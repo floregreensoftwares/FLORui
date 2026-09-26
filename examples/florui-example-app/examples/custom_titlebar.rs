@@ -11,7 +11,10 @@
 
 use florui::prelude::*;
 use florui_platform::appearance::DecorationMode;
-use florui_platform::{WINDOW_DRAG_REGION_ID, WindowOptions, use_window_controls};
+use florui_platform::{
+    Align, Placement, Popover, PopoverProps, Side, WINDOW_DRAG_REGION_ID, WindowOptions,
+    use_window_controls,
+};
 use florui_reactive::{Cleanup, use_effect, use_signal};
 use florui_style::Rgba;
 
@@ -29,6 +32,55 @@ fn main() {
         title_bar_demo,
     )
     .expect("event loop should not fail on a real desktop session");
+}
+
+/// A caption button wrapped in a real `Popover`-based tooltip -- no
+/// dedicated tooltip primitive exists yet, and `Popover` already does the
+/// positioning/portal work one needs. Shows/hides immediately on
+/// `mouseenter`/`mouseleave`; a real hover-delay needs a debounce timer
+/// `florui-reactive` doesn't have yet, so that stays a tracked gap.
+///
+/// A plain function, not `#[component]` -- hooks key off call order, not
+/// the Rust call stack, so this works inlined the same way as long as
+/// it's called the same fixed number of times in the same order every
+/// render (it is: once each for minimize/maximize/close).
+fn caption_button(
+    id: &str,
+    class: &str,
+    label: String,
+    glyph: &str,
+    onclick: impl Fn() + 'static,
+) -> Element {
+    let tooltip_open = use_signal(|| false);
+    let enter = tooltip_open.clone();
+    let leave = tooltip_open.clone();
+    let dismiss = tooltip_open.clone();
+    let class = class.to_owned();
+    let label_for_button = label.clone();
+    let trigger_id = format!("{id}-trigger");
+
+    view! {
+        <Popover
+            id={id.to_string()}
+            open={tooltip_open.get()}
+            placement={Placement::new(Side::Bottom, Align::Center)}
+            ondismiss={Handler::new(move || dismiss.set(false))}
+            trigger={view! {
+                <button
+                    id={trigger_id}
+                    class={class}
+                    accessible_label={label_for_button}
+                    onmouseenter={move || enter.set(true)}
+                    onmouseleave={move || leave.set(false)}
+                    onclick={onclick}
+                >
+                    {glyph.to_string()}
+                </button>
+            }}
+        >
+            <div class="caption-tooltip">{label}</div>
+        </Popover>
+    }
 }
 
 fn title_bar_demo() -> Element {
@@ -84,33 +136,33 @@ fn title_bar_demo() -> Element {
                     <button class="icon-button">{"?"}</button>
                 </div>
                 <div class="window-buttons">
-                    <button
-                        class="window-button"
-                        accessible_label="Minimize"
-                        onclick={move || if let Some(controls) = &minimize {
+                    {caption_button(
+                        "minimize",
+                        "window-button",
+                        "Minimize".to_string(),
+                        "_",
+                        move || if let Some(controls) = &minimize {
                             controls.minimize();
-                        }}
-                    >
-                        {"_"}
-                    </button>
-                    <button
-                        class="window-button"
-                        accessible_label={if maximized { "Restore" } else { "Maximize" }}
-                        onclick={move || if let Some(controls) = &toggle_maximize {
+                        },
+                    )}
+                    {caption_button(
+                        "toggle-maximize",
+                        "window-button",
+                        if maximized { "Restore".to_string() } else { "Maximize".to_string() },
+                        if maximized { "[ ]" } else { "[]" },
+                        move || if let Some(controls) = &toggle_maximize {
                             controls.toggle_maximize();
-                        }}
-                    >
-                        {if maximized { "[ ]" } else { "[]" }}
-                    </button>
-                    <button
-                        class="close-button"
-                        accessible_label="Close"
-                        onclick={move || if let Some(controls) = &close {
+                        },
+                    )}
+                    {caption_button(
+                        "close",
+                        "close-button",
+                        "Close".to_string(),
+                        "x",
+                        move || if let Some(controls) = &close {
                             controls.close();
-                        }}
-                    >
-                        {"x"}
-                    </button>
+                        },
+                    )}
                 </div>
             </div>
             <div class="body">

@@ -250,7 +250,11 @@ pub(crate) fn resolve_placement(
         Side::Right => (tx + tw, align_cross(placement.align, ty, th, ch)),
     };
 
-    (clamp(x, vw, cw), clamp(y, vh, ch))
+    // Snapped to a whole pixel, like Floating UI/Popper do: a half-pixel
+    // `left` re-measures text at a fractional offset, which can shift its
+    // shaped width by a pixel and feed back into a different half-pixel
+    // `left` forever (confirmed live). Rounding breaks that loop.
+    (clamp(x, vw, cw).round(), clamp(y, vh, ch).round())
 }
 
 /// `a`/`b` are a Top/Bottom or Left/Right pair. Keeps `preferred` if it
@@ -652,6 +656,293 @@ mod tests {
     }
 
     #[test]
+    fn a_popover_opened_via_real_hover_dispatch_settles_visible_and_positioned() {
+        // Every other test in this module drives `open` via the external
+        // `Cell` an `onclick` uses. This drives it through the real
+        // `set_hovered`/`dispatch_event` path instead, confirming the
+        // same two-update settle contract holds there too.
+        let mut runtime = UiRuntime::new(
+            ".trigger { padding-top: 8px; padding-right: 8px; padding-bottom: 8px; \
+                        padding-left: 8px; } \
+             .tooltip { padding-top: 4px; padding-right: 8px; padding-bottom: 4px; \
+                        padding-left: 8px; }",
+            || {
+                let open = use_signal(|| false);
+                let enter = open.clone();
+                let leave_dismiss = open.clone();
+                let leave_mouse = open.clone();
+                view! {
+                    <Popover
+                        id={"tip".to_string()}
+                        open={open.get()}
+                        placement={Placement::new(Side::Bottom, Align::Center)}
+                        ondismiss={Handler::new(move || leave_dismiss.set(false))}
+                        trigger={view! {
+                            <button
+                                id="trigger"
+                                class="trigger"
+                                onmouseenter={move || enter.set(true)}
+                                onmouseleave={move || leave_mouse.set(false)}
+                            >
+                                {"_"}
+                            </button>
+                        }}
+                    >
+                        <div id="tooltip-body" class="tooltip">{"Minimize"}</div>
+                    </Popover>
+                }
+            },
+            viewport(),
+        )
+        .unwrap();
+
+        let trigger = {
+            let (arena, ..) = runtime.geometry();
+            arena
+                .find(|a, n| a.id_attr(n) == Some("trigger"))
+                .expect("the trigger button must be in the tree")
+        };
+
+        assert!(
+            runtime.set_hovered(Some(trigger)),
+            "hovering the trigger for the first time must register as a real change"
+        );
+        runtime.dispatch_event(trigger, "mouseenter");
+        // Same two-update settle contract as every click-driven test above.
+        runtime.update(viewport());
+        runtime.update(viewport());
+
+        let (arena, styles, layouts) = runtime.geometry();
+        let tooltip_body = arena
+            .find(|a, n| a.id_attr(n) == Some("tooltip-body"))
+            .expect("the tooltip content must be in the tree once open");
+        assert_eq!(
+            styles.get(&tooltip_body).map(|s| s.opacity),
+            Some(1.0),
+            "the tooltip must be visible by the second update after a real mouseenter \
+             dispatch, not stuck hidden"
+        );
+        assert!(
+            layouts[&tooltip_body].width > 0.0 && layouts[&tooltip_body].height > 0.0,
+            "the tooltip must have a real, nonzero measured size: {:?}",
+            layouts[&tooltip_body]
+        );
+
+        // Real mouseleave must close it again, the same as a real cursor
+        // leaving the trigger.
+        assert!(runtime.set_hovered(None));
+        runtime.dispatch_event(trigger, "mouseleave");
+        runtime.update(viewport());
+
+        let (arena, ..) = runtime.geometry();
+        assert!(
+            arena
+                .find(|a, n| a.id_attr(n) == Some("tooltip-body"))
+                .is_none(),
+            "the tooltip content must be gone from the tree once closed again"
+        );
+    }
+
+    /// Builds one hover-triggered tooltip popover, like
+    /// `custom_titlebar.rs`'s own `caption_button` -- a plain function
+    /// called several times in a fixed order, each constructing its own
+    /// `Popover` from the same source line.
+    fn hover_tooltip_button(id: &str, label: &str) -> Element {
+        let open = use_signal(|| false);
+        let enter = open.clone();
+        let leave_dismiss = open.clone();
+        let leave_mouse = open.clone();
+        let trigger_id = format!("{id}-trigger");
+        let body_id = format!("{id}-body");
+        view! {
+            <Popover
+                id={id.to_string()}
+                open={open.get()}
+                placement={Placement::new(Side::Bottom, Align::Center)}
+                ondismiss={Handler::new(move || leave_dismiss.set(false))}
+                trigger={view! {
+                    <button
+                        id={trigger_id}
+                        class="trigger"
+                        onmouseenter={move || enter.set(true)}
+                        onmouseleave={move || leave_mouse.set(false)}
+                    >
+                        {"_"}
+                    </button>
+                }}
+            >
+                <div id={body_id} class="tooltip">{label.to_string()}</div>
+            </Popover>
+        }
+    }
+
+    fn three_sibling_tooltips_runtime() -> UiRuntime {
+        UiRuntime::new(
+            ".row { display: flex; flex-direction: row; } \
+             .trigger { width: 44px; height: 40px; } \
+             .tooltip { padding-top: 4px; padding-right: 8px; padding-bottom: 4px; \
+                        padding-left: 8px; }",
+            || {
+                view! {
+                    <div class="row">
+                        {hover_tooltip_button("minimize", "Minimize")}
+                        {hover_tooltip_button("toggle-maximize", "Maximize")}
+                        {hover_tooltip_button("close", "Close")}
+                    </div>
+                }
+            },
+            viewport(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn each_sibling_tooltip_from_a_shared_helper_opens_independently() {
+        // Three `Popover`s built from the same source line (a shared
+        // helper called three times), as siblings. Hovering each must
+        // show its own tooltip and label, not a stale sibling's.
+        let mut runtime = three_sibling_tooltips_runtime();
+
+        for (trigger_id, body_id, label) in [
+            ("minimize-trigger", "minimize-body", "Minimize"),
+            (
+                "toggle-maximize-trigger",
+                "toggle-maximize-body",
+                "Maximize",
+            ),
+            ("close-trigger", "close-body", "Close"),
+        ] {
+            let trigger = {
+                let (arena, ..) = runtime.geometry();
+                arena
+                    .find(|a, n| a.id_attr(n) == Some(trigger_id))
+                    .unwrap_or_else(|| panic!("no trigger with id {trigger_id}"))
+            };
+            runtime.set_hovered(Some(trigger));
+            runtime.dispatch_event(trigger, "mouseenter");
+            runtime.update(viewport());
+            runtime.update(viewport());
+
+            let (arena, styles, layouts) = runtime.geometry();
+            let body = arena
+                .find(|a, n| a.id_attr(n) == Some(body_id))
+                .unwrap_or_else(|| panic!("{body_id}'s own tooltip content must be in the tree"));
+            assert_eq!(
+                styles.get(&body).map(|s| s.opacity),
+                Some(1.0),
+                "{body_id} must be visible after its own hover settles"
+            );
+            assert!(
+                layouts[&body].width > 0.0 && layouts[&body].height > 0.0,
+                "{body_id} must have a real measured size: {:?}",
+                layouts[&body]
+            );
+            assert_eq!(
+                arena.text_content(body),
+                label,
+                "{body_id} must show its own label, not a sibling's"
+            );
+
+            runtime.set_hovered(None);
+            runtime.dispatch_event(trigger, "mouseleave");
+            runtime.update(viewport());
+        }
+    }
+
+    /// Mirrors `DesktopHost::set_hovered_and_redraw`: reads `hovered()`
+    /// before `set_hovered` overwrites it, with no manual by-`id`
+    /// re-lookup — unlike the sibling test above, this exercises
+    /// `UiRuntime`'s own hover-identity bookkeeping across a rebuild.
+    fn hover_via_runtime_state(runtime: &mut UiRuntime, hit: Option<NodeId>) {
+        let previous = runtime.hovered();
+        if !runtime.set_hovered(hit) {
+            return;
+        }
+        if let Some(node) = previous {
+            runtime.dispatch_event(node, "mouseleave");
+        }
+        if let Some(node) = hit {
+            runtime.dispatch_event(node, "mouseenter");
+        }
+        runtime.update(viewport());
+    }
+
+    #[test]
+    fn moving_hover_between_siblings_via_runtime_hovered_shows_only_the_current_ones_tooltip() {
+        // Each sibling's tooltip content only exists while its `Popover`
+        // is open, so opening/closing one reshapes the arena every
+        // iteration -- exactly the condition `resolve_hover` exists to
+        // survive.
+        let mut runtime = three_sibling_tooltips_runtime();
+
+        for (trigger_id, body_id, label) in [
+            ("minimize-trigger", "minimize-body", "Minimize"),
+            (
+                "toggle-maximize-trigger",
+                "toggle-maximize-body",
+                "Maximize",
+            ),
+            ("close-trigger", "close-body", "Close"),
+        ] {
+            let trigger = {
+                let (arena, ..) = runtime.geometry();
+                arena
+                    .find(|a, n| a.id_attr(n) == Some(trigger_id))
+                    .unwrap_or_else(|| panic!("no trigger with id {trigger_id}"))
+            };
+            hover_via_runtime_state(&mut runtime, Some(trigger));
+            // Second update to let the newly opened tooltip's position/
+            // size measurement settle, same contract as every other test
+            // in this module.
+            runtime.update(viewport());
+
+            let (arena, styles, layouts) = runtime.geometry();
+            let body = arena
+                .find(|a, n| a.id_attr(n) == Some(body_id))
+                .unwrap_or_else(|| panic!("{body_id}'s own tooltip content must be in the tree"));
+            assert_eq!(
+                styles.get(&body).map(|s| s.opacity),
+                Some(1.0),
+                "{body_id} must be visible after its own hover settles"
+            );
+            assert!(
+                layouts[&body].width > 0.0 && layouts[&body].height > 0.0,
+                "{body_id} must have a real measured size: {:?}",
+                layouts[&body]
+            );
+            assert_eq!(
+                arena.text_content(body),
+                label,
+                "{body_id} must show its own label, not a sibling's"
+            );
+
+            for (other_body_id, _) in [
+                ("minimize-body", "Minimize"),
+                ("toggle-maximize-body", "Maximize"),
+                ("close-body", "Close"),
+            ] {
+                if other_body_id != body_id {
+                    assert!(
+                        arena
+                            .find(|a, n| a.id_attr(n) == Some(other_body_id))
+                            .is_none(),
+                        "{other_body_id}'s tooltip must not be showing while {body_id} is hovered"
+                    );
+                }
+            }
+        }
+
+        hover_via_runtime_state(&mut runtime, None);
+        let (arena, ..) = runtime.geometry();
+        for body_id in ["minimize-body", "toggle-maximize-body", "close-body"] {
+            assert!(
+                arena.find(|a, n| a.id_attr(n) == Some(body_id)).is_none(),
+                "{body_id}'s tooltip must be gone once the cursor leaves every trigger"
+            );
+        }
+    }
+
+    #[test]
     fn popover_roots_finds_every_open_popovers_own_marker_div() {
         let tree: Element = view! {
             <div>
@@ -865,6 +1156,28 @@ mod tests {
         );
         // trigger center = 100 + 40/2 = 120; content half-width = 10 -> x = 110
         assert_eq!(x, 110.0);
+    }
+
+    #[test]
+    fn resolve_placement_rounds_a_half_pixel_result_to_a_whole_pixel() {
+        // Real values from a live caption-button tooltip: an odd-width
+        // content box (67px) centered under a 44px trigger lands on a
+        // half pixel (660 + 44/2 - 67/2 = 648.5) -- left unrounded, this
+        // fed back into an infinite re-layout loop, because a half-pixel
+        // `left` reshapes the text it positions, which can shift that
+        // text's own measured width by a pixel, changing `left` again,
+        // forever.
+        let placement = Placement::new(Side::Bottom, Align::Center);
+        let (x, _) = resolve_placement(
+            &placement,
+            (660.0, 0.0, 44.0, 40.0),
+            (67.0, 24.0),
+            (800.0, 600.0),
+        );
+        assert_eq!(
+            x, 649.0,
+            "648.5 must round to a whole pixel, not stay fractional"
+        );
     }
 
     #[test]

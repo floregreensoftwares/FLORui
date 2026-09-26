@@ -94,6 +94,16 @@
     color: #ffffff;
 }
 
+.caption-tooltip {
+    padding-top: 4px;
+    padding-right: 8px;
+    padding-bottom: 4px;
+    padding-left: 8px;
+    background-color: #2a2a30;
+    color: #ffffff;
+    font-size: 12px;
+}
+
 .body {
     padding-top: 24px;
     padding-right: 24px;
