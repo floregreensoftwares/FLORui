@@ -13,6 +13,12 @@
 //! relaunch, and each reopens where it was left, independently of the
 //! other.
 //!
+//! Each window also shows its own real `use_window_controls().is_focused()`
+//! (click between the two windows to see them restyle independently), and
+//! window A has a "Close window A" button -- closing it must never affect
+//! window B's own state (try swapping window B's icon first, then close A,
+//! then confirm B is still open with "Icon updated live" showing).
+//!
 //! `cargo run --example two_windows -p florui-example-app`
 
 use florui::prelude::*;
@@ -123,13 +129,32 @@ fn main() {
         .expect("event loop should not fail on a real desktop session");
 }
 
+/// Also demonstrates two-window independence: closing this window (the
+/// button below, or the real OS close) must not affect window B's own
+/// state or lifecycle at all, and this window's own `use_window_controls`
+/// reflects only this window's real focus, never window B's.
 fn window_a() -> Element {
+    let controls = use_window_controls();
+    let focused = controls.as_ref().is_none_or(|c| c.is_focused());
+    let close = controls.clone();
+
     view! {
         <div class="page">
             <p class="label">{"Window A"}</p>
             <p class="hint">
                 {"Icon loaded at runtime from florui-config's resolved app.icons.source."}
             </p>
+            <p class="hint">
+                {if focused { "Focused" } else { "Not focused" }}
+            </p>
+            <button
+                class="button"
+                onclick={move || if let Some(controls) = &close {
+                    controls.close();
+                }}
+            >
+                {"Close window A"}
+            </button>
         </div>
     }
 }
@@ -140,6 +165,7 @@ fn window_a() -> Element {
 /// care.
 fn window_b(swap_to: Option<RawIcon>) -> Element {
     let controls = use_window_controls();
+    let focused = controls.as_ref().is_none_or(|c| c.is_focused());
     let updated = use_signal(|| false);
 
     let handle_click = {
@@ -160,6 +186,9 @@ fn window_b(swap_to: Option<RawIcon>) -> Element {
             <p class="label">{"Window B"}</p>
             <p class="hint">
                 {"Icon embedded at build time -- no source file needed at ship time."}
+            </p>
+            <p class="hint">
+                {if focused { "Focused" } else { "Not focused" }}
             </p>
             <button class="button" onclick={handle_click}>
                 {if updated.get() {
