@@ -1217,12 +1217,21 @@ impl WindowState {
     }
 
     /// Applies a hover change and, only when it actually changed anything
-    /// (`:hover` can affect computed style), re-renders and requests a
-    /// repaint to pick that up.
+    /// (`:hover` can affect computed style), dispatches `mouseleave`/
+    /// `mouseenter` and re-renders to pick up both. `runtime.hovered()` is
+    /// read before `set_hovered` overwrites it, so both `NodeId`s are
+    /// valid against the same arena generation.
     fn set_hovered_and_redraw(&mut self, hit: Option<NodeId>) {
         let viewport = layout_viewport(self.viewport_scale());
+        let previous = self.runtime.hovered();
         if !self.runtime.set_hovered(hit) {
             return;
+        }
+        if let Some(node) = previous {
+            self.runtime.dispatch_event(node, "mouseleave");
+        }
+        if let Some(node) = hit {
+            self.runtime.dispatch_event(node, "mouseenter");
         }
         self.runtime
             .set_os_prefers_reduced_motion(crate::accessibility::prefers_reduced_motion());

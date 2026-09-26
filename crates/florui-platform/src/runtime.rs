@@ -32,7 +32,13 @@ pub struct UiRuntime {
     rules: Vec<Rule>,
     root: Box<dyn Fn() -> Element>,
     interaction: InteractionState,
+    /// [`Self::hovered_path`] resolved against the current arena — same
+    /// contract as [`Self::focused_node`].
     hovered: Option<NodeId>,
+    /// Persistent identity for the hovered element, same as
+    /// [`Self::focused_path`] and for the same reason: a plain [`NodeId`]
+    /// doesn't survive a rebuild. `None` means nothing is hovered.
+    hovered_path: Option<FocusPath>,
     /// Persistent across renders — see [`FocusPath`]'s own doc for why a
     /// plain [`NodeId`] can't fill this role. `None` means nothing is
     /// focused.
@@ -187,6 +193,7 @@ impl UiRuntime {
             root: Box::new(root),
             interaction: InteractionState::new(),
             hovered: None,
+            hovered_path: None,
             focused_path: None,
             focused_node: None,
             focus_visible: false,
@@ -324,6 +331,7 @@ impl UiRuntime {
         // waker already requeued) make progress before this frame commits.
         self.executor.run_until_stalled();
         self.arena = Arena::build(&tree);
+        self.resolve_hover();
         self.resolve_focus();
         self.animation_timeline
             .advance_to(self.animation_epoch.elapsed().as_secs_f64());
@@ -394,6 +402,14 @@ impl UiRuntime {
         florui_layout::hit_test(&self.arena, &self.layouts, x, y)
     }
 
+    /// The currently `:hover`ed node, against the last computed geometry —
+    /// `None` if the cursor isn't over anything. A caller dispatching
+    /// `mouseenter`/`mouseleave` around [`Self::set_hovered`] needs this
+    /// read *before* calling it, since that call overwrites it.
+    pub fn hovered(&self) -> Option<NodeId> {
+        self.hovered
+    }
+
     /// Updates which node is `:hover`ed. Returns whether that actually
     /// changed anything — `:hover` can affect computed style, so a caller
     /// should follow a `true` result with a fresh [`Self::update`].
@@ -402,6 +418,7 @@ impl UiRuntime {
             return false;
         }
         self.hovered = node;
+        self.hovered_path = node.map(|id| FocusPath::of(&self.arena, id));
         self.rebuild_interaction();
         true
     }
@@ -467,6 +484,23 @@ impl UiRuntime {
             }
         };
         self.set_focused(Some(order[next_index]), true)
+    }
+
+    /// Re-resolves [`Self::hovered_path`] against the fresh arena, same as
+    /// [`Self::resolve_focus`] does for focus. Every node is a candidate —
+    /// unlike focus, hover isn't limited to a focusable subset.
+    fn resolve_hover(&mut self) {
+        self.hovered = match &self.hovered_path {
+            Some(path) => {
+                let candidates = self.arena.find_all(|_, _| true);
+                let resolved = path.resolve(&self.arena, &candidates);
+                if resolved.is_none() {
+                    self.hovered_path = None;
+                }
+                resolved
+            }
+            None => None,
+        };
     }
 
     /// Re-resolves [`Self::focused_path`] against `candidates` — a
@@ -589,6 +623,8 @@ impl UiRuntime {
     /// event name and with no disabled-button gate — a modal
     /// [`crate::dialog::Dialog`]'s own root is never itself a
     /// disableable button, so that check has nothing to apply to here.
+    /// `node` must be valid against [`Self::arena`] in its current
+    /// generation, same as every other accessor here.
     pub(crate) fn dispatch_event(&self, node: NodeId, event: &str) {
         if let Some(handler) = self.arena.handler(node, event) {
             florui_reactive::batch(|| handler.call());
