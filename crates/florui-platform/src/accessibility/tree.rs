@@ -180,8 +180,12 @@ impl AccessibilityTree {
                     node.add_action(Action::Click);
                 }
             }
-            "input" if arena.input_type(id) == Some("checkbox") => {
-                node.set_role(Role::CheckBox);
+            "input" if matches!(arena.input_type(id), Some("checkbox") | Some("radio")) => {
+                node.set_role(if arena.input_type(id) == Some("radio") {
+                    Role::RadioButton
+                } else {
+                    Role::CheckBox
+                });
                 node.set_toggled(arena.is_checked(id).into());
                 if is_focusable(arena, id) {
                     node.add_action(Action::Focus);
@@ -374,6 +378,31 @@ mod tests {
         assert_eq!(role_of(&update, ak_id), Role::CheckBox);
         let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
         assert_eq!(node.toggled(), Some(Toggled::True));
+    }
+
+    #[test]
+    fn a_radio_gets_the_radio_button_role_and_its_checked_state() {
+        let tree: Element = view! {
+            <div>
+                <input type="radio" name="g" checked="true" />
+                <input type="radio" name="g" />
+            </div>
+        };
+        let (update, reverse, arena) = build(&tree, None);
+        let radios = arena.find_all(|a, id| a.tag(id) == "input");
+        let toggled = |input| {
+            let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
+            assert_eq!(role_of(&update, ak_id), Role::RadioButton);
+            update
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == ak_id)
+                .unwrap()
+                .1
+                .toggled()
+        };
+        assert_eq!(toggled(radios[0]), Some(Toggled::True));
+        assert_eq!(toggled(radios[1]), Some(Toggled::False));
     }
 
     #[test]

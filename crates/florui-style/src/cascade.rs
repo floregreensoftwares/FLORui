@@ -864,6 +864,30 @@ mod tests {
     }
 
     #[test]
+    fn checked_matches_a_radio() {
+        let tree: Element = view! {
+            <div>
+                <input type="radio" checked="true" class="a" />
+                <input type="radio" class="b" />
+            </div>
+        };
+        let css =
+            "input { background-color: #111111; } input:checked { background-color: #00ff00; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let on = arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == "a"))
+            .unwrap();
+        let off = arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == "b"))
+            .unwrap();
+        assert_eq!(computed[&on].background_color, Rgba::opaque(0, 0xff, 0));
+        assert_eq!(
+            computed[&off].background_color,
+            Rgba::opaque(0x11, 0x11, 0x11)
+        );
+    }
+
+    #[test]
     fn disabled_has_no_effect_on_a_non_button_element() {
         let tree: Element = view! { <div disabled="true" class="a" /> };
         let css = ".a { background-color: #111111; } div:disabled { background-color: #ff0000; }";
