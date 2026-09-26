@@ -35,9 +35,9 @@ pub(crate) fn focus_order(arena: &Arena) -> Vec<NodeId> {
     arena.find_all(is_focusable)
 }
 
-/// The currently open modal [`crate::dialog::Dialog`]'s own root, if
+/// The currently open modal [`crate::components::dialog::Dialog`]'s own root, if
 /// any — the first node (document order) carrying
-/// [`crate::dialog::MODAL_ROOT_CLASS`]. Single-modal-at-a-time is this
+/// [`crate::components::dialog::MODAL_ROOT_CLASS`]. Single-modal-at-a-time is this
 /// slice's own deliberate scope limit; a second, nested `Dialog` would
 /// silently lose to whichever is found first here, not a real stacking
 /// contract yet.
@@ -46,7 +46,7 @@ pub(crate) fn modal_root(arena: &Arena) -> Option<NodeId> {
         arena
             .classes(id)
             .iter()
-            .any(|class| class == crate::dialog::MODAL_ROOT_CLASS)
+            .any(|class| class == crate::components::dialog::MODAL_ROOT_CLASS)
     })
 }
 
@@ -68,10 +68,10 @@ pub(crate) fn focusable_within(arena: &Arena, root: NodeId) -> Vec<NodeId> {
 
 /// The real candidate list for Tab traversal and focus resolution this
 /// render — every focusable node in the whole document, unless a modal
-/// [`crate::dialog::Dialog`] is currently open, in which case focus is
+/// [`crate::components::dialog::Dialog`] is currently open, in which case focus is
 /// contained to its own descendants only (real modal focus-trap
 /// behavior; a non-modal overlay must never do this — see
-/// [`crate::dialog`]'s own doc for why only `Dialog` triggers it).
+/// [`crate::components::dialog`]'s own doc for why only `Dialog` triggers it).
 pub(crate) fn focus_candidates(arena: &Arena) -> Vec<NodeId> {
     match modal_root(arena) {
         Some(root) => focusable_within(arena, root),
@@ -156,7 +156,7 @@ mod tests {
         let tree: Element = view! {
             <div>
                 <button>{"Trigger"}</button>
-                <div class={crate::dialog::MODAL_ROOT_CLASS}>
+                <div class={crate::components::dialog::MODAL_ROOT_CLASS}>
                     <button>{"Inside"}</button>
                 </div>
             </div>
@@ -164,7 +164,10 @@ mod tests {
         let arena = Arena::build(&tree);
         let root = modal_root(&arena).expect("a modal root is present");
         assert_eq!(arena.tag(root), "div");
-        assert_eq!(arena.classes(root), &[crate::dialog::MODAL_ROOT_CLASS]);
+        assert_eq!(
+            arena.classes(root),
+            &[crate::components::dialog::MODAL_ROOT_CLASS]
+        );
     }
 
     #[test]
@@ -179,7 +182,7 @@ mod tests {
         let tree: Element = view! {
             <div>
                 <button>{"Outside"}</button>
-                <div class={crate::dialog::MODAL_ROOT_CLASS}>
+                <div class={crate::components::dialog::MODAL_ROOT_CLASS}>
                     <button>{"First inside"}</button>
                     <button>{"Second inside"}</button>
                 </div>
@@ -210,7 +213,7 @@ mod tests {
         let tree: Element = view! {
             <div>
                 <button>{"Outside"}</button>
-                <div class={crate::dialog::MODAL_ROOT_CLASS}>
+                <div class={crate::components::dialog::MODAL_ROOT_CLASS}>
                     <button>{"Inside"}</button>
                 </div>
             </div>
