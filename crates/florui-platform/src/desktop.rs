@@ -1419,7 +1419,7 @@ impl WindowState {
 
     /// Tag-gated the same as `florui_platform::focus::is_focusable` and
     /// `UiRuntime::dispatch_click`: `disabled` has no wired behavior
-    /// outside `<button>`/editable-or-checkbox `<input>`. Used to keep a
+    /// outside `<button>`/editable-or-checkable `<input>`. Used to keep a
     /// disabled control out of `pressed` (see `handle_press`) and out of
     /// `:hover` (see `handle_cursor_moved`) -- real browsers don't
     /// deliver pointer events to a disabled control either.
@@ -1432,7 +1432,7 @@ impl WindowState {
             "button" => true,
             "input" => {
                 crate::focus::is_editable_input_type(arena.input_type(node))
-                    || crate::focus::is_checkbox_input_type(arena.input_type(node))
+                    || crate::focus::is_checkable_input_type(arena.input_type(node))
             }
             _ => false,
         }
@@ -1579,6 +1579,24 @@ impl WindowState {
                     self.runtime.dispatch_click(focused);
                 }
             }
+            // Selection follows focus within a radio group, so moving
+            // focus also activates the new radio.
+            Key::Named(
+                key @ (NamedKey::ArrowUp
+                | NamedKey::ArrowLeft
+                | NamedKey::ArrowDown
+                | NamedKey::ArrowRight),
+            ) => {
+                let direction = if matches!(key, NamedKey::ArrowUp | NamedKey::ArrowLeft) {
+                    -1
+                } else {
+                    1
+                };
+                if let Some(radio) = self.runtime.step_radio_group(direction) {
+                    self.runtime.dispatch_click(radio);
+                    self.update_and_request_redraw();
+                }
+            }
             // Only a modal `Dialog` wires this up at all -- resolved
             // structurally (its own reserved marker class), not from
             // whatever currently has focus, so it works even if nothing
@@ -1606,7 +1624,7 @@ impl WindowState {
     }
 
     /// The currently keyboard-focused node, if it's an editable `<input>`
-    /// — a focused `<input type="checkbox">` (also focusable, but not
+    /// — a focused checkbox or radio (also focusable, but not
     /// editable text) correctly falls through to `None` here, same as
     /// a focused `<button>`.
     fn focused_text_input(&self) -> Option<NodeId> {

@@ -1,10 +1,10 @@
 //! Which nodes participate in keyboard focus traversal, and in what order.
 //!
-//! v1 is deliberately narrow: `<button>`, an editable `<input>`, and
-//! `<input type="checkbox">`, not disabled, document order, no
-//! `tabindex`. `<input type="radio">` stays out for now — real radio
-//! behavior needs group-exclusive selection by `name`, not just a focus
-//! stop, and that's separate, later work. Extending this further
+//! v1 is deliberately narrow: `<button>`, an editable `<input>`,
+//! `<input type="checkbox">` and `<input type="radio">`, not disabled,
+//! document order, no `tabindex`. Radios sharing a `name` are one Tab
+//! stop (see [`tab_stops`]) and move among themselves with the arrow
+//! keys (see [`radio_sibling`]). Extending this further
 //! (`a`/`select`/`textarea`) later is one more clause here, not a
 //! redesign.
 
@@ -17,10 +17,14 @@ pub(crate) fn is_editable_input_type(input_type: Option<&str>) -> bool {
     matches!(input_type, Some("text") | Some("password"))
 }
 
-/// Whether `input_type` is a checkbox — the same gate [`is_focusable`]
-/// and the accessibility bridge's own checkbox arm both check.
-pub(crate) fn is_checkbox_input_type(input_type: Option<&str>) -> bool {
-    input_type == Some("checkbox")
+/// Whether `input_type` carries a `checked` state — the same gate
+/// [`is_focusable`] and the disabled-click gates all check.
+pub(crate) fn is_checkable_input_type(input_type: Option<&str>) -> bool {
+    matches!(input_type, Some("checkbox") | Some("radio"))
+}
+
+fn is_radio(arena: &Arena, id: NodeId) -> bool {
+    arena.tag(id) == "input" && arena.input_type(id) == Some("radio")
 }
 
 pub(crate) fn is_focusable(arena: &Arena, id: NodeId) -> bool {
@@ -31,7 +35,7 @@ pub(crate) fn is_focusable(arena: &Arena, id: NodeId) -> bool {
         "button" => true,
         "input" => {
             is_editable_input_type(arena.input_type(id))
-                || is_checkbox_input_type(arena.input_type(id))
+                || is_checkable_input_type(arena.input_type(id))
         }
         _ => false,
     }
@@ -42,6 +46,63 @@ pub(crate) fn is_focusable(arena: &Arena, id: NodeId) -> bool {
 /// needs.
 pub(crate) fn focus_order(arena: &Arena) -> Vec<NodeId> {
     arena.find_all(is_focusable)
+}
+
+/// The focusable radios that share `id`'s `name`, in document order. A
+/// radio with no (or an empty) `name` is a group of one. Group scope is
+/// the whole document, not a `<form>` — there is no form element yet.
+fn radio_group(arena: &Arena, id: NodeId) -> Vec<NodeId> {
+    match arena.name(id).filter(|name| !name.is_empty()) {
+        Some(name) => arena.find_all(|arena, other| {
+            is_radio(arena, other) && is_focusable(arena, other) && arena.name(other) == Some(name)
+        }),
+        None => vec![id],
+    }
+}
+
+/// `candidates` narrowed to real Tab stops: a radio group contributes
+/// one — the node holding focus if the group has it, else the checked
+/// radio, else the first.
+pub(crate) fn tab_stops(
+    arena: &Arena,
+    candidates: &[NodeId],
+    focused: Option<NodeId>,
+) -> Vec<NodeId> {
+    candidates
+        .iter()
+        .copied()
+        .filter(|&id| {
+            if !is_radio(arena, id) {
+                return true;
+            }
+            let group = radio_group(arena, id);
+            let stop = focused
+                .filter(|node| group.contains(node))
+                .or_else(|| {
+                    group
+                        .iter()
+                        .copied()
+                        .find(|&member| arena.is_checked(member))
+                })
+                .or_else(|| group.first().copied());
+            stop == Some(id)
+        })
+        .collect()
+}
+
+/// The radio one arrow-key step from `from` within its group, wrapping.
+/// `None` if `from` isn't a radio or has no other enabled group member.
+pub(crate) fn radio_sibling(arena: &Arena, from: NodeId, direction: isize) -> Option<NodeId> {
+    if !is_radio(arena, from) {
+        return None;
+    }
+    let group = radio_group(arena, from);
+    if group.len() < 2 {
+        return None;
+    }
+    let index = group.iter().position(|&member| member == from)?;
+    let next = (index as isize + direction).rem_euclid(group.len() as isize) as usize;
+    Some(group[next])
 }
 
 /// The currently open modal [`crate::components::dialog::Dialog`]'s own root, if
@@ -137,6 +198,99 @@ mod tests {
         let tree: Element = view! { <input type="checkbox" /> };
         let arena = Arena::build(&tree);
         assert!(is_focusable(&arena, arena.roots()[0]));
+    }
+
+    #[test]
+    fn a_radio_input_is_focusable_unless_disabled() {
+        let tree: Element = view! {
+            <div>
+                <input type="radio" name="g" />
+                <input type="radio" name="g" disabled="true" />
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let radios = arena.find_all(|a, id| a.tag(id) == "input");
+        assert!(is_focusable(&arena, radios[0]));
+        assert!(!is_focusable(&arena, radios[1]));
+    }
+
+    fn radios(tree: &Element) -> (Arena, Vec<NodeId>) {
+        let arena = Arena::build(tree);
+        let ids = arena.find_all(|a, id| a.tag(id) == "input");
+        (arena, ids)
+    }
+
+    #[test]
+    fn a_radio_group_is_one_tab_stop_the_first_when_none_is_checked() {
+        let tree: Element = view! {
+            <div>
+                <input type="radio" name="g" />
+                <input type="radio" name="g" />
+                <input type="radio" name="g" />
+            </div>
+        };
+        let (arena, ids) = radios(&tree);
+        assert_eq!(tab_stops(&arena, &focus_order(&arena), None), vec![ids[0]]);
+    }
+
+    #[test]
+    fn a_radio_groups_tab_stop_is_its_checked_member() {
+        let tree: Element = view! {
+            <div>
+                <input type="radio" name="g" />
+                <input type="radio" name="g" checked="true" />
+                <input type="radio" name="h" />
+            </div>
+        };
+        let (arena, ids) = radios(&tree);
+        assert_eq!(
+            tab_stops(&arena, &focus_order(&arena), None),
+            vec![ids[1], ids[2]]
+        );
+    }
+
+    #[test]
+    fn a_radio_groups_tab_stop_follows_focus_within_the_group() {
+        let tree: Element = view! {
+            <div>
+                <input type="radio" name="g" checked="true" />
+                <input type="radio" name="g" />
+            </div>
+        };
+        let (arena, ids) = radios(&tree);
+        assert_eq!(
+            tab_stops(&arena, &focus_order(&arena), Some(ids[1])),
+            vec![ids[1]]
+        );
+    }
+
+    #[test]
+    fn unnamed_radios_are_each_their_own_tab_stop() {
+        let tree: Element = view! {
+            <div>
+                <input type="radio" />
+                <input type="radio" />
+            </div>
+        };
+        let (arena, ids) = radios(&tree);
+        assert_eq!(tab_stops(&arena, &focus_order(&arena), None), ids);
+    }
+
+    #[test]
+    fn radio_sibling_wraps_and_skips_disabled_and_other_groups() {
+        let tree: Element = view! {
+            <div>
+                <input type="radio" name="g" />
+                <input type="radio" name="h" />
+                <input type="radio" name="g" disabled="true" />
+                <input type="radio" name="g" />
+            </div>
+        };
+        let (arena, ids) = radios(&tree);
+        assert_eq!(radio_sibling(&arena, ids[0], 1), Some(ids[3]));
+        assert_eq!(radio_sibling(&arena, ids[3], 1), Some(ids[0]));
+        assert_eq!(radio_sibling(&arena, ids[0], -1), Some(ids[3]));
+        assert_eq!(radio_sibling(&arena, ids[1], 1), None, "a group of one");
     }
 
     #[test]

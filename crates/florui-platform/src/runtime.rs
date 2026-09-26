@@ -463,7 +463,11 @@ impl UiRuntime {
     }
 
     fn step_focus(&mut self, direction: isize) -> bool {
-        let order = focus::focus_candidates(&self.arena);
+        let order = focus::tab_stops(
+            &self.arena,
+            &focus::focus_candidates(&self.arena),
+            self.focused_node,
+        );
         if order.is_empty() {
             return self.set_focused(None, true);
         }
@@ -501,6 +505,15 @@ impl UiRuntime {
             }
             None => None,
         };
+    }
+
+    /// Moves keyboard focus one step through the focused radio's group
+    /// (wrapping) and returns the newly focused radio, or `None` if focus
+    /// isn't on a radio with a sibling to move to.
+    pub fn step_radio_group(&mut self, direction: isize) -> Option<NodeId> {
+        let next = focus::radio_sibling(&self.arena, self.focused_node?, direction)?;
+        self.set_focused(Some(next), true);
+        Some(next)
     }
 
     /// Re-resolves [`Self::focused_path`] against `candidates` — a
@@ -600,7 +613,7 @@ impl UiRuntime {
     /// more than once) wakes this runtime's host exactly once for the
     /// whole click, not once per write.
     ///
-    /// A disabled button or checkbox's handler never fires, regardless of
+    /// A disabled button, checkbox or radio's handler never fires, regardless of
     /// caller: real mouse clicks and Enter/Space activation both already
     /// funnel through here (`desktop.rs`'s own `handle_release`/
     /// `handle_keyboard_input`), so gating here is the one place that has
@@ -610,9 +623,9 @@ impl UiRuntime {
     /// prevents the separate focus-on-click issue; see `handle_press`'s
     /// own doc). Tag-gated the same as [`crate::focus::is_focusable`].
     pub fn dispatch_click(&self, node: NodeId) {
-        let is_checkbox =
-            self.arena.tag(node) == "input" && self.arena.input_type(node) == Some("checkbox");
-        if (self.arena.tag(node) == "button" || is_checkbox) && self.arena.is_disabled(node) {
+        let is_checkable = self.arena.tag(node) == "input"
+            && focus::is_checkable_input_type(self.arena.input_type(node));
+        if (self.arena.tag(node) == "button" || is_checkable) && self.arena.is_disabled(node) {
             return;
         }
         if let Some(handler) = self.arena.handler(node, "click") {
@@ -1246,6 +1259,66 @@ mod tests {
         arena
             .find(|arena, node| arena.id_attr(node) == Some(id_attr))
             .unwrap()
+    }
+
+    fn radio_group_runtime() -> UiRuntime {
+        UiRuntime::with_rules(
+            Vec::new(),
+            || {
+                view! {
+                    <div>
+                        <button id="before">{"B"}</button>
+                        <input id="r1" type="radio" name="g" />
+                        <input id="r2" type="radio" name="g" checked="true" />
+                        <input id="r3" type="radio" name="g" />
+                        <button id="after">{"A"}</button>
+                    </div>
+                }
+            },
+            viewport(),
+        )
+    }
+
+    #[test]
+    fn tab_passes_through_a_radio_group_once_at_its_checked_member() {
+        let mut runtime = radio_group_runtime();
+        let (before, r2, after) = (
+            node_id(&runtime, "before"),
+            node_id(&runtime, "r2"),
+            node_id(&runtime, "after"),
+        );
+        assert!(runtime.focus_next());
+        assert_eq!(runtime.focused(), Some(before));
+        assert!(runtime.focus_next());
+        assert_eq!(runtime.focused(), Some(r2));
+        assert!(runtime.focus_next());
+        assert_eq!(runtime.focused(), Some(after));
+        assert!(runtime.focus_previous());
+        assert_eq!(runtime.focused(), Some(r2));
+    }
+
+    #[test]
+    fn step_radio_group_moves_focus_within_the_group_and_wraps() {
+        let mut runtime = radio_group_runtime();
+        let (r1, r2, r3) = (
+            node_id(&runtime, "r1"),
+            node_id(&runtime, "r2"),
+            node_id(&runtime, "r3"),
+        );
+        runtime.set_focused(Some(r2), true);
+        assert_eq!(runtime.step_radio_group(1), Some(r3));
+        assert_eq!(runtime.focused(), Some(r3));
+        assert_eq!(runtime.step_radio_group(1), Some(r1));
+        assert_eq!(runtime.step_radio_group(-1), Some(r3));
+    }
+
+    #[test]
+    fn step_radio_group_is_a_no_op_off_a_radio() {
+        let mut runtime = radio_group_runtime();
+        let before = node_id(&runtime, "before");
+        runtime.set_focused(Some(before), true);
+        assert_eq!(runtime.step_radio_group(1), None);
+        assert_eq!(runtime.focused(), Some(before));
     }
 
     #[test]

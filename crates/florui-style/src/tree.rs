@@ -48,6 +48,9 @@ struct ArenaNode {
     /// `"checkbox"`/`"radio"` — the only values `view!` accepts at all).
     /// See [`Arena::input_type`].
     input_type: Option<String>,
+    /// The `name` attribute on `<input type="radio">` — the group key.
+    /// See [`Arena::name`].
+    name: Option<String>,
     /// The `for` attribute on `<label>` — the id of the control it
     /// captions. See [`Arena::label_for`].
     label_for: Option<String>,
@@ -190,6 +193,7 @@ impl Arena {
                         style: attr_value(&node.attrs, "style"),
                         value: attr_value(&node.attrs, "value"),
                         input_type: attr_value(&node.attrs, "type"),
+                        name: attr_value(&node.attrs, "name"),
                         label_for: attr_value(&node.attrs, "for"),
                         accessible_label: attr_value(&node.attrs, "accessible_label"),
                         text: collect_text(&node.children),
@@ -312,6 +316,13 @@ impl Arena {
     /// `None` for any tag that never declared one.
     pub fn input_type(&self, id: NodeId) -> Option<&str> {
         self.nodes[id].input_type.as_deref()
+    }
+
+    /// This node's `name` attribute — meaningful only on `<input
+    /// type="radio">`, where radios sharing one non-empty name form a
+    /// group. `None` for any node that never declared one.
+    pub fn name(&self, id: NodeId) -> Option<&str> {
+        self.nodes[id].name.as_deref()
     }
 
     /// This node's `for` attribute — meaningful only on `<label>`: the
@@ -624,6 +635,16 @@ mod tests {
         let tree: Element = view! { <input type="checkbox" /> };
         let arena = Arena::build(&tree);
         assert!(!arena.is_checked(arena.roots()[0]));
+    }
+
+    #[test]
+    fn name_attribute_is_read() {
+        let tree: Element = view! { <input type="radio" name="size" /> };
+        let arena = Arena::build(&tree);
+        assert_eq!(arena.name(arena.roots()[0]), Some("size"));
+        let bare: Element = view! { <input type="radio" /> };
+        let arena = Arena::build(&bare);
+        assert_eq!(arena.name(arena.roots()[0]), None);
     }
 
     #[test]

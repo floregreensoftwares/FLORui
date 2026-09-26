@@ -164,9 +164,11 @@ impl StyloTree {
                 }
             }
             // Same markup-state contract as the `<button>` block above,
-            // for `<input type="checkbox">` -- plus `:checked`, which
-            // `<button>` has no equivalent of.
-            if arena.tag(id) == "input" && arena.input_type(id) == Some("checkbox") {
+            // for `<input type="checkbox"|"radio">` -- plus `:checked`,
+            // which `<button>` has no equivalent of.
+            if arena.tag(id) == "input"
+                && matches!(arena.input_type(id), Some("checkbox") | Some("radio"))
+            {
                 if arena.is_disabled(id) {
                     node_state |= ElementState::DISABLED;
                 } else {
