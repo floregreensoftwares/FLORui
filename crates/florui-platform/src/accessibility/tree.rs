@@ -180,6 +180,14 @@ impl AccessibilityTree {
                     node.add_action(Action::Click);
                 }
             }
+            "input" if arena.input_type(id) == Some("checkbox") => {
+                node.set_role(Role::CheckBox);
+                node.set_toggled(arena.is_checked(id).into());
+                if is_focusable(arena, id) {
+                    node.add_action(Action::Focus);
+                    node.add_action(Action::Click);
+                }
+            }
             "input" => {
                 let role = match arena.input_type(id) {
                     Some("password") => Role::PasswordInput,
@@ -254,6 +262,7 @@ impl AccessibilityTree {
 
 #[cfg(test)]
 mod tests {
+    use accesskit::Toggled;
     use florui::prelude::*;
 
     use super::*;
@@ -354,6 +363,39 @@ mod tests {
         let input = arena.roots()[0];
         let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
         assert_eq!(role_of(&update, ak_id), Role::PasswordInput);
+    }
+
+    #[test]
+    fn a_checked_checkbox_gets_the_checkbox_role_and_is_toggled() {
+        let tree: Element = view! { <input type="checkbox" checked="true" /> };
+        let (update, reverse, arena) = build(&tree, None);
+        let input = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
+        assert_eq!(role_of(&update, ak_id), Role::CheckBox);
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert_eq!(node.toggled(), Some(Toggled::True));
+    }
+
+    #[test]
+    fn an_unchecked_checkbox_is_not_toggled() {
+        let tree: Element = view! { <input type="checkbox" /> };
+        let (update, reverse, arena) = build(&tree, None);
+        let input = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert_eq!(node.toggled(), Some(Toggled::False));
+    }
+
+    #[test]
+    fn a_disabled_checkbox_is_marked_disabled_and_gets_no_actions() {
+        let tree: Element = view! { <input type="checkbox" disabled="true" /> };
+        let (update, reverse, arena) = build(&tree, None);
+        let input = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert!(node.is_disabled());
+        assert!(!node.supports_action(Action::Focus));
+        assert!(!node.supports_action(Action::Click));
     }
 
     #[test]

@@ -756,6 +756,38 @@ mod tests {
     }
 
     #[test]
+    fn checked_and_disabled_match_a_checkboxs_markup_state_directly() {
+        let tree: Element = view! {
+            <div>
+                <input type="checkbox" checked="true" class="a" />
+                <input type="checkbox" disabled="true" class="b" />
+            </div>
+        };
+        let css = ".a, .b { background-color: #111111; } \
+                   input:checked { background-color: #00ff00; } \
+                   input:disabled { background-color: #ff0000; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let checked_input = arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == "a"))
+            .unwrap();
+        let disabled_input = arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == "b"))
+            .unwrap();
+
+        assert_eq!(
+            computed[&checked_input].background_color,
+            Rgba::opaque(0, 0xff, 0),
+            ":checked must match a checkbox with checked=\"true\""
+        );
+        assert_eq!(
+            computed[&disabled_input].background_color,
+            Rgba::opaque(0xff, 0, 0),
+            ":disabled must also match a disabled checkbox, unlike a disabled non-button/checkbox \
+             element"
+        );
+    }
+
+    #[test]
     fn disabled_has_no_effect_on_a_non_button_element() {
         let tree: Element = view! { <div disabled="true" class="a" /> };
         let css = ".a { background-color: #111111; } div:disabled { background-color: #ff0000; }";

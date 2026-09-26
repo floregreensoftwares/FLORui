@@ -600,18 +600,19 @@ impl UiRuntime {
     /// more than once) wakes this runtime's host exactly once for the
     /// whole click, not once per write.
     ///
-    /// A disabled button's handler never fires, regardless of caller:
-    /// real mouse clicks and Enter/Space activation both already funnel
-    /// through here (`desktop.rs`'s own `handle_release`/
+    /// A disabled button or checkbox's handler never fires, regardless of
+    /// caller: real mouse clicks and Enter/Space activation both already
+    /// funnel through here (`desktop.rs`'s own `handle_release`/
     /// `handle_keyboard_input`), so gating here is the one place that has
-    /// to know about `disabled` at all — and it also catches a button
+    /// to know about `disabled` at all — and it also catches a control
     /// that becomes disabled between press and release, which
     /// `desktop.rs`'s own press-time filtering alone can't (that only
     /// prevents the separate focus-on-click issue; see `handle_press`'s
-    /// own doc). Tag-gated the same as [`crate::focus::is_focusable`]:
-    /// `disabled` has no wired behavior outside `<button>` in v1.
+    /// own doc). Tag-gated the same as [`crate::focus::is_focusable`].
     pub fn dispatch_click(&self, node: NodeId) {
-        if self.arena.tag(node) == "button" && self.arena.is_disabled(node) {
+        let is_checkbox =
+            self.arena.tag(node) == "input" && self.arena.input_type(node) == Some("checkbox");
+        if (self.arena.tag(node) == "button" || is_checkbox) && self.arena.is_disabled(node) {
             return;
         }
         if let Some(handler) = self.arena.handler(node, "click") {

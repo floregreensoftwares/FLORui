@@ -1,20 +1,26 @@
 //! Which nodes participate in keyboard focus traversal, and in what order.
 //!
-//! v1 is deliberately narrow: `<button>` and an editable `<input>`, not
-//! disabled, document order, no `tabindex`. `<input type="checkbox"|
-//! "radio">` stays out — this slice gives neither any real behavior at
-//! all yet (see `crates/florui-platform/src/text_input.rs`'s own doc).
-//! Extending this further (`a`/`select`/`textarea`) later is one more
-//! clause here, not a redesign.
+//! v1 is deliberately narrow: `<button>`, an editable `<input>`, and
+//! `<input type="checkbox">`, not disabled, document order, no
+//! `tabindex`. `<input type="radio">` stays out for now — real radio
+//! behavior needs group-exclusive selection by `name`, not just a focus
+//! stop, and that's separate, later work. Extending this further
+//! (`a`/`select`/`textarea`) later is one more clause here, not a
+//! redesign.
 
 use florui_style::{Arena, NodeId};
 
 /// `<input>` types this slice gives real text-editing behavior — the
 /// same gate [`is_focusable`] and [`crate::text_input::TextInputRegistry`]
-/// both check, so a `<input type="checkbox">` (parseable `view!` syntax,
-/// but not part of this slice) never gets a focus stop or an editor.
+/// both check.
 pub(crate) fn is_editable_input_type(input_type: Option<&str>) -> bool {
     matches!(input_type, Some("text") | Some("password"))
+}
+
+/// Whether `input_type` is a checkbox — the same gate [`is_focusable`]
+/// and the accessibility bridge's own checkbox arm both check.
+pub(crate) fn is_checkbox_input_type(input_type: Option<&str>) -> bool {
+    input_type == Some("checkbox")
 }
 
 pub(crate) fn is_focusable(arena: &Arena, id: NodeId) -> bool {
@@ -23,7 +29,10 @@ pub(crate) fn is_focusable(arena: &Arena, id: NodeId) -> bool {
     }
     match arena.tag(id) {
         "button" => true,
-        "input" => is_editable_input_type(arena.input_type(id)),
+        "input" => {
+            is_editable_input_type(arena.input_type(id))
+                || is_checkbox_input_type(arena.input_type(id))
+        }
         _ => false,
     }
 }
@@ -124,8 +133,15 @@ mod tests {
     }
 
     #[test]
-    fn a_checkbox_input_is_not_focusable_in_this_slice() {
-        let tree: Element = view! { <input type="checkbox" value="on" /> };
+    fn a_checkbox_input_is_focusable() {
+        let tree: Element = view! { <input type="checkbox" /> };
+        let arena = Arena::build(&tree);
+        assert!(is_focusable(&arena, arena.roots()[0]));
+    }
+
+    #[test]
+    fn a_disabled_checkbox_is_not_focusable() {
+        let tree: Element = view! { <input type="checkbox" disabled="true" /> };
         let arena = Arena::build(&tree);
         assert!(!is_focusable(&arena, arena.roots()[0]));
     }

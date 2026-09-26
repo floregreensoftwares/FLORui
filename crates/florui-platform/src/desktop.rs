@@ -1419,10 +1419,10 @@ impl WindowState {
 
     /// Tag-gated the same as `florui_platform::focus::is_focusable` and
     /// `UiRuntime::dispatch_click`: `disabled` has no wired behavior
-    /// outside `<button>` in v1. Used to keep a disabled button out of
-    /// `pressed` (see `handle_press`) and out of `:hover` (see
-    /// `handle_cursor_moved`) -- real browsers don't deliver pointer
-    /// events to a disabled control either.
+    /// outside `<button>`/editable-or-checkbox `<input>`. Used to keep a
+    /// disabled control out of `pressed` (see `handle_press`) and out of
+    /// `:hover` (see `handle_cursor_moved`) -- real browsers don't
+    /// deliver pointer events to a disabled control either.
     fn is_disabled(&self, node: NodeId) -> bool {
         let (arena, ..) = self.runtime.geometry();
         if !arena.is_disabled(node) {
@@ -1430,7 +1430,10 @@ impl WindowState {
         }
         match arena.tag(node) {
             "button" => true,
-            "input" => crate::focus::is_editable_input_type(arena.input_type(node)),
+            "input" => {
+                crate::focus::is_editable_input_type(arena.input_type(node))
+                    || crate::focus::is_checkbox_input_type(arena.input_type(node))
+            }
             _ => false,
         }
     }
@@ -1603,10 +1606,9 @@ impl WindowState {
     }
 
     /// The currently keyboard-focused node, if it's an editable `<input>`
-    /// — `crate::focus::is_focusable` already keeps a non-editable one
-    /// (`type="checkbox"`/`"radio"`, out of this slice's scope) from ever
-    /// receiving focus in the first place, so this only needs to check
-    /// the tag/type, not re-check disabled/focusability.
+    /// — a focused `<input type="checkbox">` (also focusable, but not
+    /// editable text) correctly falls through to `None` here, same as
+    /// a focused `<button>`.
     fn focused_text_input(&self) -> Option<NodeId> {
         let node = self.runtime.focused()?;
         let (arena, ..) = self.runtime.geometry();

@@ -31,6 +31,10 @@ struct ArenaNode {
     /// [`crate::InteractionState`] (see `stylo.rs`'s own `StyloTree::new`
     /// for why).
     disabled: bool,
+    /// Whether the `checked` attribute is present and `"true"` — markup
+    /// state for `<input type="checkbox">`/`type="radio"`, read the same
+    /// way `disabled` is. See [`Arena::is_checked`].
+    checked: bool,
     /// The raw, unparsed `style="..."` attribute text, if declared — see
     /// [`Arena::style_attr`].
     style: Option<String>,
@@ -182,6 +186,7 @@ impl Arena {
                         classes: class_list(&node.attrs),
                         id: attr_value(&node.attrs, "id"),
                         disabled: attr_bool(&node.attrs, "disabled"),
+                        checked: attr_bool(&node.attrs, "checked"),
                         style: attr_value(&node.attrs, "style"),
                         value: attr_value(&node.attrs, "value"),
                         input_type: attr_value(&node.attrs, "type"),
@@ -277,6 +282,13 @@ impl Arena {
     /// explicit `"true"`/`"false"` is ever seen in practice.
     pub fn is_disabled(&self, id: NodeId) -> bool {
         self.nodes[id].disabled
+    }
+
+    /// Whether this node's `checked` attribute is present and `"true"` —
+    /// same lowering/parsing contract as [`Self::is_disabled`], for
+    /// `<input type="checkbox">`/`type="radio"`.
+    pub fn is_checked(&self, id: NodeId) -> bool {
+        self.nodes[id].checked
     }
 
     /// This node's raw, unparsed `style="..."` attribute text, if it
@@ -598,6 +610,20 @@ mod tests {
         let tree: Element = view! { <button /> };
         let arena = Arena::build(&tree);
         assert!(!arena.is_disabled(arena.roots()[0]));
+    }
+
+    #[test]
+    fn checked_attribute_true_is_read() {
+        let tree: Element = view! { <input type="checkbox" checked="true" /> };
+        let arena = Arena::build(&tree);
+        assert!(arena.is_checked(arena.roots()[0]));
+    }
+
+    #[test]
+    fn checked_attribute_absent_defaults_to_not_checked() {
+        let tree: Element = view! { <input type="checkbox" /> };
+        let arena = Arena::build(&tree);
+        assert!(!arena.is_checked(arena.roots()[0]));
     }
 
     #[test]
