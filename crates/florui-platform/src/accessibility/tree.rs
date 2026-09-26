@@ -19,12 +19,10 @@
 //! not optimally; incremental updates are a later, measured-cost
 //! optimization, not this slice's concern.
 //!
-//! Inbound `Action::Focus`/`Action::Click` are the only ones this slice
-//! wires up (see `desktop.rs`'s own dispatch). AT-driven text editing
-//! (`Action::SetValue`/`ReplaceSelectedText`) is explicitly out of scope:
-//! there is no existing write path from an arbitrary AT string into
-//! `TextInputRegistry`'s caret-based edit ops, the same reason IME was
-//! excluded from the text-input slice.
+//! Inbound `Action::Focus`/`Action::Click`/`Action::SetValue`/
+//! `Action::ReplaceSelectedText` are wired up (see `desktop.rs`'s own
+//! dispatch, which routes the latter two through `TextInputRegistry`'s
+//! ordinary `TextEditOp` path). Every other action stays unhandled.
 
 use std::collections::{HashMap, HashSet};
 
@@ -191,6 +189,8 @@ impl AccessibilityTree {
                 node.set_value(arena.value_attr(id).unwrap_or_default());
                 if is_focusable(arena, id) {
                     node.add_action(Action::Focus);
+                    node.add_action(Action::SetValue);
+                    node.add_action(Action::ReplaceSelectedText);
                 }
             }
             "label" => {
@@ -384,6 +384,28 @@ mod tests {
         let ak_id = *reverse.iter().find(|&(_, &n)| n == button).unwrap().0;
         let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
         assert!(node.is_disabled());
+    }
+
+    #[test]
+    fn an_editable_input_advertises_set_value_and_replace_selected_text() {
+        let tree: Element = view! { <input type="text" value="hi" /> };
+        let (update, reverse, arena) = build(&tree, None);
+        let input = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert!(node.supports_action(Action::SetValue));
+        assert!(node.supports_action(Action::ReplaceSelectedText));
+    }
+
+    #[test]
+    fn a_disabled_input_advertises_neither_set_value_nor_replace_selected_text() {
+        let tree: Element = view! { <input type="text" value="hi" disabled="true" /> };
+        let (update, reverse, arena) = build(&tree, None);
+        let input = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert!(!node.supports_action(Action::SetValue));
+        assert!(!node.supports_action(Action::ReplaceSelectedText));
     }
 
     #[test]
