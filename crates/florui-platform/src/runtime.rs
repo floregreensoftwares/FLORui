@@ -51,7 +51,7 @@ pub struct UiRuntime {
     /// should match) rather than a mouse click.
     focus_visible: bool,
     /// Where to restore focus once the currently open modal
-    /// [`crate::dialog::Dialog`] closes — captured the render it opens,
+    /// [`crate::components::dialog::Dialog`] closes — captured the render it opens,
     /// consumed the render it closes. See [`Self::resolve_focus`]'s own
     /// doc for the full open/steady/close transition this drives.
     modal_return_path: Option<FocusPath>,
@@ -523,7 +523,7 @@ impl UiRuntime {
     }
 
     /// Re-resolves focus against this render's freshly rebuilt
-    /// [`Self::arena`], and drives the modal [`crate::dialog::Dialog`]
+    /// [`Self::arena`], and drives the modal [`crate::components::dialog::Dialog`]
     /// open/close transition:
     ///
     /// - **just opened** (a modal wasn't present last render, is now):
@@ -621,7 +621,7 @@ impl UiRuntime {
 
     /// Same as [`Self::dispatch_click`], generalized to an arbitrary
     /// event name and with no disabled-button gate — a modal
-    /// [`crate::dialog::Dialog`]'s own root is never itself a
+    /// [`crate::components::dialog::Dialog`]'s own root is never itself a
     /// disableable button, so that check has nothing to apply to here.
     /// `node` must be valid against [`Self::arena`] in its current
     /// generation, same as every other accessor here.
@@ -1565,7 +1565,7 @@ mod tests {
             arena
                 .classes(root)
                 .iter()
-                .any(|class| class == crate::dialog::MODAL_ROOT_CLASS),
+                .any(|class| class == crate::components::dialog::MODAL_ROOT_CLASS),
             "Dialog's own single-level Portal usage must be unaffected by nested-portal extraction"
         );
     }

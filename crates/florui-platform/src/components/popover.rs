@@ -1,5 +1,5 @@
 //! [`Popover`]: a non-modal, anchor-tracked overlay, built on
-//! [`crate::Portal`] like [`crate::dialog::Dialog`] — but never touches
+//! [`crate::Portal`] like [`crate::components::dialog::Dialog`] — but never touches
 //! [`crate::focus::modal_root`], so Tab/Shift+Tab are never trapped.
 //!
 //! Renders two divs inside `Portal`, not one: the outer is the arena's
@@ -37,7 +37,7 @@ use florui::{Children, Element, Handler, component};
 use florui_reactive::use_signal;
 use florui_style::{Arena, NodeId};
 
-use crate::portal::{Portal, PortalProps};
+use crate::components::portal::{Portal, PortalProps};
 use crate::position_observer::use_committed_position;
 use crate::size_observer::use_committed_size;
 use crate::viewport::use_viewport_size;

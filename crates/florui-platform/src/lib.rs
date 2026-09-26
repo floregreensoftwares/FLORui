@@ -9,10 +9,8 @@
 //! wants [`UiRuntime`] alone, without pulling in `winit`/`softbuffer`/
 //! `notify` at all, can disable it (`default-features = false`).
 
-mod dialog;
+mod components;
 mod focus;
-mod popover;
-mod portal;
 mod position_observer;
 mod runtime;
 mod scroll;
@@ -21,11 +19,11 @@ mod text_input;
 mod viewport;
 mod virtual_list;
 
-pub use dialog::{Dialog, DialogProps, MODAL_ROOT_CLASS};
-pub use popover::{
+pub use components::dialog::{Dialog, DialogProps, MODAL_ROOT_CLASS};
+pub use components::popover::{
     Align, POPOVER_ROOT_CLASS, POPOVER_TRIGGER_CLASS, Placement, Popover, PopoverProps, Side,
 };
-pub use portal::{Portal, PortalProps};
+pub use components::portal::{Portal, PortalProps};
 pub use position_observer::{PositionObserverRegistry, use_committed_position};
 pub use runtime::UiRuntime;
 pub use scroll::{ScrollHandle, ScrollRegistry, use_scroll_offset};

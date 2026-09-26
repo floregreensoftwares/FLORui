@@ -21,7 +21,7 @@
 
 use florui::{Children, Element, Handler, component};
 
-use crate::portal::{Portal, PortalProps};
+use crate::components::portal::{Portal, PortalProps};
 
 /// A live `<div>` carrying this class is what [`crate::focus::modal_root`]
 /// looks for — reserved, not meant to be styled directly by an app (style
