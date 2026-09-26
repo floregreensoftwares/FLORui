@@ -2431,9 +2431,38 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                                     state.update_and_request_redraw();
                                 }
                             }
-                            // AT-driven text editing (`SetValue`, etc.) is
-                            // out of scope this slice -- see this crate's
-                            // own accessibility module doc.
+                            // `ReplaceSelectedText` is `TextEditOp::InsertOrReplace`
+                            // directly. `SetValue` means the whole value,
+                            // not just the selection -- select all first
+                            // so the same insert replaces everything.
+                            action @ (accesskit::Action::SetValue
+                            | accesskit::Action::ReplaceSelectedText) => {
+                                let Some(accesskit::ActionData::Value(value)) = request.data else {
+                                    return;
+                                };
+                                let Some(id) = ({
+                                    let (arena, ..) = state.runtime.geometry();
+                                    arena.id_attr(node).map(str::to_owned)
+                                }) else {
+                                    return;
+                                };
+                                let value = strip_disallowed_input_chars(&value);
+                                let registry = state.runtime.text_input_registry();
+                                if action == accesskit::Action::SetValue {
+                                    state.commit_text_input_op(
+                                        &registry,
+                                        &id,
+                                        node,
+                                        TextEditOp::SelectAll,
+                                    );
+                                }
+                                state.commit_text_input_op(
+                                    &registry,
+                                    &id,
+                                    node,
+                                    TextEditOp::InsertOrReplace(value),
+                                );
+                            }
                             _ => {}
                         }
                     }
