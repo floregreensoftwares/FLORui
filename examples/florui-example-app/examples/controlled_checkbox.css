@@ -1,0 +1,58 @@
+.page {
+    display: flex;
+    flex-direction: column;
+    padding-top: 24px;
+    padding-right: 24px;
+    padding-bottom: 24px;
+    padding-left: 24px;
+    background-color: #1e1e22;
+    color: #ffffff;
+}
+
+.instructions {
+    margin-bottom: 16px;
+    font-size: 16px;
+}
+
+.status {
+    margin-bottom: 20px;
+    font-size: 16px;
+}
+
+.row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.checkbox {
+    width: 18px;
+    height: 18px;
+    margin-right: 10px;
+    background-color: #26262c;
+    border-width: 2px;
+    border-style: solid;
+    border-color: #6b6b73;
+}
+
+.checkbox:checked {
+    background-color: #4c8bf5;
+    border-color: #4c8bf5;
+}
+
+.checkbox:focus-visible {
+    border-color: #ffffff;
+}
+
+.checkbox:disabled {
+    border-color: #3a3a40;
+}
+
+.checkbox:disabled:checked {
+    background-color: #5a6a8a;
+}
+
+.field-label {
+    font-size: 16px;
+}

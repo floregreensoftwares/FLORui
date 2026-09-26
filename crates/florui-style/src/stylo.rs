@@ -163,6 +163,19 @@ impl StyloTree {
                     node_state |= ElementState::ENABLED;
                 }
             }
+            // Same markup-state contract as the `<button>` block above,
+            // for `<input type="checkbox">` -- plus `:checked`, which
+            // `<button>` has no equivalent of.
+            if arena.tag(id) == "input" && arena.input_type(id) == Some("checkbox") {
+                if arena.is_disabled(id) {
+                    node_state |= ElementState::DISABLED;
+                } else {
+                    node_state |= ElementState::ENABLED;
+                }
+                if arena.is_checked(id) {
+                    node_state |= ElementState::CHECKED;
+                }
+            }
             let parent_stable = arena
                 .parent(id)
                 .map(|parent_id| stable_ids[index_of[&parent_id]]);
