@@ -768,6 +768,9 @@ struct WindowState {
     /// The node hit-tested at the last left-button press, if any — a
     /// click only dispatches on release over this same node.
     pressed: Option<NodeId>,
+    /// Where the Space key went down, if it is still held: Space activates
+    /// on release, and only if focus is still there (as in real HTML).
+    space_armed: Option<florui_style::FocusPath>,
     last_cursor: (f64, f64),
     window: Arc<Window>,
     /// Also reachable from the component tree via
@@ -1519,6 +1522,9 @@ impl WindowState {
     /// below.
     fn handle_keyboard_input(&mut self, event: KeyEvent, clipboard: &crate::clipboard::Clipboard) {
         if event.state != ElementState::Pressed {
+            if matches!(event.logical_key, Key::Named(NamedKey::Space)) {
+                self.release_space();
+            }
             return;
         }
         // A held key's own OS auto-repeat must reach text editing (real
@@ -1577,12 +1583,19 @@ impl WindowState {
                         .show_system_menu_at(origin.x + offset_x, origin.y + offset_y);
                 }
             }
-            Key::Named(key @ (NamedKey::Enter | NamedKey::Space)) => {
+            Key::Named(NamedKey::Enter) => {
                 if let Some(focused) = self.runtime.focused() {
                     let (arena, ..) = self.runtime.geometry();
-                    if key == NamedKey::Space || crate::focus::activates_on_enter(arena, focused) {
+                    if crate::focus::activates_on_enter(arena, focused) {
                         self.runtime.dispatch_click(focused);
                     }
+                }
+            }
+            // Fires on release, see `release_space`.
+            Key::Named(NamedKey::Space) => {
+                if let Some(focused) = self.runtime.focused() {
+                    let (arena, ..) = self.runtime.geometry();
+                    self.space_armed = Some(florui_style::FocusPath::of(arena, focused));
                 }
             }
             // Selection follows focus within a radio group, so moving
@@ -1626,6 +1639,21 @@ impl WindowState {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Space activates on key release, like a native checkbox or button:
+    /// the click fires only if focus is still on the node it went down on.
+    fn release_space(&mut self) {
+        let Some(armed) = self.space_armed.take() else {
+            return;
+        };
+        let Some(focused) = self.runtime.focused() else {
+            return;
+        };
+        let (arena, ..) = self.runtime.geometry();
+        if florui_style::FocusPath::of(arena, focused) == armed {
+            self.runtime.dispatch_click(focused);
         }
     }
 
@@ -2247,6 +2275,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 canvas_color: spec.canvas_color,
                 runtime,
                 pressed: None,
+                space_armed: None,
                 last_cursor: (0.0, 0.0),
                 window,
                 controls,
