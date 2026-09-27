@@ -57,7 +57,7 @@ use florui_style::{
     AnimationTimeline, Arena, ComputedStyle, ContentAlignment, ContentBoxSize,
     Display as StyleDisplay, FlexDirection as StyleFlexDirection, FlexWrap as StyleFlexWrap,
     InlineItem as StyleInlineItem, InteractionState, ItemAlignment, NodeId,
-    Position as StylePosition, Rule, Viewport,
+    Position as StylePosition, RoundedRect, Rule, Viewport,
 };
 use taffy::prelude::*;
 use taffy::{Baselines, compute_leaf_layout};
@@ -1280,9 +1280,16 @@ pub fn apply_scroll_offsets(
 /// overlap always resolves to the box on top. Real block layout has no
 /// overlapping siblings yet, so in practice this only matters for nested
 /// containment, but the rule generalizes to whatever layout produces.
+///
+/// A box only counts where its `border-radius` outline does (not the cut
+/// corners), and only where every `overflow`-clipping ancestor's own
+/// rounded padding box does too — the same shapes `florui_paint` draws and
+/// clips to, so a click can't land on something that isn't visible there.
+/// A node with no entry in `styles` is a plain rectangle.
 pub fn hit_test(
     arena: &Arena,
     layouts: &HashMap<NodeId, BoxLayout>,
+    styles: &HashMap<NodeId, ComputedStyle>,
     x: f32,
     y: f32,
 ) -> Option<NodeId> {
@@ -1291,13 +1298,64 @@ pub fn hit_test(
     while let Some(node) = stack.pop() {
         if let Some(&layout) = layouts.get(&node) {
             let (ax, ay) = absolute_position(arena, layouts, node);
-            if x >= ax && x < ax + layout.width && y >= ay && y < ay + layout.height {
+            if border_box_outline(styles, node, ax, ay, layout).contains(x, y)
+                && !clipped_out(arena, layouts, styles, node, x, y)
+            {
                 hit = Some(node);
             }
         }
         stack.extend(arena.children(node).iter().rev());
     }
     hit
+}
+
+/// `node`'s border box with its `border-radius` applied. Layout runs in
+/// logical pixels, so lengths resolve at scale `1.0`.
+fn border_box_outline(
+    styles: &HashMap<NodeId, ComputedStyle>,
+    node: NodeId,
+    x: f32,
+    y: f32,
+    layout: BoxLayout,
+) -> RoundedRect {
+    match styles.get(&node) {
+        Some(style) => {
+            RoundedRect::new(x, y, layout.width, layout.height, &style.border_radius, 1.0)
+        }
+        None => RoundedRect::square(x, y, layout.width, layout.height),
+    }
+}
+
+/// Whether some `overflow`-clipping ancestor of `node` excludes `(x, y)`
+/// from its rounded padding box.
+fn clipped_out(
+    arena: &Arena,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    styles: &HashMap<NodeId, ComputedStyle>,
+    node: NodeId,
+    x: f32,
+    y: f32,
+) -> bool {
+    let mut ancestor = arena.parent(node);
+    while let Some(id) = ancestor {
+        if let (Some(style), Some(&layout)) = (styles.get(&id), layouts.get(&id))
+            && style.overflow_clips
+        {
+            let (ax, ay) = absolute_position(arena, layouts, id);
+            let border = style.border;
+            let padding_box = border_box_outline(styles, id, ax, ay, layout).inset(
+                border.top.width,
+                border.right.width,
+                border.bottom.width,
+                border.left.width,
+            );
+            if !padding_box.contains(x, y) {
+                return true;
+            }
+        }
+        ancestor = arena.parent(id);
+    }
+    false
 }
 
 /// An explanation for why a flex or grid item's final size doesn't match
@@ -1552,6 +1610,16 @@ mod tests {
     use florui_style::InteractionState;
 
     use super::*;
+
+    /// [`super::hit_test`] over unstyled (plain rectangle) nodes.
+    fn hit_test(
+        arena: &Arena,
+        layouts: &HashMap<NodeId, BoxLayout>,
+        x: f32,
+        y: f32,
+    ) -> Option<NodeId> {
+        super::hit_test(arena, layouts, &HashMap::new(), x, y)
+    }
 
     fn layout_for(tree: &Element, css: &str) -> (Arena, HashMap<NodeId, BoxLayout>) {
         let (arena, _styles, layouts) = layout_with_styles(tree, css);
@@ -2082,6 +2150,59 @@ mod tests {
             hit_test(&arena, &layouts, 200.0, 200.0),
             None,
             "outside every box"
+        );
+    }
+
+    #[test]
+    fn hit_test_misses_a_rounded_corner_but_hits_the_edge_midpoint() {
+        let tree: Element = view! { <div class="disc" /> };
+        let (arena, styles, layouts) = layout_with_styles(
+            &tree,
+            ".disc { width: 20px; height: 20px; border-radius: 50%; }",
+        );
+        let disc = arena.roots()[0];
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 10.0, 10.0),
+            Some(disc)
+        );
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 10.0, 0.5),
+            Some(disc)
+        );
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 1.0, 1.0),
+            None,
+            "the box's corner lies outside its own rounded outline"
+        );
+    }
+
+    #[test]
+    fn hit_test_clips_a_child_to_a_rounded_overflow_hidden_ancestor() {
+        let tree: Element = view! {
+            <div class="frame">
+                <div class="content" />
+            </div>
+        };
+        let (arena, styles, layouts) = layout_with_styles(
+            &tree,
+            ".frame { width: 20px; height: 20px; overflow: hidden; border-radius: 10px; } \
+             .content { width: 40px; height: 40px; }",
+        );
+        let frame = arena.roots()[0];
+        let content = arena.children(frame)[0];
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 10.0, 10.0),
+            Some(content)
+        );
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 1.0, 1.0),
+            None,
+            "the child is clipped out at the frame's cut corner"
+        );
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 30.0, 30.0),
+            None,
+            "and past the frame's padding box altogether"
         );
     }
 
