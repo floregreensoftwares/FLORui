@@ -204,7 +204,21 @@ fn push_node(
         border,
         margin: style.margin,
         size_cause: causes.get(&id).map(format_size_cause),
+        diagnostics: node_diagnostics(arena, id),
     });
+}
+
+/// Markup problems the engine silently worked around — see
+/// [`InspectorNode::diagnostics`].
+fn node_diagnostics(arena: &Arena, id: NodeId) -> Vec<String> {
+    let mut messages = Vec::new();
+    if let Some(role) = arena.unsupported_role(id) {
+        messages.push(format!(
+            "role=\"{role}\" is not supported and was ignored (only \"switch\", on a checkbox \
+             input, is understood)"
+        ));
+    }
+    messages
 }
 
 /// A node's border box, in the same physical-pixel space the preview
@@ -668,6 +682,35 @@ mod tests {
     }
 
     #[test]
+    fn an_unsupported_role_is_reported_as_a_diagnostic_and_a_supported_one_is_not() {
+        let tree: Element = view! {
+            <div>
+                <input type="checkbox" role="slider" />
+                <input type="checkbox" role="switch" />
+                <input type="checkbox" />
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let rules = parse_stylesheet("").unwrap();
+        let styles = compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+
+        let model = build_inspector_model(&arena, &styles, &HashMap::new(), None, false);
+
+        let inputs: Vec<_> = model.nodes.iter().filter(|n| n.tag == "input").collect();
+        assert_eq!(inputs.len(), 3);
+        assert_eq!(inputs[0].diagnostics.len(), 1);
+        assert!(inputs[0].diagnostics[0].contains("role=\"slider\""));
+        assert!(inputs[1].diagnostics.is_empty(), "switch is supported");
+        assert!(inputs[2].diagnostics.is_empty(), "no role, nothing to say");
+    }
+
+    #[test]
     fn inspector_nodes_default_to_css_initial_values_with_zero_author_css() {
         let tree: Element = view! { <div /> };
         let arena = Arena::build(&tree);
@@ -730,6 +773,7 @@ mod tests {
                 left: Some(0.0),
             },
             size_cause: None,
+            diagnostics: Vec::new(),
         }
     }
 
