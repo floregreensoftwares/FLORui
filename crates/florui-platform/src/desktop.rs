@@ -1453,7 +1453,7 @@ impl WindowState {
             return false;
         }
         match arena.tag(node) {
-            "button" => true,
+            "button" | "select" => true,
             "input" => {
                 crate::focus::is_editable_input_type(arena.input_type(node))
                     || crate::focus::is_checkable_input_type(arena.input_type(node))
@@ -1511,6 +1511,23 @@ impl WindowState {
         if let (Some(pressed), Some(released_over)) = (pressed, released_over)
             && pressed == released_over
         {
+            // Picking an option also closes its select -- unlike a plain
+            // popover, where a click inside content never dismisses.
+            // Skips the focus-to-target step below too: an `<option>` is
+            // never itself focusable (see `focus::is_focusable`), and
+            // focus should stay on the select, not fall off the document
+            // when the option it landed on disappears from the tree next
+            // render.
+            let is_option = {
+                let (arena, ..) = self.runtime.geometry();
+                arena.tag(pressed) == "option"
+            };
+            if is_option {
+                self.runtime.dispatch_click(pressed);
+                self.dismiss_select_root_of(pressed);
+                self.update_and_request_redraw();
+                return;
+            }
             // Matches real HTML: a click sets keyboard focus to its
             // target too, just not :focus-visible (via_keyboard: false).
             let Some(target) = self.runtime.activation_target(pressed) else {
@@ -1654,9 +1671,17 @@ impl WindowState {
             }
             Key::Named(NamedKey::Enter) => {
                 if let Some(focused) = self.runtime.focused() {
-                    let (arena, ..) = self.runtime.geometry();
-                    if crate::focus::activates_on_enter(arena, focused) {
-                        self.runtime.dispatch_click(focused);
+                    let is_open_select = {
+                        let (arena, ..) = self.runtime.geometry();
+                        arena.tag(focused) == "select" && arena.is_open(focused)
+                    };
+                    if is_open_select {
+                        self.commit_active_select_option();
+                    } else {
+                        let (arena, ..) = self.runtime.geometry();
+                        if crate::focus::activates_on_enter(arena, focused) {
+                            self.runtime.dispatch_click(focused);
+                        }
                     }
                 }
             }
@@ -1687,6 +1712,8 @@ impl WindowState {
                 if let Some(radio) = self.runtime.step_radio_group(direction) {
                     self.runtime.dispatch_click(radio);
                     self.update_and_request_redraw();
+                } else if matches!(key, NamedKey::ArrowUp | NamedKey::ArrowDown) {
+                    self.step_select(direction);
                 }
             }
             // Only a modal `Dialog` wires this up at all -- resolved
@@ -1713,6 +1740,54 @@ impl WindowState {
             }
             _ => {}
         }
+    }
+
+    /// Dismisses whichever popover-shaped overlay root contains `node` —
+    /// used for a click on an `<option>`, which is always inside a
+    /// select's own synthesized root (see `crate::select`).
+    fn dismiss_select_root_of(&mut self, node: NodeId) {
+        let root = {
+            let (arena, ..) = self.runtime.geometry();
+            popover::popover_roots(arena)
+                .into_iter()
+                .find(|&root| popover::is_self_or_descendant(arena, root, node))
+        };
+        if let Some(root) = root {
+            self.runtime.dispatch_event(root, "dismiss");
+        }
+    }
+
+    /// Matches real `<select>`: an open one's Up/Down only moves the
+    /// keyboard highlight (`"activate"`, not a commit — see
+    /// [`crate::UiRuntime::step_select_option`]); a closed one's Up/Down
+    /// commits the adjacent value immediately, without opening
+    /// ([`crate::UiRuntime::step_closed_select`]).
+    fn step_select(&mut self, direction: isize) {
+        if let Some(option) = self.runtime.step_select_option(direction) {
+            self.runtime.dispatch_event(option, "activate");
+            self.update_and_request_redraw();
+            return;
+        }
+        if self.runtime.step_closed_select(direction) {
+            self.update_and_request_redraw();
+        }
+    }
+
+    /// Commits whichever option is active (or, absent one, selected) in
+    /// the focused open select, and dismisses it — Enter's own behavior
+    /// while a select is open. Falls back to the select's own `onclick`
+    /// (normally a plain open/close toggle) if no option resolves at all.
+    fn commit_active_select_option(&mut self) {
+        let Some(option) = self.runtime.active_or_selected_option() else {
+            if let Some(focused) = self.runtime.focused() {
+                self.runtime.dispatch_click(focused);
+                self.update_and_request_redraw();
+            }
+            return;
+        };
+        self.runtime.dispatch_click(option);
+        self.dismiss_select_root_of(option);
+        self.update_and_request_redraw();
     }
 
     /// Space activates on key release, like a native checkbox or button:
@@ -2557,9 +2632,40 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                             // handler's own `Signal` writes (if any) already
                             // redraw via `UserEvent::Dirty`.
                             accesskit::Action::Click => {
-                                let focus_changed = state.runtime.set_focused(Some(node), false);
-                                state.runtime.dispatch_click(node);
-                                if focus_changed {
+                                // An `<option>` is never focusable (see
+                                // `handle_release`'s own matching case) --
+                                // AT-driven activation must skip
+                                // `set_focused` for the same reason.
+                                let is_option = {
+                                    let (arena, ..) = state.runtime.geometry();
+                                    arena.tag(node) == "option"
+                                };
+                                if is_option {
+                                    state.runtime.dispatch_click(node);
+                                    state.dismiss_select_root_of(node);
+                                    state.update_and_request_redraw();
+                                } else {
+                                    let focus_changed =
+                                        state.runtime.set_focused(Some(node), false);
+                                    state.runtime.dispatch_click(node);
+                                    if focus_changed {
+                                        state.update_and_request_redraw();
+                                    }
+                                }
+                            }
+                            // A select's own `onclick` is an open/closed
+                            // toggle (the same contract every example
+                            // wires it with) -- gating each action to the
+                            // direction it actually means keeps AT-driven
+                            // Expand from silently closing an already-open
+                            // select, and vice versa.
+                            action @ (accesskit::Action::Expand | accesskit::Action::Collapse) => {
+                                let should_dispatch = {
+                                    let (arena, ..) = state.runtime.geometry();
+                                    arena.is_open(node) == (action == accesskit::Action::Collapse)
+                                };
+                                if should_dispatch {
+                                    state.runtime.dispatch_click(node);
                                     state.update_and_request_redraw();
                                 }
                             }

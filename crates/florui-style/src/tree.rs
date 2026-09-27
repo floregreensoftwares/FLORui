@@ -68,6 +68,22 @@ struct ArenaNode {
     range_max: f32,
     range_step: f32,
     range_value: f32,
+    /// Whether the `selected` attribute is present and `"true"` — markup
+    /// state for `<option>`, read the same way `checked` is (real HTML
+    /// uses a different attribute name for a `<select>`'s own child than
+    /// for a checkbox/radio, so this is its own field rather than reusing
+    /// `checked`). See [`Arena::is_selected`].
+    selected: bool,
+    /// Whether the `active` attribute is present and `"true"` — an
+    /// `<option>`'s own keyboard-highlight state while its select is
+    /// open, distinct from `selected` (the committed value): real HTML
+    /// lets arrow keys preview an option without committing it until
+    /// Enter/click. See [`Arena::is_active`].
+    active: bool,
+    /// Whether the `open` attribute is present and `"true"` — markup
+    /// state for `<select>`: whether its option list is currently showing
+    /// as an overlay. See [`Arena::is_open`].
+    open: bool,
     /// The raw, unparsed `style="..."` attribute text, if declared — see
     /// [`Arena::style_attr`].
     style: Option<String>,
@@ -235,6 +251,9 @@ impl Arena {
                         range_max,
                         range_step: attr_f32(&node.attrs, "step", 1.0),
                         range_value: attr_f32(&node.attrs, "value", (range_min + range_max) / 2.0),
+                        selected: attr_bool(&node.attrs, "selected"),
+                        active: attr_bool(&node.attrs, "active"),
+                        open: attr_bool(&node.attrs, "open"),
                         style: attr_value(&node.attrs, "style"),
                         value: attr_value(&node.attrs, "value"),
                         input_type: attr_value(&node.attrs, "type"),
@@ -379,6 +398,24 @@ impl Arena {
         } else {
             node.range_value
         }
+    }
+
+    /// Whether this node's `selected` attribute is present and `"true"` —
+    /// for `<option>`. See [`ArenaNode::selected`].
+    pub fn is_selected(&self, id: NodeId) -> bool {
+        self.nodes[id].selected
+    }
+
+    /// Whether this node's `active` attribute is present and `"true"` —
+    /// for `<option>`. See [`ArenaNode::active`].
+    pub fn is_active(&self, id: NodeId) -> bool {
+        self.nodes[id].active
+    }
+
+    /// Whether this node's `open` attribute is present and `"true"` — for
+    /// `<select>`. See [`ArenaNode::open`].
+    pub fn is_open(&self, id: NodeId) -> bool {
+        self.nodes[id].open
     }
 
     /// This node's raw, unparsed `style="..."` attribute text, if it
@@ -808,6 +845,45 @@ mod tests {
         let tree: Element = view! { <input type="checkbox" /> };
         let arena = Arena::build(&tree);
         assert!(!arena.is_checked(arena.roots()[0]));
+    }
+
+    #[test]
+    fn selected_attribute_true_is_read_and_absent_defaults_to_false() {
+        let tree: Element = view! {
+            <select>
+                <option selected="true">{"A"}</option>
+                <option>{"B"}</option>
+            </select>
+        };
+        let arena = Arena::build(&tree);
+        let options = arena.find_all(|a, id| a.tag(id) == "option");
+        assert!(arena.is_selected(options[0]));
+        assert!(!arena.is_selected(options[1]));
+    }
+
+    #[test]
+    fn active_attribute_true_is_read_and_absent_defaults_to_false() {
+        let tree: Element = view! {
+            <select>
+                <option active="true">{"A"}</option>
+                <option>{"B"}</option>
+            </select>
+        };
+        let arena = Arena::build(&tree);
+        let options = arena.find_all(|a, id| a.tag(id) == "option");
+        assert!(arena.is_active(options[0]));
+        assert!(!arena.is_active(options[1]));
+    }
+
+    #[test]
+    fn open_attribute_true_is_read_and_absent_defaults_to_false() {
+        let tree: Element = view! { <select open="true" /> };
+        let arena = Arena::build(&tree);
+        assert!(arena.is_open(arena.roots()[0]));
+
+        let tree: Element = view! { <select /> };
+        let arena = Arena::build(&tree);
+        assert!(!arena.is_open(arena.roots()[0]));
     }
 
     #[test]

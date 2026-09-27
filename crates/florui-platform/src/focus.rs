@@ -1,14 +1,14 @@
 //! Which nodes participate in keyboard focus traversal, and in what order.
 //!
 //! v1 is deliberately narrow: `<button>`, an editable `<input>`,
-//! `<input type="checkbox">`, `<input type="radio">` and
-//! `<input type="range">`, not disabled, document order, no `tabindex`.
-//! Radios sharing a `name` are one Tab stop (see [`tab_stops`]) and move
-//! among themselves with the arrow keys (see [`radio_sibling`]) — a range
-//! input's own arrow-key handling lives in `desktop.rs`, gated by type so
-//! it never fires alongside a radio's. Extending this further
-//! (`a`/`select`/`textarea`) later is one more clause here, not a
-//! redesign.
+//! `<input type="checkbox">`, `<input type="radio">`, `<input
+//! type="range">`, and `<select>`, not disabled, document order, no
+//! `tabindex`. Radios sharing a `name` are one Tab stop (see
+//! [`tab_stops`]) and move among themselves with the arrow keys (see
+//! [`radio_sibling`]) — a range input's own arrow-key handling lives in
+//! `desktop.rs`, gated by type so it never fires alongside a radio's.
+//! Extending this further (`a`/`textarea`) later is one more clause
+//! here, not a redesign.
 
 use florui_style::{Arena, NodeId};
 
@@ -31,10 +31,10 @@ pub(crate) fn is_range_input_type(input_type: Option<&str>) -> bool {
     input_type == Some("range")
 }
 
-/// Whether a `<label>` can hand its click to `id`: an `<input>` or a
-/// `<button>`.
+/// Whether a `<label>` can hand its click to `id`: an `<input>`, a
+/// `<button>`, or a `<select>`.
 pub(crate) fn is_labelable(arena: &Arena, id: NodeId) -> bool {
-    matches!(arena.tag(id), "input" | "button")
+    matches!(arena.tag(id), "input" | "button" | "select")
 }
 
 fn is_radio(arena: &Arena, id: NodeId) -> bool {
@@ -46,7 +46,7 @@ pub(crate) fn is_focusable(arena: &Arena, id: NodeId) -> bool {
         return false;
     }
     match arena.tag(id) {
-        "button" => true,
+        "button" | "select" => true,
         "input" => {
             is_editable_input_type(arena.input_type(id))
                 || is_checkable_input_type(arena.input_type(id))
@@ -220,6 +220,31 @@ mod tests {
         let tree: Element = view! { <input type="checkbox" /> };
         let arena = Arena::build(&tree);
         assert!(is_focusable(&arena, arena.roots()[0]));
+    }
+
+    #[test]
+    fn a_select_is_focusable_unless_disabled_and_an_option_never_is() {
+        let tree: Element = view! {
+            <div>
+                <select id="a" open="true">
+                    <option value="x">{"X"}</option>
+                </select>
+                <select id="b" disabled="true" />
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let selects = arena.find_all(|a, id| a.tag(id) == "select");
+        assert!(is_focusable(&arena, selects[0]));
+        assert!(!is_focusable(&arena, selects[1]));
+        let option = arena.find(|a, id| a.tag(id) == "option").unwrap();
+        assert!(!is_focusable(&arena, option));
+    }
+
+    #[test]
+    fn a_select_is_labelable() {
+        let tree: Element = view! { <select id="size" /> };
+        let arena = Arena::build(&tree);
+        assert!(is_labelable(&arena, arena.roots()[0]));
     }
 
     #[test]

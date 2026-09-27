@@ -174,9 +174,13 @@ pub const PRIMITIVES: &[Primitive] = &[
     primitive!(
         "select",
         Content::Normal,
-        "needs selection, keyboard, and option presentation once interaction exists"
+        "a dropdown; open/value are the app's own controlled state, like checked on a checkbox"
     ),
-    primitive!("option", Content::Normal, "an item within a select"),
+    primitive!(
+        "option",
+        Content::Normal,
+        "an item within a select, chosen via its own selected attribute"
+    ),
     primitive!("fieldset", Content::Normal, "groups related form controls"),
     primitive!("legend", Content::Normal, "a caption for a fieldset"),
     // Images.

@@ -48,6 +48,27 @@
 //! rendering mode (the way Expo/React Native lets an app render toward
 //! each platform's own native look) is a real, deliberately separate
 //! future direction, not something this default stylesheet attempts.
+//!
+//! `select`/`option` are checked the same way: `select` gets
+//! `border: 1px solid #767676` (Chromium's own flat value here, no bevel
+//! simplification needed — `border-style: solid` is what a real
+//! `<select>` actually computes to, unlike `input`/`button`'s `inset`/
+//! `outset`), `background-color: #ffffff`, `color: #000000`, and
+//! `display: inline-block`. `option` gets `display: block` and
+//! `padding: 0px 2px 1px 2px` (top/right/bottom/left, confirmed — note
+//! the asymmetric top vs. `input`'s own `1px`).
+//!
+//! `select`'s own `padding` genuinely computes to `0` — the closed
+//! control's visible text inset comes from `appearance: auto`'s internal
+//! shadow-DOM rendering instead, invisible to `getComputedStyle`, so
+//! there's no real property value to copy. `padding-left: 4px` here is a
+//! *measured*, not confirmed, stand-in: pixel-compared (via this repo's
+//! `florui compare` tool) against a zero-padding `<div>` with identical
+//! text/font/border, to separate the select's own inset from the
+//! glyphs' own left-bearing — one data point, one font-size, not
+//! verified to scale like a real padding would. The dropdown-arrow glyph
+//! is the same `appearance: auto` category with no fallback at all: no
+//! CSS box of its own to even approximate a value for.
 
 use std::sync::LazyLock;
 
@@ -75,6 +96,22 @@ const CSS: &str = "
         background-color: #ffffff;
         color: #000000;
         padding-top: 1px;
+        padding-right: 2px;
+        padding-bottom: 1px;
+        padding-left: 2px;
+    }
+
+    select {
+        display: inline-block;
+        border: 1px solid #767676;
+        background-color: #ffffff;
+        color: #000000;
+        padding-left: 4px;
+    }
+
+    option {
+        display: block;
+        padding-top: 0px;
         padding-right: 2px;
         padding-bottom: 1px;
         padding-left: 2px;
@@ -263,6 +300,63 @@ mod tests {
         assert_close(style.padding.right, 2.0, "input padding-right");
         assert_close(style.padding.bottom, 1.0, "input padding-bottom");
         assert_close(style.padding.left, 2.0, "input padding-left");
+    }
+
+    #[test]
+    fn select_and_option_resolve_chromiums_real_default_appearance_with_zero_author_css() {
+        // Verified directly against a real Chromium (`getComputedStyle` on
+        // an injected `<select>`/`<option>`), not assumed -- see this
+        // module's own doc for the exact values, and for why
+        // `select_style.padding.left` alone is measured, not confirmed.
+        let tree: Element = view! {
+            <div>
+                <select>
+                    <option>{"A"}</option>
+                </select>
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let div = arena.roots()[0];
+        let select = arena.children(div)[0];
+        let option = arena.children(select)[0];
+        let rules = parse_stylesheet("").unwrap();
+        let computed = compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            Viewport::default(),
+            &mut crate::AnimationTimeline::default(),
+        );
+
+        let select_style = &computed[&select];
+        assert_eq!(select_style.display, Display::InlineBlock);
+        for side in [
+            select_style.border.top,
+            select_style.border.right,
+            select_style.border.bottom,
+            select_style.border.left,
+        ] {
+            assert_close(side.width, 1.0, "select border-width");
+            assert_eq!(side.color, crate::color::Rgba::opaque(0x76, 0x76, 0x76));
+        }
+        assert_eq!(
+            select_style.background_color,
+            crate::color::Rgba::opaque(0xff, 0xff, 0xff)
+        );
+        assert_eq!(
+            select_style.color,
+            crate::color::Rgba::opaque(0x00, 0x00, 0x00)
+        );
+        assert_close(select_style.padding.top, 0.0, "select padding-top");
+        assert_close(select_style.padding.right, 0.0, "select padding-right");
+        assert_close(select_style.padding.left, 4.0, "select padding-left");
+
+        let option_style = &computed[&option];
+        assert_eq!(option_style.display, Display::Block);
+        assert_close(option_style.padding.top, 0.0, "option padding-top");
+        assert_close(option_style.padding.right, 2.0, "option padding-right");
+        assert_close(option_style.padding.bottom, 1.0, "option padding-bottom");
+        assert_close(option_style.padding.left, 2.0, "option padding-left");
     }
 
     #[test]

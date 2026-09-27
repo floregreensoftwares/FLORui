@@ -14,6 +14,7 @@ mod focus;
 mod position_observer;
 mod runtime;
 mod scroll;
+mod select;
 mod size_observer;
 mod text_input;
 mod viewport;
@@ -34,6 +35,7 @@ pub use components::switch::{
 pub use position_observer::{PositionObserverRegistry, use_committed_position};
 pub use runtime::UiRuntime;
 pub use scroll::{ScrollHandle, ScrollRegistry, use_scroll_offset};
+pub use select::SELECT_OPTIONS_CLASS;
 pub use size_observer::{SizeObserverRegistry, use_committed_size};
 pub use viewport::{ViewportSize, use_viewport_size};
 pub use virtual_list::{ItemHeight, Overscan, VirtualListHandle, use_virtual_list};

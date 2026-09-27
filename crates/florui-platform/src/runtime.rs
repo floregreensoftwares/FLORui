@@ -76,6 +76,10 @@ pub struct UiRuntime {
     arena: Arena,
     styles: HashMap<NodeId, ComputedStyle>,
     layouts: HashMap<NodeId, BoxLayout>,
+    /// Every select's own options, by the select's `id` — see
+    /// [`crate::select::normalize`]'s own doc for why this exists
+    /// alongside `arena` rather than just reading options off it.
+    option_summaries: HashMap<String, Vec<crate::select::OptionSummary>>,
     /// Carries real `transition`/`@keyframes` state across [`Self::update`]
     /// calls, sampled against a real wall clock captured once at
     /// [`Self::with_rules_and_context`] — see
@@ -225,6 +229,7 @@ impl UiRuntime {
             arena: Arena::build(&Element::Fragment(Vec::new())),
             styles: HashMap::new(),
             layouts: HashMap::new(),
+            option_summaries: HashMap::new(),
             animation_timeline,
             animation_epoch: std::time::Instant::now(),
             font: florui_text::Font::load_embedded(),
@@ -353,6 +358,8 @@ impl UiRuntime {
         // Lets any resource the render just started (or a prior task's
         // waker already requeued) make progress before this frame commits.
         self.executor.run_until_stalled();
+        let mut tree = tree;
+        self.option_summaries = crate::select::normalize(&mut tree);
         self.arena = Arena::build(&tree);
         self.resolve_hover();
         self.resolve_focus();
@@ -373,7 +380,9 @@ impl UiRuntime {
         )
         .expect("this tree's explicit sizes never produce a layout failure");
         self.styles = styles;
+        let (layouts, content_extents) = self.fix_select_widths(layouts, content_extents, viewport);
         self.layouts = layouts;
+        self.position_open_selects(resolved_viewport.width, resolved_viewport.height);
         // After layout, not before: a committed-size/-position observer
         // must see this render's own real geometry, not the previous one's.
         self.size_observers.notify(&self.arena, &self.layouts);
@@ -382,6 +391,122 @@ impl UiRuntime {
             .sync(&self.arena, &self.layouts, &content_extents);
         self.text_input_registry
             .sync(&self.arena, &self.styles, &mut self.font);
+    }
+
+    /// Widens any *auto-width* select whose widest option's real measured
+    /// text needs more room than its own natural width (only ever sized
+    /// to whichever single option happens to be its current label, since
+    /// the rest aren't in the tree while closed — see `crate::select`'s
+    /// own doc). Never touches a select with an explicit author `width`,
+    /// matching real HTML: auto-sizing to the widest option only ever
+    /// applies absent one. A cheap layout-only re-pass, not a full
+    /// `compute_with_style` — `self.styles` is already otherwise correct,
+    /// only one node's own resolved `width` and the geometry that flows
+    /// from it need to change.
+    fn fix_select_widths(
+        &mut self,
+        layouts: HashMap<NodeId, BoxLayout>,
+        content_extents: HashMap<NodeId, florui_layout::ContentExtent>,
+        available: Size<AvailableSpace>,
+    ) -> (
+        HashMap<NodeId, BoxLayout>,
+        HashMap<NodeId, florui_layout::ContentExtent>,
+    ) {
+        let mut any_fixed = false;
+        for select in self.arena.find_all(|arena, id| arena.tag(id) == "select") {
+            let (Some(select_id), Some(&current)) =
+                (self.arena.id_attr(select), layouts.get(&select))
+            else {
+                continue;
+            };
+            let Some(options) = self.option_summaries.get(select_id) else {
+                continue;
+            };
+            let Some(style) = self.styles.get(&select) else {
+                continue;
+            };
+            if style.width.is_some() {
+                continue;
+            }
+            let family = match style.font_family {
+                florui_style::FontFamily::SansSerif => florui_text::FontFamily::SansSerif,
+                florui_style::FontFamily::Monospace => florui_text::FontFamily::Monospace,
+            };
+            let (font_size, font_weight) = (style.font_size, style.font_weight);
+            let content_width = options
+                .iter()
+                .map(|option| {
+                    self.font
+                        .measure(family, &option.label, font_size, font_weight)
+                        .width
+                })
+                .fold(0.0_f32, f32::max);
+            let needed = content_width
+                + style.padding.left
+                + style.padding.right
+                + style.border.left.width
+                + style.border.right.width;
+            if needed > current.width
+                && let Some(style) = self.styles.get_mut(&select)
+            {
+                style.width = Some(needed);
+                any_fixed = true;
+            }
+        }
+        if !any_fixed {
+            return (layouts, content_extents);
+        }
+        florui_layout::compute_layout_with_content_extents(
+            &mut self.font,
+            &self.arena,
+            &self.styles,
+            available,
+        )
+        .expect("a select-width fix-up never produces a layout failure")
+    }
+
+    /// Patches each open select's synthesized content div to its real
+    /// placement against the trigger, before anything paints this frame.
+    /// Unlike `Popover`'s hook-driven two-render settle, this runs
+    /// synchronously right after the one layout pass it reads, so the
+    /// placeholder position `select::normalize` gives the div is never
+    /// actually painted.
+    fn position_open_selects(&mut self, viewport_width: f32, viewport_height: f32) {
+        let placement = crate::components::popover::Placement::new(
+            crate::components::popover::Side::Bottom,
+            crate::components::popover::Align::Start,
+        );
+        let open_triggers: Vec<NodeId> = self
+            .arena
+            .find_all(|arena, id| arena.tag(id) == "select" && arena.is_open(id));
+        for trigger in open_triggers {
+            let Some(select_id) = self.arena.id_attr(trigger) else {
+                continue;
+            };
+            let content_id = format!("{select_id}{}", crate::select::SELECT_CONTENT_ID_SUFFIX);
+            let Some(content) = self
+                .arena
+                .find(|arena, id| arena.id_attr(id) == Some(content_id.as_str()))
+            else {
+                continue;
+            };
+            let (Some(&trigger_box), Some(&content_box)) =
+                (self.layouts.get(&trigger), self.layouts.get(&content))
+            else {
+                continue;
+            };
+            let (tx, ty) = florui_layout::absolute_position(&self.arena, &self.layouts, trigger);
+            let (x, y) = crate::components::popover::resolve_placement(
+                &placement,
+                (tx, ty, trigger_box.width, trigger_box.height),
+                (content_box.width, content_box.height),
+                (viewport_width, viewport_height),
+            );
+            if let Some(layout) = self.layouts.get_mut(&content) {
+                layout.x = x;
+                layout.y = y;
+            }
+        }
     }
 
     /// Whether the most recent [`Self::update`] left any `transition`/
@@ -669,6 +794,94 @@ impl UiRuntime {
         }
     }
 
+    /// The option one arrow-key step (wrapping) from the focused, *open*
+    /// select's currently selected option — `None` if focus isn't on an
+    /// open select, or it has fewer than two options. Unlike
+    /// [`Self::step_radio_group`], focus stays on the select itself: an
+    /// `<option>` is never independently focusable, only Tab-reachable via
+    /// its parent select.
+    pub fn step_select_option(&self, direction: isize) -> Option<NodeId> {
+        let select = self.focused_node?;
+        if self.arena.tag(select) != "select" || !self.arena.is_open(select) {
+            return None;
+        }
+        let select_id = self.arena.id_attr(select)?;
+        let content_id = format!("{select_id}{}", crate::select::SELECT_CONTENT_ID_SUFFIX);
+        let content = self
+            .arena
+            .find(|arena, id| arena.id_attr(id) == Some(content_id.as_str()))?;
+        let options: Vec<NodeId> = self
+            .arena
+            .children(content)
+            .iter()
+            .copied()
+            .filter(|&id| self.arena.tag(id) == "option")
+            .collect();
+        if options.len() < 2 {
+            return None;
+        }
+        // Pivots on `active` (the keyboard highlight), falling back to
+        // `selected` — real HTML starts the highlight at the current
+        // value when a select first opens, before any arrow key has
+        // marked an option `active` itself.
+        let index = options
+            .iter()
+            .position(|&id| self.arena.is_active(id))
+            .or_else(|| options.iter().position(|&id| self.arena.is_selected(id)))
+            .unwrap_or(0);
+        let next = (index as isize + direction).rem_euclid(options.len() as isize) as usize;
+        Some(options[next])
+    }
+
+    /// The option a focused, *open* select's Enter should commit: its
+    /// `active` (highlighted) option, or its `selected` one if none is
+    /// active yet (see [`Self::step_select_option`]'s own doc).
+    pub fn active_or_selected_option(&self) -> Option<NodeId> {
+        let select = self.focused_node?;
+        crate::select::active_option(&self.arena, select).or_else(|| {
+            let select_id = self.arena.id_attr(select)?;
+            let content_id = format!("{select_id}{}", crate::select::SELECT_CONTENT_ID_SUFFIX);
+            let content = self
+                .arena
+                .find(|arena, id| arena.id_attr(id) == Some(content_id.as_str()))?;
+            self.arena
+                .children(content)
+                .iter()
+                .copied()
+                .find(|&id| self.arena.is_selected(id))
+        })
+    }
+
+    /// Changes a focused, *closed* select's value directly by `direction`
+    /// (real HTML: Up/Down on a closed select commits immediately,
+    /// without opening it) — `true` if it actually dispatched a click.
+    /// Options aren't real `Arena` nodes while closed, so this reads
+    /// [`Self::option_summaries`] instead of walking the tree.
+    pub fn step_closed_select(&self, direction: isize) -> bool {
+        let Some(select) = self.focused_node else {
+            return false;
+        };
+        if self.arena.tag(select) != "select" || self.arena.is_open(select) {
+            return false;
+        }
+        let Some(select_id) = self.arena.id_attr(select) else {
+            return false;
+        };
+        let Some(options) = self.option_summaries.get(select_id) else {
+            return false;
+        };
+        if options.len() < 2 {
+            return false;
+        }
+        let index = options.iter().position(|o| o.selected).unwrap_or(0);
+        let next = (index as isize + direction).rem_euclid(options.len() as isize) as usize;
+        let Some(handler) = &options[next].onclick else {
+            return false;
+        };
+        florui_reactive::batch(|| handler.call());
+        true
+    }
+
     /// Re-resolves [`Self::focused_path`] against `candidates` — a
     /// [`NodeId`] from the previous arena generation isn't safe to reuse
     /// directly (see [`FocusPath`]'s own doc). Clears focus outright
@@ -829,7 +1042,8 @@ impl UiRuntime {
     pub fn dispatch_click(&self, node: NodeId) {
         let is_checkable = self.arena.tag(node) == "input"
             && focus::is_checkable_input_type(self.arena.input_type(node));
-        if (self.arena.tag(node) == "button" || is_checkable) && self.arena.is_disabled(node) {
+        let is_gated = matches!(self.arena.tag(node), "button" | "select") || is_checkable;
+        if is_gated && self.arena.is_disabled(node) {
             return;
         }
         if let Some(handler) = self.arena.handler(node, "click") {
@@ -1913,6 +2127,124 @@ mod tests {
             },
             viewport(),
         )
+    }
+
+    /// `selected_id` picks which option starts selected — separate
+    /// runtimes rather than one mutated in place, since this crate's
+    /// controlled contract never writes `selected` back itself (see
+    /// `select_runtime`'s own callers).
+    fn select_runtime_selecting(open: bool, selected_id: &'static str) -> UiRuntime {
+        UiRuntime::with_rules(
+            Vec::new(),
+            move || {
+                view! {
+                    <select id="size" open={open}>
+                        <option id="s" value="s" selected={selected_id == "s"}>{"Small"}</option>
+                        <option id="m" value="m" selected={selected_id == "m"}>{"Medium"}</option>
+                        <option id="l" value="l" selected={selected_id == "l"}>{"Large"}</option>
+                    </select>
+                }
+            },
+            viewport(),
+        )
+    }
+
+    #[test]
+    fn step_select_option_moves_from_the_selected_option() {
+        let mut runtime = select_runtime_selecting(true, "m");
+        runtime.set_focused(Some(node_id(&runtime, "size")), true);
+        let (s, l) = (node_id(&runtime, "s"), node_id(&runtime, "l"));
+        assert_eq!(runtime.step_select_option(1), Some(l));
+        assert_eq!(runtime.step_select_option(-1), Some(s));
+    }
+
+    #[test]
+    fn step_select_option_wraps_at_each_end() {
+        let mut runtime = select_runtime_selecting(true, "l");
+        runtime.set_focused(Some(node_id(&runtime, "size")), true);
+        assert_eq!(
+            runtime.step_select_option(1),
+            Some(node_id(&runtime, "s")),
+            "wraps past the last option"
+        );
+
+        let mut runtime = select_runtime_selecting(true, "s");
+        runtime.set_focused(Some(node_id(&runtime, "size")), true);
+        assert_eq!(
+            runtime.step_select_option(-1),
+            Some(node_id(&runtime, "l")),
+            "wraps past the first option"
+        );
+    }
+
+    #[test]
+    fn step_select_option_is_none_for_a_closed_select() {
+        let mut runtime = select_runtime_selecting(false, "m");
+        runtime.set_focused(Some(node_id(&runtime, "size")), true);
+        assert_eq!(runtime.step_select_option(1), None);
+    }
+
+    #[test]
+    fn a_closed_selects_auto_width_matches_its_widest_option_regardless_of_which_is_selected() {
+        let width_of = |runtime: &UiRuntime| {
+            let (arena, _, layouts) = runtime.geometry();
+            let select = arena.find(|a, id| a.tag(id) == "select").unwrap();
+            layouts[&select].width
+        };
+        // "Small" is narrower than "Medium" -- selecting it must not
+        // shrink the box below what "Medium" (the widest label) needs.
+        let narrow_selected = select_runtime_selecting(false, "s");
+        let wide_selected = select_runtime_selecting(false, "m");
+        assert_eq!(width_of(&narrow_selected), width_of(&wide_selected));
+    }
+
+    #[test]
+    fn an_explicit_author_width_is_never_overridden_by_the_widest_option() {
+        let runtime = UiRuntime::with_rules(
+            florui_style::parse_stylesheet("select { width: 10px; }").unwrap(),
+            || {
+                view! {
+                    <select id="size">
+                        <option value="s">{"Small"}</option>
+                        <option value="xl">{"Extra Large Option"}</option>
+                    </select>
+                }
+            },
+            viewport(),
+        );
+        let (arena, styles, layouts) = runtime.geometry();
+        let select = arena.roots()[0];
+        let style = &styles[&select];
+        // The author only overrides `width`, so the UA default stylesheet's
+        // own `padding-left` (see `default_stylesheet.rs`) still applies on
+        // top of it.
+        let expected = 10.0
+            + style.padding.left
+            + style.padding.right
+            + style.border.left.width
+            + style.border.right.width;
+        assert_eq!(
+            layouts[&select].width, expected,
+            "author width wins even though \"Extra Large Option\" needs more room"
+        );
+    }
+
+    #[test]
+    fn dispatch_click_on_a_disabled_select_does_not_fire() {
+        let clicks = std::rc::Rc::new(std::cell::Cell::new(0));
+        let for_click = clicks.clone();
+        let runtime = UiRuntime::with_rules(
+            Vec::new(),
+            move || {
+                let for_click = for_click.clone();
+                view! {
+                    <select id="size" disabled="true" onclick={move || for_click.set(for_click.get() + 1)} />
+                }
+            },
+            viewport(),
+        );
+        runtime.dispatch_click(node_id(&runtime, "size"));
+        assert_eq!(clicks.get(), 0);
     }
 
     #[test]
