@@ -1372,6 +1372,10 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         // and keeps this conversion honest on its own, independent of
         // that upstream guarantee holding across a future Stylo upgrade.
         opacity: effects.opacity.clamp(0.0, 1.0),
+        pointer_events_none: matches!(
+            values.get_inherited_ui().pointer_events,
+            style::values::specified::PointerEvents::None
+        ),
         overflow_clips: to_overflow_clips(box_style.overflow_x, box_style.overflow_y),
         overflow_scrolls_x: to_overflow_scrolls_x(box_style.overflow_x),
         overflow_scrolls_y: to_overflow_scrolls_y(box_style.overflow_y),

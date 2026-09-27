@@ -1285,7 +1285,9 @@ pub fn apply_scroll_offsets(
 /// corners), and only where every `overflow`-clipping ancestor's own
 /// rounded padding box does too — the same shapes `florui_paint` draws and
 /// clips to, so a click can't land on something that isn't visible there.
-/// A node with no entry in `styles` is a plain rectangle.
+/// A node with `pointer-events: none` is never the target, though its
+/// descendants still can be. A node with no entry in `styles` is a plain
+/// rectangle.
 pub fn hit_test(
     arena: &Arena,
     layouts: &HashMap<NodeId, BoxLayout>,
@@ -1298,7 +1300,9 @@ pub fn hit_test(
     while let Some(node) = stack.pop() {
         if let Some(&layout) = layouts.get(&node) {
             let (ax, ay) = absolute_position(arena, layouts, node);
-            if border_box_outline(styles, node, ax, ay, layout).contains(x, y)
+            let pointer_events_none = styles.get(&node).is_some_and(|s| s.pointer_events_none);
+            if !pointer_events_none
+                && border_box_outline(styles, node, ax, ay, layout).contains(x, y)
                 && !clipped_out(arena, layouts, styles, node, x, y)
             {
                 hit = Some(node);
@@ -2151,6 +2155,45 @@ mod tests {
             None,
             "outside every box"
         );
+    }
+
+    #[test]
+    fn hit_test_skips_a_pointer_events_none_node_and_falls_through_to_what_is_beneath() {
+        let tree: Element = view! {
+            <div class="card">
+                <div class="overlay" />
+            </div>
+        };
+        let (arena, styles, layouts) = layout_with_styles(
+            &tree,
+            ".card { width: 40px; height: 40px; } \
+             .overlay { width: 40px; height: 40px; pointer-events: none; }",
+        );
+        let card = arena.roots()[0];
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 10.0, 10.0),
+            Some(card),
+            "the click passes through the overlay to the card"
+        );
+    }
+
+    #[test]
+    fn hit_test_lets_a_descendant_re_enable_pointer_events() {
+        let tree: Element = view! {
+            <div class="card">
+                <div class="overlay">
+                    <div class="button" />
+                </div>
+            </div>
+        };
+        let (arena, styles, layouts) = layout_with_styles(
+            &tree,
+            ".card { width: 40px; height: 40px; } \
+             .overlay { width: 40px; height: 40px; pointer-events: none; } \
+             .button { width: 10px; height: 10px; pointer-events: auto; }",
+        );
+        let button = arena.find(|a, id| a.classes(id).iter().any(|c| c == "button"));
+        assert_eq!(super::hit_test(&arena, &layouts, &styles, 5.0, 5.0), button);
     }
 
     #[test]
