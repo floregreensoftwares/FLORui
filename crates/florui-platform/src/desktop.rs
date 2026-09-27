@@ -1577,9 +1577,12 @@ impl WindowState {
                         .show_system_menu_at(origin.x + offset_x, origin.y + offset_y);
                 }
             }
-            Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
+            Key::Named(key @ (NamedKey::Enter | NamedKey::Space)) => {
                 if let Some(focused) = self.runtime.focused() {
-                    self.runtime.dispatch_click(focused);
+                    let (arena, ..) = self.runtime.geometry();
+                    if key == NamedKey::Space || crate::focus::activates_on_enter(arena, focused) {
+                        self.runtime.dispatch_click(focused);
+                    }
                 }
             }
             // Selection follows focus within a radio group, so moving
