@@ -63,6 +63,16 @@ pub struct UiRuntime {
     /// open," and silently re-trigger auto-focus-on-open every
     /// subsequent render.
     had_modal_last_render: bool,
+    /// The range input a pointer drag is currently moving, if any — a
+    /// [`FocusPath`], not a plain [`NodeId`], because an accepted drag
+    /// value re-renders (a fresh [`Self::arena`]) *while the drag is still
+    /// open*, unlike a single atomic click; each of
+    /// [`Self::continue_range_drag`]/[`Self::end_range_drag`] re-resolves
+    /// it against the current arena on every call rather than caching a
+    /// resolved id, and simply ends the drag if it no longer resolves (no
+    /// invented fallback, matching [`Self::resolve_against`]'s own
+    /// precedent).
+    range_dragging: Option<FocusPath>,
     arena: Arena,
     styles: HashMap<NodeId, ComputedStyle>,
     layouts: HashMap<NodeId, BoxLayout>,
@@ -211,6 +221,7 @@ impl UiRuntime {
             focus_visible: false,
             modal_return_path: None,
             had_modal_last_render: false,
+            range_dragging: None,
             arena: Arena::build(&Element::Fragment(Vec::new())),
             styles: HashMap::new(),
             layouts: HashMap::new(),
@@ -553,6 +564,95 @@ impl UiRuntime {
         }
         self.commit_value(node, clamped.to_string());
         Some(clamped)
+    }
+
+    /// Every range input still in the arena, focusable or not — a drag
+    /// already in progress on one that becomes disabled mid-drag (a real,
+    /// if unusual, case) still needs to resolve so [`Self::end_range_drag`]
+    /// can end it cleanly rather than silently losing track of it.
+    fn range_inputs(&self) -> Vec<NodeId> {
+        self.arena.find_all(|arena, id| {
+            arena.tag(id) == "input" && focus::is_range_input_type(arena.input_type(id))
+        })
+    }
+
+    /// The value a pointer at `cursor_x` (absolute, same space as
+    /// [`florui_layout::absolute_position`]) requests on `node`'s own
+    /// track: real HTML's own "click/drag anywhere jumps directly to that
+    /// position" behavior — measured against Chrome, no grab-offset is
+    /// preserved regardless of where within the thumb the drag started.
+    /// Snapped to `step` from `min` and clamped into `[min, max]`. A
+    /// non-positive `step` (malformed markup) skips snapping rather than
+    /// dividing by zero.
+    fn range_value_at(&self, node: NodeId, cursor_x: f32) -> Option<f32> {
+        let layout = self.layouts.get(&node)?;
+        if layout.width <= 0.0 {
+            return None;
+        }
+        let (track_x, _) = florui_layout::absolute_position(&self.arena, &self.layouts, node);
+        let (min, max, step) = (
+            self.arena.range_min(node),
+            self.arena.range_max(node),
+            self.arena.range_step(node),
+        );
+        let fraction = ((cursor_x - track_x) / layout.width).clamp(0.0, 1.0);
+        let raw = min + fraction * (max - min);
+        let snapped = if step > 0.0 {
+            min + ((raw - min) / step).round() * step
+        } else {
+            raw
+        };
+        Some(snapped.clamp(min.min(max), min.max(max)))
+    }
+
+    /// Whether a pointer drag on a range input is currently open — distinct
+    /// from [`Self::continue_range_drag`] returning `None`, which also
+    /// covers "a drag is open but this particular move requested nothing
+    /// new" (see its own doc); a caller deciding whether to fall through to
+    /// ordinary hover/hit-testing needs this, not that.
+    pub(crate) fn is_range_dragging(&self) -> bool {
+        self.range_dragging.is_some()
+    }
+
+    /// Begins tracking a pointer drag on `node`'s own track/thumb and
+    /// requests the value at `cursor_x` immediately — matches Chrome's own
+    /// "mousedown already jumps the value" behavior, before any move.
+    /// Returns the requested value, or `None` if `node` isn't a real,
+    /// laid-out range input.
+    pub(crate) fn start_range_drag(&mut self, node: NodeId, cursor_x: f32) -> Option<f32> {
+        self.range_dragging = Some(FocusPath::of(&self.arena, node));
+        self.continue_range_drag(cursor_x)
+    }
+
+    /// Continues an already-started drag: re-resolves its own node against
+    /// the current arena (see [`Self::range_dragging`]'s own doc), and
+    /// requests the value at `cursor_x` only if it differs from the
+    /// node's own current value — deduplicated the same way a controlled
+    /// value naturally is, since nothing here has any other state to
+    /// compare against but what the owner most recently echoed back.
+    /// `None` if no drag is open, or it no longer resolves.
+    pub(crate) fn continue_range_drag(&mut self, cursor_x: f32) -> Option<f32> {
+        let path = self.range_dragging.as_ref()?;
+        let node = path.resolve(&self.arena, &self.range_inputs())?;
+        let requested = self.range_value_at(node, cursor_x)?;
+        if requested == self.arena.range_value(node) {
+            return None;
+        }
+        self.commit_value(node, requested.to_string());
+        Some(requested)
+    }
+
+    /// Ends the current drag, if any, firing its own `commit` event once
+    /// (no value payload — the owner already has whichever request it last
+    /// accepted; see `components::slider`'s own doc). A no-op if the
+    /// dragged node no longer resolves.
+    pub(crate) fn end_range_drag(&mut self) {
+        let Some(path) = self.range_dragging.take() else {
+            return;
+        };
+        if let Some(node) = path.resolve(&self.arena, &self.range_inputs()) {
+            self.dispatch_event(node, "commit");
+        }
     }
 
     /// Re-resolves [`Self::focused_path`] against `candidates` — a
@@ -1403,6 +1503,39 @@ mod tests {
         )
     }
 
+    /// A 100px-wide track at the layout root's own origin (`x = 0`), so a
+    /// `cursor_x` of e.g. `25.0` is directly `25%` of the track — chosen to
+    /// make the geometry math in each assertion read as the percentage
+    /// itself.
+    fn range_drag_runtime(
+        min: f32,
+        max: f32,
+        step: f32,
+        value: f32,
+        requests: Rc<RefCell<Vec<String>>>,
+    ) -> UiRuntime {
+        UiRuntime::new(
+            ".track { width: 100px; height: 20px; border-width: 0px; padding-top: 0px; padding-right: 0px; padding-bottom: 0px; padding-left: 0px; }",
+            move || {
+                let requests = requests.clone();
+                view! {
+                    <input
+                        id="r"
+                        class="track"
+                        type="range"
+                        min={min.to_string()}
+                        max={max.to_string()}
+                        step={step.to_string()}
+                        value={value.to_string()}
+                        oninput={move |v: String| requests.borrow_mut().push(v)}
+                    />
+                }
+            },
+            viewport(),
+        )
+        .unwrap()
+    }
+
     /// `step_range_value` reads and writes through the owner's own value
     /// (via [`UiRuntime::commit_value`], same as any controlled
     /// component), so a runtime whose `oninput` never accepts the request
@@ -1449,6 +1582,134 @@ mod tests {
         let node = node_id(&runtime, "r");
         assert_eq!(runtime.step_range_value(node, RangeStep::Min), Some(0.0));
         assert_eq!(runtime.step_range_value(node, RangeStep::Max), Some(10.0));
+    }
+
+    #[test]
+    fn start_range_drag_jumps_directly_to_the_cursors_own_position() {
+        // Matches Chrome: mousedown alone (no move yet) already jumps the
+        // value to wherever the cursor landed, on the 0-100 range a 100px
+        // track makes `cursor_x` read as a percentage directly.
+        let requests = Rc::default();
+        let mut runtime = range_drag_runtime(0.0, 100.0, 1.0, 30.0, Rc::clone(&requests));
+        let node = node_id(&runtime, "r");
+        assert_eq!(runtime.start_range_drag(node, 70.0), Some(70.0));
+        assert_eq!(*requests.borrow(), vec!["70".to_string()]);
+    }
+
+    #[test]
+    fn continue_range_drag_snaps_to_step_and_dedupes_an_unchanged_value() {
+        // A real accepting owner, re-rendering between steps like a real
+        // controlled app does -- only then does "the same requested value
+        // twice" become observable at all (a static arena's own value
+        // never moves, so it can't demonstrate a dedupe against it).
+        let requests: Rc<RefCell<Vec<f32>>> = Rc::default();
+        let recorded = requests.clone();
+        let value = Rc::new(Cell::new(0.0_f32));
+        let stored = value.clone();
+        let mut runtime = UiRuntime::new(
+            ".track { width: 100px; height: 20px; border-width: 0px; padding-top: 0px; padding-right: 0px; padding-bottom: 0px; padding-left: 0px; }",
+            move || {
+                let current = value.get();
+                let value = value.clone();
+                let recorded = recorded.clone();
+                view! {
+                    <input
+                        id="r"
+                        class="track"
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="10"
+                        value={current.to_string()}
+                        oninput={move |v: String| {
+                            let parsed: f32 = v.parse().unwrap();
+                            recorded.borrow_mut().push(parsed);
+                            value.set(parsed);
+                        }}
+                    />
+                }
+            },
+            viewport(),
+        )
+        .unwrap();
+        let node = node_id(&runtime, "r");
+
+        // step=10: cursor at 24% snaps to the nearest multiple of 10 (20).
+        assert_eq!(runtime.start_range_drag(node, 24.0), Some(20.0));
+        runtime.update(viewport());
+        assert_eq!(*requests.borrow(), vec![20.0]);
+
+        // 21% also snaps to 20 -- now that the owner's own value really is
+        // 20, this must not request it again.
+        assert_eq!(runtime.continue_range_drag(21.0), None);
+        assert_eq!(*requests.borrow(), vec![20.0]);
+
+        assert_eq!(runtime.continue_range_drag(85.0), Some(90.0));
+        assert_eq!(*requests.borrow(), vec![20.0, 90.0]);
+        assert_eq!(
+            stored.get(),
+            90.0,
+            "the binding's own storage updates synchronously"
+        );
+    }
+
+    #[test]
+    fn continue_range_drag_clamps_past_either_end_of_the_track() {
+        let requests = Rc::default();
+        let mut runtime = range_drag_runtime(0.0, 100.0, 1.0, 50.0, Rc::clone(&requests));
+        let node = node_id(&runtime, "r");
+        runtime.start_range_drag(node, -40.0);
+        assert_eq!(*requests.borrow(), vec!["0".to_string()], "clamped to min");
+        assert_eq!(
+            runtime.continue_range_drag(500.0),
+            Some(100.0),
+            "clamped to max"
+        );
+    }
+
+    #[test]
+    fn continue_and_end_range_drag_without_a_drag_open_are_a_no_op() {
+        let requests = Rc::default();
+        let mut runtime = range_drag_runtime(0.0, 100.0, 1.0, 50.0, requests);
+        assert_eq!(runtime.continue_range_drag(70.0), None);
+        runtime.end_range_drag(); // must not panic with nothing to end
+    }
+
+    #[test]
+    fn end_range_drag_fires_commit_exactly_once_and_clears_the_drag() {
+        let commits = Rc::new(Cell::new(0));
+        let recorded = commits.clone();
+        let requests = Rc::default();
+        let mut runtime = UiRuntime::new(
+            ".track { width: 100px; height: 20px; border-width: 0px; padding-top: 0px; padding-right: 0px; padding-bottom: 0px; padding-left: 0px; }",
+            move || {
+                let recorded = recorded.clone();
+                let requests: Rc<RefCell<Vec<String>>> = Rc::clone(&requests);
+                view! {
+                    <input
+                        id="r"
+                        class="track"
+                        type="range"
+                        min="0"
+                        max="100"
+                        value={"30".to_string()}
+                        oninput={move |v: String| requests.borrow_mut().push(v)}
+                        oncommit={move || recorded.set(recorded.get() + 1)}
+                    />
+                }
+            },
+            viewport(),
+        )
+        .unwrap();
+        let node = node_id(&runtime, "r");
+        runtime.start_range_drag(node, 60.0);
+        runtime.continue_range_drag(80.0);
+        assert_eq!(commits.get(), 0, "commit only fires once the drag ends");
+        runtime.end_range_drag();
+        assert_eq!(commits.get(), 1);
+        // A second end (nothing open) must not fire it again.
+        runtime.end_range_drag();
+        assert_eq!(commits.get(), 1);
     }
 
     #[test]
