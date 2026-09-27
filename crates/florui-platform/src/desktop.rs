@@ -1436,6 +1436,7 @@ impl WindowState {
             "input" => {
                 crate::focus::is_editable_input_type(arena.input_type(node))
                     || crate::focus::is_checkable_input_type(arena.input_type(node))
+                    || crate::focus::is_range_input_type(arena.input_type(node))
             }
             _ => false,
         }
@@ -1599,13 +1600,34 @@ impl WindowState {
                 }
             }
             // Selection follows focus within a radio group, so moving
-            // focus also activates the new radio.
+            // focus also activates the new radio. A focused range input
+            // reacts to the same four keys its own, different way (a
+            // step, not a focus move), so both live in this one arm,
+            // gated by what's actually focused rather than two arms
+            // matching the same keys.
             Key::Named(
                 key @ (NamedKey::ArrowUp
                 | NamedKey::ArrowLeft
                 | NamedKey::ArrowDown
                 | NamedKey::ArrowRight),
             ) => {
+                let range_focused = self.runtime.focused().filter(|&node| {
+                    let (arena, ..) = self.runtime.geometry();
+                    crate::focus::is_range_input_type(arena.input_type(node))
+                });
+                if let Some(node) = range_focused {
+                    // Matches Chrome: Right/Up increments, Left/Down
+                    // decrements.
+                    let step = if matches!(key, NamedKey::ArrowUp | NamedKey::ArrowRight) {
+                        crate::runtime::RangeStep::SmallIncrement
+                    } else {
+                        crate::runtime::RangeStep::SmallDecrement
+                    };
+                    if self.runtime.step_range_value(node, step).is_some() {
+                        self.update_and_request_redraw();
+                    }
+                    return;
+                }
                 let direction = if matches!(key, NamedKey::ArrowUp | NamedKey::ArrowLeft) {
                     -1
                 } else {
@@ -1613,6 +1635,30 @@ impl WindowState {
                 };
                 if let Some(radio) = self.runtime.step_radio_group(direction) {
                     self.runtime.dispatch_click(radio);
+                    self.update_and_request_redraw();
+                }
+            }
+            // A focused range input's own Page/Home/End steps -- Chrome
+            // measured: PageUp/PageDown move ten times the arrow-key step
+            // (matching both a default and a custom `step`), Home/End
+            // jump to the bounds.
+            Key::Named(
+                key @ (NamedKey::PageUp | NamedKey::PageDown | NamedKey::Home | NamedKey::End),
+            ) => {
+                let Some(focused) = self.runtime.focused().filter(|&node| {
+                    let (arena, ..) = self.runtime.geometry();
+                    crate::focus::is_range_input_type(arena.input_type(node))
+                }) else {
+                    return;
+                };
+                let step = match key {
+                    NamedKey::PageUp => crate::runtime::RangeStep::LargeIncrement,
+                    NamedKey::PageDown => crate::runtime::RangeStep::LargeDecrement,
+                    NamedKey::Home => crate::runtime::RangeStep::Min,
+                    NamedKey::End => crate::runtime::RangeStep::Max,
+                    _ => unreachable!(),
+                };
+                if self.runtime.step_range_value(focused, step).is_some() {
                     self.update_and_request_redraw();
                 }
             }

@@ -1,10 +1,12 @@
 //! Which nodes participate in keyboard focus traversal, and in what order.
 //!
 //! v1 is deliberately narrow: `<button>`, an editable `<input>`,
-//! `<input type="checkbox">` and `<input type="radio">`, not disabled,
-//! document order, no `tabindex`. Radios sharing a `name` are one Tab
-//! stop (see [`tab_stops`]) and move among themselves with the arrow
-//! keys (see [`radio_sibling`]). Extending this further
+//! `<input type="checkbox">`, `<input type="radio">` and
+//! `<input type="range">`, not disabled, document order, no `tabindex`.
+//! Radios sharing a `name` are one Tab stop (see [`tab_stops`]) and move
+//! among themselves with the arrow keys (see [`radio_sibling`]) — a range
+//! input's own arrow-key handling lives in `desktop.rs`, gated by type so
+//! it never fires alongside a radio's. Extending this further
 //! (`a`/`select`/`textarea`) later is one more clause here, not a
 //! redesign.
 
@@ -21,6 +23,12 @@ pub(crate) fn is_editable_input_type(input_type: Option<&str>) -> bool {
 /// [`is_focusable`] and the disabled-click gates all check.
 pub(crate) fn is_checkable_input_type(input_type: Option<&str>) -> bool {
     matches!(input_type, Some("checkbox") | Some("radio"))
+}
+
+/// Whether `input_type` is a slider — the same gate [`is_focusable`], the
+/// disabled gates, and `desktop.rs`'s own arrow-key/drag dispatch check.
+pub(crate) fn is_range_input_type(input_type: Option<&str>) -> bool {
+    input_type == Some("range")
 }
 
 /// Whether a `<label>` can hand its click to `id`: an `<input>` or a
@@ -42,6 +50,7 @@ pub(crate) fn is_focusable(arena: &Arena, id: NodeId) -> bool {
         "input" => {
             is_editable_input_type(arena.input_type(id))
                 || is_checkable_input_type(arena.input_type(id))
+                || is_range_input_type(arena.input_type(id))
         }
         _ => false,
     }
