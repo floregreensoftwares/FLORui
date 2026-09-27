@@ -3,7 +3,7 @@
 //! focus, and the platform accessibility bridge (Narrator, on Windows)
 //! reports each as a real switch with its name and on/off state.
 //!
-//! Both ways to wire a switch are shown. "Notifications" uses a
+//! Both ways to wire a switch are shown. "Wi-Fi" uses a
 //! `Binding<bool>` (`Signal::binding`, which always accepts). "Sync" uses
 //! the explicit contract -- a plain value plus a `BoolHandler` told the
 //! value the switch is asking for -- and the owner rejects turning it off.
@@ -31,7 +31,7 @@ fn main() {
 }
 
 fn app() -> Element {
-    let notifications = use_signal(|| false);
+    let wifi = use_signal(|| false);
     let sync = use_signal(|| false);
     let accept_sync = sync.clone();
     let locked = use_signal(|| true);
@@ -45,13 +45,13 @@ fn app() -> Element {
 
             <div class="row">
                 <Switch
-                    value={SwitchValue::bound(notifications.binding())}
+                    value={SwitchValue::bound(wifi.binding())}
                     disabled={false}
-                    accessible_label={"Notifications".to_string()}
+                    accessible_label={"Wi-Fi".to_string()}
                 />
-                <p class="field-label">{"Notifications (Binding)"}</p>
+                <p class="field-label">{"Wi-Fi (Binding)"}</p>
             </div>
-            <p class="status">{format!("Committed: {}", notifications.get())}</p>
+            <p class="status">{format!("Committed: {}", wifi.get())}</p>
 
             <div class="row">
                 <Switch

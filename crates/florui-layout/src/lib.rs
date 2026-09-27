@@ -475,6 +475,11 @@ fn compute_layout_with_content_extents(
     available: Size<AvailableSpace>,
 ) -> Result<LayoutsAndContentExtents, LayoutError> {
     let mut tree: TaffyTree<LeafContext> = TaffyTree::new();
+    // Text is measured at its exact width and paint reshapes it at the laid
+    // out width, so a width rounded down (a 36.26px label laid out at 36px)
+    // wraps it at its only break opportunity. Browsers lay out in
+    // fractional units and snap at paint; paint here already snaps fills.
+    tree.disable_rounding();
     let mut taffy_ids: HashMap<NodeId, taffy::NodeId> = HashMap::new();
     // Every inline-formatting-context leaf built below, so the second pass
     // after layout can derive its `Box` items' own `BoxLayout` entries —
@@ -2030,9 +2035,10 @@ mod tests {
         );
     }
 
-    /// Taffy rounds final layout to whole pixels by default, so a value
-    /// measured by `florui_text` (which does not round) is compared with a
-    /// sub-pixel tolerance rather than for exact equality.
+    /// A value measured by `florui_text` is compared with a sub-pixel
+    /// tolerance rather than for exact equality: layout is not rounded (see
+    /// `compute_layout_with_content_extents`), but both sides are `f32`
+    /// results of different arithmetic.
     fn assert_close(actual: f32, expected: f32) {
         assert!(
             (actual - expected).abs() < 1.0,
@@ -2155,6 +2161,59 @@ mod tests {
             None,
             "outside every box"
         );
+    }
+
+    /// Regression guard for a label ("Wi-Fi") that painted on two lines
+    /// beside a fixed-size box in a flex row. With Taffy's default rounding
+    /// layout gave the label 36px while its text measures 36.26px; paint
+    /// reshapes the text at the laid-out width, so it wrapped at its only
+    /// break opportunity, the hyphen. Confirmed by turning rounding off,
+    /// which is now how layout runs: the label gets its exact 36.26px and
+    /// does not wrap at any scale.
+    #[test]
+    fn a_hyphenated_label_beside_a_fixed_box_does_not_wrap_at_any_hidpi_scale() {
+        let tree: Element = view! {
+            <div class="row">
+                <div class="track" />
+                <p class="label">{"Wi-Fi"}</p>
+            </div>
+        };
+        let (arena, _styles, layouts) = layout_with_styles(
+            &tree,
+            ".row { display: flex; flex-direction: row; align-items: center; } \
+             .track { width: 44px; height: 24px; } \
+             .label { margin-left: 12px; margin-top: 0px; margin-bottom: 0px; font-size: 16px; }",
+        );
+        let label = arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == "label"))
+            .unwrap();
+        let laid_out = layouts[&label].width;
+
+        let mut font = florui_text::Font::load_embedded();
+        let family = florui_text::FontFamily::SansSerif;
+        let natural = font.shape_wrapped(family, "Wi-Fi", 16.0, 400.0, f32::MAX);
+        eprintln!(
+            "laid out width {laid_out}, natural width {}, one line {}",
+            natural.width, natural.height
+        );
+        assert!(
+            laid_out >= natural.width,
+            "layout gave the label {laid_out}px, narrower than its {}px of text",
+            natural.width
+        );
+
+        for scale in [1.0_f32, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 3.0] {
+            let wrap_width = (laid_out * scale) / scale;
+            let shaped = font.shape_wrapped(family, "Wi-Fi", 16.0, 400.0, wrap_width);
+            eprintln!(
+                "scale {scale}: wrap width {wrap_width}, height {} (one line {})",
+                shaped.height, natural.height
+            );
+            assert_eq!(
+                shaped.height, natural.height,
+                "wrapped onto two lines at scale {scale} (wrap width {wrap_width})"
+            );
+        }
     }
 
     #[test]
@@ -2869,9 +2928,8 @@ mod tests {
         let (arena, layouts) = layout_for(&tree, ".big { font-size: 48px; }");
         let p = arena.roots()[0];
 
-        // Taffy rounds final layout to whole pixels (see `assert_close`'s
-        // own doc), so this compares with the same sub-pixel tolerance
-        // rather than a strict `>=`.
+        // Same sub-pixel tolerance as `assert_close`, rather than a strict
+        // `>=` between two independently computed `f32`s.
         assert!(
             layouts[&p].height >= big_alone.height - 1.0,
             "a line containing a 48px run must be at least as tall as that run's own \
