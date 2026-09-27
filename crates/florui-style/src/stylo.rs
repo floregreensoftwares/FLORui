@@ -151,12 +151,12 @@ impl StyloTree {
             // focus above -- read straight from `arena` rather than
             // threaded through `InteractionState`. Tag-gated to match
             // `florui_platform::focus::is_focusable`'s own v1 scope:
-            // `disabled` has no wired behavior on anything but <button>
-            // yet, and leaving `state` untouched for every other tag
-            // means neither :disabled nor :enabled ever matches there
-            // either -- the same as real HTML, where both pseudo-classes
-            // only apply to form controls.
-            if arena.tag(id) == "button" {
+            // `disabled` has no wired behavior outside these tags yet, and
+            // leaving `state` untouched for every other tag means neither
+            // :disabled nor :enabled ever matches there either -- the same
+            // as real HTML, where both pseudo-classes only apply to form
+            // controls.
+            if matches!(arena.tag(id), "button" | "select") {
                 if arena.is_disabled(id) {
                     node_state |= ElementState::DISABLED;
                 } else {

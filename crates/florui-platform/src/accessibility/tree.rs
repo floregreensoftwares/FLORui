@@ -94,6 +94,9 @@ impl AccessibilityTree {
         // `AccessKitId` isn't known until the whole walk finishes (it may
         // not have been visited yet), so association is a second pass.
         let mut label_targets: Vec<(AccessKitId, NodeId)> = Vec::new();
+        // `(select's own ak_id, its currently active option's florui id)` --
+        // same deferred-association reason as `label_targets`.
+        let mut active_targets: Vec<(AccessKitId, NodeId)> = Vec::new();
 
         let root_children: Vec<AccessKitId> = arena
             .roots()
@@ -110,6 +113,7 @@ impl AccessibilityTree {
                     &mut index_by_ak_id,
                     &mut seen,
                     &mut label_targets,
+                    &mut active_targets,
                 )
             })
             .collect();
@@ -125,6 +129,13 @@ impl AccessibilityTree {
                 && let Some(&target_index) = index_by_ak_id.get(&target_ak_id)
             {
                 nodes[target_index].1.push_labelled_by(label_ak_id);
+            }
+        }
+        for (select_ak_id, active_florui_id) in active_targets {
+            if let Some(&active_ak_id) = forward.get(&active_florui_id)
+                && let Some(&select_index) = index_by_ak_id.get(&select_ak_id)
+            {
+                nodes[select_index].1.set_active_descendant(active_ak_id);
             }
         }
 
@@ -156,6 +167,7 @@ impl AccessibilityTree {
         index_by_ak_id: &mut HashMap<AccessKitId, usize>,
         seen: &mut HashSet<FocusPath>,
         label_targets: &mut Vec<(AccessKitId, NodeId)>,
+        active_targets: &mut Vec<(AccessKitId, NodeId)>,
     ) -> AccessKitId {
         let path = FocusPath::of(arena, id);
         seen.insert(path.clone());
@@ -238,6 +250,41 @@ impl AccessibilityTree {
                     node.add_action(Action::ReplaceSelectedText);
                 }
             }
+            "select" => {
+                node.set_role(Role::ComboBox);
+                node.set_value(arena.text_content(id));
+                node.set_expanded(arena.is_open(id));
+                if let Some(label) = arena.accessible_label(id) {
+                    node.set_label(label);
+                }
+                if is_focusable(arena, id) {
+                    node.add_action(Action::Focus);
+                    node.add_action(Action::Click);
+                    if arena.is_open(id) {
+                        node.add_action(Action::Collapse);
+                    } else {
+                        node.add_action(Action::Expand);
+                    }
+                }
+                if let Some(active) = crate::select::active_option(arena, id) {
+                    active_targets.push((ak_id, active));
+                }
+            }
+            "option" => {
+                node.set_role(Role::ListBoxOption);
+                node.set_label(arena.text_content(id));
+                node.set_selected(arena.is_selected(id));
+                node.add_action(Action::Click);
+            }
+            // The synthesized root div wrapping an open select's own
+            // options -- see `crate::select::SELECT_CONTENT_ID_SUFFIX`.
+            "div"
+                if arena.id_attr(id).is_some_and(|value| {
+                    value.ends_with(crate::select::SELECT_CONTENT_ID_SUFFIX)
+                }) =>
+            {
+                node.set_role(Role::ListBox);
+            }
             "label" => {
                 let text = arena.text_content(id);
                 if !text.is_empty() {
@@ -286,6 +333,7 @@ impl AccessibilityTree {
                     index_by_ak_id,
                     seen,
                     label_targets,
+                    active_targets,
                 )
             })
             .collect();
@@ -312,6 +360,11 @@ mod tests {
         let bounds = NodeBounds::new();
         let (update, reverse) = ak_tree.build(&arena, focused, &bounds);
         (update, reverse, arena)
+    }
+
+    fn build_select(mut tree: Element) -> (TreeUpdate, HashMap<AccessKitId, NodeId>, Arena) {
+        crate::select::normalize(&mut tree);
+        build(&tree, None)
     }
 
     fn role_of(update: &TreeUpdate, id: AccessKitId) -> Role {
@@ -410,6 +463,47 @@ mod tests {
         assert_eq!(role_of(&update, ak_id), Role::CheckBox);
         let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
         assert_eq!(node.toggled(), Some(Toggled::True));
+    }
+
+    #[test]
+    fn an_open_select_gets_the_combo_box_role_its_value_and_expanded_state() {
+        let tree: Element = view! {
+            <select id="size" open="true">
+                <option value="s">{"Small"}</option>
+                <option value="m" selected="true">{"Medium"}</option>
+            </select>
+        };
+        let (update, reverse, arena) = build_select(tree);
+        let select = arena.find(|a, id| a.tag(id) == "select").unwrap();
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == select).unwrap().0;
+        assert_eq!(role_of(&update, ak_id), Role::ComboBox);
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert_eq!(node.value(), Some("Medium"));
+        assert_eq!(node.is_expanded(), Some(true));
+    }
+
+    #[test]
+    fn an_open_selects_option_list_gets_list_box_and_list_box_option_roles() {
+        let tree: Element = view! {
+            <select id="size" open="true">
+                <option value="s">{"Small"}</option>
+                <option value="m" selected="true">{"Medium"}</option>
+            </select>
+        };
+        let (update, reverse, arena) = build_select(tree);
+        let listbox = arena
+            .find(|a, id| a.tag(id) == "div" && a.id_attr(id) == Some("size-select-content"))
+            .unwrap();
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == listbox).unwrap().0;
+        assert_eq!(role_of(&update, ak_id), Role::ListBox);
+
+        let medium = arena
+            .find(|a, id| a.tag(id) == "option" && a.is_selected(id))
+            .unwrap();
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == medium).unwrap().0;
+        assert_eq!(role_of(&update, ak_id), Role::ListBoxOption);
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert_eq!(node.is_selected(), Some(true));
     }
 
     #[test]

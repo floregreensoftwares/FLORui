@@ -468,7 +468,15 @@ type LayoutsAndContentExtents = (HashMap<NodeId, BoxLayout>, HashMap<NodeId, Con
 /// [`compute_with_style`]'s own callers (a scroll container) and
 /// [`compute_layout`] alone already has dozens of call sites across this
 /// workspace's own tests and benches that have no use for it.
-fn compute_layout_with_content_extents(
+///
+/// `pub`, not crate-private, for the same reason [`compute_with_style`]'s
+/// own container-query branch calls this a second time with adjusted
+/// `styles` rather than re-deriving them: a caller that already has a
+/// correct `styles` map from one real [`compute_with_style`] call (e.g.
+/// `florui-platform`'s own select-width fix-up, which patches one node's
+/// resolved `width` after measuring text) can get corrected geometry
+/// without re-running the cascade or touching an [`AnimationTimeline`].
+pub fn compute_layout_with_content_extents(
     font: &mut florui_text::Font,
     arena: &Arena,
     styles: &HashMap<NodeId, ComputedStyle>,
