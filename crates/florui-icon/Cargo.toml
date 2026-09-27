@@ -21,7 +21,7 @@ decode = ["dep:florui-assets", "dep:resvg", "dep:image"]
 # prelude only reaches a direct dependency's path, not a transitive one,
 # even though `florui-assets` already depends on both for its own
 # `AssetError`.
-florui-assets = { path = "../florui-assets", optional = true }
+florui-assets = { path = "../florui-assets", optional = true, default-features = false }
 resvg = { version = "0.48.1", default-features = false, optional = true }
 image = { version = "0.25.10", default-features = false, features = [
     "png",
