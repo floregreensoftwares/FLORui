@@ -6,7 +6,14 @@ on:
   pull_request:
 
 jobs:
-  check:
+  # Three independent jobs instead of one sequential one -- lint, test, and
+  # conformance don't depend on each other's output, and GitHub Actions
+  # runs independent jobs on separate runners in parallel, so wall-clock
+  # time drops to roughly the slowest of the three (test, the heaviest)
+  # instead of their sum. Measured on a real run before this split:
+  # test 10m39s, conformance 5m17s (plus its own chromium fetch), clippy
+  # 3m53s, fmt+doctest+setup ~1m -- ~23m sequential total.
+  lint:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,8 +23,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
       - run: cargo test --workspace --doc
+
+  conformance:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
       - name: Cache pinned Chrome for Testing
         uses: actions/cache@v4
         with:
