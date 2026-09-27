@@ -64,6 +64,10 @@ pub struct InspectorNode {
     /// current bound) that no cause was computed at all; the inspector
     /// does not distinguish the two rather than guess which applies.
     pub size_cause: Option<String>,
+    /// Things the engine noticed about this node's markup and could not
+    /// honor — today, an unsupported `role` attribute, which is otherwise
+    /// silently ignored. Empty when there is nothing to report.
+    pub diagnostics: Vec<String>,
 }
 
 /// Everything the inspector needs to render one frame. Rebuilt by the
@@ -333,6 +337,14 @@ fn draw_ui(ui: &mut egui::Ui, model: &InspectorModel) -> Option<InspectorAction>
                     ui.separator();
                     ui.heading("Why this size");
                     ui.label(cause);
+                }
+
+                if !node.diagnostics.is_empty() {
+                    ui.separator();
+                    ui.heading("Diagnostics");
+                    for message in &node.diagnostics {
+                        ui.label(message);
+                    }
                 }
             }
         }
