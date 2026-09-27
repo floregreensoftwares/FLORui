@@ -50,10 +50,11 @@
 //! rasterized pixels instead of a shape rasterized just for it). A node
 //! whose `overflow` clips content (see [`clip_for_children`]) restricts
 //! its own descendants — never its own border/background — to its
-//! padding box; nested clips intersect. There is no border-radius yet —
-//! `florui_style` has no property for it.
+//! padding box; nested clips intersect. `border-radius` rounds a box's
+//! background and border (see [`rounded::RoundedRect`]).
 
 mod blur;
+mod rounded;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -63,6 +64,7 @@ use florui_style::{
     Arena, ComputedStyle, Display, FilterFunction, NodeId, Position, Rgba, TransformFunction,
 };
 use florui_text::Font;
+use rounded::RoundedRect;
 use skrifa::instance::{LocationRef, NormalizedCoord, Size as GlyphSize};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::{FontRef, GlyphId, MetadataProvider};
@@ -1496,9 +1498,25 @@ fn paint_node(
             false,
         );
 
+        let rounded = style
+            .map(|s| {
+                RoundedRect::new(
+                    x,
+                    y,
+                    layout.width,
+                    layout.height,
+                    &s.border_radius,
+                    scale_factor,
+                )
+            })
+            .filter(|rect| !rect.is_square());
+
         let background = style.map_or(Rgba::TRANSPARENT, |s| s.background_color);
         if background.a != 0 {
-            fill_rect(buffer, x, y, layout.width, layout.height, background, clip);
+            match &rounded {
+                Some(rect) => fill_rounded_rect(buffer, rect, background, clip),
+                None => fill_rect(buffer, x, y, layout.width, layout.height, background, clip),
+            }
         }
 
         paint_box_shadows(
@@ -1512,7 +1530,10 @@ fn paint_node(
             true,
         );
 
-        paint_border(buffer, x, y, layout.width, layout.height, border, clip);
+        match &rounded {
+            Some(rect) => paint_rounded_border(buffer, rect, border, clip),
+            None => paint_border(buffer, x, y, layout.width, layout.height, border, clip),
+        }
 
         let color = style.map_or(Rgba::opaque(0, 0, 0), |s| s.color);
         let no_padding = florui_style::Edges {
@@ -1696,15 +1717,131 @@ fn fill_rect(
         .fill_rect(rect, &paint, Transform::identity(), clip);
 }
 
+/// Anti-aliased fill of a rounded box; a square one should use
+/// [`fill_rect`] instead, which stays the unchanged pixel-exact path.
+fn fill_rounded_rect(buffer: &mut Surface, rect: &RoundedRect, color: Rgba, clip: Option<&Mask>) {
+    let Some(path) = rect.path() else {
+        return;
+    };
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(color.r, color.g, color.b, color.a);
+    paint.anti_alias = true;
+    buffer.pixmap.fill_path(
+        &path,
+        &paint,
+        FillRule::Winding,
+        surface_transform(buffer),
+        clip,
+    );
+}
+
+/// Maps absolute canvas coordinates into `buffer`'s own local pixel space.
+fn surface_transform(buffer: &Surface) -> Transform {
+    Transform::from_translate(-(buffer.origin.0 as f32), -(buffer.origin.1 as f32))
+}
+
+/// A rounded box's border: the ring between its outer outline and its
+/// padding box's (radii shrunk by the side widths). One flat color paints
+/// the ring in a single fill; differing side colors clip the same ring to
+/// each side's mitered wedge, the diagonal from an outer corner to the
+/// matching inner one, like real CSS.
+fn paint_rounded_border(
+    buffer: &mut Surface,
+    outer: &RoundedRect,
+    border: florui_style::Edges<florui_style::BorderSide>,
+    clip: Option<&Mask>,
+) {
+    let sides = [border.top, border.right, border.bottom, border.left];
+    if sides.iter().all(|side| side.width <= 0.0) {
+        return;
+    }
+    let inner = outer.inset(
+        border.top.width,
+        border.right.width,
+        border.bottom.width,
+        border.left.width,
+    );
+    let (Some(outer_path), inner_path) = (outer.path(), inner.path()) else {
+        return;
+    };
+    let mut ring = PathBuilder::new();
+    ring.push_path(&outer_path);
+    if let Some(inner_path) = &inner_path {
+        ring.push_path(inner_path);
+    }
+    let Some(ring) = ring.finish() else {
+        return;
+    };
+    let transform = surface_transform(buffer);
+
+    let visible: Vec<Rgba> = sides
+        .iter()
+        .filter(|side| side.width > 0.0)
+        .map(|side| side.color)
+        .collect();
+    if visible.windows(2).all(|pair| pair[0] == pair[1]) {
+        let color = visible[0];
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(color.r, color.g, color.b, color.a);
+        paint.anti_alias = true;
+        buffer
+            .pixmap
+            .fill_path(&ring, &paint, FillRule::EvenOdd, transform, clip);
+        return;
+    }
+
+    let (x0, y0) = (outer.x, outer.y);
+    let (x1, y1) = (outer.x + outer.width, outer.y + outer.height);
+    let (ix0, iy0) = (inner.x, inner.y);
+    let (ix1, iy1) = (inner.x + inner.width, inner.y + inner.height);
+    let wedges = [
+        [(x0, y0), (x1, y0), (ix1, iy0), (ix0, iy0)],
+        [(x1, y0), (x1, y1), (ix1, iy1), (ix1, iy0)],
+        [(x1, y1), (x0, y1), (ix0, iy1), (ix1, iy1)],
+        [(x0, y1), (x0, y0), (ix0, iy0), (ix0, iy1)],
+    ];
+    for (side, corners) in sides.iter().zip(wedges) {
+        if side.width <= 0.0 {
+            continue;
+        }
+        let mut wedge = PathBuilder::new();
+        wedge.move_to(corners[0].0, corners[0].1);
+        for &(px, py) in &corners[1..] {
+            wedge.line_to(px, py);
+        }
+        wedge.close();
+        let Some(wedge) = wedge.finish() else {
+            continue;
+        };
+        let mut mask = match clip {
+            Some(existing) => existing.clone(),
+            None => {
+                let Some(mut full) = Mask::new(buffer.width(), buffer.height()) else {
+                    continue;
+                };
+                full.data_mut().fill(255);
+                full
+            }
+        };
+        mask.intersect_path(&wedge, FillRule::Winding, true, transform);
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(side.color.r, side.color.g, side.color.b, side.color.a);
+        paint.anti_alias = true;
+        buffer
+            .pixmap
+            .fill_path(&ring, &paint, FillRule::EvenOdd, transform, Some(&mask));
+    }
+}
+
 /// Paints `border`'s four sides as flat rectangles at the box's own outer
 /// edges — `(x, y, width, height)` is the whole border-box, matching
 /// `fill_rect`'s own background call in [`paint_node`]. A zero-width side
 /// (real CSS's own invisible default; see [`florui_style::BorderSide`]'s
-/// doc) paints nothing. No border-radius or per-corner miter join yet —
-/// `florui_style::BorderSide` has neither — so adjacent sides simply
-/// overlap by their own width at each corner, which a flat single color
-/// per side (this crate's only supported case, real CSS's own `solid`)
-/// paints identically to a mitered corner anyway.
+/// doc) paints nothing. A box with a `border-radius` goes through
+/// [`paint_rounded_border`] instead. Here adjacent sides simply overlap
+/// by their own width at each corner, which a flat single color per side
+/// (this crate's only supported case, real CSS's own `solid`) paints
+/// identically to a mitered corner anyway.
 #[allow(clippy::too_many_arguments)]
 fn paint_border(
     buffer: &mut Surface,
@@ -4390,6 +4527,75 @@ mod tests {
             &layouts,
             scale_factor,
         )
+    }
+
+    #[test]
+    fn a_rounded_background_leaves_its_corners_unpainted() {
+        let buffer = single_box_buffer(
+            ".box { background-color: #ff0000; border-radius: 5px; }",
+            10,
+            1.0,
+        );
+        assert_eq!(pixel_rgb(&buffer, 0, 0), [0, 0, 0], "corner stays canvas");
+        assert_eq!(pixel_rgb(&buffer, 9, 9), [0, 0, 0]);
+        assert_eq!(pixel_rgb(&buffer, 5, 5), [255, 0, 0], "center is filled");
+        assert_eq!(
+            pixel_rgb(&buffer, 5, 0),
+            [255, 0, 0],
+            "edge midpoint is filled"
+        );
+    }
+
+    #[test]
+    fn a_zero_radius_box_is_unchanged_from_the_plain_rect_path() {
+        let buffer = single_box_buffer(".box { background-color: #ff0000; }", 10, 1.0);
+        assert_eq!(pixel_rgb(&buffer, 0, 0), [255, 0, 0]);
+        assert_eq!(pixel_rgb(&buffer, 9, 9), [255, 0, 0]);
+    }
+
+    #[test]
+    fn a_rounded_border_follows_the_outline_and_keeps_the_interior() {
+        let buffer = single_box_buffer(
+            ".box { background-color: #ff0000; border-radius: 5px; border-width: 2px; \
+             border-style: solid; border-color: #0000ff; }",
+            10,
+            1.0,
+        );
+        assert_eq!(pixel_rgb(&buffer, 0, 0), [0, 0, 0], "corner stays canvas");
+        assert_eq!(pixel_rgb(&buffer, 5, 0), [0, 0, 255], "top edge is border");
+        assert_eq!(pixel_rgb(&buffer, 0, 5), [0, 0, 255], "left edge is border");
+        assert_eq!(
+            pixel_rgb(&buffer, 5, 5),
+            [255, 0, 0],
+            "interior is background"
+        );
+    }
+
+    #[test]
+    fn a_rounded_border_with_differing_side_colors_miters_at_the_corners() {
+        let buffer = single_box_buffer(
+            ".box { border-radius: 3px; border-width: 3px; border-style: solid; \
+             border-top-color: #00ff00; border-right-color: #0000ff; \
+             border-bottom-color: #0000ff; border-left-color: #0000ff; }",
+            10,
+            1.0,
+        );
+        assert_eq!(pixel_rgb(&buffer, 5, 0), [0, 255, 0], "top side");
+        assert_eq!(pixel_rgb(&buffer, 0, 5), [0, 0, 255], "left side");
+        assert_eq!(pixel_rgb(&buffer, 5, 9), [0, 0, 255], "bottom side");
+    }
+
+    #[test]
+    fn a_rounded_box_paints_the_same_in_a_bounded_and_a_full_target_group() {
+        assert_bounded_and_full_target_paint_identically(|| {
+            single_box_buffer_at(
+                ".box { background-color: #ff0000; border-radius: 4px; opacity: 0.5; }",
+                30,
+                1.0,
+                7.0,
+                9.0,
+            )
+        });
     }
 
     #[test]
