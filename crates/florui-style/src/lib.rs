@@ -40,6 +40,7 @@ mod focus;
 mod height_media_adapter;
 mod interaction;
 mod reduced_motion_adapter;
+mod rounded;
 mod scope_adapter;
 mod stylesheet_parse;
 mod stylo;
@@ -57,6 +58,7 @@ pub use container_query_adapter::{ContentBoxSize, resolve_container_query_signat
 pub use error::StyleError;
 pub use focus::FocusPath;
 pub use interaction::InteractionState;
+pub use rounded::RoundedRect;
 pub use stylesheet_parse::{Rule, compile_sources, parse_stylesheet};
 pub use tree::{Arena, InlineItem, NodeId};
 
