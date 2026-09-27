@@ -54,11 +54,12 @@ use stylo_dom::ElementState;
 
 use crate::animation::AnimationTimeline;
 use crate::cascade::{
-    BorderSide as FlorBorderSide, BoxShadow as FlorBoxShadow, ComputedStyle,
-    ContainerType as FlorContainerType, ContentAlignment, Corners, Display as FlorDisplay, Edges,
-    FilterFunction as FlorFilterFunction, FlexDirection, FlexWrap, FontFamily as FlorFontFamily,
-    ItemAlignment, LengthPercentage as FlorLengthPercentage,
-    TransformFunction as FlorTransformFunction, Viewport as FlorViewport,
+    AspectRatio as FlorAspectRatio, BorderSide as FlorBorderSide, BoxShadow as FlorBoxShadow,
+    ComputedStyle, ContainerType as FlorContainerType, ContentAlignment, Corners,
+    Display as FlorDisplay, Edges, FilterFunction as FlorFilterFunction, FlexDirection, FlexWrap,
+    FontFamily as FlorFontFamily, ItemAlignment, LengthPercentage as FlorLengthPercentage,
+    ObjectFit as FlorObjectFit, TransformFunction as FlorTransformFunction,
+    Viewport as FlorViewport,
 };
 use crate::color::Rgba;
 use crate::interaction::InteractionState;
@@ -1494,6 +1495,49 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         backdrop_filter: to_filter(&effects.backdrop_filter.0),
         container_type: to_container_type(box_style.clone_container_type()),
         container_name: to_container_name(&box_style.clone_container_name()),
+        object_fit: to_object_fit(position.object_fit),
+        object_position: to_object_position(&position.object_position),
+        aspect_ratio: to_aspect_ratio(&position.aspect_ratio),
+    }
+}
+
+/// `object-fit`'s variant set matches real CSS's own 1:1 (`Fill`/
+/// `Contain`/`Cover`/`None`/`ScaleDown`) -- no translation beyond naming.
+fn to_object_fit(value: style::computed_values::object_fit::T) -> FlorObjectFit {
+    use style::computed_values::object_fit::T as StyloObjectFit;
+    match value {
+        StyloObjectFit::Fill => FlorObjectFit::Fill,
+        StyloObjectFit::Contain => FlorObjectFit::Contain,
+        StyloObjectFit::Cover => FlorObjectFit::Cover,
+        StyloObjectFit::None => FlorObjectFit::None,
+        StyloObjectFit::ScaleDown => FlorObjectFit::ScaleDown,
+    }
+}
+
+/// `object-position`'s `horizontal`/`vertical` components -- same shape
+/// and same resolve-against-the-final-box reasoning as
+/// [`to_transform_origin`].
+fn to_object_position(
+    value: &style::values::computed::position::Position,
+) -> (FlorLengthPercentage, FlorLengthPercentage) {
+    (
+        to_length_percentage(&value.horizontal),
+        to_length_percentage(&value.vertical),
+    )
+}
+
+/// `aspect-ratio`'s `auto || <ratio>` grammar -- see [`FlorAspectRatio`]'s
+/// own doc for why both components are carried through independently
+/// rather than resolved into one value here.
+fn to_aspect_ratio(value: &style::values::computed::position::AspectRatio) -> FlorAspectRatio {
+    FlorAspectRatio {
+        prefers_intrinsic: value.auto,
+        ratio: match &value.ratio {
+            style::values::generics::position::PreferredRatio::None => None,
+            style::values::generics::position::PreferredRatio::Ratio(ratio) => {
+                Some((ratio.0.0, ratio.1.0))
+            }
+        },
     }
 }
 

@@ -499,6 +499,70 @@ pub struct ComputedStyle {
     /// [`ContainerType::Normal`], matching real CSS (a name with no
     /// established containment names nothing).
     pub container_name: Vec<String>,
+    /// `object-fit` — meaningless on anything but a replaced element
+    /// (e.g. `<img>`); [`ObjectFit::Fill`] is the initial value.
+    pub object_fit: ObjectFit,
+    /// `object-position` — same `(horizontal, vertical)` shape as
+    /// [`Self::transform_origin`], for the same reason: it resolves
+    /// against a replaced element's own already-final content box, which
+    /// only paint has in hand. `(50%, 50%)` (centered) is the initial
+    /// value. Meaningless on anything but a replaced element.
+    pub object_position: (LengthPercentage, LengthPercentage),
+    /// `aspect-ratio`. Meaningful on any box (not just a replaced
+    /// element) — see [`AspectRatio`]'s own doc.
+    pub aspect_ratio: AspectRatio,
+}
+
+/// `object-fit`'s exact CSS-spec variant set — a replaced element's
+/// intrinsic content (e.g. a decoded image) may need to be scaled/cropped
+/// to fill its own content box differently from the box-model default
+/// (stretch to fill).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ObjectFit {
+    /// Stretch to fill the content box exactly, ignoring the content's
+    /// own intrinsic aspect ratio. Real CSS's initial value.
+    #[default]
+    Fill,
+    /// Uniform scale to fit entirely within the content box, preserving
+    /// aspect ratio — the shorter axis leaves empty space (letterboxing).
+    Contain,
+    /// Uniform scale to fully cover the content box, preserving aspect
+    /// ratio — the longer axis is cropped.
+    Cover,
+    /// Render at intrinsic size, uncropped and unscaled (may overflow or
+    /// underfill the content box).
+    None,
+    /// Whichever of [`Self::None`] or [`Self::Contain`] produces the
+    /// smaller concrete size.
+    ScaleDown,
+}
+
+/// `aspect-ratio`. Real CSS's grammar is `auto || <ratio>` — either
+/// component alone, or both together — which is why this isn't collapsed
+/// to a single `Option<(f32, f32)>`: `auto` (alone) and `auto <ratio>`
+/// both prefer a replaced element's own intrinsic ratio when it has one,
+/// but only the latter also gives a fallback for when it doesn't (and a
+/// non-replaced box, which never has an intrinsic ratio, always falls
+/// back when `ratio` is present); a bare `<ratio>` (no `auto`) instead
+/// always wins over any intrinsic ratio, even a replaced element's own.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AspectRatio {
+    /// Whether a replaced element's own intrinsic ratio, if it has one,
+    /// takes precedence over [`Self::ratio`]. Real CSS's `auto` keyword.
+    pub prefers_intrinsic: bool,
+    /// The explicit `<width> / <height>` ratio, if the author gave one.
+    /// `None` together with `prefers_intrinsic: true` is real CSS's bare
+    /// `auto` (no explicit ratio at all, real CSS's initial value).
+    pub ratio: Option<(f32, f32)>,
+}
+
+impl Default for AspectRatio {
+    fn default() -> Self {
+        Self {
+            prefers_intrinsic: true,
+            ratio: None,
+        }
+    }
 }
 
 /// The viewport `@media` queries evaluate against — real CSS's own
@@ -1998,6 +2062,134 @@ mod tests {
             LengthPercentage {
                 length: 0.0,
                 percentage: 0.5
+            }
+        );
+    }
+
+    #[test]
+    fn object_fit_defaults_to_fill() {
+        let tree: Element = view! { <img /> };
+        let (arena, computed) = styles(&tree, "", &InteractionState::new());
+        let node = arena.roots()[0];
+        assert_eq!(computed[&node].object_fit, ObjectFit::Fill);
+    }
+
+    #[test]
+    fn object_fit_reads_each_real_css_keyword() {
+        for (keyword, expected) in [
+            ("contain", ObjectFit::Contain),
+            ("cover", ObjectFit::Cover),
+            ("none", ObjectFit::None),
+            ("scale-down", ObjectFit::ScaleDown),
+        ] {
+            let tree: Element = view! { <img class="pic" /> };
+            let (arena, computed) = styles(
+                &tree,
+                &format!(".pic {{ object-fit: {keyword}; }}"),
+                &InteractionState::new(),
+            );
+            let node = arena.roots()[0];
+            assert_eq!(
+                computed[&node].object_fit, expected,
+                "object-fit: {keyword}"
+            );
+        }
+    }
+
+    #[test]
+    fn object_position_defaults_to_centered() {
+        let tree: Element = view! { <img /> };
+        let (arena, computed) = styles(&tree, "", &InteractionState::new());
+        let node = arena.roots()[0];
+        let (x, y) = computed[&node].object_position;
+        assert_eq!(
+            x,
+            LengthPercentage {
+                length: 0.0,
+                percentage: 0.5
+            }
+        );
+        assert_eq!(
+            y,
+            LengthPercentage {
+                length: 0.0,
+                percentage: 0.5
+            }
+        );
+    }
+
+    #[test]
+    fn object_position_reads_an_explicit_length_and_percentage() {
+        let tree: Element = view! { <img class="pic" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".pic { object-position: 10px 20%; }",
+            &InteractionState::new(),
+        );
+        let node = arena.roots()[0];
+        let (x, y) = computed[&node].object_position;
+        assert_eq!(
+            x,
+            LengthPercentage {
+                length: 10.0,
+                percentage: 0.0
+            }
+        );
+        assert_eq!(
+            y,
+            LengthPercentage {
+                length: 0.0,
+                percentage: 0.2
+            }
+        );
+    }
+
+    #[test]
+    fn aspect_ratio_defaults_to_bare_auto() {
+        let tree: Element = view! { <div /> };
+        let (arena, computed) = styles(&tree, "", &InteractionState::new());
+        let node = arena.roots()[0];
+        assert_eq!(
+            computed[&node].aspect_ratio,
+            AspectRatio {
+                prefers_intrinsic: true,
+                ratio: None,
+            }
+        );
+    }
+
+    #[test]
+    fn aspect_ratio_of_a_bare_ratio_never_prefers_intrinsic() {
+        let tree: Element = view! { <img class="pic" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".pic { aspect-ratio: 16 / 9; }",
+            &InteractionState::new(),
+        );
+        let node = arena.roots()[0];
+        assert_eq!(
+            computed[&node].aspect_ratio,
+            AspectRatio {
+                prefers_intrinsic: false,
+                ratio: Some((16.0, 9.0)),
+            }
+        );
+    }
+
+    #[test]
+    fn aspect_ratio_of_auto_with_a_ratio_prefers_intrinsic_but_keeps_the_fallback() {
+        let tree: Element = view! { <img class="pic" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".pic { aspect-ratio: auto 4 / 3; }",
+            &InteractionState::new(),
+        );
+        let node = arena.roots()[0];
+        assert_eq!(
+            computed[&node].aspect_ratio,
+            AspectRatio {
+                prefers_intrinsic: true,
+                ratio: Some((4.0, 3.0)),
             }
         );
     }
