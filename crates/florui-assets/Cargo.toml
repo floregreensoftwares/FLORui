@@ -9,10 +9,13 @@ publish = false
 name = "florui_assets"
 
 [features]
-default = []
+default = ["watch"]
 # A background file-watcher thread per watched source -- not every
-# consumer wants one (a build script or a one-shot decode never does),
-# so this stays opt-in rather than a hard dependency of the crate.
+# consumer wants one (a build script or a one-shot decode never does), so
+# this is its own feature rather than unconditionally compiled in. Left
+# default-on (a consumer that doesn't want it, like florui-icon, opts out
+# with `default-features = false`) so `cargo test --workspace` actually
+# exercises the real file-watch invalidation path in CI.
 watch = ["dep:notify"]
 
 [dependencies]
