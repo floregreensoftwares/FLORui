@@ -8,7 +8,12 @@
 //! [`RawIcon`] itself has no dependencies; decoding and embedding live
 //! behind the `decode` feature (default-on) so a consumer that only needs
 //! the type (e.g. the runtime side of an already build-time-embedded
-//! icon) doesn't have to link `resvg`/`image`.
+//! icon) doesn't have to link `florui-assets`/`resvg`/`image`.
+//!
+//! The actual resolution/parsing/decoding is `florui-assets`'s
+//! (`decode.rs` only adapts it to this crate's own [`RawIcon`]/
+//! [`IconError`] shape and the square-icon-specific default size) — see
+//! that crate's own doc for the SVG library choice and format scope.
 
 #[cfg(feature = "decode")]
 mod decode;
