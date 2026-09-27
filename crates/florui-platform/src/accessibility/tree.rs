@@ -210,6 +210,21 @@ impl AccessibilityTree {
                     node.add_action(Action::Click);
                 }
             }
+            "input" if arena.input_type(id) == Some("range") => {
+                node.set_role(Role::Slider);
+                node.set_numeric_value(arena.range_value(id) as f64);
+                node.set_min_numeric_value(arena.range_min(id) as f64);
+                node.set_max_numeric_value(arena.range_max(id) as f64);
+                node.set_numeric_value_step(arena.range_step(id) as f64);
+                if let Some(label) = arena.accessible_label(id) {
+                    node.set_label(label);
+                }
+                if is_focusable(arena, id) {
+                    node.add_action(Action::Focus);
+                    node.add_action(Action::Increment);
+                    node.add_action(Action::Decrement);
+                }
+            }
             "input" => {
                 let role = match arena.input_type(id) {
                     Some("password") => Role::PasswordInput,
@@ -497,6 +512,39 @@ mod tests {
         let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
         let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
         assert_eq!(node.toggled(), Some(Toggled::True));
+    }
+
+    #[test]
+    fn a_range_input_gets_the_slider_role_and_its_numeric_values() {
+        let tree: Element = view! {
+            <input type="range" min="0" max="50" step="5" value="20" accessible_label="Volume" />
+        };
+        let (update, reverse, arena) = build(&tree, None);
+        let input = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
+        assert_eq!(role_of(&update, ak_id), Role::Slider);
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert_eq!(node.numeric_value(), Some(20.0));
+        assert_eq!(node.min_numeric_value(), Some(0.0));
+        assert_eq!(node.max_numeric_value(), Some(50.0));
+        assert_eq!(node.numeric_value_step(), Some(5.0));
+        assert_eq!(node.label(), Some("Volume"));
+        assert!(node.supports_action(Action::Focus));
+        assert!(node.supports_action(Action::Increment));
+        assert!(node.supports_action(Action::Decrement));
+    }
+
+    #[test]
+    fn a_disabled_range_input_is_marked_disabled_and_gets_no_actions() {
+        let tree: Element = view! { <input type="range" disabled="true" /> };
+        let (update, reverse, arena) = build(&tree, None);
+        let input = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert_eq!(node.role(), Role::Slider);
+        assert!(node.is_disabled());
+        assert!(!node.supports_action(Action::Increment));
+        assert!(!node.supports_action(Action::Decrement));
     }
 
     #[test]
