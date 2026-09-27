@@ -225,6 +225,26 @@ fn to_inline_content(item: &InlineContentItem) -> florui_text::InlineContent<'_>
 enum LeafContext {
     Text(TextContext),
     Inline(Vec<InlineContentItem>),
+    Image(ImageContext),
+}
+
+/// A replaced element's own sizing inputs, pre-resolved at build time the
+/// same way [`TextContext`] pre-resolves font/text state — `measure_leaf`
+/// itself never looks anything back up in `styles`.
+///
+/// `intrinsic_size` is `None` for the entire lifetime of one
+/// `compute_layout` call in this delivery: there is no channel yet from
+/// an async-loaded image's real dimensions into this crate (that's
+/// `florui-platform`'s follow-on work, patching a resolved width/height
+/// into `ComputedStyle` the same way [`compute_layout_with_content_extents`]'s
+/// own doc already describes for `<select>`'s auto-width). `None` is not
+/// a placeholder/approximation, though: it is real CSS's own "no
+/// intrinsic size yet" case (an image that hasn't finished loading, or
+/// never will) with its own well-defined sizing behavior — see
+/// [`resolve_replaced_size`]'s own doc.
+struct ImageContext {
+    intrinsic_size: Option<Size<f32>>,
+    aspect_ratio: florui_style::AspectRatio,
 }
 
 /// What [`compute_layout`]'s measure closure needs to recompute a leaf's
@@ -675,14 +695,16 @@ fn layout_root_group(
                 // returns a `Size` — extract what the baseline needs from
                 // `context` first, since the closure below moves `context`
                 // into `measure_leaf` and it isn't available again after.
-                let baseline_source = context.as_ref().map(|c| match c {
-                    LeafContext::Text(t) => BaselineSource::Text(
+                let baseline_source = context.as_ref().and_then(|c| match c {
+                    LeafContext::Text(t) => Some(BaselineSource::Text(
                         t.text.clone(),
                         t.font_size,
                         t.font_weight,
                         t.font_family,
-                    ),
-                    LeafContext::Inline(items) => BaselineSource::Inline(items.clone()),
+                    )),
+                    LeafContext::Inline(items) => Some(BaselineSource::Inline(items.clone())),
+                    // A replaced element has no text baseline to recover.
+                    LeafContext::Image(_) => None,
                 });
 
                 let mut measured_baseline = None;
@@ -937,6 +959,196 @@ fn measure_leaf(
                 height: result.height,
             }
         }
+        LeafContext::Image(image_context) => {
+            // A replaced element contributes no text baseline;
+            // `baseline_out` stays whatever the caller already
+            // initialized (`None`), matching Text/Inline's own behavior
+            // when they have nothing to report.
+            resolve_replaced_size(
+                image_context.intrinsic_size,
+                image_context.aspect_ratio,
+                known_dimensions,
+                available_space,
+            )
+        }
+    }
+}
+
+/// Resolves a replaced element's (e.g. `<img>`) own content size against
+/// `width`/`height`/`aspect-ratio` and its own intrinsic size — real CSS's
+/// replaced-element sizing algorithm, verified directly against Chrome
+/// rather than assumed from spec text alone (six real
+/// `getBoundingClientRect` measurements against a served test page,
+/// recorded in this function's own tests). The one easy-to-miss fact
+/// that verification surfaced: a *plain* block box's `width: auto` always
+/// fills its available width, but a replaced element with a real
+/// intrinsic size uses that intrinsic size instead and does **not**
+/// fill — it only falls back to filling when it has no intrinsic size at
+/// all (still loading, or failed to load).
+pub fn resolve_replaced_size(
+    intrinsic: Option<Size<f32>>,
+    aspect_ratio: florui_style::AspectRatio,
+    known_dimensions: Size<Option<f32>>,
+    available_space: Size<AvailableSpace>,
+) -> Size<f32> {
+    let ratio = resolve_aspect_ratio(aspect_ratio, intrinsic);
+    let fill_width = || match available_space.width {
+        AvailableSpace::Definite(width) => width,
+        // A min/max-content query has nothing to fill against; fall back
+        // to the intrinsic width if there is one, else contribute
+        // nothing.
+        AvailableSpace::MinContent | AvailableSpace::MaxContent => {
+            intrinsic.map_or(0.0, |size| size.width)
+        }
+    };
+
+    match (known_dimensions.width, known_dimensions.height) {
+        // Both axes already pinned by CSS (explicit `width`/`height`, or
+        // a container that already resolved both) — nothing left to
+        // measure; `object-fit` governs how content maps into this box,
+        // not this function.
+        (Some(width), Some(height)) => Size { width, height },
+        (Some(width), None) => Size {
+            width,
+            height: ratio
+                .map(|r| width / r)
+                .or(intrinsic.map(|size| size.height))
+                .unwrap_or(0.0),
+        },
+        (None, Some(height)) => Size {
+            width: ratio
+                .map(|r| height * r)
+                .or(intrinsic.map(|size| size.width))
+                .unwrap_or(0.0),
+            height,
+        },
+        (None, None) => match intrinsic {
+            // A real intrinsic size always wins over available space —
+            // measured directly (a 100x50 image with no CSS size at all,
+            // inside a 400px container, stays 100x50; it does not fill).
+            Some(size) => size,
+            // No intrinsic size at all (loading, or failed): falls back
+            // to an ordinary block box's own `width: auto` behavior
+            // (fill), then derives height from the ratio if one exists
+            // (measured: a 16:9 `aspect-ratio` in a 400px container
+            // measures 400x225), or `0.0` otherwise. Chrome instead
+            // shows an 18px broken-image glyph here — a UA
+            // presentational detail this crate doesn't render at all,
+            // so `0.0` is the honest value for "nothing to show yet"
+            // rather than a copied magic number with no real meaning
+            // here.
+            None => {
+                let width = fill_width();
+                Size {
+                    width,
+                    height: ratio.map(|r| width / r).unwrap_or(0.0),
+                }
+            }
+        },
+    }
+}
+
+/// Resolves `aspect-ratio`'s `auto || <ratio>` grammar against whether
+/// this element actually has an intrinsic ratio — see
+/// [`florui_style::AspectRatio`]'s own doc for the three real behaviors
+/// this distinguishes. Returns `width / height`, or `None` when nothing
+/// (neither an intrinsic ratio nor an explicit one) applies.
+fn resolve_aspect_ratio(
+    aspect_ratio: florui_style::AspectRatio,
+    intrinsic: Option<Size<f32>>,
+) -> Option<f32> {
+    if aspect_ratio.prefers_intrinsic {
+        intrinsic
+            .filter(|size| size.height > 0.0)
+            .map(|size| size.width / size.height)
+            .or_else(|| aspect_ratio.ratio.map(|(width, height)| width / height))
+    } else {
+        aspect_ratio.ratio.map(|(width, height)| width / height)
+    }
+}
+
+/// Resolves `object-fit`/`object-position`'s content rect: where, and at
+/// what size, a replaced element's own intrinsic content (e.g. a decoded
+/// image) paints within its already-final content box. Pure geometry —
+/// no painting, no decoding; `florui-paint` blits into the rect this
+/// returns. `intrinsic_size` with a zero or negative axis, or a
+/// zero-or-negative `box_size`, has nothing to paint, so the
+/// zero-size/zero-position rect is returned rather than dividing by zero.
+pub fn resolve_object_fit_content_rect(
+    object_fit: florui_style::ObjectFit,
+    object_position: (
+        florui_style::LengthPercentage,
+        florui_style::LengthPercentage,
+    ),
+    box_size: Size<f32>,
+    intrinsic_size: Size<f32>,
+) -> BoxLayout {
+    if intrinsic_size.width <= 0.0
+        || intrinsic_size.height <= 0.0
+        || box_size.width <= 0.0
+        || box_size.height <= 0.0
+    {
+        return BoxLayout {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        };
+    }
+
+    let intrinsic_ratio = intrinsic_size.width / intrinsic_size.height;
+    let box_ratio = box_size.width / box_size.height;
+    let contain_size = if box_ratio > intrinsic_ratio {
+        Size {
+            width: box_size.height * intrinsic_ratio,
+            height: box_size.height,
+        }
+    } else {
+        Size {
+            width: box_size.width,
+            height: box_size.width / intrinsic_ratio,
+        }
+    };
+
+    let content_size = match object_fit {
+        florui_style::ObjectFit::Fill => box_size,
+        florui_style::ObjectFit::None => intrinsic_size,
+        florui_style::ObjectFit::Contain => contain_size,
+        florui_style::ObjectFit::Cover => {
+            if box_ratio > intrinsic_ratio {
+                Size {
+                    width: box_size.width,
+                    height: box_size.width / intrinsic_ratio,
+                }
+            } else {
+                Size {
+                    width: box_size.height * intrinsic_ratio,
+                    height: box_size.height,
+                }
+            }
+        }
+        // Whichever of `None` or `Contain` is smaller — `Contain` is
+        // only ever smaller than the intrinsic size when the box forced
+        // it to shrink; when the box is large enough that `Contain`
+        // would upscale instead, `None` (unscaled) is the smaller one.
+        florui_style::ObjectFit::ScaleDown => {
+            if intrinsic_size.width <= contain_size.width
+                && intrinsic_size.height <= contain_size.height
+            {
+                intrinsic_size
+            } else {
+                contain_size
+            }
+        }
+    };
+
+    let extra_x = box_size.width - content_size.width;
+    let extra_y = box_size.height - content_size.height;
+    BoxLayout {
+        x: object_position.0.resolve(extra_x),
+        y: object_position.1.resolve(extra_y),
+        width: content_size.width,
+        height: content_size.height,
     }
 }
 
@@ -969,10 +1181,23 @@ fn build_node(
                 let arena_children = arena.children(node);
                 let id = if arena_children.is_empty() {
                     let style = to_taffy_style(styles.get(&node));
-                    let text = leaf_text(arena, node);
-                    if text.is_empty() {
+                    if arena.tag(node) == "img" {
+                        tree.new_leaf_with_context(
+                            style,
+                            LeafContext::Image(ImageContext {
+                                // No intrinsic-size channel into this
+                                // crate yet -- see `ImageContext`'s own
+                                // doc.
+                                intrinsic_size: None,
+                                aspect_ratio: styles
+                                    .get(&node)
+                                    .map_or_else(Default::default, |s| s.aspect_ratio),
+                            }),
+                        )?
+                    } else if leaf_text(arena, node).is_empty() {
                         tree.new_leaf(style)?
                     } else {
+                        let text = leaf_text(arena, node);
                         let font_size = styles.get(&node).map_or(16.0, |s| s.font_size);
                         let font_weight = styles.get(&node).map_or(400.0, |s| s.font_weight);
                         let font_family = styles
@@ -1703,6 +1928,347 @@ mod tests {
         let mut font = florui_text::Font::load_embedded();
         let layouts = compute_layout(&mut font, &arena, &styles, available).unwrap();
         (arena, layouts)
+    }
+
+    /// [`resolve_replaced_size`] and [`resolve_object_fit_content_rect`],
+    /// each measurement recorded against real Chrome first (a served test
+    /// page, real `getBoundingClientRect`) rather than derived from CSS
+    /// spec text alone — see [`resolve_replaced_size`]'s own doc.
+    mod replaced_element_sizing {
+        use super::*;
+
+        fn no_ratio() -> florui_style::AspectRatio {
+            florui_style::AspectRatio {
+                prefers_intrinsic: true,
+                ratio: None,
+            }
+        }
+
+        fn explicit_ratio(width: f32, height: f32) -> florui_style::AspectRatio {
+            florui_style::AspectRatio {
+                prefers_intrinsic: false,
+                ratio: Some((width, height)),
+            }
+        }
+
+        fn both_auto() -> Size<Option<f32>> {
+            Size {
+                width: None,
+                height: None,
+            }
+        }
+
+        fn definite(width: f32, height: f32) -> Size<AvailableSpace> {
+            Size {
+                width: AvailableSpace::Definite(width),
+                height: AvailableSpace::Definite(height),
+            }
+        }
+
+        /// Measured: a broken/never-loaded image with no CSS size and no
+        /// `aspect-ratio`, inside a 400px container, is 400 wide (an
+        /// ordinary block box's own `width: auto` fill) and a small,
+        /// UA-glyph-sized height Chrome shows its own broken-image icon
+        /// at (18px there) — this crate renders no such glyph, so `0.0`
+        /// is the honest value instead of a copied magic number.
+        #[test]
+        fn no_intrinsic_size_and_no_ratio_fills_width_and_has_zero_height() {
+            let size = resolve_replaced_size(None, no_ratio(), both_auto(), definite(400.0, 900.0));
+            assert_eq!(
+                size,
+                Size {
+                    width: 400.0,
+                    height: 0.0
+                }
+            );
+        }
+
+        /// Measured: 400x225 (400 * 9/16) for a 16:9 `aspect-ratio` with
+        /// both axes `auto`, no intrinsic size, in a 400px container.
+        #[test]
+        fn no_intrinsic_size_with_a_ratio_derives_height_from_the_filled_width() {
+            let size = resolve_replaced_size(
+                None,
+                explicit_ratio(16.0, 9.0),
+                both_auto(),
+                definite(400.0, 900.0),
+            );
+            assert_eq!(size.width, 400.0);
+            assert!((size.height - 225.0).abs() < 0.01, "{size:?}");
+        }
+
+        /// Measured: 200x112.5 for a 16:9 ratio with an explicit
+        /// `width: 200px` (`height: auto`).
+        #[test]
+        fn an_explicit_width_with_a_ratio_derives_the_height() {
+            let size = resolve_replaced_size(
+                None,
+                explicit_ratio(16.0, 9.0),
+                Size {
+                    width: Some(200.0),
+                    height: None,
+                },
+                definite(400.0, 900.0),
+            );
+            assert_eq!(size.width, 200.0);
+            assert!((size.height - 112.5).abs() < 0.01, "{size:?}");
+        }
+
+        /// Measured: a real 100x50 intrinsic image with `width: 200px`
+        /// and no `aspect-ratio` property resolves height from its own
+        /// intrinsic ratio (2:1) — 200x100.
+        #[test]
+        fn an_explicit_width_with_no_ratio_property_derives_height_from_the_intrinsic_ratio() {
+            let size = resolve_replaced_size(
+                Some(Size {
+                    width: 100.0,
+                    height: 50.0,
+                }),
+                no_ratio(),
+                Size {
+                    width: Some(200.0),
+                    height: None,
+                },
+                definite(400.0, 900.0),
+            );
+            assert_eq!(
+                size,
+                Size {
+                    width: 200.0,
+                    height: 100.0
+                }
+            );
+        }
+
+        /// Measured: the same 100x50 intrinsic image with an explicit
+        /// `aspect-ratio: 1/1` (no `auto`) and `width: 200px` uses 1:1,
+        /// not its own 2:1 intrinsic ratio — 200x200. A bare `<ratio>`
+        /// always overrides the intrinsic ratio.
+        #[test]
+        fn an_explicit_bare_ratio_overrides_the_intrinsic_ratio() {
+            let size = resolve_replaced_size(
+                Some(Size {
+                    width: 100.0,
+                    height: 50.0,
+                }),
+                explicit_ratio(1.0, 1.0),
+                Size {
+                    width: Some(200.0),
+                    height: None,
+                },
+                definite(400.0, 900.0),
+            );
+            assert_eq!(
+                size,
+                Size {
+                    width: 200.0,
+                    height: 200.0
+                }
+            );
+        }
+
+        /// Measured: a real 100x50 intrinsic image with no CSS size at
+        /// all, inside a 400px container, stays 100x50 — it does **not**
+        /// fill, unlike an ordinary block box or a sizeless/broken image.
+        #[test]
+        fn a_real_intrinsic_size_wins_over_available_space_when_both_axes_are_auto() {
+            let size = resolve_replaced_size(
+                Some(Size {
+                    width: 100.0,
+                    height: 50.0,
+                }),
+                no_ratio(),
+                both_auto(),
+                definite(400.0, 900.0),
+            );
+            assert_eq!(
+                size,
+                Size {
+                    width: 100.0,
+                    height: 50.0
+                }
+            );
+        }
+
+        #[test]
+        fn both_axes_already_pinned_by_css_are_used_as_is() {
+            let size = resolve_replaced_size(
+                Some(Size {
+                    width: 100.0,
+                    height: 50.0,
+                }),
+                no_ratio(),
+                Size {
+                    width: Some(30.0),
+                    height: Some(30.0),
+                },
+                definite(400.0, 900.0),
+            );
+            assert_eq!(
+                size,
+                Size {
+                    width: 30.0,
+                    height: 30.0
+                }
+            );
+        }
+
+        fn box_of(width: f32, height: f32) -> Size<f32> {
+            Size { width, height }
+        }
+
+        fn centered() -> (
+            florui_style::LengthPercentage,
+            florui_style::LengthPercentage,
+        ) {
+            (
+                florui_style::LengthPercentage {
+                    length: 0.0,
+                    percentage: 0.5,
+                },
+                florui_style::LengthPercentage {
+                    length: 0.0,
+                    percentage: 0.5,
+                },
+            )
+        }
+
+        #[test]
+        fn object_fit_fill_stretches_to_the_whole_box_ignoring_aspect_ratio() {
+            let rect = resolve_object_fit_content_rect(
+                florui_style::ObjectFit::Fill,
+                centered(),
+                box_of(200.0, 100.0),
+                box_of(100.0, 50.0),
+            );
+            assert_eq!(rect.width, 200.0);
+            assert_eq!(rect.height, 100.0);
+        }
+
+        /// A 2:1 image in a taller-than-2:1 (100x100) box: `Contain` fits
+        /// entirely within by scaling to the narrower axis (100x50),
+        /// centered — 25px empty on each side of the shorter axis.
+        #[test]
+        fn object_fit_contain_letterboxes_and_centers() {
+            let rect = resolve_object_fit_content_rect(
+                florui_style::ObjectFit::Contain,
+                centered(),
+                box_of(100.0, 100.0),
+                box_of(100.0, 50.0),
+            );
+            assert_eq!((rect.width, rect.height), (100.0, 50.0));
+            assert_eq!(rect.y, 25.0, "centered vertically in the leftover space");
+        }
+
+        /// The same 2:1 image and box under `Cover` instead crops to fill
+        /// every axis — 100x100, cropping the wider axis (200 scaled
+        /// down to fit height, then only 100 of its 200 width shown).
+        #[test]
+        fn object_fit_cover_fills_and_crops() {
+            let rect = resolve_object_fit_content_rect(
+                florui_style::ObjectFit::Cover,
+                centered(),
+                box_of(100.0, 100.0),
+                box_of(100.0, 50.0),
+            );
+            assert_eq!((rect.width, rect.height), (200.0, 100.0));
+            assert_eq!(
+                rect.x, -50.0,
+                "centered -- half the overflow is cropped left"
+            );
+        }
+
+        #[test]
+        fn object_fit_none_uses_intrinsic_size_unscaled() {
+            let rect = resolve_object_fit_content_rect(
+                florui_style::ObjectFit::None,
+                centered(),
+                box_of(300.0, 300.0),
+                box_of(100.0, 50.0),
+            );
+            assert_eq!((rect.width, rect.height), (100.0, 50.0));
+        }
+
+        /// A box larger than the intrinsic size: `ScaleDown` behaves like
+        /// `None` (never upscales).
+        #[test]
+        fn object_fit_scale_down_never_upscales() {
+            let rect = resolve_object_fit_content_rect(
+                florui_style::ObjectFit::ScaleDown,
+                centered(),
+                box_of(300.0, 300.0),
+                box_of(100.0, 50.0),
+            );
+            assert_eq!((rect.width, rect.height), (100.0, 50.0));
+        }
+
+        /// A box smaller than the intrinsic size: `ScaleDown` behaves
+        /// like `Contain` (does shrink).
+        #[test]
+        fn object_fit_scale_down_shrinks_like_contain_when_the_box_is_smaller() {
+            let rect = resolve_object_fit_content_rect(
+                florui_style::ObjectFit::ScaleDown,
+                centered(),
+                box_of(50.0, 50.0),
+                box_of(100.0, 50.0),
+            );
+            assert_eq!((rect.width, rect.height), (50.0, 25.0));
+        }
+
+        #[test]
+        fn object_position_offsets_away_from_center() {
+            let top_left = (
+                florui_style::LengthPercentage {
+                    length: 0.0,
+                    percentage: 0.0,
+                },
+                florui_style::LengthPercentage {
+                    length: 0.0,
+                    percentage: 0.0,
+                },
+            );
+            let rect = resolve_object_fit_content_rect(
+                florui_style::ObjectFit::Contain,
+                top_left,
+                box_of(100.0, 100.0),
+                box_of(100.0, 50.0),
+            );
+            assert_eq!((rect.x, rect.y), (0.0, 0.0));
+        }
+
+        /// End-to-end through real CSS parsing, Stylo cascade, and Taffy
+        /// layout (not just the pure function above): an `<img>` with
+        /// `aspect-ratio: 16 / 9` in a 400px-wide flow gets a real
+        /// 400x225 box — the same case measured against Chrome.
+        #[test]
+        fn an_img_with_an_aspect_ratio_gets_a_real_measured_box_end_to_end() {
+            let tree: Element = view! {
+                <div class="container">
+                    <img class="pic" />
+                </div>
+            };
+            let (arena, layouts) = layout_for(
+                &tree,
+                ".container { width: 400px; } \
+                 .pic { display: block; aspect-ratio: 16 / 9; }",
+            );
+            let container = arena.roots()[0];
+            let img = arena.children(container)[0];
+            assert_eq!(layouts[&img].width, 400.0);
+            assert!((layouts[&img].height - 225.0).abs() < 0.01);
+        }
+
+        /// End-to-end: an `<img>` with an explicit `width`/`height` uses
+        /// exactly those, the same as any other box-sized element.
+        #[test]
+        fn an_img_with_explicit_width_and_height_uses_them_end_to_end() {
+            let tree: Element = view! { <img class="pic" /> };
+            let (arena, layouts) =
+                layout_for(&tree, ".pic { display: block; width: 64px; height: 48px; }");
+            let img = arena.roots()[0];
+            assert_eq!(layouts[&img].width, 64.0);
+            assert_eq!(layouts[&img].height, 48.0);
+        }
     }
 
     #[test]
