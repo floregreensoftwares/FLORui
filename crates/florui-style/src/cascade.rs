@@ -409,10 +409,14 @@ pub struct ComputedStyle {
     pub position: Position,
     /// `top`/`right`/`bottom`/`left` — meaningless when [`Self::position`]
     /// is [`Position::Static`]. Each edge is `None` for an explicit
-    /// `auto`, or any value this crate can't yet resolve (a percentage,
-    /// a `calc()`) — the identical limitation [`Self::width`]/
-    /// [`Self::margin`] already have, not a new one.
-    pub inset: Edges<Option<f32>>,
+    /// `auto`. Kept as a [`LengthPercentage`], not collapsed to a resolved
+    /// pixel like [`Self::width`]/[`Self::margin`] are, for the same
+    /// reason `transform`'s own `translate()`/`transform-origin` are: the
+    /// containing block it resolves against (the nearest positioned
+    /// ancestor's own padding box) is only known once layout runs; Taffy's
+    /// own inset type already resolves a percentage there natively, so
+    /// `florui-layout` only has to hand it through unresolved.
+    pub inset: Edges<Option<LengthPercentage>>,
     /// `z-index`. `None` means `auto` (the initial value) — real CSS only
     /// gives `z-index` an effect on a positioned (non-[`Position::Static`])
     /// element, a flex item, or a grid item (see `florui_paint`'s own doc
@@ -1233,10 +1237,14 @@ mod tests {
         );
         let node = arena.roots()[0];
         let inset = &computed[&node].inset;
-        assert_eq!(inset.top, Some(4.0));
-        assert_eq!(inset.right, Some(8.0));
-        assert_eq!(inset.bottom, Some(12.0));
-        assert_eq!(inset.left, Some(16.0));
+        let px = |length| LengthPercentage {
+            length,
+            percentage: 0.0,
+        };
+        assert_eq!(inset.top, Some(px(4.0)));
+        assert_eq!(inset.right, Some(px(8.0)));
+        assert_eq!(inset.bottom, Some(px(12.0)));
+        assert_eq!(inset.left, Some(px(16.0)));
     }
 
     #[test]
@@ -1249,6 +1257,24 @@ mod tests {
         );
         let node = arena.roots()[0];
         assert_eq!(computed[&node].inset.top, None);
+    }
+
+    #[test]
+    fn a_percentage_inset_edge_keeps_its_percentage_unresolved() {
+        let tree: Element = view! { <div class="abs" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".abs { position: absolute; left: 25%; }",
+            &InteractionState::new(),
+        );
+        let node = arena.roots()[0];
+        assert_eq!(
+            computed[&node].inset.left,
+            Some(LengthPercentage {
+                length: 0.0,
+                percentage: 0.25,
+            })
+        );
     }
 
     #[test]

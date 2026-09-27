@@ -1972,10 +1972,16 @@ fn to_position(value: style::values::computed::PositionProperty) -> crate::casca
 /// percentage, or a `calc()` all become `None`) — `top`/`right`/`bottom`/
 /// `left` share `margin`'s own generated value shape (a plain
 /// `LengthPercentage`, real CSS inset values allow negative lengths too).
-fn to_optional_inset(value: &style::values::computed::position::Inset) -> Option<f32> {
+/// `None` for `auto` (real CSS's own initial value for every inset edge).
+/// A declared length-percentage is kept unresolved — see
+/// [`crate::cascade::ComputedStyle::inset`]'s own doc for why, unlike
+/// [`to_optional_length`]'s own collapse-to-`None`.
+fn to_optional_inset(
+    value: &style::values::computed::position::Inset,
+) -> Option<FlorLengthPercentage> {
     use style::values::generics::position::GenericInset;
     match value {
-        GenericInset::LengthPercentage(lp) => lp.to_length().map(|length| length.px()),
+        GenericInset::LengthPercentage(lp) => Some(to_length_percentage(lp)),
         _ => None,
     }
 }
