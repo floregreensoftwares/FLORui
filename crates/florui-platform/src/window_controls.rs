@@ -35,6 +35,7 @@ use crate::file_dialog::{
     OpenFileDialogOptions, OpenFileDialogOutcome, SaveFileDialogOptions, SaveFileDialogOutcome,
 };
 use crate::menu::{ContextMenuOutcome, MenuEntry};
+use crate::open_url::OpenUrlOutcome;
 
 /// See this module's own doc, "Marking a draggable region."
 pub const WINDOW_DRAG_REGION_ID: &str = "florui-window-drag-region";
@@ -319,6 +320,18 @@ impl WindowControls {
         if let Some(callback) = self.pending_save_dialog.borrow_mut().take() {
             callback(outcome);
         }
+    }
+
+    /// Opens `url` in the OS's own default browser. Unlike
+    /// [`Self::open_file_dialog`], this returns its outcome immediately --
+    /// the underlying OS call doesn't block on anything the browser does,
+    /// so there is no result to deliver later. `<a href="http(s)://...">`
+    /// calls this itself as its own default action; an app (or
+    /// `florui_routing::Link`) can call it directly too, for the same
+    /// reason [`Self::open_file_dialog`] is public rather than
+    /// `<input type="file">`-only.
+    pub fn open_url(&self, url: &str) -> OpenUrlOutcome {
+        crate::open_url::open_url(&self.window, url)
     }
 
     /// Starts an OS-native move-drag from the current mouse position. A
