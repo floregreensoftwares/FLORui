@@ -7,6 +7,8 @@
 //! `Binding<bool>` (`Signal::binding`, which always accepts). "Sync" uses
 //! the explicit contract -- a plain value plus a `BoolHandler` told the
 //! value the switch is asking for -- and the owner rejects turning it off.
+//! "Updating" is `indeterminate`: a real mixed state, display only, that
+//! still toggles from its own `checked` when clicked.
 //!
 //! `cargo run --example controlled_switch -p florui-example-app`
 
@@ -35,6 +37,7 @@ fn app() -> Element {
     let sync = use_signal(|| false);
     let accept_sync = sync.clone();
     let locked = use_signal(|| true);
+    let updating = use_signal(|| false);
 
     view! {
         <div class="page">
@@ -48,6 +51,7 @@ fn app() -> Element {
                     id={"wifi-switch".to_string()}
                     value={SwitchValue::bound(wifi.binding())}
                     disabled={false}
+                    indeterminate={false}
                     accessible_label={"Wi-Fi".to_string()}
                 />
                 <label class="field-label" for="wifi-switch">{"Wi-Fi (Binding)"}</label>
@@ -66,6 +70,7 @@ fn app() -> Element {
                         }),
                     )}
                     disabled={false}
+                    indeterminate={false}
                     accessible_label={"Sync".to_string()}
                 />
                 <label class="field-label" for="sync-switch">
@@ -79,10 +84,24 @@ fn app() -> Element {
                     id={"locked-switch".to_string()}
                     value={SwitchValue::controlled(locked.get(), BoolHandler::new(|_| {}))}
                     disabled={true}
+                    indeterminate={false}
                     accessible_label={"Locked setting".to_string()}
                 />
                 <label class="field-label" for="locked-switch">
                     {"Locked setting (disabled, stays on)"}
+                </label>
+            </div>
+
+            <div class="row">
+                <Switch
+                    id={"updating-switch".to_string()}
+                    value={SwitchValue::bound(updating.binding())}
+                    disabled={false}
+                    indeterminate={true}
+                    accessible_label={"Updating".to_string()}
+                />
+                <label class="field-label" for="updating-switch">
+                    {"Updating (indeterminate, still toggles)"}
                 </label>
             </div>
         </div>
