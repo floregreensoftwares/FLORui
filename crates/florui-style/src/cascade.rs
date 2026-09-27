@@ -840,6 +840,52 @@ mod tests {
     }
 
     #[test]
+    fn a_two_hop_adjacent_sibling_chain_matches() {
+        let tree: Element = view! {
+            <div>
+                <input type="checkbox" disabled="true" class="a" />
+                <span class="b" />
+                <span class="c" />
+            </div>
+        };
+        let css = ".c { background-color: #111111; } \
+                   input:disabled + .b + .c { background-color: #00ff00; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let c = arena
+            .find(|a, id| a.classes(id).iter().any(|cl| cl == "c"))
+            .unwrap();
+        assert_eq!(computed[&c].background_color, Rgba::opaque(0, 0xff, 0));
+    }
+
+    #[test]
+    fn disabled_matches_a_range_input_directly() {
+        let tree: Element = view! {
+            <div>
+                <input type="range" disabled="true" class="a" />
+                <input type="range" class="b" />
+            </div>
+        };
+        let css = ".a, .b { background-color: #111111; } \
+                   input:disabled { background-color: #ff0000; } \
+                   input:enabled { background-color: #00ff00; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let disabled = arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == "a"))
+            .unwrap();
+        let enabled = arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == "b"))
+            .unwrap();
+        assert_eq!(
+            computed[&disabled].background_color,
+            Rgba::opaque(0xff, 0, 0)
+        );
+        assert_eq!(
+            computed[&enabled].background_color,
+            Rgba::opaque(0, 0xff, 0)
+        );
+    }
+
+    #[test]
     fn checked_and_disabled_match_a_checkboxs_markup_state_directly() {
         let tree: Element = view! {
             <div>
