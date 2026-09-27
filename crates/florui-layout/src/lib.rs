@@ -1041,10 +1041,10 @@ fn to_taffy_style(style: Option<&ComputedStyle>) -> taffy::Style {
         },
         position: to_taffy_position(style.position),
         inset: Rect {
-            left: to_length_percentage_auto(style.inset.left),
-            right: to_length_percentage_auto(style.inset.right),
-            top: to_length_percentage_auto(style.inset.top),
-            bottom: to_length_percentage_auto(style.inset.bottom),
+            left: to_inset_length_percentage_auto(style.inset.left),
+            right: to_inset_length_percentage_auto(style.inset.right),
+            top: to_inset_length_percentage_auto(style.inset.top),
+            bottom: to_inset_length_percentage_auto(style.inset.bottom),
         },
         // These four only affect *this node's own children*, and only take
         // effect at all when `display` above is `Flex` — Taffy ignores them
@@ -1143,6 +1143,26 @@ fn to_dimension(value: Option<f32>) -> Dimension {
 fn to_length_percentage_auto(value: Option<f32>) -> LengthPercentageAuto {
     match value {
         Some(length) => LengthPercentageAuto::length(length),
+        None => LengthPercentageAuto::auto(),
+    }
+}
+
+/// Same as [`to_length_percentage_auto`], for `inset`'s own edges, which
+/// (unlike margin's) keep a real percentage instead of collapsing it — see
+/// [`florui_style::ComputedStyle::inset`]'s own doc. A length-only or
+/// percentage-only edge maps to Taffy's own matching variant, which
+/// resolves a percentage natively against the containing block Taffy
+/// already computes during its own absolute-position layout pass. Real
+/// CSS also allows mixing both in one `calc()`; Taffy's own inset type
+/// cannot hold both at once, so a genuine mix keeps only the percentage
+/// term and drops the length term — a documented simplification, not a
+/// silently wrong resolution.
+fn to_inset_length_percentage_auto(
+    value: Option<florui_style::LengthPercentage>,
+) -> LengthPercentageAuto {
+    match value {
+        Some(lp) if lp.percentage != 0.0 => LengthPercentageAuto::percent(lp.percentage),
+        Some(lp) => LengthPercentageAuto::length(lp.length),
         None => LengthPercentageAuto::auto(),
     }
 }
@@ -1794,6 +1814,23 @@ mod tests {
         assert_eq!(layouts[&abs].y, 10.0);
         assert_eq!(layouts[&abs].width, 30.0);
         assert_eq!(layouts[&abs].height, 15.0);
+    }
+
+    #[test]
+    fn position_absolute_resolves_a_percentage_inset_against_its_containing_block() {
+        let tree: Element = view! {
+            <div class="parent">
+                <div class="abs" />
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".parent { position: relative; width: 200px; height: 100px; } \
+             .abs { position: absolute; top: 50%; left: 25%; width: 30px; height: 15px; }",
+        );
+        let abs = arena.children(arena.roots()[0])[0];
+        assert_eq!(layouts[&abs].x, 50.0, "25% of the 200px containing block");
+        assert_eq!(layouts[&abs].y, 50.0, "50% of the 100px containing block");
     }
 
     #[test]
