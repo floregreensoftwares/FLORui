@@ -9,8 +9,8 @@
 //! Selector matching, cascade, and inheritance are Stylo's real
 //! implementation (see [`stylo`] for the bridge onto [`Arena`]) — not a
 //! closed, hand-validated subset. CSS this crate's own downstream
-//! consumers don't yet render (`border-radius`, a child combinator,
-//! `!important`, most properties beyond the seven below) parses
+//! consumers don't yet render (a child combinator, `!important`, most
+//! properties beyond the seven below) parses
 //! successfully; it simply has no visible effect yet, the same way an
 //! unsupported property behaves in a real browser rather than being
 //! rejected as invalid input.
@@ -47,7 +47,7 @@ mod tree;
 
 pub use animation::AnimationTimeline;
 pub use cascade::{
-    BorderSide, BoxShadow, ComputedStyle, ContainerType, ContentAlignment, Display, Edges,
+    BorderSide, BoxShadow, ComputedStyle, ContainerType, ContentAlignment, Corners, Display, Edges,
     FilterFunction, FlexDirection, FlexWrap, FontFamily, GridPlacement, GridTrackSize,
     ItemAlignment, LengthPercentage, Position, TransformFunction, Viewport, compute,
     compute_with_container_query_signature,
