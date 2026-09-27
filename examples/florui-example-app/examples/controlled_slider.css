@@ -30,24 +30,27 @@
     font-size: 16px;
 }
 
+/* Chromium's own default <input type="range"> look, measured directly
+   (no author CSS) rather than guessed: a 16px-tall hit target holding a
+   thin 6px pill-shaped track and a 16px solid-color thumb, colors
+   #efefef (unfilled) / #0075ff (filled + thumb). */
 .florui-slider {
     position: relative;
     width: 260px;
-    height: 24px;
+    height: 16px;
 }
 
-/* The input is the whole track: its own full-height box is the real
-   click/drag target, filled solid so it reads as a track. */
 .florui-slider-input {
     width: 260px;
-    height: 24px;
+    height: 6px;
+    margin-top: 5px;
     border-width: 0px;
     padding-top: 0px;
     padding-right: 0px;
     padding-bottom: 0px;
     padding-left: 0px;
-    border-radius: 12px;
-    background-color: #3a3a40;
+    border-radius: 3px;
+    background-color: #efefef;
 }
 
 .florui-slider-input:focus-visible {
@@ -55,23 +58,31 @@
 }
 
 .florui-slider-input:disabled {
-    background-color: #26262c;
+    background-color: #3a3a40;
 }
 
-.florui-slider-input:disabled + .florui-slider-thumb {
-    background-color: #5a6a8a;
-    border-color: #3a3a40;
+.florui-slider-fill {
+    position: absolute;
+    top: 5px;
+    height: 6px;
+    border-radius: 3px;
+    background-color: #0075ff;
+}
+
+.florui-slider-input:disabled + .florui-slider-fill {
+    background-color: #6b6b73;
 }
 
 .florui-slider-thumb {
     position: absolute;
-    top: 2px;
-    width: 20px;
-    height: 20px;
-    margin-left: -10px;
-    border-radius: 10px;
-    background-color: #4c8bf5;
-    border-width: 2px;
-    border-style: solid;
-    border-color: #1e3a8a;
+    top: 0px;
+    width: 16px;
+    height: 16px;
+    margin-left: -8px;
+    border-radius: 8px;
+    background-color: #0075ff;
+}
+
+.florui-slider-input:disabled + .florui-slider-fill + .florui-slider-thumb {
+    background-color: #6b6b73;
 }
