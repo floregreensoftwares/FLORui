@@ -70,8 +70,8 @@ use skrifa::instance::{LocationRef, NormalizedCoord, Size as GlyphSize};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::{FontRef, GlyphId, MetadataProvider};
 use tiny_skia::{
-    BlendMode, FillRule, IntRect, Mask, Paint, PathBuilder, Pixmap, PixmapPaint,
-    PremultipliedColorU8, Rect, Transform,
+    FillRule, IntRect, Mask, Paint, PathBuilder, Pixmap, PixmapPaint, PremultipliedColorU8, Rect,
+    Transform,
 };
 
 pub type Canvas = Pixmap;
@@ -1242,19 +1242,37 @@ fn map_rect_aabb(x0: f32, y0: f32, x1: f32, y1: f32, transform: Transform) -> (f
 /// Region is clamped to `buffer`'s own bounds first, since
 /// [`Pixmap::clone_rect`] refuses a rect that isn't fully contained.
 /// Sampling ignores `clip` (an ancestor's clip stops painting, it doesn't
-/// erase what's already there); only the write-back respects it.
+/// erase what's already there); only the write-back respects it. A rounded
+/// `outline` narrows that write-back to its own shape, so the filtered
+/// backdrop doesn't show at the cut corners.
 fn apply_backdrop_filter(
     buffer: &mut Surface,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
+    outline: &RoundedRect,
     functions: &[FilterFunction],
     clip: Option<&Mask>,
 ) {
     if functions.is_empty() {
         return;
     }
+    let (x, y, width, height) = (outline.x, outline.y, outline.width, outline.height);
+    let rounded_clip = (!outline.is_square())
+        .then(|| {
+            let mut mask = Mask::new(buffer.width(), buffer.height())?;
+            mask.fill_path(
+                &outline.path()?,
+                FillRule::Winding,
+                true,
+                surface_transform(buffer),
+            );
+            if let Some(clip) = clip {
+                for (own, ancestor) in mask.data_mut().iter_mut().zip(clip.data()) {
+                    *own = mul_div_255(*own, *ancestor);
+                }
+            }
+            Some(mask)
+        })
+        .flatten();
+    let clip = rounded_clip.as_ref().or(clip);
     let (lx, ly) = buffer.local(x, y);
     let x0 = lx.max(0.0).floor() as i32;
     let y0 = ly.max(0.0).floor() as i32;
@@ -1270,18 +1288,45 @@ fn apply_backdrop_filter(
         return;
     };
     apply_filters(&mut backdrop, functions);
-    let paint = PixmapPaint {
-        blend_mode: BlendMode::Source,
-        ..Default::default()
-    };
-    buffer.pixmap.draw_pixmap(
-        x0,
-        y0,
-        backdrop.as_ref(),
-        &paint,
-        Transform::identity(),
-        clip,
-    );
+    // Replace, weighted by the mask: `BlendMode::Source` with a mask would
+    // scale the source itself, clearing the pixels outside it instead of
+    // leaving them alone.
+    let surface_width = buffer.width();
+    let (region_width, region_height) = (backdrop.width(), backdrop.height());
+    for row in 0..region_height {
+        for col in 0..region_width {
+            let index = ((y0 as u32 + row) * surface_width + x0 as u32 + col) as usize;
+            let coverage = clip.map_or(255, |mask| mask.data()[index]);
+            if coverage == 0 {
+                continue;
+            }
+            let source = backdrop.pixels()[(row * region_width + col) as usize];
+            let pixels = buffer.pixmap.pixels_mut();
+            pixels[index] = if coverage == 255 {
+                source
+            } else {
+                lerp_premultiplied(pixels[index], source, coverage)
+            };
+        }
+    }
+}
+
+/// `from` blended toward `to` by `weight / 255`, channel by channel on
+/// premultiplied pixels (which interpolate linearly).
+fn lerp_premultiplied(
+    from: PremultipliedColorU8,
+    to: PremultipliedColorU8,
+    weight: u8,
+) -> PremultipliedColorU8 {
+    let mix = |a: u8, b: u8| mul_div_255(b, weight).saturating_add(mul_div_255(a, 255 - weight));
+    let alpha = mix(from.alpha(), to.alpha());
+    PremultipliedColorU8::from_rgba(
+        mix(from.red(), to.red()).min(alpha),
+        mix(from.green(), to.green()).min(alpha),
+        mix(from.blue(), to.blue()).min(alpha),
+        alpha,
+    )
+    .unwrap_or(to)
 }
 
 /// Applies `functions`' own chain to `pixmap`'s premultiplied pixels in
@@ -1521,26 +1566,6 @@ fn paint_node(
         let style = styles.get(&node);
         let (x, y) = absolute_position(arena, layouts, node);
 
-        let backdrop_filter: &[FilterFunction] = style.map_or(&[][..], |s| &s.backdrop_filter[..]);
-        apply_backdrop_filter(
-            buffer,
-            x,
-            y,
-            layout.width,
-            layout.height,
-            backdrop_filter,
-            clip,
-        );
-
-        let border = style.map_or(NO_BORDER, |s| s.border);
-        let box_shadow: &[florui_style::BoxShadow] = style.map_or(&[][..], |s| &s.box_shadow[..]);
-
-        // Real CSS's own painting order for a normal-flow box with no
-        // stacking context: outer (non-inset) shadows sit behind
-        // everything else — background, then border, then content — while
-        // inset shadows sit on top of the background but still behind the
-        // border and content. See [`paint_box_shadows`]'s own doc for the
-        // painted shape.
         let outline = style.map_or(
             RoundedRect::square(x, y, layout.width, layout.height),
             |s| {
@@ -1556,6 +1581,18 @@ fn paint_node(
         );
         let rounded = !outline.is_square();
 
+        let backdrop_filter: &[FilterFunction] = style.map_or(&[][..], |s| &s.backdrop_filter[..]);
+        apply_backdrop_filter(buffer, &outline, backdrop_filter, clip);
+
+        let border = style.map_or(NO_BORDER, |s| s.border);
+        let box_shadow: &[florui_style::BoxShadow] = style.map_or(&[][..], |s| &s.box_shadow[..]);
+
+        // Real CSS's own painting order for a normal-flow box with no
+        // stacking context: outer (non-inset) shadows sit behind
+        // everything else — background, then border, then content — while
+        // inset shadows sit on top of the background but still behind the
+        // border and content. See [`paint_box_shadows`]'s own doc for the
+        // painted shape.
         paint_box_shadows(buffer, &outline, border, box_shadow, false);
 
         let background = style.map_or(Rgba::TRANSPARENT, |s| s.background_color);
@@ -5353,6 +5390,18 @@ mod tests {
             &layouts,
             1.0,
         )
+    }
+
+    #[test]
+    fn backdrop_filter_stops_at_the_rounded_corner() {
+        let buffer =
+            backdrop_over_red_buffer("backdrop-filter: brightness(0.5); border-radius: 10px;");
+        assert_eq!(pixel_rgb(&buffer, 10, 10), [0x80, 0, 0], "inside is dimmed");
+        assert_eq!(
+            pixel_rgb(&buffer, 1, 1),
+            [0xff, 0, 0],
+            "the cut corner keeps the undimmed backdrop"
+        );
     }
 
     #[test]
