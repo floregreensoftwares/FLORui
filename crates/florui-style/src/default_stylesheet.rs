@@ -70,6 +70,17 @@
 //! is the same `appearance: auto` category with no fallback at all: no
 //! CSS box of its own to even approximate a value for.
 //!
+//! That 4px stand-in belongs only to the closed, single-line trigger —
+//! confirmed against a real Chromium's own `getComputedStyle` that
+//! `select[multiple]` reports `padding: 0` on every side, same as the
+//! closed control, and visually shows no left-only inset at all: real
+//! Chromium's UA stylesheet already renders a multi-select listbox as a
+//! plain `appearance: listbox` box, distinct from the closed control's
+//! `appearance: menulist`, with each row's own inset coming entirely from
+//! `option`'s own padding. `select[multiple="true"]` below overrides the
+//! stand-in back to `0` for that reason — not a florui-specific quirk,
+//! the real native default itself draws no such inset there.
+//!
 //! `optgroup`/`.florui-optgroup-label` (a synthesized header for its own
 //! `label` attribute — see `florui-platform`'s `select` module) are *not*
 //! checked against a real Chromium the way everything above is:
@@ -137,6 +148,10 @@ const CSS: &str = "
         background-color: #ffffff;
         color: #000000;
         padding-left: 4px;
+    }
+
+    select[multiple=\"true\"] {
+        padding-left: 0px;
     }
 
     option {
@@ -476,6 +491,42 @@ mod tests {
         assert_close(option_style.padding.right, 2.0, "option padding-right");
         assert_close(option_style.padding.bottom, 1.0, "option padding-bottom");
         assert_close(option_style.padding.left, 2.0, "option padding-left");
+    }
+
+    #[test]
+    /// Real Chromium's own `getComputedStyle` on a `<select multiple>`
+    /// reports `padding: 0` on every side (unlike the closed control's
+    /// measured `padding-left: 4px` stand-in above) and renders no
+    /// left-only inset — the multiple-mode override must actually zero it
+    /// back out, not just leave the closed-control default in place.
+    fn a_multiple_select_has_no_left_inset_unlike_the_closed_control() {
+        let tree: Element = view! {
+            <select multiple="true">
+                <option>{"A"}</option>
+            </select>
+        };
+        let arena = Arena::build(&tree);
+        let select = arena.roots()[0];
+        let rules = parse_stylesheet("").unwrap();
+        let computed = compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            Viewport::default(),
+            &mut crate::AnimationTimeline::default(),
+        );
+
+        let select_style = &computed[&select];
+        assert_close(
+            select_style.padding.left,
+            0.0,
+            "select[multiple] padding-left",
+        );
+        assert_close(
+            select_style.padding.right,
+            0.0,
+            "select[multiple] padding-right",
+        );
     }
 
     #[test]

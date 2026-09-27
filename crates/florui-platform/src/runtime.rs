@@ -93,6 +93,12 @@ pub struct UiRuntime {
     /// [`crate::select::normalize`]'s own doc for why this exists
     /// alongside `arena` rather than just reading options off it.
     option_summaries: HashMap<String, Vec<crate::select::OptionSummary>>,
+    /// The `(select id, option value)` a `<select multiple>`'s last
+    /// plain/Ctrl click landed on — the anchor a following Shift-click
+    /// range-selects from, real HTML's own multi-select semantics. Plain
+    /// strings, not a [`FocusPath`]: unlike `range_dragging`, nothing
+    /// here needs re-resolving against a fresh `Arena`.
+    multiselect_anchor: Option<(String, String)>,
     /// Carries real `transition`/`@keyframes` state across [`Self::update`]
     /// calls, sampled against a real wall clock captured once at
     /// [`Self::with_rules_and_context`] — see
@@ -244,6 +250,7 @@ impl UiRuntime {
             styles: HashMap::new(),
             layouts: HashMap::new(),
             option_summaries: HashMap::new(),
+            multiselect_anchor: None,
             animation_timeline,
             animation_epoch: std::time::Instant::now(),
             font: florui_text::Font::load_embedded(),
@@ -875,6 +882,45 @@ impl UiRuntime {
             return false;
         };
         florui_reactive::batch(|| handler.call(&Event::new()));
+        true
+    }
+
+    /// Computes and applies a `<select multiple>` click on `option`,
+    /// given which modifier (if any) was held — see
+    /// [`crate::select::compute_multiselect`]'s own doc for the exact
+    /// semantics. Calls the select's own `onselectionchange` and updates
+    /// the Shift-click range anchor. `false` if `option` isn't a real
+    /// option inside a real multi-select.
+    pub fn commit_multiselect_click(&mut self, option: NodeId, ctrl: bool, shift: bool) -> bool {
+        let Some(select) = crate::select::owning_select(&self.arena, option) else {
+            return false;
+        };
+        let Some(select_id) = self.arena.id_attr(select) else {
+            return false;
+        };
+        let select_id = select_id.to_string();
+        let clicked_value = self
+            .arena
+            .value_attr(option)
+            .map(str::to_string)
+            .unwrap_or_else(|| self.arena.text_content(option).to_string());
+        let Some(options) = self.option_summaries.get(&select_id) else {
+            return false;
+        };
+        let anchor_value = self
+            .multiselect_anchor
+            .as_ref()
+            .filter(|(anchor_select, _)| *anchor_select == select_id)
+            .map(|(_, value)| value.as_str());
+        let new_selection =
+            crate::select::compute_multiselect(options, &clicked_value, ctrl, shift, anchor_value);
+        if !shift {
+            self.multiselect_anchor = Some((select_id, clicked_value));
+        }
+        if let Some(handler) = self.arena.selection_handler(select, "selection") {
+            let handler = handler.clone();
+            florui_reactive::batch(|| handler.call(new_selection));
+        }
         true
     }
 

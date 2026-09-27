@@ -210,6 +210,42 @@ impl PartialEq for FloatHandler {
 
 impl Eq for FloatHandler {}
 
+/// [`ValueHandler`] for a multi-select `<select multiple>`: reports the
+/// full new set of selected option values after a click gesture (plain,
+/// Ctrl-toggle, or Shift-range) — the control computes the whole result,
+/// not a per-option delta, matching real HTML's own `change` event on a
+/// multi-select (`select.selectedOptions`), not a series of individual
+/// option events.
+#[derive(Clone)]
+pub struct SelectionHandler(Rc<dyn Fn(Vec<String>)>);
+
+impl SelectionHandler {
+    pub fn new(f: impl Fn(Vec<String>) + 'static) -> Self {
+        Self(Rc::new(f))
+    }
+
+    /// Reports that the control asks for `values` to be the whole
+    /// selection now.
+    pub fn call(&self, values: Vec<String>) {
+        (self.0)(values);
+    }
+}
+
+impl fmt::Debug for SelectionHandler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SelectionHandler(..)")
+    }
+}
+
+impl PartialEq for SelectionHandler {
+    /// Same "identity, not content" reasoning as [`Handler`]'s own.
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for SelectionHandler {}
+
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
@@ -281,6 +317,19 @@ mod tests {
             ValueHandler::new(move |value| *received_in_closure.borrow_mut() = Some(value));
         handler.call("hello".to_string());
         assert_eq!(*received.borrow(), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn selection_handler_call_passes_the_whole_new_selection_through() {
+        let received = Rc::new(RefCell::new(None));
+        let received_in_closure = Rc::clone(&received);
+        let handler =
+            SelectionHandler::new(move |values| *received_in_closure.borrow_mut() = Some(values));
+        handler.call(vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            *received.borrow(),
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
     }
 
     #[test]

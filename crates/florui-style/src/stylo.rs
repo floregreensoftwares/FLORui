@@ -75,6 +75,9 @@ struct NodeSlot {
     parent: Option<*const NodeSlot>,
     children: Vec<*const NodeSlot>,
     tag: &'static str,
+    /// Every attribute exactly as authored — see [`Arena::attrs`] and
+    /// this struct's own use in `attr_matches`.
+    attrs: Vec<(String, String)>,
     classes: Vec<String>,
     /// This element's identity for animation purposes, stable across
     /// separate [`compute`] calls unlike this ephemeral slot's own address
@@ -233,6 +236,7 @@ impl StyloTree {
                 parent: None,
                 children: Vec::new(),
                 tag: arena.tag(id),
+                attrs: arena.attrs(id).to_vec(),
                 classes: arena.classes(id).to_vec(),
                 stable_id,
                 id_attr: arena.id_attr(id).map(str::to_owned),
@@ -534,14 +538,17 @@ impl<'a> SelectorsElement for StyloNode<'a> {
     fn attr_matches(
         &self,
         _ns: &NamespaceConstraint<&<SelectorImpl as selectors::parser::SelectorImpl>::NamespaceUrl>,
-        _local_name: &<SelectorImpl as selectors::parser::SelectorImpl>::LocalName,
-        _operation: &AttrSelectorOperation<
+        local_name: &<SelectorImpl as selectors::parser::SelectorImpl>::LocalName,
+        operation: &AttrSelectorOperation<
             &<SelectorImpl as selectors::parser::SelectorImpl>::AttrValue,
         >,
     ) -> bool {
-        // florui's Arena exposes no attributes beyond class/id, each of
-        // which selectors dispatches through has_class/has_id instead.
-        false
+        let name = local_name.as_ref() as &str;
+        self.0
+            .attrs
+            .iter()
+            .find(|(key, _)| key == name)
+            .is_some_and(|(_, value)| operation.eval_str(value))
     }
 
     fn match_non_ts_pseudo_class(
@@ -697,10 +704,18 @@ impl<'a> TElement for StyloNode<'a> {
     {
     }
 
-    fn each_attr_name<F>(&self, _callback: F)
+    fn each_attr_name<F>(&self, mut callback: F)
     where
         F: FnMut(&LocalName),
     {
+        // Stylo's own fast-reject bloom filter is populated from this
+        // before an attribute selector is even tried against
+        // `attr_matches` -- leaving it empty (the previous stub) silently
+        // made every `[attr]`/`[attr="v"]` selector never match at all,
+        // not just less efficient.
+        for (name, _) in &self.0.attrs {
+            callback(&LocalName::from(name.as_str()));
+        }
     }
 
     fn has_dirty_descendants(&self) -> bool {
@@ -2039,4 +2054,71 @@ fn to_length(
     value: &style::values::generics::NonNegative<style::values::computed::LengthPercentage>,
 ) -> f32 {
     value.0.to_length().map(|length| length.px()).unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod attr_selector_tests {
+    use florui::prelude::*;
+
+    use crate::animation::AnimationTimeline;
+    use crate::cascade::{Viewport, compute};
+    use crate::interaction::InteractionState;
+    use crate::stylesheet_parse::parse_stylesheet;
+    use crate::tree::Arena;
+
+    #[test]
+    fn an_attribute_selector_matches_a_real_attribute_value() {
+        let tree: Element = view! {
+            <div>
+                <option selected="true">{"A"}</option>
+                <option selected="false">{"B"}</option>
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let options = arena.find_all(|a, id| a.tag(id) == "option");
+        let rules = parse_stylesheet("option[selected=\"true\"] { color: #ff0000; }").unwrap();
+        let computed = compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            Viewport::default(),
+            &mut AnimationTimeline::default(),
+        );
+        assert_eq!(
+            computed[&options[0]].color,
+            crate::color::Rgba::opaque(0xff, 0x00, 0x00)
+        );
+        assert_ne!(
+            computed[&options[1]].color,
+            crate::color::Rgba::opaque(0xff, 0x00, 0x00)
+        );
+    }
+
+    #[test]
+    fn a_bare_attribute_selector_matches_presence_regardless_of_value() {
+        let tree: Element = view! {
+            <div>
+                <option value="x">{"A"}</option>
+                <option>{"B"}</option>
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let options = arena.find_all(|a, id| a.tag(id) == "option");
+        let rules = parse_stylesheet("option[value] { color: #00ff00; }").unwrap();
+        let computed = compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            Viewport::default(),
+            &mut AnimationTimeline::default(),
+        );
+        assert_eq!(
+            computed[&options[0]].color,
+            crate::color::Rgba::opaque(0x00, 0xff, 0x00)
+        );
+        assert_ne!(
+            computed[&options[1]].color,
+            crate::color::Rgba::opaque(0x00, 0xff, 0x00)
+        );
+    }
 }

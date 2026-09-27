@@ -136,6 +136,7 @@ fn primitive_element(
     let mut handler_pairs = Vec::new();
     let mut binding_pairs = Vec::new();
     let mut value_handler_pairs = Vec::new();
+    let mut selection_handler_pairs = Vec::new();
 
     for (name, value) in attrs {
         if is_scope_attr(name) {
@@ -150,6 +151,18 @@ fn primitive_element(
                 AttrValue::Lit(lit) => {
                     let message = "`oninput` needs a Rust expression in braces, e.g. \
                                     `oninput={move |value: String| ...}`, not a string literal";
+                    quote_spanned! { lit.span() => compile_error!(#message) }
+                }
+            });
+        } else if name_str == "onselectionchange" {
+            selection_handler_pairs.push(match value {
+                AttrValue::Expr(expr) => {
+                    quote! { ("selection".to_string(), ::florui::SelectionHandler::new(#expr)) }
+                }
+                AttrValue::Lit(lit) => {
+                    let message = "`onselectionchange` needs a Rust expression in braces, e.g. \
+                                    `onselectionchange={move |values: Vec<String>| ...}`, not a \
+                                    string literal";
                     quote_spanned! { lit.span() => compile_error!(#message) }
                 }
             });
@@ -205,7 +218,19 @@ fn primitive_element(
     }
     let children = children_vec(children, effective_scope);
 
-    if !value_handler_pairs.is_empty() {
+    if !selection_handler_pairs.is_empty() {
+        quote! {
+            ::florui::Element::node_with_selection_handlers(
+                #tag_str,
+                ::std::vec![ #(#attr_pairs),* ],
+                ::std::vec![ #(#handler_pairs),* ],
+                ::std::vec![ #(#binding_pairs),* ],
+                ::std::vec![ #(#value_handler_pairs),* ],
+                ::std::vec![ #(#selection_handler_pairs),* ],
+                #children,
+            )
+        }
+    } else if !value_handler_pairs.is_empty() {
         quote! {
             ::florui::Element::node_with_value_handlers(
                 #tag_str,

@@ -5,7 +5,7 @@
 //! that view once, up front, rather than threading parent references
 //! through `Element` itself.
 
-use florui::{Element, Handler, ValueHandler};
+use florui::{Element, Handler, SelectionHandler, ValueHandler};
 use florui_reactive::Binding;
 
 pub type NodeId = usize;
@@ -41,6 +41,12 @@ pub enum InlineItem {
 
 struct ArenaNode {
     tag: &'static str,
+    /// Every attribute exactly as authored, kept alongside the specific
+    /// typed fields below (`disabled`, `checked`, ...) — those exist so a
+    /// consumer doesn't have to re-parse a known attribute by name every
+    /// time, but real CSS attribute selectors (`[attr]`, `[attr="v"]`)
+    /// need the raw list itself. See [`Arena::attrs`].
+    attrs: Vec<(String, String)>,
     classes: Vec<String>,
     id: Option<String>,
     /// Whether the `disabled` attribute is present and `"true"` — markup
@@ -89,6 +95,14 @@ struct ArenaNode {
     /// `<optgroup>`'s only real children are `<option>`s). See
     /// [`Arena::group_label`].
     group_label: Option<String>,
+    /// Whether the `multiple` attribute is present and `"true"` — a
+    /// `<select multiple>` renders as an always-visible listbox instead
+    /// of a collapsible dropdown; `open` has no meaning for it. See
+    /// [`Arena::is_multiple`].
+    multiple: bool,
+    /// `onselectionchange` on `<select multiple>` — see
+    /// [`Arena::selection_handler`].
+    selection_handlers: Vec<(String, SelectionHandler)>,
     /// The raw, unparsed `style="..."` attribute text, if declared — see
     /// [`Arena::style_attr`].
     style: Option<String>,
@@ -249,6 +263,7 @@ impl Arena {
                     let range_max = attr_f32(&node.attrs, "max", 100.0);
                     self.nodes.push(ArenaNode {
                         tag: node.tag,
+                        attrs: node.attrs.clone(),
                         classes: class_list(&node.attrs),
                         id: attr_value(&node.attrs, "id"),
                         disabled: attr_bool(&node.attrs, "disabled"),
@@ -262,6 +277,8 @@ impl Arena {
                         active: attr_bool(&node.attrs, "active"),
                         open: attr_bool(&node.attrs, "open"),
                         group_label: attr_value(&node.attrs, "label"),
+                        multiple: attr_bool(&node.attrs, "multiple"),
+                        selection_handlers: node.selection_handlers.clone(),
                         style: attr_value(&node.attrs, "style"),
                         value: attr_value(&node.attrs, "value"),
                         input_type: attr_value(&node.attrs, "type"),
@@ -348,6 +365,13 @@ impl Arena {
         &self.nodes[id].classes
     }
 
+    /// Every attribute this node declared, exactly as authored — for a
+    /// real CSS attribute selector (`[attr]`, `[attr="v"]`); see
+    /// [`ArenaNode::attrs`].
+    pub fn attrs(&self, id: NodeId) -> &[(String, String)] {
+        &self.nodes[id].attrs
+    }
+
     pub fn id_attr(&self, id: NodeId) -> Option<&str> {
         self.nodes[id].id.as_deref()
     }
@@ -431,6 +455,22 @@ impl Arena {
     /// [`ArenaNode::group_label`].
     pub fn group_label(&self, id: NodeId) -> Option<&str> {
         self.nodes[id].group_label.as_deref()
+    }
+
+    /// Whether this node's `multiple` attribute is present and `"true"`
+    /// — for `<select>`. See [`ArenaNode::multiple`].
+    pub fn is_multiple(&self, id: NodeId) -> bool {
+        self.nodes[id].multiple
+    }
+
+    /// The [`SelectionHandler`] this node declared for `attr` (today,
+    /// only `"selection"` for `onselectionchange`), if any.
+    pub fn selection_handler(&self, id: NodeId, attr: &str) -> Option<&SelectionHandler> {
+        self.nodes[id]
+            .selection_handlers
+            .iter()
+            .find(|(name, _)| name == attr)
+            .map(|(_, handler)| handler)
     }
 
     /// This node's raw, unparsed `style="..."` attribute text, if it
