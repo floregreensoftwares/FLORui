@@ -5,6 +5,7 @@ pub(crate) mod file_dialog;
 pub(crate) mod gpu;
 pub(crate) mod input_regions;
 pub(crate) mod menu;
+pub(crate) mod open_url;
 pub mod overlay;
 pub(crate) mod single_instance;
 pub mod tray;

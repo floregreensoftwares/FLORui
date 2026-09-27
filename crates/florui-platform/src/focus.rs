@@ -2,13 +2,14 @@
 //!
 //! v1 is deliberately narrow: `<button>`, an editable `<input>`,
 //! `<input type="checkbox">`, `<input type="radio">`, `<input
-//! type="range">`, and `<select>`, not disabled, document order, no
-//! `tabindex`. Radios sharing a `name` are one Tab stop (see
+//! type="range">`, `<select>`, and `<a href>`, not disabled (`<a>` has
+//! no `disabled` attribute at all, so nothing to check there), document
+//! order, no `tabindex`. Radios sharing a `name` are one Tab stop (see
 //! [`tab_stops`]) and move among themselves with the arrow keys (see
 //! [`radio_sibling`]) — a range input's own arrow-key handling lives in
 //! `desktop.rs`, gated by type so it never fires alongside a radio's.
-//! Extending this further (`a`/`textarea`) later is one more clause
-//! here, not a redesign.
+//! Extending this further (`textarea`) later is one more clause here,
+//! not a redesign.
 
 use florui_style::{Arena, NodeId};
 
@@ -42,10 +43,13 @@ fn is_radio(arena: &Arena, id: NodeId) -> bool {
 }
 
 pub(crate) fn is_focusable(arena: &Arena, id: NodeId) -> bool {
-    if arena.is_disabled(id) {
-        return false;
-    }
     match arena.tag(id) {
+        // Real `<a>` has no `disabled` attribute at all -- a stray one is
+        // ignored (still focusable), unlike every tag below, which is why
+        // this arm comes before the blanket disabled check rather than
+        // after it.
+        "a" => arena.href(id).is_some(),
+        _ if arena.is_disabled(id) => false,
         "button" | "select" => true,
         "input" => {
             is_editable_input_type(arena.input_type(id))
@@ -58,9 +62,17 @@ pub(crate) fn is_focusable(arena: &Arena, id: NodeId) -> bool {
 
 /// Whether the Enter key activates `id`. As in real HTML a checkbox or
 /// radio (and so a switch) is toggled by Space only; Enter activates a
-/// button.
+/// button or a link.
 pub(crate) fn activates_on_enter(arena: &Arena, id: NodeId) -> bool {
     !(arena.tag(id) == "input" && is_checkable_input_type(arena.input_type(id)))
+}
+
+/// Whether the Space key activates `id`. Unlike Enter, real `<a>` ignores
+/// Space entirely (it neither activates the link nor scrolls it, since
+/// this crate's own scrolling isn't keyed off Space either) — every other
+/// focusable tag keeps today's behavior.
+pub(crate) fn activates_on_space(arena: &Arena, id: NodeId) -> bool {
+    arena.tag(id) != "a"
 }
 
 /// Every focusable node, in document order — both the tab-traversal

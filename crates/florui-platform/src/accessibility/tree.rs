@@ -194,6 +194,18 @@ impl AccessibilityTree {
                     node.add_action(Action::Click);
                 }
             }
+            "a" => {
+                node.set_role(Role::Link);
+                node.set_label(
+                    arena
+                        .accessible_label(id)
+                        .unwrap_or_else(|| arena.text_content(id)),
+                );
+                if is_focusable(arena, id) {
+                    node.add_action(Action::Focus);
+                    node.add_action(Action::Click);
+                }
+            }
             "input" if matches!(arena.input_type(id), Some("checkbox") | Some("radio")) => {
                 // `role="switch"` only applies to a checkbox; a radio stays
                 // a radio.

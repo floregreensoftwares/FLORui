@@ -80,6 +80,15 @@ pub use file_dialog::{
 };
 
 #[cfg(feature = "desktop")]
+mod href;
+
+#[cfg(feature = "desktop")]
+mod open_url;
+
+#[cfg(feature = "desktop")]
+pub use open_url::OpenUrlOutcome;
+
+#[cfg(feature = "desktop")]
 pub mod accessibility;
 
 #[cfg(feature = "desktop")]
