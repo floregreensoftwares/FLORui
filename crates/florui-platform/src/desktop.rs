@@ -302,6 +302,7 @@ pub fn run_windows(initial: Vec<WindowSpec>) -> Result<(), RunError> {
         activation_queue: None,
         primary_window_id: None,
         clipboard: crate::clipboard::Clipboard::new(),
+        visited_links: crate::visited_links::VisitedLinks::new(),
     };
     event_loop.run_app(&mut host).map_err(RunError::EventLoop)?;
     match host.fatal_error {
@@ -394,6 +395,7 @@ pub fn run_single_instance(
                 activation_queue: Some(activation_queue),
                 primary_window_id: None,
                 clipboard: crate::clipboard::Clipboard::new(),
+                visited_links: crate::visited_links::VisitedLinks::new(),
             };
             event_loop.run_app(&mut host).map_err(RunError::EventLoop)?;
             match host.fatal_error {
@@ -1185,9 +1187,15 @@ impl WindowState {
     fn handle_cursor_moved(&mut self, x: f64, y: f64) {
         self.last_cursor = (x, y);
         let (x, y) = self.to_logical_cursor(x, y);
+        // A resize edge always wins over content's own `cursor: pointer`
+        // -- resolved once here so the check below can skip content
+        // cursor logic entirely rather than have both methods race to
+        // set the OS cursor on every move.
+        let resize_direction = (self.decorations == DecorationMode::Custom)
+            .then(|| self.resize_direction_at_cursor(x, y))
+            .flatten();
         if self.decorations == DecorationMode::Custom {
-            self.controls
-                .set_resize_cursor(self.resize_direction_at_cursor(x, y));
+            self.controls.set_resize_cursor(resize_direction);
         }
         if let Some(node) = self.text_selecting {
             let Some(id) = ({
@@ -1214,6 +1222,13 @@ impl WindowState {
             .hit_test(x, y)
             .filter(|&node| !self.is_disabled(node));
         self.set_hovered_and_redraw(hit);
+        if resize_direction.is_none() {
+            let (_, styles, ..) = self.runtime.geometry();
+            let pointer = hit
+                .and_then(|node| styles.get(&node))
+                .is_some_and(|style| style.cursor_pointer);
+            self.controls.set_content_cursor(pointer);
+        }
     }
 
     /// The cursor leaving the window cancels any in-progress press (there
@@ -1560,12 +1575,29 @@ impl WindowState {
         if self.runtime.dispatch_click(node) {
             return;
         }
-        let (arena, ..) = self.runtime.geometry();
-        if arena.tag(node) == "a"
-            && let Some(href) = arena.href(node)
-            && crate::href::is_openable(href)
-        {
-            self.controls.open_url(href);
+        // Collected as an owned `String` before the open-URL call below,
+        // rather than kept as a `&str` borrowed from `self.runtime`'s own
+        // arena: `refresh_visited_links` needs `&mut self.runtime` right
+        // after, which a live borrow from `geometry()` would still be
+        // blocking otherwise.
+        let href = {
+            let (arena, ..) = self.runtime.geometry();
+            (arena.tag(node) == "a")
+                .then(|| arena.href(node))
+                .flatten()
+                .filter(|href| crate::href::is_openable(href))
+                .map(str::to_owned)
+        };
+        let Some(href) = href else {
+            return;
+        };
+        if self.controls.open_url(&href) == crate::OpenUrlOutcome::Opened {
+            // The link just became `:visited` -- refresh the styling that
+            // depends on it and redraw, the same two-step every other
+            // interaction-state change here already follows (see
+            // `set_focused`'s own callers).
+            self.runtime.refresh_visited_links();
+            self.update_and_request_redraw();
         }
     }
 
@@ -2176,6 +2208,10 @@ struct DesktopHost {
     /// `crate::clipboard`'s own module doc for why this isn't per-window
     /// or reachable via `use_context`.
     clipboard: crate::clipboard::Clipboard,
+    /// One visited-link record for this whole process, same reasoning as
+    /// `clipboard` above — cloned (cheap: an `Rc` handle) into every
+    /// window's own [`WindowControls`]/[`UiRuntime`] as it's created.
+    visited_links: crate::visited_links::VisitedLinks,
 }
 
 impl DesktopHost {
@@ -2384,6 +2420,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                         .send_event(UserEvent::SaveFileDialogResult(window_id, outcome));
                 },
                 appearance_report,
+                self.visited_links.clone(),
             ));
             let drag_drop_registration = drag_drop::register(&window, Rc::clone(&controls));
             let mut context_providers: Vec<Box<dyn Fn()>> = {
@@ -2414,6 +2451,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 crate::accessibility::prefers_reduced_motion(),
                 initial_color_scheme.is_dark(),
             );
+            runtime.set_visited_links(self.visited_links.clone());
             let proxy = self.proxy.clone();
             runtime.on_needs_update(move || {
                 let _ = proxy.send_event(UserEvent::Dirty(window_id));

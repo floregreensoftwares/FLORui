@@ -192,6 +192,34 @@ impl StyloTree {
                     node_state |= ElementState::ENABLED;
                 }
             }
+            // `:link`/`:visited` for `<a href>` -- exactly one of the two
+            // bits, never both, never neither, matching real Gecko's own
+            // `is_link()` invariant. An `<a>` with no `href` is not a
+            // hyperlink at all (real CSS: neither `:link` nor `:visited`
+            // matches it), so `node_state` is left untouched there, same
+            // as `is_focusable`'s own href gate. Deliberately simpler than
+            // a real browser otherwise: this crate doesn't implement
+            // `is_link()`/`visited_handling()`, or Stylo's dual primary/
+            // visited cascade those exist to keep `:visited` from leaking
+            // into -- `match_non_ts_pseudo_class`'s existing plain
+            // state-bit check (same one `:hover`/`:focus`/`:active`
+            // already use) is already correct here without a special
+            // case, precisely because there's only one cascade pass in
+            // this crate's own usage, so there's no primary/visited split
+            // for a raw bit check to leak between. Real browsers need
+            // that extra machinery to stop `:visited`-authored styles
+            // (layout-affecting properties especially) from being
+            // detectable by a script probing computed styles; florui has
+            // no such script layer for a leak to reach.
+            if arena.tag(id) == "a"
+                && let Some(href) = arena.href(id)
+            {
+                node_state |= if state.is_visited(href) {
+                    ElementState::VISITED
+                } else {
+                    ElementState::UNVISITED
+                };
+            }
             let parent_stable = arena
                 .parent(id)
                 .map(|parent_id| stable_ids[index_of[&parent_id]]);
@@ -1389,6 +1417,14 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         pointer_events_none: matches!(
             values.get_inherited_ui().pointer_events,
             style::values::specified::PointerEvents::None
+        ),
+        text_decoration_underline: values
+            .get_text()
+            .text_decoration_line
+            .contains(style::values::computed::TextDecorationLine::UNDERLINE),
+        cursor_pointer: matches!(
+            values.get_inherited_ui().cursor.keyword,
+            style::values::computed::ui::CursorKind::Pointer
         ),
         overflow_clips: to_overflow_clips(box_style.overflow_x, box_style.overflow_y),
         overflow_scrolls_x: to_overflow_scrolls_x(box_style.overflow_x),

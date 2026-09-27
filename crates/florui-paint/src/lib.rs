@@ -1739,6 +1739,20 @@ fn paint_node(
                     scale_factor,
                     clip,
                 );
+                if style.is_some_and(|s| s.text_decoration_underline) {
+                    let font_size = style.map_or(16.0, |s| s.font_size);
+                    paint_underline(
+                        buffer,
+                        content_x,
+                        content_y,
+                        shaped.width,
+                        font_size,
+                        shaped.baseline,
+                        color,
+                        scale_factor,
+                        clip,
+                    );
+                }
             }
         } else {
             let text = arena.text_content(node);
@@ -2660,6 +2674,43 @@ fn paint_text(buffer: &mut Surface, font: &mut Font, params: TextPaint<'_>) {
     } = params;
     let shaped = font.shape_wrapped(font_family, text, font_size, font_weight, wrap_width);
     paint_shaped_runs(buffer, &shaped.runs, x, y, color, scale_factor, clip);
+}
+
+/// `text-decoration: underline`'s own mark, spanning `width` (logical
+/// units, same as `font_size`/`baseline`) at `baseline`'s own offset from
+/// the block's top. Single-line only: the caller has no per-line width/
+/// baseline to draw a second mark from (see `florui-style`'s own
+/// `ComputedStyle::text_decoration_underline` doc for why that's a
+/// deliberate bound, not an oversight).
+#[allow(clippy::too_many_arguments)]
+fn paint_underline(
+    buffer: &mut Surface,
+    x: f32,
+    y: f32,
+    width: f32,
+    font_size: f32,
+    baseline: f32,
+    color: Rgba,
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
+    // Approximated from `font_size` (typographic convention, roughly what
+    // real fonts' own underline metrics land on for a UA default) rather
+    // than read from real font metrics, which this crate has no accessor
+    // for yet -- unlike the *positioning* logic around it (which reuses
+    // the real shaped baseline, not a guess), these two constants are a
+    // deliberate approximation.
+    let gap = font_size * 0.08;
+    let thickness = (font_size * 0.05).max(1.0);
+    fill_rect(
+        buffer,
+        x,
+        y + (baseline + gap) * scale_factor,
+        width * scale_factor,
+        thickness * scale_factor,
+        color,
+        clip,
+    );
 }
 
 /// Fills every glyph across `runs` at `(x, y)` — the top-left of the whole
@@ -4305,6 +4356,94 @@ mod tests {
             }
         }
         assert!(found_ink, "expected at least one red glyph pixel");
+    }
+
+    /// Renders `<a href>"H"</a>` at a fixed size under `css` and returns
+    /// `(buffer, width, height)` — shared by the underline tests below
+    /// so they only differ in the one declaration that matters. `<a>`,
+    /// not `<h2>`: no default margin to account for when sizing the
+    /// buffer to `layouts[&node]` alone.
+    fn render_a(css: &str) -> (Canvas, u32, u32) {
+        let tree: Element = view! { <a href="https://example.com">{"H"}</a> };
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+
+        let node = arena.roots()[0];
+        let width = layouts[&node].width.ceil() as u32;
+        let height = layouts[&node].height.ceil() as u32;
+        let buffer = paint_to_buffer(
+            &mut font,
+            width,
+            height,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        );
+        (buffer, width, height)
+    }
+
+    fn lowest_red_row(buffer: &Canvas, width: u32, height: u32) -> Option<u32> {
+        (0..height).rev().find(|&py| {
+            (0..width).any(|px| {
+                let pixel = pixel_rgb(buffer, px, py);
+                pixel[0] > 0x80 && pixel[1] < 0x40 && pixel[2] < 0x40
+            })
+        })
+    }
+
+    #[test]
+    fn text_decoration_underline_paints_a_mark_below_the_glyphs_own_ink() {
+        // Explicit `text-decoration: none`, not just an author rule with
+        // no `text-decoration` at all: the default stylesheet's own
+        // `a:link`/`a:visited` rule (see `default_stylesheet.rs`) already
+        // underlines a bare `<a href>` by default, real Chromium's own
+        // behavior too -- an author has to override it explicitly to get
+        // a genuinely undecorated baseline to compare against.
+        let css = "a { color: #ff0000; font-size: 40px; text-decoration: none; }";
+        let (plain, width, height) = render_a(css);
+        let plain_bottom = lowest_red_row(&plain, width, height)
+            .expect("expected at least one red glyph pixel with no underline");
+
+        let underlined_css = "a { color: #ff0000; font-size: 40px; text-decoration: underline; }";
+        let (underlined, width, height) = render_a(underlined_css);
+        let underlined_bottom = lowest_red_row(&underlined, width, height)
+            .expect("expected at least one red pixel with underline declared");
+
+        assert!(
+            underlined_bottom > plain_bottom,
+            "the underline must paint strictly below the glyph's own lowest ink \
+             (plain bottom row {plain_bottom}, underlined bottom row {underlined_bottom})"
+        );
+    }
+
+    #[test]
+    fn line_through_alone_paints_no_underline() {
+        // Same `text-decoration: none` reasoning as the test above.
+        let css = "a { color: #ff0000; font-size: 40px; text-decoration: none; }";
+        let (plain, width, height) = render_a(css);
+        let plain_bottom = lowest_red_row(&plain, width, height).unwrap();
+
+        let line_through_css =
+            "a { color: #ff0000; font-size: 40px; text-decoration: line-through; }";
+        let (line_through, width, height) = render_a(line_through_css);
+        let line_through_bottom = lowest_red_row(&line_through, width, height).unwrap();
+
+        assert_eq!(
+            plain_bottom, line_through_bottom,
+            "line-through alone must not paint an underline mark"
+        );
     }
 
     #[test]

@@ -36,6 +36,7 @@ use crate::file_dialog::{
 };
 use crate::menu::{ContextMenuOutcome, MenuEntry};
 use crate::open_url::OpenUrlOutcome;
+use crate::visited_links::VisitedLinks;
 
 /// See this module's own doc, "Marking a draggable region."
 pub const WINDOW_DRAG_REGION_ID: &str = "florui-window-drag-region";
@@ -234,15 +235,21 @@ pub struct WindowControls {
     pending_save_dialog: PendingDialogCallback<SaveFileDialogOutcome>,
     drag_accept_policy: DragAcceptPolicy,
     drag_event_handler: DragEventHandler,
+    /// Shared across every window this process opens — see
+    /// [`VisitedLinks`]'s own doc. [`Self::open_url`] is the only method
+    /// that writes to it.
+    visited_links: VisitedLinks,
 }
 
 impl WindowControls {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         window: Arc<Window>,
         request_close: impl Fn() + 'static,
         notify_open_dialog_result: impl Fn(OpenFileDialogOutcome) + Send + Sync + 'static,
         notify_save_dialog_result: impl Fn(SaveFileDialogOutcome) + Send + Sync + 'static,
         appearance_report: AppearanceReport,
+        visited_links: VisitedLinks,
     ) -> Self {
         Self {
             window,
@@ -257,6 +264,7 @@ impl WindowControls {
             pending_save_dialog: RefCell::new(None),
             drag_accept_policy: DragAcceptPolicy::default(),
             drag_event_handler: DragEventHandler::default(),
+            visited_links,
         }
     }
 
@@ -330,8 +338,20 @@ impl WindowControls {
     /// `florui_routing::Link`) can call it directly too, for the same
     /// reason [`Self::open_file_dialog`] is public rather than
     /// `<input type="file">`-only.
+    ///
+    /// Marks `url` visited (see [`VisitedLinks`]) only on
+    /// [`OpenUrlOutcome::Opened`] -- a cancelled `event.prevent_default()`
+    /// never reaches this method at all (the caller checks that first),
+    /// and [`OpenUrlOutcome::Failed`]/[`OpenUrlOutcome::Unavailable`]
+    /// mean the browser never actually opened, so nothing was visited.
+    /// This is the one place that rule lives, not duplicated at every
+    /// caller.
     pub fn open_url(&self, url: &str) -> OpenUrlOutcome {
-        crate::open_url::open_url(&self.window, url)
+        let outcome = crate::open_url::open_url(&self.window, url);
+        if outcome == OpenUrlOutcome::Opened {
+            self.visited_links.mark_visited(url);
+        }
+        outcome
     }
 
     /// Starts an OS-native move-drag from the current mouse position. A
@@ -359,6 +379,21 @@ impl WindowControls {
                 .set_cursor(winit::window::CursorIcon::from(direction)),
             None => self.window.set_cursor(winit::window::CursorIcon::Default),
         }
+    }
+
+    /// Applies the real OS pointer/default cursor for whatever's under
+    /// the mouse right now (`cursor: pointer`, e.g. a focusable `<a>`) --
+    /// called on every cursor move that isn't already claimed by
+    /// [`Self::set_resize_cursor`] (a resize edge always wins). Unlike
+    /// that method, this isn't gated to
+    /// [`crate::appearance::DecorationMode::Custom`]: a system-decorated
+    /// window has no cursor logic of its own to conflict with.
+    pub(crate) fn set_content_cursor(&self, pointer: bool) {
+        self.window.set_cursor(if pointer {
+            winit::window::CursorIcon::Pointer
+        } else {
+            winit::window::CursorIcon::Default
+        });
     }
 
     /// Shows a real native context menu at the current cursor position,
