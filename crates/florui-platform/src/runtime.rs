@@ -607,6 +607,28 @@ impl UiRuntime {
         self.interaction = state;
     }
 
+    /// The node a click on `node` activates. Only a `<label for="id">`
+    /// redirects, to the `<input>`/`<button>` carrying that `id`, as in real
+    /// HTML: `None` if that control is disabled (clicking its label does
+    /// nothing). A label with no matching control, and every other node,
+    /// activates itself. A wrapper never redirects on its own.
+    pub fn activation_target(&self, node: NodeId) -> Option<NodeId> {
+        let Some(for_id) = (self.arena.tag(node) == "label")
+            .then(|| self.arena.label_for(node))
+            .flatten()
+        else {
+            return Some(node);
+        };
+        let control = self.arena.find(|arena, candidate| {
+            matches!(arena.tag(candidate), "input" | "button")
+                && arena.id_attr(candidate) == Some(for_id)
+        });
+        match control {
+            Some(control) => focus::is_focusable(&self.arena, control).then_some(control),
+            None => Some(node),
+        }
+    }
+
     /// Calls `node`'s `click` handler, if it declared one, against the
     /// last computed geometry — inside [`florui_reactive::batch`], so a
     /// handler that writes more than one `Signal` (or writes the same one
@@ -1259,6 +1281,58 @@ mod tests {
         arena
             .find(|arena, node| arena.id_attr(node) == Some(id_attr))
             .unwrap()
+    }
+
+    fn label_runtime(disabled: bool, clicks: std::rc::Rc<std::cell::Cell<u32>>) -> UiRuntime {
+        UiRuntime::with_rules(
+            Vec::new(),
+            move || {
+                let clicks = clicks.clone();
+                view! {
+                    <div id="wrapper">
+                        <input
+                            id="box"
+                            type="checkbox"
+                            disabled={disabled}
+                            onclick={move || clicks.set(clicks.get() + 1)}
+                        />
+                        <label id="named" for="box">{"Box"}</label>
+                        <label id="dangling" for="missing">{"Nothing"}</label>
+                        <label id="wrapping"><span id="inner">{"x"}</span></label>
+                    </div>
+                }
+            },
+            viewport(),
+        )
+    }
+
+    #[test]
+    fn a_label_for_activates_its_control() {
+        let clicks = std::rc::Rc::new(std::cell::Cell::new(0));
+        let runtime = label_runtime(false, clicks.clone());
+        let (label, control) = (node_id(&runtime, "named"), node_id(&runtime, "box"));
+        assert_eq!(runtime.activation_target(label), Some(control));
+        runtime.dispatch_click(runtime.activation_target(label).unwrap());
+        assert_eq!(
+            clicks.get(),
+            1,
+            "the label click reached the input's handler"
+        );
+    }
+
+    #[test]
+    fn a_label_for_a_disabled_control_activates_nothing() {
+        let runtime = label_runtime(true, std::rc::Rc::default());
+        assert_eq!(runtime.activation_target(node_id(&runtime, "named")), None);
+    }
+
+    #[test]
+    fn a_label_without_a_matching_control_and_a_plain_wrapper_activate_themselves() {
+        let runtime = label_runtime(false, std::rc::Rc::default());
+        for id in ["dangling", "wrapping", "wrapper", "inner"] {
+            let node = node_id(&runtime, id);
+            assert_eq!(runtime.activation_target(node), Some(node), "{id}");
+        }
     }
 
     fn radio_group_runtime() -> UiRuntime {
