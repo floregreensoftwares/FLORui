@@ -5,3 +5,4 @@
 pub(crate) mod dialog;
 pub(crate) mod popover;
 pub(crate) mod portal;
+pub(crate) mod switch;
