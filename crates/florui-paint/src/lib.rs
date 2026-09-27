@@ -4713,8 +4713,11 @@ mod tests {
                     .unwrap();
 
             let node = arena.roots()[0];
-            let logical_width = layouts[&node].width;
-            let logical_height = layouts[&node].height;
+            // The whole node, margin offset included: a canvas of only the
+            // node's own size would crop the glyph by a different amount at
+            // each scale.
+            let logical_width = layouts[&node].x + layouts[&node].width;
+            let logical_height = layouts[&node].y + layouts[&node].height;
             let physical_layouts = layouts
                 .iter()
                 .map(|(&id, l)| {
