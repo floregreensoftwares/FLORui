@@ -75,6 +75,13 @@
 //! checked against a real Chromium the way everything above is:
 //! `display: block` and a bold label are standard, undisputed
 //! cross-browser behavior, not measured here.
+//!
+//! `a`'s own rule is `display: inline` only -- real Chromium's default
+//! link look (blue, underlined, a pointer cursor) needs `text-decoration`
+//! and `cursor`, and neither CSS property exists anywhere in this crate
+//! or `florui-paint` yet. Tracked as a known gap, not attempted here;
+//! `:link`/`:visited` styling is the same gap, since they're two halves
+//! of one feature.
 
 use std::sync::LazyLock;
 
@@ -87,7 +94,7 @@ const CSS: &str = "
         display: block;
     }
 
-    span {
+    span, a {
         display: inline;
     }
 
@@ -241,6 +248,28 @@ mod tests {
 
         assert_eq!(computed[&span].display, Display::Inline);
         assert_eq!(computed[&button].display, Display::InlineBlock);
+    }
+
+    #[test]
+    fn a_resolves_inline_with_zero_author_css() {
+        let tree: Element = view! {
+            <div>
+                <a href="https://example.com" />
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let div = arena.roots()[0];
+        let a = arena.children(div)[0];
+        let rules = parse_stylesheet("").unwrap();
+        let computed = compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            Viewport::default(),
+            &mut crate::AnimationTimeline::default(),
+        );
+
+        assert_eq!(computed[&a].display, Display::Inline);
     }
 
     #[test]

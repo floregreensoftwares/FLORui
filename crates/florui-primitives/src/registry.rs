@@ -155,12 +155,13 @@ pub const PRIMITIVES: &[Primitive] = &[
     primitive!(
         "button",
         Content::Normal,
-        "the only primitive with real focus, keyboard activation, and disabled-state behavior"
+        "real focus, keyboard activation, and disabled-state behavior"
     ),
     primitive!(
         "a",
         Content::Normal,
-        "needs link/navigation semantics once routing exists"
+        "real focus, Enter activation, and a default external-link-open action; \
+         :link/:visited styling is a tracked gap"
     ),
     // Forms.
     primitive!("form", Content::Normal, "a form"),

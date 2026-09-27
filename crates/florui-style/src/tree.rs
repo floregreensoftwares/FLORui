@@ -117,6 +117,8 @@ struct ArenaNode {
     accessible_label: Option<String>,
     /// The raw `role` attribute. See [`Arena::role`].
     role: Option<String>,
+    /// The `href` attribute on `<a>`. See [`Arena::href`].
+    href: Option<String>,
     /// The node's own direct text, for text measurement — not inherited
     /// from or propagated to any other node.
     text: String,
@@ -267,6 +269,7 @@ impl Arena {
                         label_for: attr_value(&node.attrs, "for"),
                         accessible_label: attr_value(&node.attrs, "accessible_label"),
                         role: attr_value(&node.attrs, "role"),
+                        href: attr_value(&node.attrs, "href"),
                         text: collect_text(&node.children),
                         inline_items: Vec::new(),
                         handlers: node.handlers.clone(),
@@ -466,6 +469,13 @@ impl Arena {
     /// by `Arena` itself.
     pub fn label_for(&self, id: NodeId) -> Option<&str> {
         self.nodes[id].label_for.as_deref()
+    }
+
+    /// This node's `href` attribute — meaningful only on `<a>`, where its
+    /// presence (not its content) also decides focusability, see
+    /// `florui-platform`'s own `focus::is_focusable`.
+    pub fn href(&self, id: NodeId) -> Option<&str> {
+        self.nodes[id].href.as_deref()
     }
 
     /// This node's `accessible_label` attribute, if declared — an

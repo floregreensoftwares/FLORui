@@ -1535,7 +1535,7 @@ impl WindowState {
             };
             let previous = self.focused_text_input();
             let focus_changed = self.runtime.set_focused(Some(target), false);
-            self.runtime.dispatch_click(target);
+            self.activate(target);
             if focus_changed {
                 // `pressed` is never itself an editable text input here
                 // (`handle_press` routes those through
@@ -1547,6 +1547,25 @@ impl WindowState {
                 self.window.set_ime_allowed(false);
                 self.update_and_request_redraw();
             }
+        }
+    }
+
+    /// Dispatches `node`'s click, then -- unless the handler called
+    /// `Event::prevent_default()` -- runs its default action, if it has
+    /// one. Only `<a href="http(s)://...">` has one today; the branch is
+    /// a no-op for every other tag, so every activation path (mouse,
+    /// keyboard, an accessibility action) can route through here
+    /// uniformly rather than each needing its own opt-in.
+    fn activate(&mut self, node: NodeId) {
+        if self.runtime.dispatch_click(node) {
+            return;
+        }
+        let (arena, ..) = self.runtime.geometry();
+        if arena.tag(node) == "a"
+            && let Some(href) = arena.href(node)
+            && crate::href::is_openable(href)
+        {
+            self.controls.open_url(href);
         }
     }
 
@@ -1680,16 +1699,19 @@ impl WindowState {
                     } else {
                         let (arena, ..) = self.runtime.geometry();
                         if crate::focus::activates_on_enter(arena, focused) {
-                            self.runtime.dispatch_click(focused);
+                            self.activate(focused);
                         }
                     }
                 }
             }
-            // Fires on release, see `release_space`.
+            // Fires on release, see `release_space`. Never arms on a
+            // focused `<a>` -- real anchors ignore Space entirely.
             Key::Named(NamedKey::Space) => {
                 if let Some(focused) = self.runtime.focused() {
                     let (arena, ..) = self.runtime.geometry();
-                    self.space_armed = Some(florui_style::FocusPath::of(arena, focused));
+                    if crate::focus::activates_on_space(arena, focused) {
+                        self.space_armed = Some(florui_style::FocusPath::of(arena, focused));
+                    }
                 }
             }
             // Selection follows focus within a radio group, so moving
@@ -1710,7 +1732,7 @@ impl WindowState {
                     1
                 };
                 if let Some(radio) = self.runtime.step_radio_group(direction) {
-                    self.runtime.dispatch_click(radio);
+                    self.activate(radio);
                     self.update_and_request_redraw();
                 } else if matches!(key, NamedKey::ArrowUp | NamedKey::ArrowDown) {
                     self.step_select(direction);
@@ -1801,7 +1823,7 @@ impl WindowState {
         };
         let (arena, ..) = self.runtime.geometry();
         if florui_style::FocusPath::of(arena, focused) == armed {
-            self.runtime.dispatch_click(focused);
+            self.activate(focused);
         }
     }
 
@@ -2647,7 +2669,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                                 } else {
                                     let focus_changed =
                                         state.runtime.set_focused(Some(node), false);
-                                    state.runtime.dispatch_click(node);
+                                    state.activate(node);
                                     if focus_changed {
                                         state.update_and_request_redraw();
                                     }
