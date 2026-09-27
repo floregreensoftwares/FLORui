@@ -145,6 +145,15 @@ fixture_test!(
 );
 fixture_test!(box_shadow_default_matches_chromium, "box-shadow-default");
 fixture_test!(box_shadow_blur_matches_chromium, "box-shadow-blur");
+fixture_test!(border_radius_matches_chromium, "border-radius");
+fixture_test!(
+    border_radius_overflow_hidden_matches_chromium,
+    "border-radius-overflow-hidden"
+);
+fixture_test!(
+    border_radius_box_shadow_matches_chromium,
+    "border-radius-box-shadow"
+);
 fixture_test!(transform_translate_matches_chromium, "transform-translate");
 fixture_test!(
     overflow_hidden_clip_matches_chromium,

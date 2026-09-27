@@ -1,0 +1,124 @@
+.page {
+    display: flex;
+    flex-direction: column;
+    padding-top: 24px;
+    padding-right: 24px;
+    padding-bottom: 24px;
+    padding-left: 24px;
+    background-color: #1e1e22;
+    color: #ffffff;
+}
+
+.instructions {
+    margin-bottom: 16px;
+    font-size: 16px;
+}
+
+.status {
+    margin-top: 8px;
+    margin-bottom: 20px;
+    font-size: 16px;
+}
+
+.row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.card, .pill, .circle, .ellipse, .corners, .shadowed, .inset, .frame, .backdrop-stage {
+    margin-right: 20px;
+}
+
+.card {
+    width: 100px;
+    height: 70px;
+    background-color: #4c8bf5;
+    border-width: 4px;
+    border-style: solid;
+    border-color: #ffffff;
+    border-radius: 16px;
+}
+
+.pill {
+    width: 100px;
+    height: 40px;
+    background-color: #e0603c;
+    border-radius: 20px;
+}
+
+.circle {
+    width: 70px;
+    height: 70px;
+    background-color: #3cb371;
+    border-width: 3px;
+    border-style: solid;
+    border-color: #1c6b40;
+    border-radius: 50%;
+}
+
+.circle:hover {
+    background-color: #52d18a;
+}
+
+.ellipse {
+    width: 100px;
+    height: 60px;
+    background-color: #b565e0;
+    border-radius: 50px / 30px;
+}
+
+.corners {
+    width: 80px;
+    height: 70px;
+    background-color: #f2c744;
+    border-radius: 30px 4px 30px 4px;
+}
+
+.shadowed {
+    width: 80px;
+    height: 60px;
+    background-color: #2d2d33;
+    border-radius: 14px;
+    box-shadow: 6px 8px 12px #000000;
+}
+
+.inset {
+    width: 80px;
+    height: 60px;
+    background-color: #d0d0d8;
+    border-radius: 14px;
+    box-shadow: inset 0 0 10px 2px #2a4dbd;
+}
+
+.frame {
+    width: 70px;
+    height: 70px;
+    overflow: hidden;
+    border-radius: 35px;
+    background-color: #444450;
+}
+
+.content {
+    width: 110px;
+    height: 110px;
+    background-color: #ff5a5a;
+}
+
+.backdrop-stage {
+    width: 110px;
+    height: 70px;
+    background-color: #3cb371;
+    border-radius: 6px;
+}
+
+.glass {
+    width: 70px;
+    height: 46px;
+    margin-top: 12px;
+    margin-left: 12px;
+    border-radius: 16px;
+    background-color: rgba(255, 255, 255, 0.15);
+    backdrop-filter: blur(4px);
+}

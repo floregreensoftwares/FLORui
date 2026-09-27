@@ -1,0 +1,22 @@
+{
+  "id": "border-radius-overflow-hidden",
+  "description": "A 40x40 overflow: hidden frame with a fully rounded (circular) border-radius containing a 60x60 child -- the child must be clipped to the frame's rounded padding box, not just its rectangle.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": { "width_css_px": 60, "height_css_px": 60, "device_pixel_ratio": 1.0 },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "frame",
+    "css": ".frame { width: 40px; height: 40px; overflow: hidden; border-radius: 20px; } .content { width: 60px; height: 60px; background-color: #ff0000; }",
+    "children": [
+      { "tag": "div", "class": "content", "css": "" }
+    ]
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 6.0,
+    "reason": "The circular clip edge is anti-aliased by two different rasterizers. Measured against desktop Chrome: 4.22% of pixels differ (mean_error 0.726, max_error 38), geometry an exact 40x40 match -- the child is clipped to the same circle, only its edge coverage differs. Not re-measured against a software-rendered CI Chromium."
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "id": "border-radius",
+  "description": "A bordered box with four different corner radii -- background and border ring must both follow the rounded outline, checked against Chromium's own rasterization.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": { "width_css_px": 80, "height_css_px": 80, "device_pixel_ratio": 1.0 },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "box",
+    "css": ".box { width: 52px; height: 52px; background-color: #4c8bf5; border-width: 4px; border-style: solid; border-color: #1e3a8a; border-radius: 20px 8px 30px 12px; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 5.0,
+    "reason": "Chromium's and tiny-skia's anti-aliasing of a curved edge never agree pixel for pixel. Measured against desktop Chrome: 3.09% of pixels differ (mean_error 0.756, max_error 74 on a few edge pixels), geometry an exact 60x60 match -- edge coverage only, no shape or position difference. Not re-measured against a software-rendered CI Chromium."
+  }
+}
