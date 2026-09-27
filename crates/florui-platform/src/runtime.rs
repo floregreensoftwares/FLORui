@@ -399,7 +399,7 @@ impl UiRuntime {
     /// The topmost node under `(x, y)`, against the last computed
     /// geometry — does not render again.
     pub fn hit_test(&self, x: f32, y: f32) -> Option<NodeId> {
-        florui_layout::hit_test(&self.arena, &self.layouts, x, y)
+        florui_layout::hit_test(&self.arena, &self.layouts, &self.styles, x, y)
     }
 
     /// The currently `:hover`ed node, against the last computed geometry —
