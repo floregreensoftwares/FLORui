@@ -30,7 +30,7 @@ pub use element::{Element, ElementNode};
 pub use florui_macros::component;
 pub use florui_macros::{stylesheet, stylesheet_scoped, view};
 pub use florui_reactive as reactive;
-pub use handler::{BoolHandler, Handler, ValueHandler};
+pub use handler::{BoolHandler, FloatHandler, Handler, ValueHandler};
 pub use into_nodes::IntoNodes;
 pub use stylesheets::{
     StyleScope, StylesheetSource, apply_scope_to_class_attr, dedup as dedup_stylesheets,
@@ -45,7 +45,7 @@ pub mod prelude {
         use_context, use_effect, use_error_boundary, use_memo, use_ref, use_resource, use_signal,
     };
     pub use crate::{
-        BoolHandler, Children, Element, Handler, IntoNodes, StyleScope, ValueHandler, component,
-        stylesheet, stylesheet_scoped, view,
+        BoolHandler, Children, Element, FloatHandler, Handler, IntoNodes, StyleScope, ValueHandler,
+        component, stylesheet, stylesheet_scoped, view,
     };
 }

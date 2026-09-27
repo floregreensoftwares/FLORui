@@ -124,6 +124,38 @@ impl PartialEq for BoolHandler {
 
 impl Eq for BoolHandler {}
 
+/// [`ValueHandler`] for a continuous numeric control (a slider): reports
+/// the value the control is asking for, so its owner can accept, reject
+/// or clamp it. The explicit-contract counterpart of a `Binding<f32>`.
+#[derive(Clone)]
+pub struct FloatHandler(Rc<dyn Fn(f32)>);
+
+impl FloatHandler {
+    pub fn new(f: impl Fn(f32) + 'static) -> Self {
+        Self(Rc::new(f))
+    }
+
+    /// Reports that the control asks to become `value`.
+    pub fn call(&self, value: f32) {
+        (self.0)(value);
+    }
+}
+
+impl fmt::Debug for FloatHandler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("FloatHandler(..)")
+    }
+}
+
+impl PartialEq for FloatHandler {
+    /// Same "identity, not content" reasoning as [`Handler`]'s own.
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for FloatHandler {}
+
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
@@ -178,6 +210,18 @@ mod tests {
         let clone = handler.clone();
         assert_eq!(handler, clone);
         assert_ne!(handler, BoolHandler::new(|_| ()));
+    }
+
+    #[test]
+    fn float_handler_call_passes_the_requested_value_through() {
+        let received = Rc::new(Cell::new(None));
+        let received_in_closure = Rc::clone(&received);
+        let handler = FloatHandler::new(move |value| received_in_closure.set(Some(value)));
+        handler.call(2.5);
+        assert_eq!(received.get(), Some(2.5));
+        let clone = handler.clone();
+        assert_eq!(handler, clone);
+        assert_ne!(handler, FloatHandler::new(|_| ()));
     }
 
     #[test]
