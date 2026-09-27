@@ -432,6 +432,10 @@ pub struct ComputedStyle {
     /// through unrendered, and `florui-paint`'s own doc for the ordering
     /// this crate paints them in.
     pub box_shadow: Vec<BoxShadow>,
+    /// `pointer-events: none` — the node is never the target of a pointer
+    /// hit (its descendants still can be, if they don't inherit `none`).
+    /// `auto` and every other value read as `false`.
+    pub pointer_events_none: bool,
     /// Whether this node clips its own content (including descendants) to
     /// its padding box — real CSS's `overflow-x`/`overflow-y`, collapsed
     /// to one bool. `false` only when *both* axes are the initial
