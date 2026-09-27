@@ -92,6 +92,38 @@ impl PartialEq for ValueHandler {
 
 impl Eq for ValueHandler {}
 
+/// [`ValueHandler`] for a boolean control (a switch, a checkbox): reports
+/// the value the control is *asking* for, so its owner can accept or
+/// reject it. The explicit-contract counterpart of a `Binding<bool>`.
+#[derive(Clone)]
+pub struct BoolHandler(Rc<dyn Fn(bool)>);
+
+impl BoolHandler {
+    pub fn new(f: impl Fn(bool) + 'static) -> Self {
+        Self(Rc::new(f))
+    }
+
+    /// Reports that the control asks to become `value`.
+    pub fn call(&self, value: bool) {
+        (self.0)(value);
+    }
+}
+
+impl fmt::Debug for BoolHandler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("BoolHandler(..)")
+    }
+}
+
+impl PartialEq for BoolHandler {
+    /// Same "identity, not content" reasoning as [`Handler`]'s own.
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for BoolHandler {}
+
 #[cfg(test)]
 mod tests {
     use std::cell::{Cell, RefCell};
@@ -134,6 +166,18 @@ mod tests {
             ValueHandler::new(move |value| *received_in_closure.borrow_mut() = Some(value));
         handler.call("hello".to_string());
         assert_eq!(*received.borrow(), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn bool_handler_call_passes_the_requested_value_through() {
+        let received = Rc::new(Cell::new(None));
+        let received_in_closure = Rc::clone(&received);
+        let handler = BoolHandler::new(move |value| received_in_closure.set(Some(value)));
+        handler.call(true);
+        assert_eq!(received.get(), Some(true));
+        let clone = handler.clone();
+        assert_eq!(handler, clone);
+        assert_ne!(handler, BoolHandler::new(|_| ()));
     }
 
     #[test]
