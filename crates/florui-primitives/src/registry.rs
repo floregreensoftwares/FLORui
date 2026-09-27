@@ -181,6 +181,11 @@ pub const PRIMITIVES: &[Primitive] = &[
         Content::Normal,
         "an item within a select, chosen via its own selected attribute"
     ),
+    primitive!(
+        "optgroup",
+        Content::Normal,
+        "labels a group of options within a select, via its own label attribute"
+    ),
     primitive!("fieldset", Content::Normal, "groups related form controls"),
     primitive!("legend", Content::Normal, "a caption for a fieldset"),
     // Images.

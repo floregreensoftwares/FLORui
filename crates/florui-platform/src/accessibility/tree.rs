@@ -276,6 +276,12 @@ impl AccessibilityTree {
                 node.set_selected(arena.is_selected(id));
                 node.add_action(Action::Click);
             }
+            "optgroup" => {
+                node.set_role(Role::Group);
+                if let Some(label) = arena.group_label(id) {
+                    node.set_label(label);
+                }
+            }
             // The synthesized root div wrapping an open select's own
             // options -- see `crate::select::SELECT_CONTENT_ID_SUFFIX`.
             "div"

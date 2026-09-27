@@ -84,6 +84,11 @@ struct ArenaNode {
     /// state for `<select>`: whether its option list is currently showing
     /// as an overlay. See [`Arena::is_open`].
     open: bool,
+    /// The `label` attribute on `<optgroup>` — real HTML's own group
+    /// caption, an attribute rather than child text content (an
+    /// `<optgroup>`'s only real children are `<option>`s). See
+    /// [`Arena::group_label`].
+    group_label: Option<String>,
     /// The raw, unparsed `style="..."` attribute text, if declared — see
     /// [`Arena::style_attr`].
     style: Option<String>,
@@ -254,6 +259,7 @@ impl Arena {
                         selected: attr_bool(&node.attrs, "selected"),
                         active: attr_bool(&node.attrs, "active"),
                         open: attr_bool(&node.attrs, "open"),
+                        group_label: attr_value(&node.attrs, "label"),
                         style: attr_value(&node.attrs, "style"),
                         value: attr_value(&node.attrs, "value"),
                         input_type: attr_value(&node.attrs, "type"),
@@ -416,6 +422,12 @@ impl Arena {
     /// `<select>`. See [`ArenaNode::open`].
     pub fn is_open(&self, id: NodeId) -> bool {
         self.nodes[id].open
+    }
+
+    /// This node's `label` attribute — for `<optgroup>`. See
+    /// [`ArenaNode::group_label`].
+    pub fn group_label(&self, id: NodeId) -> Option<&str> {
+        self.nodes[id].group_label.as_deref()
     }
 
     /// This node's raw, unparsed `style="..."` attribute text, if it
@@ -873,6 +885,17 @@ mod tests {
         let options = arena.find_all(|a, id| a.tag(id) == "option");
         assert!(arena.is_active(options[0]));
         assert!(!arena.is_active(options[1]));
+    }
+
+    #[test]
+    fn group_label_reads_the_plain_string_form_and_is_none_without_it() {
+        let tree: Element = view! { <optgroup label="Fruits" /> };
+        let arena = Arena::build(&tree);
+        assert_eq!(arena.group_label(arena.roots()[0]), Some("Fruits"));
+
+        let tree: Element = view! { <optgroup /> };
+        let arena = Arena::build(&tree);
+        assert_eq!(arena.group_label(arena.roots()[0]), None);
     }
 
     #[test]
