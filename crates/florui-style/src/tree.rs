@@ -10,6 +10,23 @@ use florui_reactive::Binding;
 
 pub type NodeId = usize;
 
+/// The `role` attribute values this crate understands. Only `switch`, and
+/// only meaningful on `<input type="checkbox">`, for now; any other value
+/// is reported by [`Arena::unsupported_role`] rather than guessed at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessibleRole {
+    Switch,
+}
+
+impl AccessibleRole {
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "switch" => Some(Self::Switch),
+            _ => None,
+        }
+    }
+}
+
 /// One direct child of a node, in original source order, for inline
 /// layout: consecutive [`Element::Text`] siblings merge into one
 /// [`InlineItem::Text`], the same way a real inline formatting context
@@ -61,6 +78,8 @@ struct ArenaNode {
     /// plain `syn::Ident`s, which can't contain `-`. See
     /// [`Arena::accessible_label`].
     accessible_label: Option<String>,
+    /// The raw `role` attribute. See [`Arena::role`].
+    role: Option<String>,
     /// The node's own direct text, for text measurement — not inherited
     /// from or propagated to any other node.
     text: String,
@@ -196,6 +215,7 @@ impl Arena {
                         name: attr_value(&node.attrs, "name"),
                         label_for: attr_value(&node.attrs, "for"),
                         accessible_label: attr_value(&node.attrs, "accessible_label"),
+                        role: attr_value(&node.attrs, "role"),
                         text: collect_text(&node.children),
                         inline_items: Vec::new(),
                         handlers: node.handlers.clone(),
@@ -339,6 +359,25 @@ impl Arena {
     /// present.
     pub fn accessible_label(&self, id: NodeId) -> Option<&str> {
         self.nodes[id].accessible_label.as_deref()
+    }
+
+    /// This node's `role` attribute, if it names a role this crate
+    /// supports (see [`AccessibleRole`]).
+    pub fn role(&self, id: NodeId) -> Option<AccessibleRole> {
+        self.nodes[id]
+            .role
+            .as_deref()
+            .and_then(AccessibleRole::parse)
+    }
+
+    /// This node's `role` attribute when it names a role this crate does
+    /// not support -- the diagnostic for a role that would otherwise be
+    /// silently ignored. Nothing is printed: this crate has no logging.
+    pub fn unsupported_role(&self, id: NodeId) -> Option<&str> {
+        self.nodes[id]
+            .role
+            .as_deref()
+            .filter(|value| AccessibleRole::parse(value).is_none())
     }
 
     /// This node's own direct text, for measurement: its direct
@@ -775,6 +814,25 @@ mod tests {
         let tree: Element = view! { <button accessible_label="Close">{"x"}</button> };
         let arena = Arena::build(&tree);
         assert_eq!(arena.accessible_label(arena.roots()[0]), Some("Close"));
+    }
+
+    #[test]
+    fn role_switch_is_parsed_and_an_unknown_role_is_reported() {
+        let tree: Element = view! {
+            <div>
+                <input type="checkbox" role="switch" />
+                <input type="checkbox" role="slider" />
+                <input type="checkbox" />
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let inputs = arena.find_all(|a, id| a.tag(id) == "input");
+        assert_eq!(arena.role(inputs[0]), Some(AccessibleRole::Switch));
+        assert_eq!(arena.unsupported_role(inputs[0]), None);
+        assert_eq!(arena.role(inputs[1]), None);
+        assert_eq!(arena.unsupported_role(inputs[1]), Some("slider"));
+        assert_eq!(arena.role(inputs[2]), None);
+        assert_eq!(arena.unsupported_role(inputs[2]), None);
     }
 
     #[test]
