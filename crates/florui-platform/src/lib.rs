@@ -24,6 +24,9 @@ pub use components::popover::{
     Align, POPOVER_ROOT_CLASS, POPOVER_TRIGGER_CLASS, Placement, Popover, PopoverProps, Side,
 };
 pub use components::portal::{Portal, PortalProps};
+pub use components::switch::{
+    SWITCH_CLASS, SWITCH_INPUT_CLASS, SWITCH_THUMB_CLASS, Switch, SwitchProps, SwitchValue,
+};
 pub use position_observer::{PositionObserverRegistry, use_committed_position};
 pub use runtime::UiRuntime;
 pub use scroll::{ScrollHandle, ScrollRegistry, use_scroll_offset};
