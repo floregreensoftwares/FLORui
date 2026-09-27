@@ -544,6 +544,13 @@ impl UiRuntime {
     /// PageUp (+10×step, measured against Chrome for both a default and a
     /// custom `step`), Home (min) and End (max).
     pub(crate) fn step_range_value(&self, node: NodeId, step: RangeStep) -> Option<f32> {
+        // Self-gated the same as `dispatch_click`: an accessibility action
+        // can target any node id regardless of focus, so the gate can't
+        // live only in whatever normally keeps a disabled input from
+        // being focused in the first place.
+        if self.arena.is_disabled(node) {
+            return None;
+        }
         let (min, max, unit) = (
             self.arena.range_min(node),
             self.arena.range_max(node),
@@ -634,6 +641,13 @@ impl UiRuntime {
     pub(crate) fn continue_range_drag(&mut self, cursor_x: f32) -> Option<f32> {
         let path = self.range_dragging.as_ref()?;
         let node = path.resolve(&self.arena, &self.range_inputs())?;
+        // Matches `dispatch_click`: a control that becomes disabled between
+        // press and release stops accepting requests, even though the
+        // drag itself (started while it was still enabled) only ends on a
+        // real release.
+        if self.arena.is_disabled(node) {
+            return None;
+        }
         let requested = self.range_value_at(node, cursor_x)?;
         if requested == self.arena.range_value(node) {
             return None;
