@@ -58,6 +58,7 @@ mod rounded;
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::rc::Rc;
 
 use florui_layout::{BoxLayout, absolute_position};
 use florui_style::{
@@ -126,12 +127,18 @@ impl Surface {
 /// x0`) stays representable instead of failing to construct — real CSS
 /// nests clips that vanish entirely (a clipped-away descendant) as
 /// routinely as ones that don't.
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// `rounded` holds the rounded padding-box outlines of any
+/// `border-radius` clipping ancestors; the rectangle bounds stay
+/// axis-aligned and conservative for extent math, and only
+/// [`Self::to_mask`] applies the outlines.
+#[derive(Clone, Debug, PartialEq)]
 struct ClipRect {
     x0: f32,
     y0: f32,
     x1: f32,
     y1: f32,
+    rounded: Option<Rc<[RoundedRect]>>,
 }
 
 impl ClipRect {
@@ -141,7 +148,20 @@ impl ClipRect {
             y0: y,
             x1: x + width,
             y1: y + height,
+            rounded: None,
         }
+    }
+
+    /// This clip also restricted to `outline`, a rounded box inside it.
+    fn with_rounded(mut self, outline: RoundedRect) -> Self {
+        let mut outlines: Vec<RoundedRect> = self
+            .rounded
+            .iter()
+            .flat_map(|o| o.iter().copied())
+            .collect();
+        outlines.push(outline);
+        self.rounded = Some(outlines.into());
+        self
     }
 
     fn is_empty(&self) -> bool {
@@ -152,11 +172,17 @@ impl ClipRect {
     /// (`is_empty()`) means nothing under both clips is ever visible,
     /// same as real CSS's own nested `overflow: hidden`.
     fn intersect(&self, other: &ClipRect) -> ClipRect {
+        let rounded = match (&self.rounded, &other.rounded) {
+            (None, None) => None,
+            (Some(only), None) | (None, Some(only)) => Some(Rc::clone(only)),
+            (Some(a), Some(b)) => Some(a.iter().chain(b.iter()).copied().collect()),
+        };
         ClipRect {
             x0: self.x0.max(other.x0),
             y0: self.y0.max(other.y0),
             x1: self.x1.min(other.x1),
             y1: self.y1.min(other.y1),
+            rounded,
         }
     }
 
@@ -166,7 +192,7 @@ impl ClipRect {
     /// "nothing to paint" case in this module (the caller skips the fill
     /// entirely rather than passing a mask that would filter out
     /// everything).
-    fn to_mask(self, surface: &Surface) -> Option<Mask> {
+    fn to_mask(&self, surface: &Surface) -> Option<Mask> {
         if self.is_empty() {
             return None;
         }
@@ -183,6 +209,13 @@ impl ClipRect {
         path_builder.push_rect(rect);
         let path = path_builder.finish()?;
         mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
+        let to_local = surface_transform(surface);
+        for outline in self.rounded.iter().flat_map(|o| o.iter()) {
+            match outline.path() {
+                Some(path) => mask.intersect_path(&path, FillRule::Winding, true, to_local),
+                None => return None,
+            }
+        }
         Some(mask)
     }
 }
@@ -407,7 +440,7 @@ fn paint_nodes(
     let mut stack: Vec<(NodeId, Option<ClipRect>)> = paint_order(styles, parent_display, nodes)
         .into_iter()
         .rev()
-        .map(|id| (id, clip))
+        .map(|id| (id, clip.clone()))
         .collect();
     while let Some((node, node_clip)) = stack.pop() {
         let opacity = styles.get(&node).map_or(1.0, |s| s.opacity);
@@ -418,7 +451,7 @@ fn paint_nodes(
             // would still cost the same work for no visible result.
             continue;
         }
-        if node_clip.is_some_and(|c| c.is_empty()) {
+        if node_clip.as_ref().is_some_and(|c| c.is_empty()) {
             // An ancestor's `overflow: hidden` clip has already vanished
             // entirely (fully outside its own visible region) — nothing
             // under it can ever be visible either. Distinct from `None`
@@ -452,7 +485,7 @@ fn paint_nodes(
             );
             continue;
         }
-        let node_mask = node_clip.and_then(|c| c.to_mask(buffer));
+        let node_mask = node_clip.as_ref().and_then(|c| c.to_mask(buffer));
         paint_node(
             buffer,
             arena,
@@ -464,13 +497,13 @@ fn paint_nodes(
             node_mask.as_ref(),
             text_inputs,
         );
-        let child_clip = clip_for_children(arena, styles, layouts, node, node_clip);
+        let child_clip = clip_for_children(arena, styles, layouts, node, node_clip, scale_factor);
         let child_display = styles.get(&node).map(|s| s.display);
         stack.extend(
             paint_order(styles, child_display, arena.children(node))
                 .into_iter()
                 .rev()
-                .map(|id| (id, child_clip)),
+                .map(|id| (id, child_clip.clone())),
         );
     }
 }
@@ -496,6 +529,7 @@ fn clip_for_children(
     layouts: &HashMap<NodeId, BoxLayout>,
     node: NodeId,
     incoming: Option<ClipRect>,
+    scale_factor: f32,
 ) -> Option<ClipRect> {
     let clips = styles.get(&node).is_some_and(|s| s.overflow_clips);
     if !clips {
@@ -506,12 +540,31 @@ fn clip_for_children(
     };
     let (x, y) = absolute_position(arena, layouts, node);
     let border = styles.get(&node).map_or(NO_BORDER, |s| s.border);
-    let padding_box = ClipRect::from_xywh(
+    let mut padding_box = ClipRect::from_xywh(
         x + border.left.width,
         y + border.top.width,
         (layout.width - border.left.width - border.right.width).max(0.0),
         (layout.height - border.top.width - border.bottom.width).max(0.0),
     );
+    if let Some(style) = styles.get(&node) {
+        let outline = RoundedRect::new(
+            x,
+            y,
+            layout.width,
+            layout.height,
+            &style.border_radius,
+            scale_factor,
+        )
+        .inset(
+            border.top.width,
+            border.right.width,
+            border.bottom.width,
+            border.left.width,
+        );
+        if !outline.is_square() {
+            padding_box = padding_box.with_rounded(outline);
+        }
+    }
     Some(match incoming {
         Some(parent) => parent.intersect(&padding_box),
         None => padding_box,
@@ -729,6 +782,7 @@ fn subtree_extent(
                     y0: cy0,
                     x1: cx1,
                     y1: cy1,
+                    rounded: None,
                 });
                 if clipped.is_empty() {
                     continue;
@@ -978,8 +1032,8 @@ fn paint_group(
     // harmless to skip (the clamp against the full target alone still
     // gives a correct, just looser, bound), so an absent clip just
     // reuses `target_rect` unchanged.
-    let visible_rect = match clip {
-        Some(clip) => target_rect.intersect(&clip),
+    let visible_rect = match &clip {
+        Some(clip) => target_rect.intersect(clip),
         None => target_rect,
     };
     let sizing = if visible_rect.is_empty() {
@@ -1014,7 +1068,7 @@ fn paint_group(
     let Some(mut group) = Surface::new(width, height, origin) else {
         return;
     };
-    let inner_mask = clip.and_then(|c| c.to_mask(&group));
+    let inner_mask = clip.as_ref().and_then(|c| c.to_mask(&group));
     paint_node(
         &mut group,
         arena,
@@ -1026,7 +1080,7 @@ fn paint_group(
         inner_mask.as_ref(),
         text_inputs,
     );
-    let content_clip = clip_for_children(arena, styles, layouts, node, clip);
+    let content_clip = clip_for_children(arena, styles, layouts, node, clip.clone(), scale_factor);
     let child_display = styles.get(&node).map(|s| s.display);
     paint_nodes(
         &mut group,
@@ -3764,6 +3818,77 @@ mod tests {
             "past the frame's own padding box, the child's overflow must be clipped away, \
              leaving the plain canvas background"
         );
+    }
+
+    fn rounded_frame_with_child(child_css: &str) -> Canvas {
+        let tree: Element = view! {
+            <div class="frame">
+                <div class="content" />
+            </div>
+        };
+        let css = format!(
+            ".frame {{ width: 20px; height: 20px; overflow: hidden; border-radius: 10px; }} \
+             .content {{ background-color: #ff0000; {child_css} }}"
+        );
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(&css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let frame = arena.roots()[0];
+        let content = arena.children(frame)[0];
+        let mut layouts = HashMap::new();
+        for (node, size) in [(frame, 20.0), (content, 40.0)] {
+            layouts.insert(
+                node,
+                BoxLayout {
+                    x: 0.0,
+                    y: 0.0,
+                    width: size,
+                    height: size,
+                },
+            );
+        }
+        let mut font = Font::load_embedded();
+        paint_to_buffer(
+            &mut font,
+            40,
+            40,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        )
+    }
+
+    #[test]
+    fn overflow_hidden_clips_a_child_to_the_rounded_corner() {
+        let buffer = rounded_frame_with_child("");
+        assert_eq!(
+            pixel_rgb(&buffer, 10, 10),
+            [0xff, 0, 0],
+            "center is visible"
+        );
+        assert_eq!(
+            pixel_rgb(&buffer, 1, 1),
+            [0, 0, 0],
+            "inside the frame's box but outside its rounded corner, the child is clipped"
+        );
+    }
+
+    #[test]
+    fn a_rounded_clip_survives_a_bounded_group_surface() {
+        assert_bounded_and_full_target_paint_identically(|| {
+            rounded_frame_with_child("opacity: 0.5;")
+        });
+        let buffer = rounded_frame_with_child("opacity: 0.5;");
+        assert_eq!(pixel_rgb(&buffer, 1, 1), [0, 0, 0]);
+        assert_ne!(pixel_rgb(&buffer, 10, 10), [0, 0, 0]);
     }
 
     #[test]
