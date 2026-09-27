@@ -76,12 +76,16 @@
 //! `display: block` and a bold label are standard, undisputed
 //! cross-browser behavior, not measured here.
 //!
-//! `a`'s own rule is `display: inline` only -- real Chromium's default
-//! link look (blue, underlined, a pointer cursor) needs `text-decoration`
-//! and `cursor`, and neither CSS property exists anywhere in this crate
-//! or `florui-paint` yet. Tracked as a known gap, not attempted here;
-//! `:link`/`:visited` styling is the same gap, since they're two halves
-//! of one feature.
+//! `a:link`'s `color: #0000ee` is checked directly against a real
+//! Chromium (headless, `getComputedStyle` on an injected `<a href>`, not
+//! assumed) -- confirmed `rgb(0, 0, 238)`. `a:visited`'s `color:
+//! #551a8b` is the paired well-established value from the same suggested
+//! rendering both browsers converge on (same "not invented" tier as
+//! `h1`-`h6`'s scale above) -- a live measurement was attempted too, but
+//! Chromium deliberately excludes `file://` URLs from `:visited` history
+//! (a privacy restriction, not a bug), so there was no way to make a
+//! local one register as visited to check against. `underline`/`pointer`
+//! apply to both states alike, matching real Chromium.
 
 use std::sync::LazyLock;
 
@@ -96,6 +100,19 @@ const CSS: &str = "
 
     span, a {
         display: inline;
+    }
+
+    a:link, a:visited {
+        text-decoration: underline;
+        cursor: pointer;
+    }
+
+    a:link {
+        color: #0000ee;
+    }
+
+    a:visited {
+        color: #551a8b;
     }
 
     button {
@@ -270,6 +287,64 @@ mod tests {
         );
 
         assert_eq!(computed[&a].display, Display::Inline);
+    }
+
+    #[test]
+    fn an_unvisited_link_gets_the_real_chromium_default_link_look_with_zero_author_css() {
+        let tree: Element = view! {
+            <div>
+                <a href="https://example.com" />
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let div = arena.roots()[0];
+        let a = arena.children(div)[0];
+        let rules = parse_stylesheet("").unwrap();
+        let computed = compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            Viewport::default(),
+            &mut crate::AnimationTimeline::default(),
+        );
+
+        // Measured directly against a real headless Chromium -- see this
+        // module's own doc.
+        assert_eq!(
+            computed[&a].color,
+            crate::color::Rgba::opaque(0x00, 0x00, 0xee)
+        );
+        assert!(computed[&a].text_decoration_underline);
+        assert!(computed[&a].cursor_pointer);
+    }
+
+    #[test]
+    fn a_visited_link_gets_the_paired_default_color_with_zero_author_css() {
+        let tree: Element = view! {
+            <div>
+                <a href="https://example.com" />
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let div = arena.roots()[0];
+        let a = arena.children(div)[0];
+        let rules = parse_stylesheet("").unwrap();
+        let visited = std::collections::HashSet::from(["https://example.com".to_string()]);
+        let state = InteractionState::new().with_visited(&visited);
+        let computed = compute(
+            &arena,
+            &rules,
+            &state,
+            Viewport::default(),
+            &mut crate::AnimationTimeline::default(),
+        );
+
+        assert_eq!(
+            computed[&a].color,
+            crate::color::Rgba::opaque(0x55, 0x1a, 0x8b)
+        );
+        assert!(computed[&a].text_decoration_underline);
+        assert!(computed[&a].cursor_pointer);
     }
 
     #[test]

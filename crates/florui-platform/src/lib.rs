@@ -19,6 +19,7 @@ mod size_observer;
 mod text_input;
 mod viewport;
 mod virtual_list;
+mod visited_links;
 
 pub use components::dialog::{Dialog, DialogProps, MODAL_ROOT_CLASS};
 pub use components::popover::{
@@ -39,6 +40,7 @@ pub use select::SELECT_OPTIONS_CLASS;
 pub use size_observer::{SizeObserverRegistry, use_committed_size};
 pub use viewport::{ViewportSize, use_viewport_size};
 pub use virtual_list::{ItemHeight, Overscan, VirtualListHandle, use_virtual_list};
+pub use visited_links::VisitedLinks;
 
 #[cfg(feature = "desktop")]
 mod clipboard;

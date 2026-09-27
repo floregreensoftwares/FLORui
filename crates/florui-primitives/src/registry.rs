@@ -160,8 +160,8 @@ pub const PRIMITIVES: &[Primitive] = &[
     primitive!(
         "a",
         Content::Normal,
-        "real focus, Enter activation, and a default external-link-open action; \
-         :link/:visited styling is a tracked gap"
+        "real focus, Enter activation, a default external-link-open action, and \
+         :link/:visited styling backed by an in-memory, per-session visited-link record"
     ),
     // Forms.
     primitive!("form", Content::Normal, "a form"),

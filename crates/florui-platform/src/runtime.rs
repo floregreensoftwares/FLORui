@@ -25,6 +25,7 @@ use crate::scroll::ScrollRegistry;
 use crate::size_observer::SizeObserverRegistry;
 use crate::text_input::TextInputRegistry;
 use crate::viewport::ViewportSize;
+use crate::visited_links::VisitedLinks;
 
 pub struct UiRuntime {
     scope: ComponentScope,
@@ -32,6 +33,18 @@ pub struct UiRuntime {
     rules: Vec<Rule>,
     root: Box<dyn Fn() -> Element>,
     interaction: InteractionState,
+    /// Feeds `:link`/`:visited` into every [`Self::rebuild_interaction`]
+    /// call — a fresh, never-shared, always-empty default here (matching
+    /// this whole constructor's non-desktop callers: devtools, benches,
+    /// most tests). [`crate::desktop::DesktopHost`] replaces it with the
+    /// real, process-wide shared one via [`Self::set_visited_links`],
+    /// right after construction — the same "provided afterward, not a
+    /// constructor argument" shape [`Self::on_needs_update`] already has,
+    /// not [`Self::with_rules_and_context`]'s own `extra_context_providers`
+    /// shape, since this is runtime-internal state `rebuild_interaction`
+    /// consults directly, not something component code reaches via
+    /// `use_context`.
+    visited_links: VisitedLinks,
     /// [`Self::hovered_path`] resolved against the current arena — same
     /// contract as [`Self::focused_node`].
     hovered: Option<NodeId>,
@@ -218,6 +231,7 @@ impl UiRuntime {
             rules,
             root: Box::new(root),
             interaction: InteractionState::new(),
+            visited_links: VisitedLinks::new(),
             hovered: None,
             hovered_path: None,
             focused_path: None,
@@ -942,7 +956,7 @@ impl UiRuntime {
     /// that assembles it, so setting one doesn't silently clobber the
     /// others the way replacing it wholesale would.
     fn rebuild_interaction(&mut self) {
-        let mut state = InteractionState::new();
+        let mut state = InteractionState::new().with_visited(&self.visited_links.snapshot());
         if let Some(id) = self.hovered {
             state = state.with_hovered(id);
         }
@@ -953,6 +967,29 @@ impl UiRuntime {
             }
         }
         self.interaction = state;
+    }
+
+    /// Swaps in the real, process-wide [`VisitedLinks`] — see
+    /// [`Self::visited_links`]'s own doc for why this is a post-
+    /// construction setter, not a constructor argument. Rebuilds
+    /// [`Self::interaction`] immediately so a caller that already marked
+    /// something visited before this runs (unlikely, but not prevented)
+    /// isn't left stale until the next unrelated hover/focus change.
+    pub(crate) fn set_visited_links(&mut self, links: VisitedLinks) {
+        self.visited_links = links;
+        self.rebuild_interaction();
+    }
+
+    /// Re-reads [`Self::visited_links`] so `:link`/`:visited` matching
+    /// reflects a href just marked visited — `WindowControls::open_url`
+    /// marks it on the *store* directly (it has no `UiRuntime` to call
+    /// back into), so this is the other half. Like [`Self::set_focused`],
+    /// this doesn't request a redraw itself — the caller
+    /// (`desktop.rs`'s own `activate`) already knows it needs one and
+    /// requests it itself, the same pattern every other interaction-state
+    /// change here already follows.
+    pub(crate) fn refresh_visited_links(&mut self) {
+        self.rebuild_interaction();
     }
 
     /// The node a click on `node` activates. A click reaching a `<label>`

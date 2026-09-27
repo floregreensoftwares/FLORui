@@ -440,6 +440,15 @@ pub struct ComputedStyle {
     /// hit (its descendants still can be, if they don't inherit `none`).
     /// `auto` and every other value read as `false`.
     pub pointer_events_none: bool,
+    /// `text-decoration`/`text-decoration-line` — true only when the
+    /// value includes `underline`. `overline`/`line-through`/`blink`
+    /// aren't tracked; this is `<a>`'s own default-stylesheet need, not a
+    /// claim of full property coverage.
+    pub text_decoration_underline: bool,
+    /// `cursor: pointer` — true only for that one keyword; every other
+    /// value (including `auto`) reads `false`, the same narrow scope as
+    /// [`Self::text_decoration_underline`].
+    pub cursor_pointer: bool,
     /// Whether this node clips its own content (including descendants) to
     /// its padding box — real CSS's `overflow-x`/`overflow-y`, collapsed
     /// to one bool. `false` only when *both* axes are the initial
@@ -566,6 +575,8 @@ pub fn compute_with_container_query_signature(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use florui::prelude::*;
 
     use super::*;
@@ -979,6 +990,86 @@ mod tests {
             computed[&node].background_color,
             Rgba::opaque(0x11, 0x11, 0x11),
             "v1 scope: disabled is only wired into ElementState on <button>"
+        );
+    }
+
+    #[test]
+    fn text_decoration_underline_reads_the_declared_value() {
+        let tree: Element = view! {
+            <div>
+                <span class="a" />
+                <span class="b" />
+            </div>
+        };
+        let css = ".a { text-decoration: underline; } .b { text-decoration: line-through; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let underlined = arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == "a"))
+            .unwrap();
+        let not_underlined = arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == "b"))
+            .unwrap();
+        assert!(computed[&underlined].text_decoration_underline);
+        assert!(
+            !computed[&not_underlined].text_decoration_underline,
+            "line-through alone must not read as underline"
+        );
+    }
+
+    #[test]
+    fn cursor_pointer_reads_the_declared_value() {
+        let tree: Element = view! {
+            <div>
+                <span class="a" />
+                <span class="b" />
+            </div>
+        };
+        let css = ".a { cursor: pointer; } .b { cursor: text; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let pointer = arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == "a"))
+            .unwrap();
+        let not_pointer = arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == "b"))
+            .unwrap();
+        assert!(computed[&pointer].cursor_pointer);
+        assert!(!computed[&not_pointer].cursor_pointer);
+    }
+
+    #[test]
+    fn an_unvisited_link_matches_link_not_visited() {
+        let tree: Element = view! { <a href="https://example.com" class="a" /> };
+        let css = "a:link { background-color: #00ff00; } \
+                   a:visited { background-color: #ff0000; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let a = arena.roots()[0];
+        assert_eq!(computed[&a].background_color, Rgba::opaque(0, 0xff, 0));
+    }
+
+    #[test]
+    fn a_visited_link_matches_visited_not_link() {
+        let tree: Element = view! { <a href="https://example.com" class="a" /> };
+        let css = "a:link { background-color: #00ff00; } \
+                   a:visited { background-color: #ff0000; }";
+        let visited = HashSet::from(["https://example.com".to_string()]);
+        let state = InteractionState::new().with_visited(&visited);
+        let (arena, computed) = styles(&tree, css, &state);
+        let a = arena.roots()[0];
+        assert_eq!(computed[&a].background_color, Rgba::opaque(0xff, 0, 0));
+    }
+
+    #[test]
+    fn an_a_with_no_href_matches_neither_link_nor_visited() {
+        let tree: Element = view! { <a class="a" /> };
+        let css = "a { background-color: #111111; } \
+                   a:link { background-color: #00ff00; } \
+                   a:visited { background-color: #ff0000; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let a = arena.roots()[0];
+        assert_eq!(
+            computed[&a].background_color,
+            Rgba::opaque(0x11, 0x11, 0x11),
+            "an <a> with no href is not a hyperlink at all"
         );
     }
 
