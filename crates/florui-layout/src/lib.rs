@@ -1834,6 +1834,25 @@ mod tests {
     }
 
     #[test]
+    fn position_absolute_with_no_width_stretches_between_opposing_percentage_insets() {
+        let tree: Element = view! {
+            <div class="parent">
+                <div class="abs" />
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".parent { position: relative; width: 200px; height: 100px; } \
+             .abs { position: absolute; top: 0px; left: 0%; right: 25%; height: 10px; }",
+        );
+        let abs = arena.children(arena.roots()[0])[0];
+        assert_eq!(
+            layouts[&abs].width, 150.0,
+            "200px containing block minus 0% left and 25% (50px) right, no explicit width"
+        );
+    }
+
+    #[test]
     fn position_absolute_is_removed_from_normal_flow() {
         let tree: Element = view! {
             <div class="parent">
