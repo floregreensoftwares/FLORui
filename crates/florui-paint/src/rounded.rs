@@ -101,6 +101,86 @@ impl RoundedRect {
         }
     }
 
+    /// A square-cornered box.
+    pub fn square(x: f32, y: f32, width: f32, height: f32) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+            radii: [(0.0, 0.0); 4],
+        }
+    }
+
+    pub fn translated(&self, dx: f32, dy: f32) -> Self {
+        Self {
+            x: self.x + dx,
+            y: self.y + dy,
+            ..*self
+        }
+    }
+
+    /// The box grown by `amount` on every side (negative shrinks), as a
+    /// `box-shadow` spread does: a rounded corner's radius grows with it,
+    /// while a square corner stays square.
+    pub fn grown(&self, amount: f32) -> Self {
+        let grow = |(h, v): (f32, f32)| {
+            if h <= 0.0 || v <= 0.0 {
+                return (0.0, 0.0);
+            }
+            let (h, v) = ((h + amount).max(0.0), (v + amount).max(0.0));
+            if h <= 0.0 || v <= 0.0 {
+                (0.0, 0.0)
+            } else {
+                (h, v)
+            }
+        };
+        Self {
+            x: self.x - amount,
+            y: self.y - amount,
+            width: (self.width + 2.0 * amount).max(0.0),
+            height: (self.height + 2.0 * amount).max(0.0),
+            radii: self.radii.map(grow),
+        }
+    }
+
+    /// Whether the point lies inside the outline, corners included.
+    pub fn contains(&self, px: f32, py: f32) -> bool {
+        let (x1, y1) = (self.x + self.width, self.y + self.height);
+        if px < self.x || px >= x1 || py < self.y || py >= y1 {
+            return false;
+        }
+        let [tl, tr, br, bl] = self.radii;
+        let corners = [
+            (
+                tl,
+                self.x + tl.0,
+                self.y + tl.1,
+                px < self.x + tl.0 && py < self.y + tl.1,
+            ),
+            (
+                tr,
+                x1 - tr.0,
+                self.y + tr.1,
+                px >= x1 - tr.0 && py < self.y + tr.1,
+            ),
+            (br, x1 - br.0, y1 - br.1, px >= x1 - br.0 && py >= y1 - br.1),
+            (
+                bl,
+                self.x + bl.0,
+                y1 - bl.1,
+                px < self.x + bl.0 && py >= y1 - bl.1,
+            ),
+        ];
+        for ((rx, ry), cx, cy, in_corner) in corners {
+            if in_corner && rx > 0.0 && ry > 0.0 {
+                let (dx, dy) = ((px - cx) / rx, (py - cy) / ry);
+                return dx * dx + dy * dy <= 1.0;
+            }
+        }
+        true
+    }
+
     /// The outline of a rounded corner's closed path, or `None` when the
     /// box is empty.
     pub fn path(&self) -> Option<Path> {
@@ -215,6 +295,28 @@ mod tests {
         // 100px radii on a 100x40 box: the tallest sum (200 vs 40) wins.
         let rect = RoundedRect::new(0.0, 0.0, 100.0, 40.0, &all(px(100.0), px(100.0)), 1.0);
         assert_eq!(rect.radii, [(20.0, 20.0); 4]);
+    }
+
+    #[test]
+    fn contains_excludes_the_cut_corner_but_not_the_edge_midpoints() {
+        let rect = RoundedRect::new(0.0, 0.0, 20.0, 20.0, &all(px(10.0), px(10.0)), 1.0);
+        assert!(!rect.contains(0.5, 0.5));
+        assert!(rect.contains(10.0, 0.5));
+        assert!(rect.contains(10.0, 10.0));
+        assert!(!rect.contains(-1.0, 10.0));
+    }
+
+    #[test]
+    fn grown_keeps_square_corners_square_and_grows_rounded_ones() {
+        let rect = RoundedRect::new(0.0, 0.0, 20.0, 20.0, &all(px(4.0), px(4.0)), 1.0);
+        let bigger = rect.grown(3.0);
+        assert_eq!((bigger.x, bigger.width), (-3.0, 26.0));
+        assert_eq!(bigger.radii, [(7.0, 7.0); 4]);
+        assert!(
+            RoundedRect::square(0.0, 0.0, 5.0, 5.0)
+                .grown(2.0)
+                .is_square()
+        );
     }
 
     #[test]

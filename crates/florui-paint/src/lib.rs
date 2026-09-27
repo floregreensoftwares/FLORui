@@ -1541,19 +1541,9 @@ fn paint_node(
         // inset shadows sit on top of the background but still behind the
         // border and content. See [`paint_box_shadows`]'s own doc for the
         // painted shape.
-        paint_box_shadows(
-            buffer,
-            x,
-            y,
-            layout.width,
-            layout.height,
-            border,
-            box_shadow,
-            false,
-        );
-
-        let rounded = style
-            .map(|s| {
+        let outline = style.map_or(
+            RoundedRect::square(x, y, layout.width, layout.height),
+            |s| {
                 RoundedRect::new(
                     x,
                     y,
@@ -1562,31 +1552,27 @@ fn paint_node(
                     &s.border_radius,
                     scale_factor,
                 )
-            })
-            .filter(|rect| !rect.is_square());
+            },
+        );
+        let rounded = !outline.is_square();
+
+        paint_box_shadows(buffer, &outline, border, box_shadow, false);
 
         let background = style.map_or(Rgba::TRANSPARENT, |s| s.background_color);
         if background.a != 0 {
-            match &rounded {
-                Some(rect) => fill_rounded_rect(buffer, rect, background, clip),
-                None => fill_rect(buffer, x, y, layout.width, layout.height, background, clip),
+            if rounded {
+                fill_rounded_rect(buffer, &outline, background, clip);
+            } else {
+                fill_rect(buffer, x, y, layout.width, layout.height, background, clip);
             }
         }
 
-        paint_box_shadows(
-            buffer,
-            x,
-            y,
-            layout.width,
-            layout.height,
-            border,
-            box_shadow,
-            true,
-        );
+        paint_box_shadows(buffer, &outline, border, box_shadow, true);
 
-        match &rounded {
-            Some(rect) => paint_rounded_border(buffer, rect, border, clip),
-            None => paint_border(buffer, x, y, layout.width, layout.height, border, clip),
+        if rounded {
+            paint_rounded_border(buffer, &outline, border, clip);
+        } else {
+            paint_border(buffer, x, y, layout.width, layout.height, border, clip);
         }
 
         let color = style.map_or(Rgba::opaque(0, 0, 0), |s| s.color);
@@ -1959,19 +1945,20 @@ fn paint_border(
 /// order: the *last*-listed layer paints first, so the first-listed one
 /// ends up on top — real CSS's own layering rule for `box-shadow`'s
 /// comma-separated list.
-#[allow(clippy::too_many_arguments)]
 fn paint_box_shadows(
     buffer: &mut Surface,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
+    outline: &RoundedRect,
     border: florui_style::Edges<florui_style::BorderSide>,
     shadows: &[florui_style::BoxShadow],
     inset: bool,
 ) {
+    let (x, y, width, height) = (outline.x, outline.y, outline.width, outline.height);
     for shadow in shadows.iter().filter(|s| s.inset == inset).rev() {
         if shadow.color.a == 0 {
+            continue;
+        }
+        if !outline.is_square() {
+            paint_rounded_shadow(buffer, outline, border, shadow);
             continue;
         }
         match (inset, shadow.blur_radius > 0.0) {
@@ -1981,6 +1968,116 @@ fn paint_box_shadows(
             (true, true) => paint_inset_shadow_blurred(buffer, x, y, width, height, border, shadow),
         }
     }
+}
+
+/// One `box-shadow` layer on a box with rounded corners. Same geometry as
+/// the rectangular paths (an outer shadow is the border box grown by the
+/// spread and offset, hidden behind the box itself; an inset one fills the
+/// padding box except for a spread-shrunk, offset hole), with every shape
+/// following the rounded outline. The hidden/kept region is a
+/// hard-edged cut in the blurred case, like the rectangular one.
+fn paint_rounded_shadow(
+    buffer: &mut Surface,
+    outline: &RoundedRect,
+    border: florui_style::Edges<florui_style::BorderSide>,
+    shadow: &florui_style::BoxShadow,
+) {
+    let padding = outline.inset(
+        border.top.width,
+        border.right.width,
+        border.bottom.width,
+        border.left.width,
+    );
+    let (region, shape) = if shadow.inset {
+        let hole = padding
+            .inset(
+                shadow.spread_radius,
+                shadow.spread_radius,
+                shadow.spread_radius,
+                shadow.spread_radius,
+            )
+            .translated(shadow.offset_x, shadow.offset_y);
+        (padding, hole)
+    } else {
+        let grown = outline
+            .grown(shadow.spread_radius)
+            .translated(shadow.offset_x, shadow.offset_y);
+        (grown, grown)
+    };
+
+    if shadow.blur_radius <= 0.0 {
+        // Outer: the grown shape minus the box itself. Inset: the padding
+        // box minus the hole.
+        let (fill, exclude) = if shadow.inset {
+            (&region, &shape)
+        } else {
+            (&shape, outline)
+        };
+        let Some(path) = fill.path() else {
+            return;
+        };
+        let transform = surface_transform(buffer);
+        let mask = match exclude.path() {
+            Some(exclude_path) => {
+                let Some(mut mask) = Mask::new(buffer.width(), buffer.height()) else {
+                    return;
+                };
+                mask.fill_path(&exclude_path, FillRule::Winding, true, transform);
+                mask.invert();
+                mask
+            }
+            None => {
+                let Some(mut mask) = Mask::new(buffer.width(), buffer.height()) else {
+                    return;
+                };
+                mask.data_mut().fill(255);
+                mask
+            }
+        };
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(
+            shadow.color.r,
+            shadow.color.g,
+            shadow.color.b,
+            shadow.color.a,
+        );
+        paint.anti_alias = true;
+        buffer
+            .pixmap
+            .fill_path(&path, &paint, FillRule::Winding, transform, Some(&mask));
+        return;
+    }
+
+    let Some(blurred) = rasterize_and_blur(
+        region.x,
+        region.y,
+        region.width,
+        region.height,
+        &shape,
+        shadow.blur_radius,
+    ) else {
+        return;
+    };
+    composite_blurred_shadow(
+        buffer,
+        &blurred,
+        shadow.color,
+        shadow.inset,
+        |canvas_x, canvas_y| {
+            let inside = outline_contains_pixel(&padding, canvas_x, canvas_y);
+            if shadow.inset {
+                inside
+            } else {
+                !outline_contains_pixel(outline, canvas_x, canvas_y)
+            }
+        },
+    );
+}
+
+/// Whether the pixel whose top-left is `(x, y)` has its center inside
+/// `outline`.
+fn outline_contains_pixel(outline: &RoundedRect, x: f32, y: f32) -> bool {
+    outline.contains(x + 0.5, y + 0.5)
 }
 
 /// An outer (drop) shadow: a copy of the border box, grown by
@@ -2181,10 +2278,7 @@ fn rasterize_and_blur(
     region_y: f32,
     region_width: f32,
     region_height: f32,
-    shape_x: f32,
-    shape_y: f32,
-    shape_width: f32,
-    shape_height: f32,
+    shape: &RoundedRect,
     blur_radius: f32,
 ) -> Option<BlurredShape> {
     if region_width <= 0.0 || region_height <= 0.0 {
@@ -2202,16 +2296,21 @@ fn rasterize_and_blur(
     let height = (region_height + 2.0 * pad).ceil().max(1.0) as u32;
 
     let mut coverage = vec![0u8; (width as usize) * (height as usize)];
-    stamp_rect(
-        &mut coverage,
-        width,
-        height,
-        shape_x - origin_x as f32,
-        shape_y - origin_y as f32,
-        shape_width,
-        shape_height,
-        255,
-    );
+    let local = shape.translated(-(origin_x as f32), -(origin_y as f32));
+    if local.is_square() {
+        stamp_rect(
+            &mut coverage,
+            width,
+            height,
+            local.x,
+            local.y,
+            local.width,
+            local.height,
+            255,
+        );
+    } else {
+        stamp_rounded(&mut coverage, width, height, &local);
+    }
 
     blur::gaussian_blur_in_place(&mut coverage, width, height, sigma);
 
@@ -2222,6 +2321,27 @@ fn rasterize_and_blur(
         height,
         coverage,
     })
+}
+
+/// [`stamp_rect`]'s rounded counterpart: the outline's anti-aliased
+/// coverage, written into the buffer at full strength.
+fn stamp_rounded(buf: &mut [u8], buf_width: u32, buf_height: u32, shape: &RoundedRect) {
+    let (Some(path), Some(mut pixmap)) = (shape.path(), Pixmap::new(buf_width, buf_height)) else {
+        return;
+    };
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(0, 0, 0, 255);
+    paint.anti_alias = true;
+    pixmap.fill_path(
+        &path,
+        &paint,
+        FillRule::Winding,
+        Transform::identity(),
+        None,
+    );
+    for (out, pixel) in buf.iter_mut().zip(pixmap.pixels()) {
+        *out = pixel.alpha();
+    }
 }
 
 /// Fills the (clamped-to-buffer) rectangle at `local_x`/`local_y` with
@@ -2296,10 +2416,7 @@ fn paint_outset_shadow_blurred(
         outer_y,
         outer_width,
         outer_height,
-        outer_x,
-        outer_y,
-        outer_width,
-        outer_height,
+        &RoundedRect::square(outer_x, outer_y, outer_width, outer_height),
         shadow.blur_radius,
     ) else {
         return;
@@ -2350,10 +2467,7 @@ fn paint_inset_shadow_blurred(
         padding_y,
         padding_width,
         padding_height,
-        hole_x,
-        hole_y,
-        hole_width,
-        hole_height,
+        &RoundedRect::square(hole_x, hole_y, hole_width, hole_height),
         shadow.blur_radius,
     ) else {
         return;
@@ -4708,6 +4822,79 @@ mod tests {
         assert_eq!(pixel_rgb(&buffer, 5, 0), [0, 255, 0], "top side");
         assert_eq!(pixel_rgb(&buffer, 0, 5), [0, 0, 255], "left side");
         assert_eq!(pixel_rgb(&buffer, 5, 9), [0, 0, 255], "bottom side");
+    }
+
+    #[test]
+    fn a_rounded_outer_shadow_follows_the_outline_and_hides_behind_the_box() {
+        let buffer = single_box_buffer_at(
+            ".box { border-radius: 5px; box-shadow: 0 0 0 4px #00ff00; }",
+            30,
+            1.0,
+            10.0,
+            10.0,
+        );
+        assert_eq!(
+            pixel_rgb(&buffer, 15, 15),
+            [0, 0, 0],
+            "hidden behind the box"
+        );
+        assert_eq!(
+            pixel_rgb(&buffer, 7, 15),
+            [0, 255, 0],
+            "spread ring beside the box"
+        );
+        assert_eq!(
+            pixel_rgb(&buffer, 10, 10),
+            [0, 255, 0],
+            "the box's own cut corner shows the shadow through it"
+        );
+        assert_eq!(
+            pixel_rgb(&buffer, 6, 6),
+            [0, 0, 0],
+            "past the grown, rounded corner"
+        );
+    }
+
+    #[test]
+    fn a_rounded_inset_shadow_stays_inside_the_rounded_padding_box() {
+        let buffer = single_box_buffer(
+            ".box { background-color: #ff0000; border-radius: 5px; \
+             box-shadow: inset 0 0 0 2px #00ff00; }",
+            10,
+            1.0,
+        );
+        assert_eq!(
+            pixel_rgb(&buffer, 5, 1),
+            [0, 255, 0],
+            "inset ring at the top edge"
+        );
+        assert_eq!(pixel_rgb(&buffer, 5, 5), [255, 0, 0], "center is the hole");
+        assert_eq!(
+            pixel_rgb(&buffer, 0, 0),
+            [0, 0, 0],
+            "never past the rounded corner"
+        );
+    }
+
+    #[test]
+    fn a_blurred_rounded_outer_shadow_is_soft_outside_and_absent_inside() {
+        let buffer = single_box_buffer_at(
+            ".box { border-radius: 5px; box-shadow: 0 0 6px #00ff00; }",
+            30,
+            1.0,
+            10.0,
+            10.0,
+        );
+        assert_eq!(
+            pixel_rgb(&buffer, 15, 15),
+            [0, 0, 0],
+            "hidden behind the box"
+        );
+        let beside = pixel_rgb(&buffer, 8, 15);
+        assert!(
+            beside[1] > 0 && beside[1] < 255,
+            "soft edge outside the box: {beside:?}"
+        );
     }
 
     #[test]
