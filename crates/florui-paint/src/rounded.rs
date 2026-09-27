@@ -1,0 +1,228 @@
+//! A box's rounded outline: `border-radius` resolved against the box, with
+//! the spec's overlap clamping, and the geometry every rounded consumer
+//! (background, border ring, clip, shadow, hit-test) shares.
+
+use florui_style::{Corners, LengthPercentage};
+use tiny_skia::{Path, PathBuilder, Rect};
+
+/// Cubic-Bezier control-point distance for a quarter ellipse.
+const KAPPA: f32 = 0.552_284_7;
+
+/// Corner order is top-left, top-right, bottom-right, bottom-left; each
+/// radius is a (horizontal, vertical) pair in painted pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct RoundedRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub radii: [(f32, f32); 4],
+}
+
+impl RoundedRect {
+    /// Resolves `radius` against this border box. Lengths are logical
+    /// pixels and scale with `scale_factor`; percentages resolve against
+    /// the already-scaled box. Radii that would overlap are all scaled down
+    /// by the same factor, as real CSS requires.
+    pub fn new(
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        radius: &Corners<(LengthPercentage, LengthPercentage)>,
+        scale_factor: f32,
+    ) -> Self {
+        let resolve = |(h, v): &(LengthPercentage, LengthPercentage)| {
+            (
+                (h.length * scale_factor + h.percentage * width).max(0.0),
+                (v.length * scale_factor + v.percentage * height).max(0.0),
+            )
+        };
+        let mut radii = [
+            resolve(&radius.top_left),
+            resolve(&radius.top_right),
+            resolve(&radius.bottom_right),
+            resolve(&radius.bottom_left),
+        ];
+        let [tl, tr, br, bl] = radii;
+        let mut factor = 1.0_f32;
+        for (available, sum) in [
+            (width, tl.0 + tr.0),
+            (width, bl.0 + br.0),
+            (height, tl.1 + bl.1),
+            (height, tr.1 + br.1),
+        ] {
+            if sum > available {
+                factor = factor.min(available / sum);
+            }
+        }
+        if factor < 1.0 {
+            for (h, v) in &mut radii {
+                *h *= factor;
+                *v *= factor;
+            }
+        }
+        Self {
+            x,
+            y,
+            width,
+            height,
+            radii,
+        }
+    }
+
+    pub fn is_square(&self) -> bool {
+        self.radii.iter().all(|&(h, v)| h <= 0.0 || v <= 0.0)
+    }
+
+    /// The box shrunk by `top/right/bottom/left` (a border's widths, to get
+    /// the padding box). Each corner radius shrinks by the adjacent side
+    /// widths; a corner with either axis used up becomes square.
+    pub fn inset(&self, top: f32, right: f32, bottom: f32, left: f32) -> Self {
+        let shrink = |(h, v): (f32, f32), dh: f32, dv: f32| {
+            let (h, v) = ((h - dh).max(0.0), (v - dv).max(0.0));
+            if h <= 0.0 || v <= 0.0 {
+                (0.0, 0.0)
+            } else {
+                (h, v)
+            }
+        };
+        Self {
+            x: self.x + left,
+            y: self.y + top,
+            width: (self.width - left - right).max(0.0),
+            height: (self.height - top - bottom).max(0.0),
+            radii: [
+                shrink(self.radii[0], left, top),
+                shrink(self.radii[1], right, top),
+                shrink(self.radii[2], right, bottom),
+                shrink(self.radii[3], left, bottom),
+            ],
+        }
+    }
+
+    /// The outline of a rounded corner's closed path, or `None` when the
+    /// box is empty.
+    pub fn path(&self) -> Option<Path> {
+        if self.width <= 0.0 || self.height <= 0.0 {
+            return None;
+        }
+        let mut builder = PathBuilder::new();
+        if self.is_square() {
+            builder.push_rect(Rect::from_xywh(self.x, self.y, self.width, self.height)?);
+            return builder.finish();
+        }
+        let (x0, y0) = (self.x, self.y);
+        let (x1, y1) = (self.x + self.width, self.y + self.height);
+        let [tl, tr, br, bl] = self.radii;
+        builder.move_to(x0 + tl.0, y0);
+        builder.line_to(x1 - tr.0, y0);
+        builder.cubic_to(
+            x1 - tr.0 * (1.0 - KAPPA),
+            y0,
+            x1,
+            y0 + tr.1 * (1.0 - KAPPA),
+            x1,
+            y0 + tr.1,
+        );
+        builder.line_to(x1, y1 - br.1);
+        builder.cubic_to(
+            x1,
+            y1 - br.1 * (1.0 - KAPPA),
+            x1 - br.0 * (1.0 - KAPPA),
+            y1,
+            x1 - br.0,
+            y1,
+        );
+        builder.line_to(x0 + bl.0, y1);
+        builder.cubic_to(
+            x0 + bl.0 * (1.0 - KAPPA),
+            y1,
+            x0,
+            y1 - bl.1 * (1.0 - KAPPA),
+            x0,
+            y1 - bl.1,
+        );
+        builder.line_to(x0, y0 + tl.1);
+        builder.cubic_to(
+            x0,
+            y0 + tl.1 * (1.0 - KAPPA),
+            x0 + tl.0 * (1.0 - KAPPA),
+            y0,
+            x0 + tl.0,
+            y0,
+        );
+        builder.close();
+        builder.finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn px(length: f32) -> LengthPercentage {
+        LengthPercentage {
+            length,
+            percentage: 0.0,
+        }
+    }
+
+    fn pct(percentage: f32) -> LengthPercentage {
+        LengthPercentage {
+            length: 0.0,
+            percentage,
+        }
+    }
+
+    fn all(
+        h: LengthPercentage,
+        v: LengthPercentage,
+    ) -> Corners<(LengthPercentage, LengthPercentage)> {
+        Corners {
+            top_left: (h, v),
+            top_right: (h, v),
+            bottom_right: (h, v),
+            bottom_left: (h, v),
+        }
+    }
+
+    #[test]
+    fn zero_radius_is_square_and_paths_as_a_plain_rect() {
+        let rect = RoundedRect::new(1.0, 2.0, 30.0, 20.0, &all(px(0.0), px(0.0)), 1.0);
+        assert!(rect.is_square());
+        let bounds = rect.path().unwrap().bounds();
+        assert_eq!(
+            (bounds.left(), bounds.top(), bounds.right(), bounds.bottom()),
+            (1.0, 2.0, 31.0, 22.0)
+        );
+    }
+
+    #[test]
+    fn lengths_scale_with_the_canvas_and_percentages_do_not_double_scale() {
+        let rect = RoundedRect::new(0.0, 0.0, 200.0, 100.0, &all(px(8.0), pct(0.1)), 2.0);
+        assert_eq!(rect.radii[0], (16.0, 10.0));
+    }
+
+    #[test]
+    fn fifty_percent_on_a_square_is_a_circle() {
+        let rect = RoundedRect::new(0.0, 0.0, 20.0, 20.0, &all(pct(0.5), pct(0.5)), 1.0);
+        assert_eq!(rect.radii, [(10.0, 10.0); 4]);
+    }
+
+    #[test]
+    fn overlapping_radii_scale_down_uniformly() {
+        // 100px radii on a 100x40 box: the tallest sum (200 vs 40) wins.
+        let rect = RoundedRect::new(0.0, 0.0, 100.0, 40.0, &all(px(100.0), px(100.0)), 1.0);
+        assert_eq!(rect.radii, [(20.0, 20.0); 4]);
+    }
+
+    #[test]
+    fn inset_shrinks_radii_by_the_border_and_squares_a_used_up_corner() {
+        let rect = RoundedRect::new(0.0, 0.0, 100.0, 100.0, &all(px(10.0), px(10.0)), 1.0);
+        let inner = rect.inset(2.0, 2.0, 2.0, 2.0);
+        assert_eq!(inner.radii, [(8.0, 8.0); 4]);
+        assert_eq!((inner.x, inner.width), (2.0, 96.0));
+        assert!(rect.inset(10.0, 10.0, 10.0, 10.0).is_square());
+    }
+}
