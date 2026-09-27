@@ -30,9 +30,24 @@ fn calling_the_stored_handler_runs_the_original_closure() {
         panic!("expected a node");
     };
     let (_name, handler) = &node.handlers[0];
-    handler.call();
+    handler.call(&Event::new());
 
     assert!(clicked.get());
+}
+
+#[test]
+fn a_one_arg_onclick_closure_receives_the_event_and_can_prevent_default() {
+    let el: Element = view! {
+        <button onclick={|event: &Event| event.prevent_default()}>{"Go"}</button>
+    };
+    let Element::Node(node) = &el else {
+        panic!("expected a node");
+    };
+    let (_name, handler) = &node.handlers[0];
+    let event = Event::new();
+    handler.call(&event);
+
+    assert!(event.default_prevented());
 }
 
 #[test]
@@ -55,7 +70,7 @@ fn a_signal_set_from_an_onclick_handler_persists_across_a_real_render_cycle() {
         panic!("expected a node");
     };
     let handler = node.handlers[0].1.clone();
-    handler.call();
+    handler.call(&Event::new());
 
     let second = scope.render(|| Counter(CounterProps {}));
     let Element::Node(node) = &second else {

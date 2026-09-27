@@ -26,7 +26,7 @@ pub fn TitleBar(
         <div class={if focused { "titlebar" } else { "titlebar inactive" }}>
             <span class="titlebar-title">{"florui-player"}</span>
             <div id={WINDOW_DRAG_REGION_ID} class="drag-region" />
-            <button class="skin-button" onclick={move || on_cycle_skin.call()}>
+            <button class="skin-button" onclick={move || on_cycle_skin.call(&Event::new())}>
                 {skin.label()}
             </button>
             <div class="window-buttons">

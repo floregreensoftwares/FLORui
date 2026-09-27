@@ -51,7 +51,7 @@ mod tests {
         let node = arena
             .find(|a, id| a.classes(id).iter().any(|c| c == class))
             .unwrap_or_else(|| panic!("no node with class {class:?}"));
-        arena.handler(node, "click").unwrap().call();
+        arena.handler(node, "click").unwrap().call(&Event::new());
     }
 
     /// The owner clamps to `min..=max`, rejecting anything outside it —

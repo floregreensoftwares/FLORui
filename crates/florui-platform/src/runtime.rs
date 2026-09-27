@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use florui::Element;
+use florui::{Element, Event};
 use florui_layout::BoxLayout;
 use florui_reactive::executor::{Executor, LocalExecutor};
 use florui_reactive::{ComponentScope, DirtyFlag, provide_context};
@@ -860,7 +860,7 @@ impl UiRuntime {
         let Some(handler) = &options[next].onclick else {
             return false;
         };
-        florui_reactive::batch(|| handler.call());
+        florui_reactive::batch(|| handler.call(&Event::new()));
         true
     }
 
@@ -1021,16 +1021,24 @@ impl UiRuntime {
     /// `desktop.rs`'s own press-time filtering alone can't (that only
     /// prevents the separate focus-on-click issue; see `handle_press`'s
     /// own doc). Tag-gated the same as [`crate::focus::is_focusable`].
-    pub fn dispatch_click(&self, node: NodeId) {
+    ///
+    /// Returns whether the handler (if any) called
+    /// [`Event::prevent_default`] — a primitive with its own default
+    /// action (e.g. `<a href>` following its target) checks this before
+    /// running it. No primitive has one yet, so every caller today
+    /// ignores the return value; it exists for that future caller.
+    pub fn dispatch_click(&self, node: NodeId) -> bool {
         let is_checkable = self.arena.tag(node) == "input"
             && focus::is_checkable_input_type(self.arena.input_type(node));
         let is_gated = matches!(self.arena.tag(node), "button" | "select") || is_checkable;
         if is_gated && self.arena.is_disabled(node) {
-            return;
+            return false;
         }
+        let event = Event::new();
         if let Some(handler) = self.arena.handler(node, "click") {
-            florui_reactive::batch(|| handler.call());
+            florui_reactive::batch(|| handler.call(&event));
         }
+        event.default_prevented()
     }
 
     /// Reports `value` to whichever write-back channel `node`'s own
@@ -1054,11 +1062,15 @@ impl UiRuntime {
     /// [`crate::components::dialog::Dialog`]'s own root is never itself a
     /// disableable button, so that check has nothing to apply to here.
     /// `node` must be valid against [`Self::arena`] in its current
-    /// generation, same as every other accessor here.
-    pub(crate) fn dispatch_event(&self, node: NodeId, event: &str) {
-        if let Some(handler) = self.arena.handler(node, event) {
-            florui_reactive::batch(|| handler.call());
+    /// generation, same as every other accessor here. Returns whether the
+    /// handler called [`Event::prevent_default`], same as
+    /// [`Self::dispatch_click`].
+    pub(crate) fn dispatch_event(&self, node: NodeId, event_name: &str) -> bool {
+        let event = Event::new();
+        if let Some(handler) = self.arena.handler(node, event_name) {
+            florui_reactive::batch(|| handler.call(&event));
         }
+        event.default_prevented()
     }
 
     /// Whether a [`florui_reactive::Signal::set`] happened since the last
