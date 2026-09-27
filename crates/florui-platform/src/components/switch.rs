@@ -69,9 +69,19 @@ impl SwitchValue {
 
 /// Renders a switch — see the module doc. `id` is the input's id, so a
 /// `<label for={id}>` toggles it; `accessible_label` is the name a screen
-/// reader announces.
+/// reader announces. `indeterminate` reports a real mixed state to
+/// accessibility tools (measured against Chrome: a `role="switch"`
+/// checkbox reports it the same way a plain one does) — it is display
+/// only, real HTML's own IDL-only property, so it never changes what a
+/// toggle requests.
 #[component]
-pub fn Switch(id: String, value: SwitchValue, disabled: bool, accessible_label: String) -> Element {
+pub fn Switch(
+    id: String,
+    value: SwitchValue,
+    disabled: bool,
+    indeterminate: bool,
+    accessible_label: String,
+) -> Element {
     let checked = value.checked();
     florui::view! {
         <div class={SWITCH_CLASS}>
@@ -82,6 +92,7 @@ pub fn Switch(id: String, value: SwitchValue, disabled: bool, accessible_label: 
                 role="switch"
                 checked={checked}
                 disabled={disabled}
+                indeterminate={indeterminate}
                 accessible_label={accessible_label}
                 onclick={move || value.request_toggle()}
             />
@@ -129,6 +140,7 @@ mod tests {
                             id={"wifi".to_string()}
                             value={value}
                             disabled={disabled}
+                            indeterminate={false}
                             accessible_label={"Wi-Fi".to_string()}
                         />
                         <label id="wifi-label" for="wifi">{"Wi-Fi"}</label>
@@ -184,6 +196,41 @@ mod tests {
         assert_eq!(*requests.borrow(), vec![true]);
         let (arena, ..) = runtime.geometry();
         assert!(!arena.is_checked(node_of(&runtime, SWITCH_INPUT_CLASS)));
+    }
+
+    #[test]
+    fn an_indeterminate_switch_reports_mixed_and_still_toggles_from_checked() {
+        let requests: Requests = Rc::default();
+        let recorded = requests.clone();
+        let value = SwitchValue::controlled(
+            false,
+            BoolHandler::new(move |next| recorded.borrow_mut().push(next)),
+        );
+        let runtime = UiRuntime::new(
+            CSS,
+            move || {
+                let value = value.clone();
+                view! {
+                    <Switch
+                        id={"wifi".to_string()}
+                        value={value}
+                        disabled={false}
+                        indeterminate={true}
+                        accessible_label={"Wi-Fi".to_string()}
+                    />
+                }
+            },
+            viewport(),
+        )
+        .unwrap();
+        let (arena, ..) = runtime.geometry();
+        assert!(arena.is_indeterminate(node_of(&runtime, SWITCH_INPUT_CLASS)));
+        runtime.dispatch_click(node_of(&runtime, SWITCH_INPUT_CLASS));
+        assert_eq!(
+            *requests.borrow(),
+            vec![true],
+            "indeterminate is display-only: a toggle still requests !checked"
+        );
     }
 
     #[test]
