@@ -2701,6 +2701,40 @@ mod tests {
     }
 
     #[test]
+    /// A `<select multiple>`'s own box carries no inset of its own (see
+    /// `florui_style::default_stylesheet`'s `select[multiple="true"]`
+    /// override) — each option must stretch symmetrically to the full
+    /// content width either side, not just on its own declared padding.
+    fn a_multiple_selects_option_stretches_symmetrically_with_no_container_inset() {
+        let tree: Element = view! {
+            <select id="fruits" class="listbox" multiple="true">
+                <option value="banana">{"Banana"}</option>
+            </select>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            "
+            .listbox { display: flex; flex-direction: column; width: 200px; \
+                       border-width: 2px; border-style: solid; }
+            option { padding-top: 6px; padding-right: 10px; padding-bottom: 6px; \
+                     padding-left: 10px; }
+            ",
+        );
+        let select = arena.roots()[0];
+        let option = arena.children(select)[0];
+
+        assert_eq!(
+            layouts[&option].x, 2.0,
+            "flush against the select's own left border"
+        );
+        assert_eq!(
+            layouts[&option].x + layouts[&option].width,
+            layouts[&select].x + layouts[&select].width - 2.0,
+            "flush against the select's own right border, symmetrically"
+        );
+    }
+
+    #[test]
     fn gap_adds_space_between_flex_children_without_affecting_the_first_ones_position() {
         let tree: Element = view! {
             <div class="row">

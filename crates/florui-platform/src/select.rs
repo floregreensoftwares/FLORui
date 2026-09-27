@@ -39,6 +39,7 @@ pub const SELECT_OPTIONS_CLASS: &str = "florui-select-options";
 /// select is open — see the module doc.
 #[derive(Clone)]
 pub(crate) struct OptionSummary {
+    pub value: String,
     pub label: String,
     pub selected: bool,
     pub onclick: Option<Handler>,
@@ -70,14 +71,20 @@ fn normalize_node(node: &mut ElementNode, summaries: &mut HashMap<String, Vec<Op
         return;
     }
 
+    let multiple = attr_bool(&node.attrs, "multiple");
     let is_open = attr_bool(&node.attrs, "open");
     let mut options = std::mem::take(&mut node.children);
-    let label = selected_label(&options);
+    let label = (!multiple).then(|| selected_label(&options)).flatten();
     let id = attr(&node.attrs, "id").unwrap_or_default();
     summaries.insert(id.clone(), option_summaries(&options));
     options.iter_mut().for_each(|child| walk(child, summaries));
 
-    node.children = if is_open {
+    // `multiple` is always a visible, in-flow listbox -- real HTML has no
+    // open/closed state for it at all, so it needs neither the collapsed
+    // label text nor the Portal overlay below.
+    node.children = if multiple {
+        options
+    } else if is_open {
         let ondismiss = node
             .handlers
             .iter()
@@ -170,14 +177,20 @@ fn flatten_options(options: &[Element]) -> Vec<&ElementNode> {
 fn option_summaries(options: &[Element]) -> Vec<OptionSummary> {
     flatten_options(options)
         .into_iter()
-        .map(|n| OptionSummary {
-            label: collect_text(&n.children),
-            selected: attr_bool(&n.attrs, "selected"),
-            onclick: n
-                .handlers
-                .iter()
-                .find(|(name, _)| name == "click")
-                .map(|(_, handler)| handler.clone()),
+        .map(|n| {
+            let label = collect_text(&n.children);
+            OptionSummary {
+                // Real HTML: an `<option>` with no `value` attribute uses
+                // its own text content as the value instead.
+                value: attr(&n.attrs, "value").unwrap_or_else(|| label.clone()),
+                label,
+                selected: attr_bool(&n.attrs, "selected"),
+                onclick: n
+                    .handlers
+                    .iter()
+                    .find(|(name, _)| name == "click")
+                    .map(|(_, handler)| handler.clone()),
+            }
         })
         .collect()
 }
@@ -228,6 +241,67 @@ fn options_within(arena: &Arena, container: NodeId) -> Vec<NodeId> {
         }
     }
     options
+}
+
+/// `select`'s nearest ancestor with tag `"select"`, if any — used to find
+/// which multi-select an `<option>` click landed inside, since a
+/// `<select multiple>`'s options are real, direct-ish `Arena` children
+/// (no Portal wrapper, unlike a single-select's open overlay).
+pub(crate) fn owning_select(arena: &Arena, option: NodeId) -> Option<NodeId> {
+    let mut current = arena.parent(option);
+    while let Some(id) = current {
+        if arena.tag(id) == "select" {
+            return Some(id);
+        }
+        current = arena.parent(id);
+    }
+    None
+}
+
+/// The computed new selection for a `<select multiple>` after a click on
+/// `clicked_value`, given which modifier (if any) was held — real HTML's
+/// own multi-select semantics: a plain click replaces the whole selection
+/// with just this one; Ctrl toggles it, leaving every other option's own
+/// state alone; Shift selects every option between `anchor_value` (the
+/// select's last plain/Ctrl click) and this one, inclusive, falling back
+/// to a plain click if there is no anchor to range from.
+pub(crate) fn compute_multiselect(
+    options: &[OptionSummary],
+    clicked_value: &str,
+    ctrl: bool,
+    shift: bool,
+    anchor_value: Option<&str>,
+) -> Vec<String> {
+    let index_of = |value: &str| options.iter().position(|o| o.value == value);
+    if shift
+        && let (Some(clicked), Some(anchor)) =
+            (index_of(clicked_value), anchor_value.and_then(index_of))
+    {
+        let (start, end) = if anchor <= clicked {
+            (anchor, clicked)
+        } else {
+            (clicked, anchor)
+        };
+        return options[start..=end]
+            .iter()
+            .map(|o| o.value.clone())
+            .collect();
+    }
+    if ctrl {
+        let mut selected: Vec<String> = options
+            .iter()
+            .filter(|o| o.selected)
+            .map(|o| o.value.clone())
+            .collect();
+        match selected.iter().position(|v| v == clicked_value) {
+            Some(pos) => {
+                selected.remove(pos);
+            }
+            None => selected.push(clicked_value.to_string()),
+        }
+        return selected;
+    }
+    vec![clicked_value.to_string()]
 }
 
 fn collect_text(children: &[Element]) -> String {
@@ -403,6 +477,80 @@ mod tests {
         assert_eq!(options.len(), 2);
         assert_eq!(arena.text_content(options[0]), "Small");
         assert_eq!(arena.text_content(options[1]), "Medium");
+    }
+
+    #[test]
+    fn a_multiple_select_is_always_a_plain_in_flow_listbox() {
+        let tree: Element = view! {
+            <select id="sizes" multiple="true">
+                <option value="s">{"Small"}</option>
+                <option value="m" selected="true">{"Medium"}</option>
+            </select>
+        };
+        let (arena, summaries) = normalized(tree);
+        let select = arena.roots()[0];
+        assert!(arena.overlay_roots().is_empty(), "no Portal for multiple");
+        let children = arena.children(select);
+        assert_eq!(children.len(), 2);
+        assert_eq!(arena.tag(children[0]), "option");
+        let options = &summaries["sizes"];
+        assert_eq!(options[0].value, "s");
+        assert_eq!(options[1].value, "m");
+    }
+
+    #[test]
+    fn an_options_value_falls_back_to_its_own_text_when_absent() {
+        let tree: Element = view! {
+            <select id="sizes">
+                <option>{"Medium"}</option>
+            </select>
+        };
+        let (_, summaries) = normalized(tree);
+        assert_eq!(summaries["sizes"][0].value, "Medium");
+    }
+
+    #[test]
+    fn compute_multiselect_plain_click_replaces_the_whole_selection() {
+        let options = three_size_options();
+        let result = compute_multiselect(&options, "l", false, false, None);
+        assert_eq!(result, vec!["l".to_string()]);
+    }
+
+    #[test]
+    fn compute_multiselect_ctrl_click_toggles_without_touching_others() {
+        let options = three_size_options(); // "m" starts selected
+        let added = compute_multiselect(&options, "l", true, false, None);
+        assert_eq!(added, vec!["m".to_string(), "l".to_string()]);
+        let removed = compute_multiselect(&options, "m", true, false, None);
+        assert_eq!(removed, Vec::<String>::new());
+    }
+
+    #[test]
+    fn compute_multiselect_shift_click_selects_the_inclusive_range() {
+        let options = three_size_options();
+        let forward = compute_multiselect(&options, "l", false, true, Some("s"));
+        assert_eq!(forward, vec!["s", "m", "l"]);
+        let backward = compute_multiselect(&options, "s", false, true, Some("l"));
+        assert_eq!(backward, vec!["s", "m", "l"]);
+    }
+
+    #[test]
+    fn compute_multiselect_shift_click_without_an_anchor_falls_back_to_plain() {
+        let options = three_size_options();
+        let result = compute_multiselect(&options, "l", false, true, None);
+        assert_eq!(result, vec!["l".to_string()]);
+    }
+
+    fn three_size_options() -> Vec<OptionSummary> {
+        ["s", "m", "l"]
+            .into_iter()
+            .map(|value| OptionSummary {
+                value: value.to_string(),
+                label: value.to_string(),
+                selected: value == "m",
+                onclick: None,
+            })
+            .collect()
     }
 
     #[test]

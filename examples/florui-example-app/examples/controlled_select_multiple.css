@@ -1,0 +1,48 @@
+.page {
+    display: flex;
+    flex-direction: column;
+    padding-top: 24px;
+    padding-right: 24px;
+    padding-bottom: 24px;
+    padding-left: 24px;
+    background-color: #1e1e22;
+    color: #ffffff;
+}
+
+.instructions {
+    margin-bottom: 16px;
+    font-size: 16px;
+}
+
+.status {
+    margin-top: 16px;
+    font-size: 16px;
+}
+
+.listbox {
+    display: flex;
+    flex-direction: column;
+    width: 200px;
+    background-color: #26262c;
+    border-width: 2px;
+    border-style: solid;
+    border-color: #6b6b73;
+}
+
+option {
+    padding-top: 6px;
+    padding-right: 10px;
+    padding-bottom: 6px;
+    padding-left: 10px;
+    background-color: #26262c;
+    color: #ffffff;
+    font-size: 15px;
+}
+
+option:hover {
+    background-color: #34343c;
+}
+
+option[selected="true"] {
+    background-color: #4c8bf5;
+}

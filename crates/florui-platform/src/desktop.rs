@@ -1538,8 +1538,22 @@ impl WindowState {
                 arena.tag(pressed) == "option"
             };
             if is_option {
-                self.runtime.dispatch_click(pressed);
-                self.dismiss_select_root_of(pressed);
+                let in_multiple = {
+                    let (arena, ..) = self.runtime.geometry();
+                    crate::select::owning_select(arena, pressed)
+                        .is_some_and(|select| arena.is_multiple(select))
+                };
+                if in_multiple {
+                    // A multi-select has no dismiss concept at all -- it's
+                    // always visible (see `crate::select`'s own doc), so
+                    // this only ever computes and reports the new
+                    // selection, never closes anything.
+                    let (ctrl, shift) = (self.modifiers.control_key(), self.modifiers.shift_key());
+                    self.runtime.commit_multiselect_click(pressed, ctrl, shift);
+                } else {
+                    self.runtime.dispatch_click(pressed);
+                    self.dismiss_select_root_of(pressed);
+                }
                 self.update_and_request_redraw();
                 return;
             }
@@ -2701,8 +2715,24 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                                     arena.tag(node) == "option"
                                 };
                                 if is_option {
-                                    state.runtime.dispatch_click(node);
-                                    state.dismiss_select_root_of(node);
+                                    let in_multiple = {
+                                        let (arena, ..) = state.runtime.geometry();
+                                        crate::select::owning_select(arena, node)
+                                            .is_some_and(|select| arena.is_multiple(select))
+                                    };
+                                    if in_multiple {
+                                        // No modifier state travels with an
+                                        // AT `Click` action -- a real
+                                        // Ctrl/Shift-equivalent needs
+                                        // SelectionItemPattern's own
+                                        // Add/Remove actions, not attempted
+                                        // here; this replaces the whole
+                                        // selection, same as a plain click.
+                                        state.runtime.commit_multiselect_click(node, false, false);
+                                    } else {
+                                        state.runtime.dispatch_click(node);
+                                        state.dismiss_select_root_of(node);
+                                    }
                                     state.update_and_request_redraw();
                                 } else {
                                     let focus_changed =

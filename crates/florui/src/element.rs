@@ -7,7 +7,7 @@
 
 use florui_reactive::Binding;
 
-use crate::{Handler, ValueHandler};
+use crate::{Handler, SelectionHandler, ValueHandler};
 
 /// A node produced by `view!`: a tagged element, a text run, or a fragment
 /// (a sequence of siblings with no wrapping box of their own).
@@ -44,6 +44,9 @@ pub struct ElementNode {
     /// codegen only ever emits one of `bindings`/`value_handlers` for a
     /// given attribute, never both.
     pub value_handlers: Vec<(String, ValueHandler)>,
+    /// `onselectionchange` on `<select multiple>` -- reports the control's
+    /// own computed new selection set. See [`SelectionHandler`]'s own doc.
+    pub selection_handlers: Vec<(String, SelectionHandler)>,
     pub children: Vec<Element>,
 }
 
@@ -79,12 +82,34 @@ impl Element {
         value_handlers: Vec<(String, ValueHandler)>,
         children: Vec<Element>,
     ) -> Self {
+        Self::node_with_selection_handlers(
+            tag,
+            attrs,
+            handlers,
+            bindings,
+            value_handlers,
+            Vec::new(),
+            children,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn node_with_selection_handlers(
+        tag: &'static str,
+        attrs: Vec<(String, String)>,
+        handlers: Vec<(String, Handler)>,
+        bindings: Vec<(String, Binding<String>)>,
+        value_handlers: Vec<(String, ValueHandler)>,
+        selection_handlers: Vec<(String, SelectionHandler)>,
+        children: Vec<Element>,
+    ) -> Self {
         Element::Node(ElementNode {
             tag,
             attrs,
             handlers,
             bindings,
             value_handlers,
+            selection_handlers,
             children,
         })
     }

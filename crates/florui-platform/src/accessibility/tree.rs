@@ -262,6 +262,21 @@ impl AccessibilityTree {
                     node.add_action(Action::ReplaceSelectedText);
                 }
             }
+            // `multiple` is always a visible listbox, never a collapsible
+            // combobox -- no `Expanded`/Expand/Collapse, and its own
+            // `<option>` children are real descendants here already
+            // (never inside a synthesized overlay), so `active_option`
+            // (which only ever looks inside one) has nothing to find.
+            "select" if arena.is_multiple(id) => {
+                node.set_role(Role::ListBox);
+                node.set_multiselectable();
+                if let Some(label) = arena.accessible_label(id) {
+                    node.set_label(label);
+                }
+                if is_focusable(arena, id) {
+                    node.add_action(Action::Focus);
+                }
+            }
             "select" => {
                 node.set_role(Role::ComboBox);
                 node.set_value(arena.text_content(id));
