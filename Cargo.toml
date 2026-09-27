@@ -20,6 +20,7 @@ members = [
     "crates/florui-reactive",
     "crates/florui-routing",
     "examples/florui-example-app",
+    "examples/florui-player",
 ]
 
 [workspace.package]
