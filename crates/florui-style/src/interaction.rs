@@ -16,6 +16,11 @@ pub struct InteractionState {
     focused: HashSet<NodeId>,
     active: HashSet<NodeId>,
     focus_visible: HashSet<NodeId>,
+    /// Which `<a>` `href`s count as visited for `:link`/`:visited` — keyed
+    /// by the href string itself, not a `NodeId`: the same URL linked from
+    /// two different nodes is visited or not as one fact, not per-node
+    /// state like hover/focus are.
+    visited: HashSet<String>,
 }
 
 impl InteractionState {
@@ -62,6 +67,19 @@ impl InteractionState {
     pub fn is_focus_visible(&self, id: NodeId) -> bool {
         self.focus_visible.contains(&id)
     }
+
+    /// Replaces the whole visited-href set at once — the caller's own
+    /// store already owns the real set (see `florui-platform`'s
+    /// `VisitedLinks`); this just copies it in for one render, matching
+    /// how every other field here is rebuilt fresh per render too.
+    pub fn with_visited(mut self, hrefs: &HashSet<String>) -> Self {
+        self.visited = hrefs.clone();
+        self
+    }
+
+    pub fn is_visited(&self, href: &str) -> bool {
+        self.visited.contains(href)
+    }
 }
 
 #[cfg(test)]
@@ -79,6 +97,14 @@ mod tests {
         assert!(state.is_focused(2));
         assert!(state.is_active(3));
         assert!(!state.is_active(1));
+    }
+
+    #[test]
+    fn visited_tracks_by_href_not_node_id() {
+        let visited = HashSet::from(["https://example.com".to_string()]);
+        let state = InteractionState::new().with_visited(&visited);
+        assert!(state.is_visited("https://example.com"));
+        assert!(!state.is_visited("https://other.example"));
     }
 
     #[test]
