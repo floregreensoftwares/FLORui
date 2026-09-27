@@ -27,7 +27,7 @@
 use std::collections::{HashMap, HashSet};
 
 use accesskit::{Action, Node, NodeId as AccessKitId, Rect, Role, TreeId, TreeInfo, TreeUpdate};
-use florui_style::{Arena, FocusPath, NodeId};
+use florui_style::{AccessibleRole, Arena, FocusPath, NodeId};
 
 use crate::focus::is_focusable;
 
@@ -181,11 +181,16 @@ impl AccessibilityTree {
                 }
             }
             "input" if matches!(arena.input_type(id), Some("checkbox") | Some("radio")) => {
-                node.set_role(if arena.input_type(id) == Some("radio") {
-                    Role::RadioButton
-                } else {
-                    Role::CheckBox
+                // `role="switch"` only applies to a checkbox; a radio stays
+                // a radio.
+                node.set_role(match (arena.input_type(id), arena.role(id)) {
+                    (Some("radio"), _) => Role::RadioButton,
+                    (_, Some(AccessibleRole::Switch)) => Role::Switch,
+                    (_, None) => Role::CheckBox,
                 });
+                if let Some(label) = arena.accessible_label(id) {
+                    node.set_label(label);
+                }
                 node.set_toggled(arena.is_checked(id).into());
                 if is_focusable(arena, id) {
                     node.add_action(Action::Focus);
@@ -403,6 +408,52 @@ mod tests {
         };
         assert_eq!(toggled(radios[0]), Some(Toggled::True));
         assert_eq!(toggled(radios[1]), Some(Toggled::False));
+    }
+
+    #[test]
+    fn role_switch_on_a_radio_is_ignored_and_it_stays_a_radio() {
+        let tree: Element = view! { <input type="radio" role="switch" /> };
+        let (update, reverse, arena) = build(&tree, None);
+        let input = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
+        assert_eq!(role_of(&update, ak_id), Role::RadioButton);
+    }
+
+    #[test]
+    fn a_role_switch_checkbox_gets_the_switch_role_state_name_and_actions() {
+        let tree: Element = view! {
+            <input type="checkbox" role="switch" checked="true" accessible_label="Wi-Fi" />
+        };
+        let (update, reverse, arena) = build(&tree, None);
+        let input = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
+        assert_eq!(role_of(&update, ak_id), Role::Switch);
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert_eq!(node.toggled(), Some(Toggled::True));
+        assert_eq!(node.label(), Some("Wi-Fi"));
+        assert!(node.supports_action(Action::Focus));
+        assert!(node.supports_action(Action::Click));
+    }
+
+    #[test]
+    fn a_disabled_switch_is_marked_disabled_and_gets_no_actions() {
+        let tree: Element = view! { <input type="checkbox" role="switch" disabled="true" /> };
+        let (update, reverse, arena) = build(&tree, None);
+        let input = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert_eq!(node.role(), Role::Switch);
+        assert!(node.is_disabled());
+        assert!(!node.supports_action(Action::Click));
+    }
+
+    #[test]
+    fn an_unsupported_role_on_a_checkbox_falls_back_to_the_checkbox_role() {
+        let tree: Element = view! { <input type="checkbox" role="slider" /> };
+        let (update, reverse, arena) = build(&tree, None);
+        let input = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
+        assert_eq!(role_of(&update, ak_id), Role::CheckBox);
     }
 
     #[test]
