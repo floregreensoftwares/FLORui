@@ -67,14 +67,16 @@ impl SwitchValue {
     }
 }
 
-/// Renders a switch — see the module doc. `accessible_label` is the name
-/// a screen reader announces.
+/// Renders a switch — see the module doc. `id` is the input's id, so a
+/// `<label for={id}>` toggles it; `accessible_label` is the name a screen
+/// reader announces.
 #[component]
-pub fn Switch(value: SwitchValue, disabled: bool, accessible_label: String) -> Element {
+pub fn Switch(id: String, value: SwitchValue, disabled: bool, accessible_label: String) -> Element {
     let checked = value.checked();
     florui::view! {
         <div class={SWITCH_CLASS}>
             <input
+                id={id}
                 class={SWITCH_INPUT_CLASS}
                 type="checkbox"
                 role="switch"
@@ -124,10 +126,12 @@ mod tests {
                 view! {
                     <div>
                         <Switch
+                            id={"wifi".to_string()}
                             value={value}
                             disabled={disabled}
                             accessible_label={"Wi-Fi".to_string()}
                         />
+                        <label id="wifi-label" for="wifi">{"Wi-Fi"}</label>
                     </div>
                 }
             },
@@ -193,6 +197,26 @@ mod tests {
         assert!(arena.is_checked(input), "checked comes from the binding");
         runtime.dispatch_click(input);
         assert_eq!(*requests.borrow(), vec![false]);
+    }
+
+    #[test]
+    fn clicking_its_label_asks_for_a_toggle_and_a_disabled_one_ignores_it() {
+        let (runtime, requests) = controlled(false, false);
+        let label = node_of_id(&runtime, "wifi-label");
+        let target = runtime
+            .activation_target(label)
+            .expect("the label targets the input");
+        runtime.dispatch_click(target);
+        assert_eq!(*requests.borrow(), vec![true]);
+
+        let (disabled, _) = controlled(false, true);
+        let label = node_of_id(&disabled, "wifi-label");
+        assert_eq!(disabled.activation_target(label), None);
+    }
+
+    fn node_of_id(runtime: &UiRuntime, id: &str) -> NodeId {
+        let (arena, ..) = runtime.geometry();
+        arena.find(|a, node| a.id_attr(node) == Some(id)).unwrap()
     }
 
     #[test]

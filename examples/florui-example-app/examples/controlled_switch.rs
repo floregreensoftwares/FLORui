@@ -39,22 +39,24 @@ fn app() -> Element {
     view! {
         <div class="page">
             <p class="instructions">
-                {"Click the track or the thumb, or Tab to it and press Space. \
+                {"Click the track, the thumb or the label, or Tab to it and press Space. \
                   Sync can be turned on but refuses to turn off; the disabled one never moves."}
             </p>
 
             <div class="row">
                 <Switch
+                    id={"wifi-switch".to_string()}
                     value={SwitchValue::bound(wifi.binding())}
                     disabled={false}
                     accessible_label={"Wi-Fi".to_string()}
                 />
-                <p class="field-label">{"Wi-Fi (Binding)"}</p>
+                <label class="field-label" for="wifi-switch">{"Wi-Fi (Binding)"}</label>
             </div>
             <p class="status">{format!("Committed: {}", wifi.get())}</p>
 
             <div class="row">
                 <Switch
+                    id={"sync-switch".to_string()}
                     value={SwitchValue::controlled(
                         sync.get(),
                         BoolHandler::new(move |next| {
@@ -66,17 +68,22 @@ fn app() -> Element {
                     disabled={false}
                     accessible_label={"Sync".to_string()}
                 />
-                <p class="field-label">{"Sync (value + handler, refuses to turn off)"}</p>
+                <label class="field-label" for="sync-switch">
+                    {"Sync (value + handler, refuses to turn off)"}
+                </label>
             </div>
             <p class="status">{format!("Committed: {}", sync.get())}</p>
 
             <div class="row">
                 <Switch
+                    id={"locked-switch".to_string()}
                     value={SwitchValue::controlled(locked.get(), BoolHandler::new(|_| {}))}
                     disabled={true}
                     accessible_label={"Locked setting".to_string()}
                 />
-                <p class="field-label">{"Locked setting (disabled, stays on)"}</p>
+                <label class="field-label" for="locked-switch">
+                    {"Locked setting (disabled, stays on)"}
+                </label>
             </div>
         </div>
     }
