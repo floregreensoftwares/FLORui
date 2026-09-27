@@ -183,6 +183,15 @@ impl StyloTree {
                     node_state |= ElementState::INDETERMINATE;
                 }
             }
+            // Same markup-state contract again, for `<input type="range">`
+            // -- no `:checked`/`:indeterminate` equivalent for a slider.
+            if arena.tag(id) == "input" && arena.input_type(id) == Some("range") {
+                if arena.is_disabled(id) {
+                    node_state |= ElementState::DISABLED;
+                } else {
+                    node_state |= ElementState::ENABLED;
+                }
+            }
             let parent_stable = arena
                 .parent(id)
                 .map(|parent_id| stable_ids[index_of[&parent_id]]);
