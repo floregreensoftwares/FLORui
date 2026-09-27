@@ -59,6 +59,15 @@ struct ArenaNode {
     /// from, so it is a plain attribute here, read the same way `checked`
     /// is). See [`Arena::is_indeterminate`].
     indeterminate: bool,
+    /// `min`/`max`/`step` on `<input type="range">`, and `value` parsed as
+    /// a number instead of the raw string [`Self::value`] already keeps —
+    /// real HTML's own initial values (`0`/`100`/`1`) when absent or not a
+    /// valid number. See [`Arena::range_min`]/[`Arena::range_max`]/
+    /// [`Arena::range_step`]/[`Arena::range_value`].
+    range_min: f32,
+    range_max: f32,
+    range_step: f32,
+    range_value: f32,
     /// The raw, unparsed `style="..."` attribute text, if declared — see
     /// [`Arena::style_attr`].
     style: Option<String>,
@@ -210,6 +219,11 @@ impl Arena {
             match element {
                 Element::Node(node) => {
                     let id = self.nodes.len();
+                    // Real HTML's own default `value` when absent is the
+                    // midpoint of `min`/`max`, so it needs those already
+                    // parsed rather than a fixed literal default.
+                    let range_min = attr_f32(&node.attrs, "min", 0.0);
+                    let range_max = attr_f32(&node.attrs, "max", 100.0);
                     self.nodes.push(ArenaNode {
                         tag: node.tag,
                         classes: class_list(&node.attrs),
@@ -217,6 +231,10 @@ impl Arena {
                         disabled: attr_bool(&node.attrs, "disabled"),
                         checked: attr_bool(&node.attrs, "checked"),
                         indeterminate: attr_bool(&node.attrs, "indeterminate"),
+                        range_min,
+                        range_max,
+                        range_step: attr_f32(&node.attrs, "step", 1.0),
+                        range_value: attr_f32(&node.attrs, "value", (range_min + range_max) / 2.0),
                         style: attr_value(&node.attrs, "style"),
                         value: attr_value(&node.attrs, "value"),
                         input_type: attr_value(&node.attrs, "type"),
@@ -326,6 +344,41 @@ impl Arena {
     /// This node's `indeterminate` attribute — see [`ArenaNode::indeterminate`].
     pub fn is_indeterminate(&self, id: NodeId) -> bool {
         self.nodes[id].indeterminate
+    }
+
+    /// `<input type="range">`'s own `min` — real HTML's own initial `0`
+    /// when absent or not a number.
+    pub fn range_min(&self, id: NodeId) -> f32 {
+        self.nodes[id].range_min
+    }
+
+    /// `<input type="range">`'s own `max` — real HTML's own initial `100`
+    /// when absent or not a number. Not clamped against `min` here; a
+    /// caller that needs a well-ordered pair should treat `max < min` the
+    /// way it treats any other malformed input.
+    pub fn range_max(&self, id: NodeId) -> f32 {
+        self.nodes[id].range_max
+    }
+
+    /// `<input type="range">`'s own `step` — real HTML's own initial `1`
+    /// when absent or not a number.
+    pub fn range_step(&self, id: NodeId) -> f32 {
+        self.nodes[id].range_step
+    }
+
+    /// `<input type="range">`'s own `value`, parsed as a number and
+    /// clamped into `[min, max]` (real HTML's own behavior for an
+    /// out-of-range value) — `[`Self::value_attr`] keeps the same
+    /// attribute's raw string form. Defaults to the midpoint of `min`/
+    /// `max` when absent or not a number, real HTML's own initial value.
+    pub fn range_value(&self, id: NodeId) -> f32 {
+        let node = &self.nodes[id];
+        let (min, max) = (node.range_min, node.range_max);
+        if min <= max {
+            node.range_value.clamp(min, max)
+        } else {
+            node.range_value
+        }
     }
 
     /// This node's raw, unparsed `style="..."` attribute text, if it
@@ -495,6 +548,15 @@ fn attr_value(attrs: &[(String, String)], name: &str) -> Option<String> {
 
 fn attr_bool(attrs: &[(String, String)], name: &str) -> bool {
     attr_value(attrs, name).as_deref() == Some("true")
+}
+
+/// `name`'s attribute value parsed as `f32`, or `default` if absent or not
+/// a valid float — same lenient-fallback shape `attr_bool` gives a missing
+/// or non-`"true"` boolean attribute.
+fn attr_f32(attrs: &[(String, String)], name: &str, default: f32) -> f32 {
+    attr_value(attrs, name)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
 }
 
 fn collect_text(children: &[Element]) -> String {
@@ -680,6 +742,54 @@ mod tests {
         let tree: Element = view! { <input type="checkbox" checked="true" /> };
         let arena = Arena::build(&tree);
         assert!(arena.is_checked(arena.roots()[0]));
+    }
+
+    #[test]
+    fn range_min_max_step_default_to_reals_htmls_own_initial_values() {
+        let tree: Element = view! { <input type="range" /> };
+        let arena = Arena::build(&tree);
+        let input = arena.roots()[0];
+        assert_eq!(arena.range_min(input), 0.0);
+        assert_eq!(arena.range_max(input), 100.0);
+        assert_eq!(arena.range_step(input), 1.0);
+        assert_eq!(arena.range_value(input), 50.0, "midpoint of min/max");
+    }
+
+    #[test]
+    fn range_min_max_step_value_are_read_from_their_attributes() {
+        let tree: Element = view! {
+            <input type="range" min="10" max="20" step="5" value="17" />
+        };
+        let arena = Arena::build(&tree);
+        let input = arena.roots()[0];
+        assert_eq!(arena.range_min(input), 10.0);
+        assert_eq!(arena.range_max(input), 20.0);
+        assert_eq!(arena.range_step(input), 5.0);
+        assert_eq!(
+            arena.range_value(input),
+            17.0,
+            "range_value does not snap to step"
+        );
+    }
+
+    #[test]
+    fn range_value_clamps_into_min_max_but_value_attr_keeps_the_raw_string() {
+        let tree: Element = view! { <input type="range" min="0" max="10" value="99" /> };
+        let arena = Arena::build(&tree);
+        let input = arena.roots()[0];
+        assert_eq!(arena.range_value(input), 10.0);
+        assert_eq!(
+            arena.value_attr(input),
+            Some("99"),
+            "raw string form is untouched"
+        );
+    }
+
+    #[test]
+    fn a_non_numeric_value_falls_back_to_the_min_max_midpoint() {
+        let tree: Element = view! { <input type="range" min="0" max="10" value="not-a-number" /> };
+        let arena = Arena::build(&tree);
+        assert_eq!(arena.range_value(arena.roots()[0]), 5.0);
     }
 
     #[test]
