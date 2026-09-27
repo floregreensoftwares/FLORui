@@ -868,6 +868,34 @@ mod tests {
     }
 
     #[test]
+    fn indeterminate_matches_a_checkbox_but_never_a_radio() {
+        let tree: Element = view! {
+            <div>
+                <input type="checkbox" indeterminate="true" class="a" />
+                <input type="radio" indeterminate="true" class="b" />
+            </div>
+        };
+        let css = "input { background-color: #111111; } \
+                   input:indeterminate { background-color: #00ff00; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let checkbox = arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == "a"))
+            .unwrap();
+        let radio = arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == "b"))
+            .unwrap();
+        assert_eq!(
+            computed[&checkbox].background_color,
+            Rgba::opaque(0, 0xff, 0)
+        );
+        assert_eq!(
+            computed[&radio].background_color,
+            Rgba::opaque(0x11, 0x11, 0x11),
+            "indeterminate is a checkbox-only IDL property in real HTML, never a radio's"
+        );
+    }
+
+    #[test]
     fn checked_matches_a_radio() {
         let tree: Element = view! {
             <div>

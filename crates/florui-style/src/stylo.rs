@@ -177,6 +177,11 @@ impl StyloTree {
                 if arena.is_checked(id) {
                     node_state |= ElementState::CHECKED;
                 }
+                // Real HTML: `indeterminate` only exists on a checkbox,
+                // never a radio.
+                if arena.input_type(id) == Some("checkbox") && arena.is_indeterminate(id) {
+                    node_state |= ElementState::INDETERMINATE;
+                }
             }
             let parent_stable = arena
                 .parent(id)

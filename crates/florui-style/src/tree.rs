@@ -52,6 +52,13 @@ struct ArenaNode {
     /// state for `<input type="checkbox">`/`type="radio"`, read the same
     /// way `disabled` is. See [`Arena::is_checked`].
     checked: bool,
+    /// Whether the `indeterminate` attribute is present and `"true"` —
+    /// markup state for `<input type="checkbox">`, real HTML's own
+    /// IDL-only "mixed" display state (no matching content attribute
+    /// there; this crate has no scripting layer to set an IDL property
+    /// from, so it is a plain attribute here, read the same way `checked`
+    /// is). See [`Arena::is_indeterminate`].
+    indeterminate: bool,
     /// The raw, unparsed `style="..."` attribute text, if declared — see
     /// [`Arena::style_attr`].
     style: Option<String>,
@@ -209,6 +216,7 @@ impl Arena {
                         id: attr_value(&node.attrs, "id"),
                         disabled: attr_bool(&node.attrs, "disabled"),
                         checked: attr_bool(&node.attrs, "checked"),
+                        indeterminate: attr_bool(&node.attrs, "indeterminate"),
                         style: attr_value(&node.attrs, "style"),
                         value: attr_value(&node.attrs, "value"),
                         input_type: attr_value(&node.attrs, "type"),
@@ -313,6 +321,11 @@ impl Arena {
     /// `<input type="checkbox">`/`type="radio"`.
     pub fn is_checked(&self, id: NodeId) -> bool {
         self.nodes[id].checked
+    }
+
+    /// This node's `indeterminate` attribute — see [`ArenaNode::indeterminate`].
+    pub fn is_indeterminate(&self, id: NodeId) -> bool {
+        self.nodes[id].indeterminate
     }
 
     /// This node's raw, unparsed `style="..."` attribute text, if it
@@ -667,6 +680,17 @@ mod tests {
         let tree: Element = view! { <input type="checkbox" checked="true" /> };
         let arena = Arena::build(&tree);
         assert!(arena.is_checked(arena.roots()[0]));
+    }
+
+    #[test]
+    fn indeterminate_attribute_true_is_read_and_absent_defaults_to_false() {
+        let tree: Element = view! { <input type="checkbox" indeterminate="true" /> };
+        let arena = Arena::build(&tree);
+        assert!(arena.is_indeterminate(arena.roots()[0]));
+
+        let tree: Element = view! { <input type="checkbox" /> };
+        let arena = Arena::build(&tree);
+        assert!(!arena.is_indeterminate(arena.roots()[0]));
     }
 
     #[test]
