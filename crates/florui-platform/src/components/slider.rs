@@ -5,12 +5,18 @@
 //! `accessibility::tree`.
 //!
 //! The `<input>` is the whole track (it is the real click/drag/focus/
-//! accessibility target); the thumb is a later sibling that is purely
-//! visual, so it carries `pointer-events: none` and a computed inline
-//! `left:` percentage — a continuous position, unlike `Switch`'s own
-//! binary `:checked` thumb, so it cannot be a CSS state and has to be
-//! computed here. Ships no CSS: size the wrapper and input, position the
-//! thumb (`position: absolute`).
+//! accessibility target); the fill and the thumb are later siblings that
+//! are purely visual, so both carry `pointer-events: none`. Real HTML's
+//! own default slider paints a two-tone track — a filled color from the
+//! start up to the thumb, the track's own base color past it — which
+//! this crate has no CSS mechanism to express as a single background
+//! (no gradients); the fill is a real positioned element instead, sized
+//! with `left: 0%; right: N%` and no explicit width, which resolves the
+//! same way an inset percentage already does, needing no separate
+//! percentage-width support. The thumb's own `left: N%` is a continuous
+//! position, unlike `Switch`'s binary `:checked` state, so both are
+//! computed here rather than expressed as CSS state. Ships no CSS: size
+//! the wrapper and input, position the fill/thumb (`position: absolute`).
 //!
 //! Controlled, like `Switch`: every step (a key, a click-jump, a drag
 //! move) requests a value and the owner decides. `on_commit` fires once
@@ -27,7 +33,11 @@ use florui_reactive::Binding;
 pub const SLIDER_CLASS: &str = "florui-slider";
 /// The `<input>`, which is the track itself.
 pub const SLIDER_INPUT_CLASS: &str = "florui-slider-input";
-/// The visual thumb, a sibling right after the input.
+/// The filled portion of the track, from the start up to the thumb — a
+/// real element, not a CSS background, since this crate has no gradient
+/// support. A sibling right after the input, before the thumb.
+pub const SLIDER_FILL_CLASS: &str = "florui-slider-fill";
+/// The visual thumb, a sibling after the fill.
 pub const SLIDER_THUMB_CLASS: &str = "florui-slider-thumb";
 
 /// How a [`Slider`] reads its value and reports a requested change — the
@@ -107,6 +117,10 @@ pub fn Slider(
                 oncommit={move || on_commit.call()}
             />
             <div
+                class={SLIDER_FILL_CLASS}
+                style={format!("left: 0%; right: {}%; pointer-events: none", 100.0 - percent)}
+            ></div>
+            <div
                 class={SLIDER_THUMB_CLASS}
                 style={format!("left: {percent}%; pointer-events: none")}
             ></div>
@@ -131,6 +145,7 @@ mod tests {
          .florui-slider-input { width: 100px; height: 20px; \
                                  border-width: 0px; padding-top: 0px; padding-right: 0px; \
                                  padding-bottom: 0px; padding-left: 0px; } \
+         .florui-slider-fill { position: absolute; top: 0px; height: 20px; } \
          .florui-slider-thumb { position: absolute; top: 0px; width: 10px; height: 20px; }";
 
     type Requests = Rc<RefCell<Vec<f32>>>;
@@ -193,6 +208,11 @@ mod tests {
         absolute_position(arena, layouts, node_of(runtime, SLIDER_THUMB_CLASS)).0
     }
 
+    fn fill_width(runtime: &UiRuntime) -> f32 {
+        let (_, _, layouts) = runtime.geometry();
+        layouts[&node_of(runtime, SLIDER_FILL_CLASS)].width
+    }
+
     #[test]
     fn a_click_jump_requests_the_value_at_that_position() {
         let (mut runtime, requests, _) = controlled(30.0, false);
@@ -244,5 +264,32 @@ mod tests {
         assert_eq!(thumb_left(&at_min), 0.0);
         assert_eq!(thumb_left(&at_quarter), 25.0);
         assert_eq!(thumb_left(&at_max), 100.0);
+    }
+
+    #[test]
+    fn a_click_landing_on_the_fill_reaches_the_input() {
+        let (runtime, ..) = controlled(50.0, false);
+        let input = node_of(&runtime, SLIDER_INPUT_CLASS);
+        let (arena, _, layouts) = runtime.geometry();
+        let fill = node_of(&runtime, SLIDER_FILL_CLASS);
+        let (fx, fy) = absolute_position(arena, layouts, fill);
+        let layout = layouts[&fill];
+        assert!(layout.width > 0.0, "the fill has a real width to click on");
+        let (x, y) = (fx + layout.width / 2.0, fy + layout.height / 2.0);
+        assert_eq!(
+            runtime.hit_test(x, y),
+            Some(input),
+            "the fill sits over the track but never takes the click"
+        );
+    }
+
+    #[test]
+    fn the_fills_width_follows_the_value_as_a_percentage_of_the_track() {
+        let (at_min, ..) = controlled(0.0, false);
+        let (at_quarter, ..) = controlled(25.0, false);
+        let (at_max, ..) = controlled(100.0, false);
+        assert_eq!(fill_width(&at_min), 0.0);
+        assert_eq!(fill_width(&at_quarter), 25.0);
+        assert_eq!(fill_width(&at_max), 100.0);
     }
 }

@@ -25,7 +25,8 @@ pub use components::popover::{
 };
 pub use components::portal::{Portal, PortalProps};
 pub use components::slider::{
-    SLIDER_CLASS, SLIDER_INPUT_CLASS, SLIDER_THUMB_CLASS, Slider, SliderProps, SliderValue,
+    SLIDER_CLASS, SLIDER_FILL_CLASS, SLIDER_INPUT_CLASS, SLIDER_THUMB_CLASS, Slider, SliderProps,
+    SliderValue,
 };
 pub use components::switch::{
     SWITCH_CLASS, SWITCH_INPUT_CLASS, SWITCH_THUMB_CLASS, Switch, SwitchProps, SwitchValue,
