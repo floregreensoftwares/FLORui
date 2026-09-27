@@ -1,0 +1,19 @@
+{
+  "id": "border-radius-box-shadow",
+  "description": "A rounded box with a blurred drop shadow -- the shadow must follow the rounded outline and stay hidden behind the box, validated against Chromium's own rendering.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": { "width_css_px": 80, "height_css_px": 80, "device_pixel_ratio": 1.0 },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "box",
+    "css": ".box { width: 40px; height: 40px; background-color: #ffffff; border-radius: 12px; box-shadow: 4px 4px 8px 0px rgba(0, 0, 0, 0.4); }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 30.0,
+    "reason": "Two independent Gaussian blurs plus a curved shadow edge. Measured against desktop Chrome: 15.1% of pixels differ (mean_error 0.243, max_error 31), geometry an exact 40x40 match. The limit is set well above that because the sibling box-shadow-blur fixture measured almost 3x worse on a software-rendered CI Chromium than on desktop; this one has not been measured there."
+  }
+}
