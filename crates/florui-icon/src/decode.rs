@@ -2,6 +2,11 @@ use crate::RawIcon;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+/// `resvg`/`image` stay direct dependencies of this crate only so their
+/// error types (`Svg`/`Png` below) are nameable here -- the actual
+/// parsing/decoding/rasterization logic lives in `florui-assets` and is
+/// not duplicated in this crate; see that crate's own doc for why `resvg`
+/// was kept rather than re-evaluated.
 #[derive(Debug)]
 pub enum IconError {
     Io {
@@ -13,13 +18,39 @@ pub enum IconError {
         extension: Option<String>,
     },
     Svg(resvg::usvg::Error),
-    /// A syntactically valid SVG with no content (`viewBox`/size resolves
-    /// to zero on at least one axis) — nothing to scale a raster size
-    /// against.
+    /// Preserved for API compatibility with earlier versions of this
+    /// crate; never constructed today. `florui_assets::rasterize_svg`'s
+    /// own doc explains why: `usvg` represents a tree's size as
+    /// `NonZeroPositiveF32` and rejects an explicitly zero-sized document
+    /// at parse time, so no successfully parsed SVG can reach this crate
+    /// with a zero intrinsic size.
     SvgEmptySize {
         path: Option<PathBuf>,
     },
     Png(image::ImageError),
+    /// A source file exceeded `florui_assets::limits::MAX_SOURCE_BYTES`.
+    SourceTooLarge {
+        path: PathBuf,
+        byte_len: u64,
+        limit: u64,
+    },
+    /// An `.svg` file's bytes were not valid UTF-8.
+    InvalidUtf8 {
+        path: PathBuf,
+    },
+    /// The requested `size` exceeds
+    /// `florui_assets::limits::MAX_RASTER_DIMENSION`. `path` is `None` for
+    /// [`decode_svg`] (no file involved).
+    SizeTooLarge {
+        path: Option<PathBuf>,
+        size: u32,
+        limit: u32,
+    },
+    /// The requested `size` is zero -- nothing to rasterize into. `path`
+    /// is `None` for [`decode_svg`] (no file involved).
+    SizeZero {
+        path: Option<PathBuf>,
+    },
 }
 
 impl fmt::Display for IconError {
@@ -42,6 +73,32 @@ impl fmt::Display for IconError {
                 write!(f, "SVG has no visible content to rasterize")
             }
             IconError::Png(err) => write!(f, "could not decode PNG: {err}"),
+            IconError::SourceTooLarge {
+                path,
+                byte_len,
+                limit,
+            } => write!(
+                f,
+                "{} is {byte_len} bytes, over the {limit}-byte limit",
+                path.display()
+            ),
+            IconError::InvalidUtf8 { path } => {
+                write!(f, "{} is not valid UTF-8 text", path.display())
+            }
+            IconError::SizeTooLarge { path, size, limit } => write!(
+                f,
+                "requested icon size {size}px ({}) exceeds the {limit}px limit",
+                path.as_deref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "in-memory SVG".to_string())
+            ),
+            IconError::SizeZero { path } => write!(
+                f,
+                "requested icon size is zero ({})",
+                path.as_deref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "in-memory SVG".to_string())
+            ),
         }
     }
 }
@@ -52,7 +109,45 @@ impl std::error::Error for IconError {
             IconError::Io { source, .. } => Some(source),
             IconError::Svg(err) => Some(err),
             IconError::Png(err) => Some(err),
-            IconError::UnsupportedFormat { .. } | IconError::SvgEmptySize { .. } => None,
+            IconError::UnsupportedFormat { .. }
+            | IconError::SvgEmptySize { .. }
+            | IconError::SourceTooLarge { .. }
+            | IconError::InvalidUtf8 { .. }
+            | IconError::SizeTooLarge { .. }
+            | IconError::SizeZero { .. } => None,
+        }
+    }
+}
+
+/// Converts a `florui-assets` failure into this crate's own error type.
+/// `path` is `None` for the pure, no-disk functions ([`decode_svg`],
+/// [`decode_png`]) and `Some` for [`load_icon_at_size`].
+fn from_asset_error(err: florui_assets::AssetError, path: Option<&Path>) -> IconError {
+    let owned_path = || path.map(Path::to_owned);
+    match err {
+        florui_assets::AssetError::Io { path, source } => IconError::Io { path, source },
+        florui_assets::AssetError::Svg(err) => IconError::Svg(err),
+        florui_assets::AssetError::Png(err) => IconError::Png(err),
+        florui_assets::AssetError::SourceTooLarge {
+            byte_len, limit, ..
+        } => IconError::SourceTooLarge {
+            // Only reachable via `load_icon_at_size`, which always passes
+            // `Some(path)` -- `decode_svg`/`decode_png` never call a
+            // `read_bytes`/`read_text` path that can produce this.
+            path: owned_path().expect("SourceTooLarge only originates from a real file read"),
+            byte_len,
+            limit,
+        },
+        florui_assets::AssetError::InvalidUtf8 { .. } => IconError::InvalidUtf8 {
+            path: owned_path().expect("InvalidUtf8 only originates from a real file read"),
+        },
+        florui_assets::AssetError::RasterTooLarge { width, limit, .. } => IconError::SizeTooLarge {
+            path: owned_path(),
+            size: width,
+            limit,
+        },
+        florui_assets::AssetError::RasterTargetEmpty { .. } => {
+            IconError::SizeZero { path: owned_path() }
         }
     }
 }
@@ -60,68 +155,32 @@ impl std::error::Error for IconError {
 /// Rasterizes `svg_text` to exactly `size` x `size` RGBA pixels, scaled
 /// uniformly to fit the SVG's own intrinsic size (aspect-preserving,
 /// centered within the square). Pure -- takes no path, touches no disk.
-///
-/// `tiny-skia` (via `resvg`) produces premultiplied alpha; this
-/// unpremultiplies every pixel before returning, since
-/// `winit::window::Icon::from_rgba` (and platform icon APIs generally)
-/// expect straight alpha.
 pub fn decode_svg(svg_text: &str, size: u32) -> Result<RawIcon, IconError> {
-    let options = resvg::usvg::Options::default();
-    let tree = resvg::usvg::Tree::from_str(svg_text, &options).map_err(IconError::Svg)?;
-    let intrinsic = tree.size();
-    let longest = intrinsic.width().max(intrinsic.height());
-    if longest <= 0.0 {
-        return Err(IconError::SvgEmptySize { path: None });
-    }
-    let scale = size as f32 / longest;
-    let mut pixmap =
-        resvg::tiny_skia::Pixmap::new(size, size).expect("size is checked nonzero by the caller");
-    let offset_x = (size as f32 - intrinsic.width() * scale) / 2.0;
-    let offset_y = (size as f32 - intrinsic.height() * scale) / 2.0;
-    let transform =
-        resvg::tiny_skia::Transform::from_translate(offset_x, offset_y).pre_scale(scale, scale);
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
-
-    let mut rgba = pixmap.data().to_vec();
-    unpremultiply(&mut rgba);
+    let image = florui_assets::parse_svg(svg_text).map_err(|err| from_asset_error(err, None))?;
+    let raster = florui_assets::rasterize_svg(
+        &image,
+        florui_assets::RasterFit::Contain {
+            width: size,
+            height: size,
+        },
+    )
+    .map_err(|err| from_asset_error(err, None))?;
     Ok(RawIcon {
-        rgba,
-        width: size,
-        height: size,
+        rgba: raster.rgba,
+        width: raster.width,
+        height: raster.height,
     })
-}
-
-/// Straight = premultiplied * 255 / alpha, per channel. `tiny-skia`'s own
-/// premultiplied invariant guarantees `premultiplied <= alpha`, so this
-/// never exceeds 255 and never needs clamping -- but the multiply itself
-/// overflows `u8` (max 65025), so it runs in `u16`. At `alpha == 0` the
-/// pixel is fully transparent and whatever RGB `tiny-skia` already wrote
-/// there (typically 0,0,0) is invisible regardless -- skip the division
-/// rather than divide by zero.
-fn unpremultiply(rgba: &mut [u8]) {
-    for pixel in rgba.chunks_exact_mut(4) {
-        let alpha = pixel[3] as u16;
-        if alpha == 0 || alpha == 255 {
-            continue;
-        }
-        for channel in &mut pixel[..3] {
-            *channel = ((*channel as u16) * 255 / alpha) as u8;
-        }
-    }
 }
 
 /// Decodes `bytes` as a PNG at its own native resolution -- `size` has no
 /// PNG analogue (no vector content to rasterize at an arbitrary size).
 /// Pure -- takes no path, touches no disk.
 pub fn decode_png(bytes: &[u8]) -> Result<RawIcon, IconError> {
-    let image = image::load_from_memory(bytes)
-        .map_err(IconError::Png)?
-        .to_rgba8();
-    let (width, height) = image.dimensions();
+    let raster = florui_assets::decode_png(bytes).map_err(|err| from_asset_error(err, None))?;
     Ok(RawIcon {
-        rgba: image.into_raw(),
-        width,
-        height,
+        rgba: raster.rgba,
+        width: raster.width,
+        height: raster.height,
     })
 }
 
@@ -134,23 +193,38 @@ pub fn load_icon_at_size(path: &Path, size: u32) -> Result<RawIcon, IconError> {
         .map(str::to_ascii_lowercase);
     match extension.as_deref() {
         Some("svg") => {
-            let text = std::fs::read_to_string(path).map_err(|source| IconError::Io {
-                path: path.to_owned(),
-                source,
-            })?;
-            decode_svg(&text, size).map_err(|err| match err {
-                IconError::SvgEmptySize { .. } => IconError::SvgEmptySize {
-                    path: Some(path.to_owned()),
+            let source = florui_assets::AssetSource::Path(path);
+            let text = source
+                .read_text()
+                .map_err(|err| from_asset_error(err, Some(path)))?;
+            let image =
+                florui_assets::parse_svg(&text).map_err(|err| from_asset_error(err, Some(path)))?;
+            let raster = florui_assets::rasterize_svg(
+                &image,
+                florui_assets::RasterFit::Contain {
+                    width: size,
+                    height: size,
                 },
-                other => other,
+            )
+            .map_err(|err| from_asset_error(err, Some(path)))?;
+            Ok(RawIcon {
+                rgba: raster.rgba,
+                width: raster.width,
+                height: raster.height,
             })
         }
         Some("png") => {
-            let bytes = std::fs::read(path).map_err(|source| IconError::Io {
-                path: path.to_owned(),
-                source,
-            })?;
-            decode_png(&bytes)
+            let source = florui_assets::AssetSource::Path(path);
+            let bytes = source
+                .read_bytes()
+                .map_err(|err| from_asset_error(err, Some(path)))?;
+            let raster = florui_assets::decode_png(&bytes)
+                .map_err(|err| from_asset_error(err, Some(path)))?;
+            Ok(RawIcon {
+                rgba: raster.rgba,
+                width: raster.width,
+                height: raster.height,
+            })
         }
         _ => Err(IconError::UnsupportedFormat {
             path: path.to_owned(),
@@ -206,6 +280,12 @@ mod tests {
     fn decode_svg_rejects_unparseable_markup() {
         let err = decode_svg("not an svg at all", 64).unwrap_err();
         assert!(matches!(err, IconError::Svg(_)));
+    }
+
+    #[test]
+    fn decode_svg_rejects_a_zero_size() {
+        let err = decode_svg(BLUE_CIRCLE_SVG, 0).unwrap_err();
+        assert!(matches!(err, IconError::SizeZero { path: None }));
     }
 
     fn encode_test_png(width: u32, height: u32) -> Vec<u8> {
@@ -279,5 +359,16 @@ mod tests {
             (icon.width, icon.height),
             (crate::DEFAULT_ICON_SIZE, crate::DEFAULT_ICON_SIZE)
         );
+    }
+
+    #[test]
+    fn load_icon_at_size_rejects_a_source_file_over_the_size_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("huge.svg");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(florui_assets::limits::MAX_SOURCE_BYTES + 1)
+            .unwrap();
+        let err = load_icon_at_size(&path, 64).unwrap_err();
+        assert!(matches!(err, IconError::SourceTooLarge { .. }));
     }
 }

@@ -1822,6 +1822,7 @@ dependencies = [
 name = "florui-icon"
 version = "0.1.0"
 dependencies = [
+ "florui-assets",
  "image",
  "resvg",
  "syn 2.0.119",
