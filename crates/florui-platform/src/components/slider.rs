@@ -26,7 +26,7 @@
 //! dispatch. It carries no value: the owner already holds whichever
 //! request it last accepted.
 
-use florui::{Element, FloatHandler, Handler, component};
+use florui::{Element, Event, FloatHandler, Handler, component};
 use florui_reactive::Binding;
 
 /// The wrapper `<div>` — reserved marker, style it for the track's size.
@@ -114,7 +114,7 @@ pub fn Slider(
                         value.request(parsed);
                     }
                 }}
-                oncommit={move || on_commit.call()}
+                oncommit={move || on_commit.call(&Event::new())}
             />
             <div
                 class={SLIDER_FILL_CLASS}

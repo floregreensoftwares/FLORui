@@ -19,7 +19,7 @@
 //! popovers/menus (viewport collision, click-outside dismissal, and
 //! explicitly no focus trap) are a separate, later feature.
 
-use florui::{Children, Element, Handler, component};
+use florui::{Children, Element, Event, Handler, component};
 
 use crate::components::portal::{Portal, PortalProps};
 
@@ -33,7 +33,7 @@ pub const MODAL_ROOT_CLASS: &str = "florui-modal-root";
 pub fn Dialog(children: Children, onclose: Handler) -> Element {
     florui::view! {
         <Portal>
-            <div class={MODAL_ROOT_CLASS} onclose={move || onclose.call()}>
+            <div class={MODAL_ROOT_CLASS} onclose={move || onclose.call(&Event::new())}>
                 {children}
             </div>
         </Portal>

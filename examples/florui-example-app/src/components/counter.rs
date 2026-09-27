@@ -41,7 +41,7 @@ mod tests {
 
     fn click(arena: &Arena) {
         let button = arena.find(|a, id| a.tag(id) == "button").unwrap();
-        arena.handler(button, "click").unwrap().call();
+        arena.handler(button, "click").unwrap().call(&Event::new());
     }
 
     #[test]

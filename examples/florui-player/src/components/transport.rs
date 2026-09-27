@@ -35,24 +35,24 @@ pub fn Transport(
             </div>
 
             <div class="transport-row">
-                <button class="transport-button" accessible_label="Previous" onclick={move || on_previous.call()}>
+                <button class="transport-button" accessible_label="Previous" onclick={move || on_previous.call(&Event::new())}>
                     {"|<"}
                 </button>
-                <button class="transport-button transport-primary" accessible_label={if paused { "Play" } else { "Pause" }} onclick={move || on_play_pause.call()}>
+                <button class="transport-button transport-primary" accessible_label={if paused { "Play" } else { "Pause" }} onclick={move || on_play_pause.call(&Event::new())}>
                     {if paused { ">" } else { "||" }}
                 </button>
-                <button class="transport-button" accessible_label="Next" onclick={move || on_next.call()}>
+                <button class="transport-button" accessible_label="Next" onclick={move || on_next.call(&Event::new())}>
                     {">|"}
                 </button>
 
                 <div class="volume">
-                    <button class="volume-step" accessible_label="Volume down" onclick={move || on_volume_down.call()}>
+                    <button class="volume-step" accessible_label="Volume down" onclick={move || on_volume_down.call(&Event::new())}>
                         {"-"}
                     </button>
                     <div class="volume-track">
                         <div class="volume-fill" style={format!("width: {volume_percent}%;")} />
                     </div>
-                    <button class="volume-step" accessible_label="Volume up" onclick={move || on_volume_up.call()}>
+                    <button class="volume-step" accessible_label="Volume up" onclick={move || on_volume_up.call(&Event::new())}>
                         {"+"}
                     </button>
                 </div>
@@ -62,7 +62,7 @@ pub fn Transport(
                 <label class="toggle-label" for="shuffle-switch">
                     <Switch
                         id={"shuffle-switch".to_string()}
-                        value={SwitchValue::controlled(shuffle, BoolHandler::new(move |_| on_shuffle.call()))}
+                        value={SwitchValue::controlled(shuffle, BoolHandler::new(move |_| on_shuffle.call(&Event::new())))}
                         disabled={false}
                         indeterminate={false}
                         accessible_label={"Shuffle".to_string()}
@@ -72,7 +72,7 @@ pub fn Transport(
                 <label class="toggle-label" for="repeat-switch">
                     <Switch
                         id={"repeat-switch".to_string()}
-                        value={SwitchValue::controlled(repeat, BoolHandler::new(move |_| on_repeat.call()))}
+                        value={SwitchValue::controlled(repeat, BoolHandler::new(move |_| on_repeat.call(&Event::new())))}
                         disabled={false}
                         indeterminate={false}
                         accessible_label={"Repeat".to_string()}

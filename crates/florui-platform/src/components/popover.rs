@@ -33,7 +33,7 @@
 //! Not done here: focus-on-open, placements beyond flip/shift (no
 //! `autoPlacement`, arrow element, or `size` middleware).
 
-use florui::{Children, Element, Handler, component};
+use florui::{Children, Element, Event, Handler, component};
 use florui_reactive::use_signal;
 use florui_style::{Arena, NodeId};
 
@@ -133,7 +133,7 @@ pub fn Popover(
                     <div
                         id={root_id.clone()}
                         class={POPOVER_ROOT_CLASS}
-                        ondismiss={move || ondismiss.call()}
+                        ondismiss={move || ondismiss.call(&Event::new())}
                     >
                         <div id={content_id.clone()} style={style.clone()}>
                             {children}

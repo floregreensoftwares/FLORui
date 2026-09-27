@@ -4,23 +4,73 @@
 //! controlled-value contract — see slots-and-bindings.md's "Optional
 //! convenience and explicit control."
 
+use std::cell::Cell;
 use std::fmt;
 use std::rc::Rc;
 
+/// A click/activation event handed to an `on*` handler. Its only power is
+/// [`Event::prevent_default`]: some primitives run a default action after
+/// dispatch (e.g. `<a href>` following its target) unless the handler
+/// cancels it here — real `<a>` semantics, not just a bare callback.
+#[derive(Debug, Default)]
+pub struct Event {
+    default_prevented: Cell<bool>,
+}
+
+impl Event {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Cancels this node's default action, if it has one.
+    pub fn prevent_default(&self) {
+        self.default_prevented.set(true);
+    }
+
+    /// Whether [`Event::prevent_default`] was called.
+    pub fn default_prevented(&self) -> bool {
+        self.default_prevented.get()
+    }
+}
+
+#[derive(Clone)]
+enum Callback {
+    /// The common case: a handler that ignores the event entirely.
+    Plain(Rc<dyn Fn()>),
+    /// A handler that reads the event (e.g. to call
+    /// [`Event::prevent_default`]).
+    WithEvent(Rc<dyn Fn(&Event)>),
+}
+
 /// A callback captured from an `on*` attribute in `view!`, carried on the
 /// `Element` tree so a host can look it up (by node and event name) after
-/// a real input event and call it.
+/// a real input event and call it. Two constructors, not one generic
+/// `Fn()`-or-`Fn(&Event)` bound: Rust's coherence rules don't allow a
+/// single trait to be blanket-implemented for both closure arities at
+/// once, and `view!`'s codegen picks between them by inspecting the
+/// closure literal's own parameter count (see `florui-macros`), so every
+/// existing zero-arg `onclick={move || ...}` in the codebase keeps
+/// compiling unchanged.
 #[derive(Clone)]
-pub struct Handler(Rc<dyn Fn()>);
+pub struct Handler(Callback);
 
 impl Handler {
     pub fn new(f: impl Fn() + 'static) -> Self {
-        Self(Rc::new(f))
+        Self(Callback::Plain(Rc::new(f)))
     }
 
-    /// Runs the callback.
-    pub fn call(&self) {
-        (self.0)();
+    /// A handler that reads the [`Event`] it's called with (e.g. to call
+    /// [`Event::prevent_default`]) rather than ignoring it.
+    pub fn with_event(f: impl Fn(&Event) + 'static) -> Self {
+        Self(Callback::WithEvent(Rc::new(f)))
+    }
+
+    /// Runs the callback with the given event.
+    pub fn call(&self, event: &Event) {
+        match &self.0 {
+            Callback::Plain(f) => f(),
+            Callback::WithEvent(f) => f(event),
+        }
     }
 }
 
@@ -34,7 +84,11 @@ impl PartialEq for Handler {
     /// Equal only if they share the same underlying callback — comparing
     /// behavior isn't possible, so this is identity, not content, equality.
     fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.0, &other.0)
+        match (&self.0, &other.0) {
+            (Callback::Plain(a), Callback::Plain(b)) => Rc::ptr_eq(a, b),
+            (Callback::WithEvent(a), Callback::WithEvent(b)) => Rc::ptr_eq(a, b),
+            _ => false,
+        }
     }
 }
 
@@ -167,7 +221,7 @@ mod tests {
         let called = Rc::new(Cell::new(false));
         let called_in_closure = called.clone();
         let handler = Handler::new(move || called_in_closure.set(true));
-        handler.call();
+        handler.call(&Event::new());
         assert!(called.get());
     }
 
@@ -177,8 +231,8 @@ mod tests {
         let calls_in_closure = calls.clone();
         let handler = Handler::new(move || calls_in_closure.set(calls_in_closure.get() + 1));
         let clone = handler.clone();
-        handler.call();
-        clone.call();
+        handler.call(&Event::new());
+        clone.call(&Event::new());
         assert_eq!(calls.get(), 2);
         assert_eq!(handler, clone);
     }
@@ -188,6 +242,35 @@ mod tests {
         let a = Handler::new(|| ());
         let b = Handler::new(|| ());
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn with_event_handler_receives_the_event() {
+        let prevented = Rc::new(Cell::new(false));
+        let prevented_in_closure = prevented.clone();
+        let handler = Handler::with_event(move |event| {
+            event.prevent_default();
+            prevented_in_closure.set(event.default_prevented());
+        });
+        let event = Event::new();
+        handler.call(&event);
+        assert!(prevented.get());
+        assert!(event.default_prevented());
+    }
+
+    #[test]
+    fn plain_handler_leaves_the_event_unprevented() {
+        let handler = Handler::new(|| ());
+        let event = Event::new();
+        handler.call(&event);
+        assert!(!event.default_prevented());
+    }
+
+    #[test]
+    fn plain_and_with_event_handlers_are_never_equal() {
+        let plain = Handler::new(|| ());
+        let with_event = Handler::with_event(|_: &Event| ());
+        assert_ne!(plain, with_event);
     }
 
     #[test]

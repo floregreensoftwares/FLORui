@@ -13,7 +13,7 @@
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
-use syn::Ident;
+use syn::{Expr, Ident};
 
 use florui_view_syntax::{AttrValue, Node};
 
@@ -23,6 +23,19 @@ use florui_view_syntax::{AttrValue, Node};
 /// dispatches one.
 fn event_name(attr_name: &str) -> Option<&str> {
     attr_name.strip_prefix("on").filter(|rest| !rest.is_empty())
+}
+
+/// `::florui::Handler::new` and `::florui::Handler::with_event` share no
+/// common trait bound (a single trait can't be blanket-implemented for
+/// both `Fn()` and `Fn(&Event)` at once — see `Handler`'s own doc
+/// comment), so `view!` picks between them itself: a one-parameter
+/// closure literal (`|event| ...`) wants the event, anything else — a
+/// zero-arg closure, or an expression that isn't a closure literal at all
+/// (a named function, a variable already holding a `Handler`-shaped
+/// value) — takes the plain constructor, matching today's behavior.
+fn handler_constructor(expr: &Expr) -> Ident {
+    let wants_event = matches!(expr, Expr::Closure(closure) if closure.inputs.len() == 1);
+    format_ident!("{}", if wants_event { "with_event" } else { "new" })
 }
 
 pub fn expand(nodes: Vec<Node>) -> TokenStream {
@@ -143,7 +156,8 @@ fn primitive_element(
         } else if let Some(event) = event_name(&name_str) {
             handler_pairs.push(match value {
                 AttrValue::Expr(expr) => {
-                    quote! { (#event.to_string(), ::florui::Handler::new(#expr)) }
+                    let ctor = handler_constructor(expr);
+                    quote! { (#event.to_string(), ::florui::Handler::#ctor(#expr)) }
                 }
                 AttrValue::Lit(lit) => {
                     let message = format!(
