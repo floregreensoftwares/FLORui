@@ -122,6 +122,18 @@ pub struct UiRuntime {
     extra_context_providers: Vec<Box<dyn Fn()>>,
 }
 
+/// One keyboard step for a focused range input — see
+/// [`UiRuntime::step_range_value`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RangeStep {
+    SmallDecrement,
+    SmallIncrement,
+    LargeDecrement,
+    LargeIncrement,
+    Min,
+    Max,
+}
+
 impl UiRuntime {
     /// Parses `css` and renders `root` once against `viewport`, so a
     /// freshly constructed runtime always has real geometry ready.
@@ -514,6 +526,33 @@ impl UiRuntime {
         let next = focus::radio_sibling(&self.arena, self.focused_node?, direction)?;
         self.set_focused(Some(next), true);
         Some(next)
+    }
+
+    /// A keyboard step for a focused range input — matches real HTML's
+    /// own Left/Down (-step), Right/Up (+step), PageDown (-10×step),
+    /// PageUp (+10×step, measured against Chrome for both a default and a
+    /// custom `step`), Home (min) and End (max).
+    pub(crate) fn step_range_value(&self, node: NodeId, step: RangeStep) -> Option<f32> {
+        let (min, max, unit) = (
+            self.arena.range_min(node),
+            self.arena.range_max(node),
+            self.arena.range_step(node),
+        );
+        let current = self.arena.range_value(node);
+        let requested = match step {
+            RangeStep::SmallDecrement => current - unit,
+            RangeStep::SmallIncrement => current + unit,
+            RangeStep::LargeDecrement => current - 10.0 * unit,
+            RangeStep::LargeIncrement => current + 10.0 * unit,
+            RangeStep::Min => min,
+            RangeStep::Max => max,
+        };
+        let clamped = requested.clamp(min.min(max), min.max(max));
+        if clamped == current {
+            return None;
+        }
+        self.commit_value(node, clamped.to_string());
+        Some(clamped)
     }
 
     /// Re-resolves [`Self::focused_path`] against `candidates` — a
@@ -1342,6 +1381,118 @@ mod tests {
         );
         runtime.commit_value(node_id(&runtime, "a"), "new".to_string());
         assert_eq!(*received.borrow(), vec!["new".to_string()]);
+    }
+
+    fn range_runtime(min: f32, max: f32, step: f32, value: f32) -> UiRuntime {
+        UiRuntime::with_rules(
+            Vec::new(),
+            move || {
+                view! {
+                    <input
+                        id="r"
+                        type="range"
+                        min={min.to_string()}
+                        max={max.to_string()}
+                        step={step.to_string()}
+                        value={value.to_string()}
+                        oninput={|_: String| {}}
+                    />
+                }
+            },
+            viewport(),
+        )
+    }
+
+    /// `step_range_value` reads and writes through the owner's own value
+    /// (via [`UiRuntime::commit_value`], same as any controlled
+    /// component), so a runtime whose `oninput` never accepts the request
+    /// never actually moves — each case here checks one interaction
+    /// against its own starting state, matching how `Switch`'s own tests
+    /// each check one interaction rather than chaining several against a
+    /// runtime that has nothing accepting them.
+    #[test]
+    fn step_range_value_moves_by_one_step_in_either_direction() {
+        let runtime = range_runtime(0.0, 10.0, 1.0, 5.0);
+        let node = node_id(&runtime, "r");
+        assert_eq!(
+            runtime.step_range_value(node, RangeStep::SmallIncrement),
+            Some(6.0)
+        );
+        assert_eq!(
+            runtime.step_range_value(node, RangeStep::SmallDecrement),
+            Some(4.0)
+        );
+    }
+
+    #[test]
+    fn step_range_value_clamps_at_the_bounds_and_is_a_no_op_past_them() {
+        let at_max = range_runtime(0.0, 10.0, 1.0, 10.0);
+        let node = node_id(&at_max, "r");
+        assert_eq!(
+            at_max.step_range_value(node, RangeStep::SmallIncrement),
+            None,
+            "already at max"
+        );
+
+        let at_min = range_runtime(0.0, 10.0, 1.0, 0.0);
+        let node = node_id(&at_min, "r");
+        assert_eq!(
+            at_min.step_range_value(node, RangeStep::SmallDecrement),
+            None,
+            "already at min"
+        );
+    }
+
+    #[test]
+    fn step_range_value_home_and_end_jump_to_min_and_max() {
+        let runtime = range_runtime(0.0, 10.0, 1.0, 5.0);
+        let node = node_id(&runtime, "r");
+        assert_eq!(runtime.step_range_value(node, RangeStep::Min), Some(0.0));
+        assert_eq!(runtime.step_range_value(node, RangeStep::Max), Some(10.0));
+    }
+
+    #[test]
+    fn step_range_value_large_step_is_ten_times_the_small_step() {
+        // Matches both cases measured against Chrome: default step 1 on a
+        // 0-100 range moves 10 on Page; a custom step 10 moves 100.
+        let default_step = range_runtime(0.0, 100.0, 1.0, 30.0);
+        let node = node_id(&default_step, "r");
+        assert_eq!(
+            default_step.step_range_value(node, RangeStep::LargeIncrement),
+            Some(40.0)
+        );
+
+        let custom_step = range_runtime(0.0, 100.0, 10.0, 0.0);
+        let node = node_id(&custom_step, "r");
+        assert_eq!(
+            custom_step.step_range_value(node, RangeStep::LargeIncrement),
+            Some(100.0)
+        );
+    }
+
+    #[test]
+    fn step_range_value_requests_the_new_value_through_the_value_attribute() {
+        let requests: Rc<RefCell<Vec<String>>> = Rc::default();
+        let recorded = requests.clone();
+        let runtime = UiRuntime::with_rules(
+            Vec::new(),
+            move || {
+                let recorded = recorded.clone();
+                view! {
+                    <input
+                        id="r"
+                        type="range"
+                        min="0"
+                        max="10"
+                        value={"5".to_string()}
+                        oninput={move |value: String| recorded.borrow_mut().push(value)}
+                    />
+                }
+            },
+            viewport(),
+        );
+        runtime.step_range_value(node_id(&runtime, "r"), RangeStep::SmallIncrement);
+        assert_eq!(*requests.borrow(), vec!["6".to_string()]);
     }
 
     fn three_buttons_runtime() -> UiRuntime {
