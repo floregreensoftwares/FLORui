@@ -26,7 +26,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use accesskit::{Action, Node, NodeId as AccessKitId, Rect, Role, TreeId, TreeInfo, TreeUpdate};
+use accesskit::{
+    Action, Node, NodeId as AccessKitId, Rect, Role, Toggled, TreeId, TreeInfo, TreeUpdate,
+};
 use florui_style::{AccessibleRole, Arena, FocusPath, NodeId};
 
 use crate::focus::is_focusable;
@@ -191,7 +193,18 @@ impl AccessibilityTree {
                 if let Some(label) = arena.accessible_label(id) {
                     node.set_label(label);
                 }
-                node.set_toggled(arena.is_checked(id).into());
+                // A checkbox's `indeterminate` overrides `checked` for the
+                // reported state -- real HTML's own IDL-property behavior
+                // (`indeterminate` never applies to a radio). Measured
+                // against Chrome: this holds for a plain checkbox and for
+                // one with `role="switch"` alike.
+                let indeterminate =
+                    arena.input_type(id) == Some("checkbox") && arena.is_indeterminate(id);
+                node.set_toggled(if indeterminate {
+                    Toggled::Mixed
+                } else {
+                    arena.is_checked(id).into()
+                });
                 if is_focusable(arena, id) {
                     node.add_action(Action::Focus);
                     node.add_action(Action::Click);
@@ -271,7 +284,6 @@ impl AccessibilityTree {
 
 #[cfg(test)]
 mod tests {
-    use accesskit::Toggled;
     use florui::prelude::*;
 
     use super::*;
@@ -454,6 +466,37 @@ mod tests {
         let input = arena.roots()[0];
         let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
         assert_eq!(role_of(&update, ak_id), Role::CheckBox);
+    }
+
+    #[test]
+    fn an_indeterminate_checkbox_reports_mixed_regardless_of_checked() {
+        let tree: Element = view! { <input type="checkbox" checked="true" indeterminate="true" /> };
+        let (update, reverse, arena) = build(&tree, None);
+        let input = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert_eq!(node.toggled(), Some(Toggled::Mixed));
+    }
+
+    #[test]
+    fn an_indeterminate_role_switch_also_reports_mixed() {
+        let tree: Element = view! { <input type="checkbox" role="switch" indeterminate="true" /> };
+        let (update, reverse, arena) = build(&tree, None);
+        let input = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
+        assert_eq!(role_of(&update, ak_id), Role::Switch);
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert_eq!(node.toggled(), Some(Toggled::Mixed));
+    }
+
+    #[test]
+    fn indeterminate_on_a_radio_is_ignored() {
+        let tree: Element = view! { <input type="radio" checked="true" indeterminate="true" /> };
+        let (update, reverse, arena) = build(&tree, None);
+        let input = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == input).unwrap().0;
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert_eq!(node.toggled(), Some(Toggled::True));
     }
 
     #[test]
