@@ -1483,9 +1483,12 @@ impl WindowState {
         {
             // Matches real HTML: a click sets keyboard focus to its
             // target too, just not :focus-visible (via_keyboard: false).
+            let Some(target) = self.runtime.activation_target(pressed) else {
+                return;
+            };
             let previous = self.focused_text_input();
-            let focus_changed = self.runtime.set_focused(Some(pressed), false);
-            self.runtime.dispatch_click(pressed);
+            let focus_changed = self.runtime.set_focused(Some(target), false);
+            self.runtime.dispatch_click(target);
             if focus_changed {
                 // `pressed` is never itself an editable text input here
                 // (`handle_press` routes those through
