@@ -1203,6 +1203,12 @@ impl WindowState {
             self.update_and_request_redraw();
             return;
         }
+        if self.runtime.is_range_dragging() {
+            if self.runtime.continue_range_drag(x).is_some() {
+                self.update_and_request_redraw();
+            }
+            return;
+        }
         let hit = self
             .runtime
             .hit_test(x, y)
@@ -1324,6 +1330,21 @@ impl WindowState {
             && self.is_editable_text_input(node)
         {
             self.handle_text_input_press(node, x);
+            return;
+        }
+        if let Some(node) = hit
+            && !self.is_disabled(node)
+            && {
+                let (arena, ..) = self.runtime.geometry();
+                arena.tag(node) == "input"
+                    && crate::focus::is_range_input_type(arena.input_type(node))
+            }
+        {
+            // Matches Chrome: mousedown alone already jumps the value and
+            // focuses the control, before any drag movement.
+            self.runtime.set_focused(Some(node), false);
+            self.runtime.start_range_drag(node, x);
+            self.update_and_request_redraw();
             return;
         }
         // A disabled button must not become `pressed`: `handle_release`
@@ -1479,6 +1500,11 @@ impl WindowState {
 
     fn handle_release(&mut self) {
         self.text_selecting = None;
+        if self.runtime.is_range_dragging() {
+            self.runtime.end_range_drag();
+            self.update_and_request_redraw();
+            return;
+        }
         let (x, y) = self.to_logical_cursor(self.last_cursor.0, self.last_cursor.1);
         let pressed = self.pressed.take();
         let released_over = self.runtime.hit_test(x, y);
