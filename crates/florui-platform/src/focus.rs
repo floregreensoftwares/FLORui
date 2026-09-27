@@ -23,6 +23,12 @@ pub(crate) fn is_checkable_input_type(input_type: Option<&str>) -> bool {
     matches!(input_type, Some("checkbox") | Some("radio"))
 }
 
+/// Whether a `<label>` can hand its click to `id`: an `<input>` or a
+/// `<button>`.
+pub(crate) fn is_labelable(arena: &Arena, id: NodeId) -> bool {
+    matches!(arena.tag(id), "input" | "button")
+}
+
 fn is_radio(arena: &Arena, id: NodeId) -> bool {
     arena.tag(id) == "input" && arena.input_type(id) == Some("radio")
 }
