@@ -41,6 +41,13 @@ pub(crate) fn is_focusable(arena: &Arena, id: NodeId) -> bool {
     }
 }
 
+/// Whether the Enter key activates `id`. As in real HTML a checkbox or
+/// radio (and so a switch) is toggled by Space only; Enter activates a
+/// button.
+pub(crate) fn activates_on_enter(arena: &Arena, id: NodeId) -> bool {
+    !(arena.tag(id) == "input" && is_checkable_input_type(arena.input_type(id)))
+}
+
 /// Every focusable node, in document order — both the tab-traversal
 /// sequence and the candidate list [`florui_style::FocusPath::resolve`]
 /// needs.
@@ -198,6 +205,24 @@ mod tests {
         let tree: Element = view! { <input type="checkbox" /> };
         let arena = Arena::build(&tree);
         assert!(is_focusable(&arena, arena.roots()[0]));
+    }
+
+    #[test]
+    fn enter_activates_a_button_but_not_a_checkbox_or_radio() {
+        let tree: Element = view! {
+            <div>
+                <button>{"go"}</button>
+                <input type="checkbox" />
+                <input type="radio" />
+                <input type="checkbox" role="switch" />
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let button = arena.find(|a, id| a.tag(id) == "button").unwrap();
+        assert!(activates_on_enter(&arena, button));
+        for input in arena.find_all(|a, id| a.tag(id) == "input") {
+            assert!(!activates_on_enter(&arena, input));
+        }
     }
 
     #[test]
