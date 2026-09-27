@@ -86,6 +86,7 @@ fn normalize_node(node: &mut ElementNode, summaries: &mut HashMap<String, Vec<Op
         let root_handlers = ondismiss
             .map(|handler| vec![("dismiss".to_string(), handler)])
             .unwrap_or_default();
+        options.iter_mut().for_each(inject_optgroup_label);
 
         let content = Element::node(
             "div",
@@ -120,40 +121,78 @@ fn normalize_node(node: &mut ElementNode, summaries: &mut HashMap<String, Vec<Op
     };
 }
 
+/// Class on the synthesized header the module doc's `inject_optgroup_label`
+/// gives an open `<optgroup>`'s own `label` attribute — real HTML has no
+/// content-generation mechanism here to reach for, and `<optgroup>`'s own
+/// only real children are `<option>`s, so its `label` needs a real
+/// sibling element to actually show.
+pub const SELECT_OPTGROUP_LABEL_CLASS: &str = "florui-optgroup-label";
+
+/// Gives an `<optgroup>` a real, visible header for its own `label`
+/// attribute — one non-`<option>`, non-interactive child, prepended
+/// ahead of its real options. A no-op for anything else, so callers can
+/// map this over every top-level child unconditionally.
+fn inject_optgroup_label(element: &mut Element) {
+    let Element::Node(node) = element else {
+        return;
+    };
+    if node.tag != "optgroup" {
+        return;
+    }
+    let Some(label) = attr(&node.attrs, "label") else {
+        return;
+    };
+    let header = Element::node(
+        "div",
+        vec![("class".to_string(), SELECT_OPTGROUP_LABEL_CLASS.to_string())],
+        vec![Element::text(label)],
+    );
+    node.children.insert(0, header);
+}
+
+/// Every real `<option>` among `options`, descending one level into any
+/// `<optgroup>` — real HTML only ever nests `<option>` directly inside
+/// one, never deeper.
+fn flatten_options(options: &[Element]) -> Vec<&ElementNode> {
+    let mut flat = Vec::new();
+    for el in options {
+        match el {
+            Element::Node(n) if n.tag == "option" => flat.push(n),
+            Element::Node(n) if n.tag == "optgroup" => {
+                flat.extend(flatten_options(&n.children));
+            }
+            _ => {}
+        }
+    }
+    flat
+}
+
 fn option_summaries(options: &[Element]) -> Vec<OptionSummary> {
-    options
-        .iter()
-        .filter_map(|el| match el {
-            Element::Node(n) if n.tag == "option" => Some(OptionSummary {
-                label: collect_text(&n.children),
-                selected: attr_bool(&n.attrs, "selected"),
-                onclick: n
-                    .handlers
-                    .iter()
-                    .find(|(name, _)| name == "click")
-                    .map(|(_, handler)| handler.clone()),
-            }),
-            _ => None,
+    flatten_options(options)
+        .into_iter()
+        .map(|n| OptionSummary {
+            label: collect_text(&n.children),
+            selected: attr_bool(&n.attrs, "selected"),
+            onclick: n
+                .handlers
+                .iter()
+                .find(|(name, _)| name == "click")
+                .map(|(_, handler)| handler.clone()),
         })
         .collect()
 }
 
-/// The text of the first `<option selected="true">` among `options`, or
-/// the first `<option>` at all if none is marked — real HTML's own
-/// default-to-first-option behavior when nothing is explicitly selected.
+/// The text of the first `<option selected="true">` among `options`
+/// (descending into any `<optgroup>`), or the first `<option>` at all if
+/// none is marked — real HTML's own default-to-first-option behavior
+/// when nothing is explicitly selected.
 fn selected_label(options: &[Element]) -> Option<String> {
-    let explicit = options.iter().find_map(|el| match el {
-        Element::Node(n) if n.tag == "option" && attr_bool(&n.attrs, "selected") => {
-            Some(collect_text(&n.children))
-        }
-        _ => None,
-    });
-    explicit.or_else(|| {
-        options.iter().find_map(|el| match el {
-            Element::Node(n) if n.tag == "option" => Some(collect_text(&n.children)),
-            _ => None,
-        })
-    })
+    let flat = flatten_options(options);
+    let explicit = flat
+        .iter()
+        .find(|n| attr_bool(&n.attrs, "selected"))
+        .map(|n| collect_text(&n.children));
+    explicit.or_else(|| flat.first().map(|n| collect_text(&n.children)))
 }
 
 /// `select`'s currently active (keyboard-highlighted) option, if it's
@@ -161,17 +200,34 @@ fn selected_label(options: &[Element]) -> Option<String> {
 /// — used by the accessibility bridge's `active_descendant`. `None` while
 /// closed: options aren't real `Arena` nodes then (see the module doc).
 pub(crate) fn active_option(arena: &Arena, select: NodeId) -> Option<NodeId> {
+    options_of(arena, select)?
+        .into_iter()
+        .find(|&option| arena.is_active(option))
+}
+
+/// The live `<option>` nodes under `select`'s own open content root, in
+/// document order, descending through any `<optgroup>` — `None` if
+/// `select` is closed or its content root doesn't resolve.
+pub(crate) fn options_of(arena: &Arena, select: NodeId) -> Option<Vec<NodeId>> {
     if !arena.is_open(select) {
         return None;
     }
     let select_id = arena.id_attr(select)?;
     let content_id = format!("{select_id}{SELECT_CONTENT_ID_SUFFIX}");
     let content = arena.find(|a, id| a.id_attr(id) == Some(content_id.as_str()))?;
-    arena
-        .children(content)
-        .iter()
-        .copied()
-        .find(|&option| arena.is_active(option))
+    Some(options_within(arena, content))
+}
+
+fn options_within(arena: &Arena, container: NodeId) -> Vec<NodeId> {
+    let mut options = Vec::new();
+    for child in arena.children(container) {
+        match arena.tag(*child) {
+            "option" => options.push(*child),
+            "optgroup" => options.extend(options_within(arena, *child)),
+            _ => {}
+        }
+    }
+    options
 }
 
 fn collect_text(children: &[Element]) -> String {
@@ -294,6 +350,59 @@ mod tests {
         assert!(!options[0].selected);
         assert_eq!(options[1].label, "Medium");
         assert!(options[1].selected);
+    }
+
+    #[test]
+    fn option_summaries_descend_into_an_optgroup() {
+        let tree: Element = view! {
+            <select id="size">
+                <optgroup label="Small sizes">
+                    <option value="s">{"Small"}</option>
+                </optgroup>
+                <option value="m" selected="true">{"Medium"}</option>
+            </select>
+        };
+        let (_, summaries) = normalized(tree);
+        let options = &summaries["size"];
+        assert_eq!(options.len(), 2);
+        assert_eq!(options[0].label, "Small");
+        assert_eq!(options[1].label, "Medium");
+    }
+
+    #[test]
+    fn an_open_optgroup_gets_a_visible_header_for_its_label_alongside_its_options() {
+        let tree: Element = view! {
+            <select id="size" open="true">
+                <optgroup label="Small sizes">
+                    <option value="s">{"Small"}</option>
+                </optgroup>
+            </select>
+        };
+        let (arena, _) = normalized(tree);
+        let optgroup = arena.find(|a, id| a.tag(id) == "optgroup").unwrap();
+        assert_eq!(arena.group_label(optgroup), Some("Small sizes"));
+        let children = arena.children(optgroup);
+        assert_eq!(children.len(), 2, "the header div, then the real option");
+        assert_eq!(arena.text_content(children[0]), "Small sizes");
+        assert_eq!(arena.tag(children[1]), "option");
+    }
+
+    #[test]
+    fn options_of_finds_a_grouped_option() {
+        let tree: Element = view! {
+            <select id="size" open="true">
+                <optgroup label="Small sizes">
+                    <option value="s">{"Small"}</option>
+                </optgroup>
+                <option value="m" selected="true">{"Medium"}</option>
+            </select>
+        };
+        let (arena, _) = normalized(tree);
+        let select = arena.find(|a, id| a.tag(id) == "select").unwrap();
+        let options = options_of(&arena, select).expect("select is open");
+        assert_eq!(options.len(), 2);
+        assert_eq!(arena.text_content(options[0]), "Small");
+        assert_eq!(arena.text_content(options[1]), "Medium");
     }
 
     #[test]

@@ -13,7 +13,9 @@
 //! contract every other control here already follows. `active` tracks
 //! the keyboard highlight separately from `selected` (the committed
 //! value) -- this app resyncs it to the committed value whenever the
-//! dropdown opens or closes, matching real HTML's own behavior.
+//! dropdown opens or closes, matching real HTML's own behavior. Options
+//! are grouped under two `<optgroup>`s to show their own bold `label`
+//! headers.
 //!
 //! `cargo run --example controlled_select -p florui-example-app`
 
@@ -88,42 +90,46 @@ fn app() -> Element {
                     onclick={toggle}
                     ondismiss={close}
                 >
-                    <option
-                        value="small"
-                        selected={value.get() == "small"}
-                        active={active.get() == "small"}
-                        onclick={pick("small")}
-                        onactivate={highlight("small")}
-                    >
-                        {"Small"}
-                    </option>
-                    <option
-                        value="medium"
-                        selected={value.get() == "medium"}
-                        active={active.get() == "medium"}
-                        onclick={pick("medium")}
-                        onactivate={highlight("medium")}
-                    >
-                        {"Medium"}
-                    </option>
-                    <option
-                        value="large"
-                        selected={value.get() == "large"}
-                        active={active.get() == "large"}
-                        onclick={pick("large")}
-                        onactivate={highlight("large")}
-                    >
-                        {"Large"}
-                    </option>
-                    <option
-                        value="extra-large"
-                        selected={value.get() == "extra-large"}
-                        active={active.get() == "extra-large"}
-                        onclick={pick("extra-large")}
-                        onactivate={highlight("extra-large")}
-                    >
-                        {"Extra Large"}
-                    </option>
+                    <optgroup label="Standard sizes">
+                        <option
+                            value="small"
+                            selected={value.get() == "small"}
+                            active={active.get() == "small"}
+                            onclick={pick("small")}
+                            onactivate={highlight("small")}
+                        >
+                            {"Small"}
+                        </option>
+                        <option
+                            value="medium"
+                            selected={value.get() == "medium"}
+                            active={active.get() == "medium"}
+                            onclick={pick("medium")}
+                            onactivate={highlight("medium")}
+                        >
+                            {"Medium"}
+                        </option>
+                    </optgroup>
+                    <optgroup label="Bulk sizes">
+                        <option
+                            value="large"
+                            selected={value.get() == "large"}
+                            active={active.get() == "large"}
+                            onclick={pick("large")}
+                            onactivate={highlight("large")}
+                        >
+                            {"Large"}
+                        </option>
+                        <option
+                            value="extra-large"
+                            selected={value.get() == "extra-large"}
+                            active={active.get() == "extra-large"}
+                            onclick={pick("extra-large")}
+                            onactivate={highlight("extra-large")}
+                        >
+                            {"Extra Large"}
+                        </option>
+                    </optgroup>
                 </select>
                 <p class="filler">{"This box clips its own content..."}</p>
                 <p class="filler">{"...but not the select's dropdown."}</p>

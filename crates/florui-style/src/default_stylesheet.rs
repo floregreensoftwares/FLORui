@@ -69,6 +69,12 @@
 //! verified to scale like a real padding would. The dropdown-arrow glyph
 //! is the same `appearance: auto` category with no fallback at all: no
 //! CSS box of its own to even approximate a value for.
+//!
+//! `optgroup`/`.florui-optgroup-label` (a synthesized header for its own
+//! `label` attribute — see `florui-platform`'s `select` module) are *not*
+//! checked against a real Chromium the way everything above is:
+//! `display: block` and a bold label are standard, undisputed
+//! cross-browser behavior, not measured here.
 
 use std::sync::LazyLock;
 
@@ -115,6 +121,15 @@ const CSS: &str = "
         padding-right: 2px;
         padding-bottom: 1px;
         padding-left: 2px;
+    }
+
+    optgroup {
+        display: block;
+    }
+
+    .florui-optgroup-label {
+        display: block;
+        font-weight: bold;
     }
 
     h1, h2, h3, h4, h5, h6 {

@@ -802,21 +802,10 @@ impl UiRuntime {
     /// its parent select.
     pub fn step_select_option(&self, direction: isize) -> Option<NodeId> {
         let select = self.focused_node?;
-        if self.arena.tag(select) != "select" || !self.arena.is_open(select) {
+        if self.arena.tag(select) != "select" {
             return None;
         }
-        let select_id = self.arena.id_attr(select)?;
-        let content_id = format!("{select_id}{}", crate::select::SELECT_CONTENT_ID_SUFFIX);
-        let content = self
-            .arena
-            .find(|arena, id| arena.id_attr(id) == Some(content_id.as_str()))?;
-        let options: Vec<NodeId> = self
-            .arena
-            .children(content)
-            .iter()
-            .copied()
-            .filter(|&id| self.arena.tag(id) == "option")
-            .collect();
+        let options = crate::select::options_of(&self.arena, select)?;
         if options.len() < 2 {
             return None;
         }
@@ -839,15 +828,8 @@ impl UiRuntime {
     pub fn active_or_selected_option(&self) -> Option<NodeId> {
         let select = self.focused_node?;
         crate::select::active_option(&self.arena, select).or_else(|| {
-            let select_id = self.arena.id_attr(select)?;
-            let content_id = format!("{select_id}{}", crate::select::SELECT_CONTENT_ID_SUFFIX);
-            let content = self
-                .arena
-                .find(|arena, id| arena.id_attr(id) == Some(content_id.as_str()))?;
-            self.arena
-                .children(content)
-                .iter()
-                .copied()
+            crate::select::options_of(&self.arena, select)?
+                .into_iter()
                 .find(|&id| self.arena.is_selected(id))
         })
     }
