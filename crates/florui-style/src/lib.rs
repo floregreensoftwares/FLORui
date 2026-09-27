@@ -48,10 +48,10 @@ mod tree;
 
 pub use animation::AnimationTimeline;
 pub use cascade::{
-    BorderSide, BoxShadow, ComputedStyle, ContainerType, ContentAlignment, Corners, Display, Edges,
-    FilterFunction, FlexDirection, FlexWrap, FontFamily, GridPlacement, GridTrackSize,
-    ItemAlignment, LengthPercentage, Position, TransformFunction, Viewport, compute,
-    compute_with_container_query_signature,
+    AspectRatio, BorderSide, BoxShadow, ComputedStyle, ContainerType, ContentAlignment, Corners,
+    Display, Edges, FilterFunction, FlexDirection, FlexWrap, FontFamily, GridPlacement,
+    GridTrackSize, ItemAlignment, LengthPercentage, ObjectFit, Position, TransformFunction,
+    Viewport, compute, compute_with_container_query_signature,
 };
 pub use color::{ColorParseError, Rgba, parse_hex_color};
 pub use container_query_adapter::{ContentBoxSize, resolve_container_query_signatures};
