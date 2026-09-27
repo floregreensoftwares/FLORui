@@ -684,6 +684,22 @@ impl UiRuntime {
         }
     }
 
+    /// Reports `value` to whichever write-back channel `node`'s own
+    /// `value` attribute carries — a [`florui_reactive::Binding`] if it
+    /// declared one, else an explicit [`florui::ValueHandler`] if it
+    /// declared that instead, else nothing. Shared by every controlled
+    /// primitive that writes back through the `value` attribute (a text
+    /// input's committed text, a range input's requested number as a
+    /// string); the caller still owns redrawing afterward, the same way
+    /// [`Self::dispatch_click`]'s caller does.
+    pub(crate) fn commit_value(&self, node: NodeId, value: String) {
+        if let Some(binding) = self.arena.value_binding(node, "value") {
+            binding.request_update(value);
+        } else if let Some(handler) = self.arena.value_handler(node, "value") {
+            handler.call(value);
+        }
+    }
+
     /// Same as [`Self::dispatch_click`], generalized to an arbitrary
     /// event name and with no disabled-button gate — a modal
     /// [`crate::components::dialog::Dialog`]'s own root is never itself a
@@ -1287,6 +1303,45 @@ mod tests {
             1,
             "unmounting the observing scope must dispose its attachment, not fire it again"
         );
+    }
+
+    #[test]
+    fn commit_value_writes_through_a_binding_when_the_node_declared_one() {
+        let requests: Rc<RefCell<Vec<String>>> = Rc::default();
+        let recorded = requests.clone();
+        let binding = Binding::new("old".to_string(), move |value| {
+            recorded.borrow_mut().push(value)
+        });
+        let runtime = UiRuntime::with_rules(
+            Vec::new(),
+            move || view! { <input type="text" id="a" value={binding.clone()} /> },
+            viewport(),
+        );
+        runtime.commit_value(node_id(&runtime, "a"), "new".to_string());
+        assert_eq!(*requests.borrow(), vec!["new".to_string()]);
+    }
+
+    #[test]
+    fn commit_value_calls_the_explicit_handler_when_there_is_no_binding() {
+        let received: Rc<RefCell<Vec<String>>> = Rc::default();
+        let recorded = received.clone();
+        let runtime = UiRuntime::with_rules(
+            Vec::new(),
+            move || {
+                let recorded = recorded.clone();
+                view! {
+                    <input
+                        type="text"
+                        id="a"
+                        value={"old".to_string()}
+                        oninput={move |value: String| recorded.borrow_mut().push(value)}
+                    />
+                }
+            },
+            viewport(),
+        );
+        runtime.commit_value(node_id(&runtime, "a"), "new".to_string());
+        assert_eq!(*received.borrow(), vec!["new".to_string()]);
     }
 
     fn three_buttons_runtime() -> UiRuntime {
