@@ -607,26 +607,55 @@ impl UiRuntime {
         self.interaction = state;
     }
 
-    /// The node a click on `node` activates. Only a `<label for="id">`
-    /// redirects, to the `<input>`/`<button>` carrying that `id`, as in real
-    /// HTML: `None` if that control is disabled (clicking its label does
-    /// nothing). A label with no matching control, and every other node,
-    /// activates itself. A wrapper never redirects on its own.
+    /// The node a click on `node` activates. A click reaching a `<label>`
+    /// (on the label itself, or on something inside it) activates the
+    /// label's control, as in real HTML: the `<input>`/`<button>` its
+    /// `for` names, or, with no `for`, its first such descendant. `None`
+    /// if that control is disabled (clicking its label does nothing). An
+    /// input or button is its own target, and so is anything with no
+    /// label around it or no control to reach. Only a label redirects: any
+    /// other wrapper never does.
     pub fn activation_target(&self, node: NodeId) -> Option<NodeId> {
-        let Some(for_id) = (self.arena.tag(node) == "label")
-            .then(|| self.arena.label_for(node))
-            .flatten()
-        else {
+        let Some(label) = self.enclosing_label(node) else {
             return Some(node);
         };
-        let control = self.arena.find(|arena, candidate| {
-            matches!(arena.tag(candidate), "input" | "button")
-                && arena.id_attr(candidate) == Some(for_id)
-        });
+        let control = match self.arena.label_for(label) {
+            Some(for_id) => self.arena.find(|arena, candidate| {
+                focus::is_labelable(arena, candidate) && arena.id_attr(candidate) == Some(for_id)
+            }),
+            None => self.first_labelable_descendant(label),
+        };
         match control {
             Some(control) => focus::is_focusable(&self.arena, control).then_some(control),
             None => Some(node),
         }
+    }
+
+    /// The nearest `<label>` at or above `node`, unless an input or button
+    /// sits in between: those take their own clicks.
+    fn enclosing_label(&self, node: NodeId) -> Option<NodeId> {
+        let mut current = Some(node);
+        while let Some(id) = current {
+            if self.arena.tag(id) == "label" {
+                return Some(id);
+            }
+            if focus::is_labelable(&self.arena, id) {
+                return None;
+            }
+            current = self.arena.parent(id);
+        }
+        None
+    }
+
+    fn first_labelable_descendant(&self, root: NodeId) -> Option<NodeId> {
+        let mut stack: Vec<NodeId> = self.arena.children(root).iter().rev().copied().collect();
+        while let Some(id) = stack.pop() {
+            if focus::is_labelable(&self.arena, id) {
+                return Some(id);
+            }
+            stack.extend(self.arena.children(id).iter().rev());
+        }
+        None
     }
 
     /// Calls `node`'s `click` handler, if it declared one, against the
@@ -1333,6 +1362,58 @@ mod tests {
             let node = node_id(&runtime, id);
             assert_eq!(runtime.activation_target(node), Some(node), "{id}");
         }
+    }
+
+    fn nested_label_runtime() -> UiRuntime {
+        UiRuntime::with_rules(
+            Vec::new(),
+            || {
+                view! {
+                    <div id="plain-wrapper">
+                        <label id="wrap">
+                            <input id="wrapped" type="checkbox" />
+                            <span id="wrap-text">{"Wrapped"}</span>
+                        </label>
+                        <label id="mismatch" for="nothing">
+                            <input id="ignored" type="checkbox" />
+                        </label>
+                        <label id="with-button"><button id="inside">{"go"}</button></label>
+                        <label id="off-target"><input id="disabled-one" type="checkbox" disabled="true" /></label>
+                    </div>
+                }
+            },
+            viewport(),
+        )
+    }
+
+    #[test]
+    fn a_label_wrapping_a_control_activates_it_from_the_label_and_from_inside_it() {
+        let runtime = nested_label_runtime();
+        let control = node_id(&runtime, "wrapped");
+        for id in ["wrap", "wrap-text"] {
+            let node = node_id(&runtime, id);
+            assert_eq!(runtime.activation_target(node), Some(control), "{id}");
+        }
+    }
+
+    #[test]
+    fn a_label_with_a_for_never_falls_back_to_a_descendant_control() {
+        let runtime = nested_label_runtime();
+        let label = node_id(&runtime, "mismatch");
+        assert_eq!(runtime.activation_target(label), Some(label));
+    }
+
+    #[test]
+    fn a_control_inside_a_label_is_its_own_target_and_a_disabled_one_activates_nothing() {
+        let runtime = nested_label_runtime();
+        let button = node_id(&runtime, "inside");
+        assert_eq!(runtime.activation_target(button), Some(button));
+        assert_eq!(
+            runtime.activation_target(node_id(&runtime, "off-target")),
+            None
+        );
+        let plain = node_id(&runtime, "plain-wrapper");
+        assert_eq!(runtime.activation_target(plain), Some(plain));
     }
 
     fn radio_group_runtime() -> UiRuntime {
