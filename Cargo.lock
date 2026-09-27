@@ -1701,6 +1701,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "florui-assets"
+version = "0.1.0"
+dependencies = [
+ "image",
+ "notify",
+ "resvg",
+ "tempfile",
+]
+
+[[package]]
 name = "florui-build"
 version = "0.1.0"
 dependencies = [

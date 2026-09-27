@@ -1,0 +1,26 @@
+[package]
+name = "florui-assets"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "florui_assets"
+
+[features]
+default = []
+# A background file-watcher thread per watched source -- not every
+# consumer wants one (a build script or a one-shot decode never does),
+# so this stays opt-in rather than a hard dependency of the crate.
+watch = ["dep:notify"]
+
+[dependencies]
+resvg = { version = "0.48.1", default-features = false }
+image = { version = "0.25.10", default-features = false, features = [
+    "png",
+] }
+notify = { version = "8.2.0", optional = true }
+
+[dev-dependencies]
+tempfile = "3"

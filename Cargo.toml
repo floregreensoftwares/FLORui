@@ -4,6 +4,7 @@ members = [
     "crates/florui-devtools",
     "crates/florui-cli",
     "crates/florui-config",
+    "crates/florui-assets",
     "crates/florui-icon",
     "crates/florui-primitives",
     "crates/florui-view-syntax",
