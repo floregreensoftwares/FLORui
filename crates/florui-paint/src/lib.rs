@@ -62,10 +62,11 @@ use std::rc::Rc;
 
 use florui_layout::{BoxLayout, absolute_position};
 use florui_style::{
-    Arena, ComputedStyle, Display, FilterFunction, NodeId, Position, Rgba, TransformFunction,
+    Arena, ComputedStyle, Display, FilterFunction, NodeId, Position, Rgba, RoundedRect,
+    TransformFunction,
 };
 use florui_text::Font;
-use rounded::RoundedRect;
+use rounded::RoundedRectPath;
 use skrifa::instance::{LocationRef, NormalizedCoord, Size as GlyphSize};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::{FontRef, GlyphId, MetadataProvider};
