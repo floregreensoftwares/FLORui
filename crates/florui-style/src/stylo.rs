@@ -55,7 +55,7 @@ use stylo_dom::ElementState;
 use crate::animation::AnimationTimeline;
 use crate::cascade::{
     BorderSide as FlorBorderSide, BoxShadow as FlorBoxShadow, ComputedStyle,
-    ContainerType as FlorContainerType, ContentAlignment, Display as FlorDisplay, Edges,
+    ContainerType as FlorContainerType, ContentAlignment, Corners, Display as FlorDisplay, Edges,
     FilterFunction as FlorFilterFunction, FlexDirection, FlexWrap, FontFamily as FlorFontFamily,
     ItemAlignment, LengthPercentage as FlorLengthPercentage,
     TransformFunction as FlorTransformFunction, Viewport as FlorViewport,
@@ -1400,6 +1400,12 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
                 color,
             ),
         },
+        border_radius: Corners {
+            top_left: to_corner_radius(&border.border_top_left_radius),
+            top_right: to_corner_radius(&border.border_top_right_radius),
+            bottom_right: to_corner_radius(&border.border_bottom_right_radius),
+            bottom_left: to_corner_radius(&border.border_bottom_left_radius),
+        },
         grid_template_columns: to_grid_template_tracks(&position.grid_template_columns),
         grid_template_rows: to_grid_template_tracks(&position.grid_template_rows),
         grid_column: (
@@ -1600,6 +1606,17 @@ fn to_box_shadow(
             .unwrap_or(inherited_color),
         inset: shadow.inset,
     }
+}
+
+/// One corner's (horizontal, vertical) radius pair, percentages left
+/// unresolved -- see [`crate::cascade::ComputedStyle::border_radius`].
+fn to_corner_radius(
+    radius: &style::values::computed::BorderCornerRadius,
+) -> (FlorLengthPercentage, FlorLengthPercentage) {
+    (
+        to_length_percentage(&radius.0.width.0),
+        to_length_percentage(&radius.0.height.0),
+    )
 }
 
 /// One border side: `0.0` width for `none`/`hidden` (real CSS's initial

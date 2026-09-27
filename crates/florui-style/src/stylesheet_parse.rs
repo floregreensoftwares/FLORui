@@ -2,7 +2,7 @@
 //! model applies: a malformed declaration or rule is skipped, not
 //! rejected, matching how a browser behaves, not the previous hand-rolled
 //! parser's closed-subset rejection. Selectors and properties this crate
-//! doesn't yet render (a child combinator, `border-radius`, `!important`)
+//! doesn't yet render (a child combinator, `!important`)
 //! parse successfully; they simply have no visible effect until
 //! `florui-layout`/`florui-paint` grow support for them.
 

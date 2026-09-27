@@ -21,6 +21,15 @@ pub struct Edges<T> {
     pub left: T,
 }
 
+/// One value per corner of the box, clockwise from the top-left.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Corners<T> {
+    pub top_left: T,
+    pub top_right: T,
+    pub bottom_right: T,
+    pub bottom_left: T,
+}
+
 /// Which of this crate's two embedded font families to shape/measure text
 /// with — real CSS's own `font-family` is a whole comma-separated
 /// preference list of specific names and generics; this crate only
@@ -372,6 +381,12 @@ pub struct ComputedStyle {
     /// `border-*-width`/`-style`/`-color` per side — see [`BorderSide`]'s
     /// own doc for the solid-only scope and the `none`/`hidden` collapse.
     pub border: Edges<BorderSide>,
+    /// `border-*-radius` per corner as a (horizontal, vertical) pair, still
+    /// carrying any percentage unresolved: it resolves against this node's
+    /// own border box (width for horizontal, height for vertical), which
+    /// only paint knows. Not clamped here either -- the spec's
+    /// scale-down-when-radii-overlap rule needs that same final box.
+    pub border_radius: Corners<(LengthPercentage, LengthPercentage)>,
     /// `grid-template-columns`. Meaningless when [`Self::display`] isn't
     /// [`Display::Grid`]. See [`GridTrackSize`]'s own doc for the bound.
     pub grid_template_columns: Vec<GridTrackSize>,
@@ -753,6 +768,67 @@ mod tests {
             Rgba::opaque(0, 0xff, 0),
             ":enabled must match a button that isn't disabled"
         );
+    }
+
+    fn radius_of(css: &str) -> Corners<(LengthPercentage, LengthPercentage)> {
+        let tree: Element = view! { <div class="a" /> };
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let id = arena.roots()[0];
+        computed[&id].border_radius
+    }
+
+    fn lp(length: f32, percentage: f32) -> LengthPercentage {
+        LengthPercentage { length, percentage }
+    }
+
+    #[test]
+    fn border_radius_defaults_to_zero() {
+        let zero = (lp(0.0, 0.0), lp(0.0, 0.0));
+        let radius = radius_of(".a { width: 10px; }");
+        assert_eq!(radius.top_left, zero);
+        assert_eq!(radius.bottom_right, zero);
+    }
+
+    #[test]
+    fn border_radius_shorthand_expands_one_to_four_values_clockwise() {
+        let r = |px| (lp(px, 0.0), lp(px, 0.0));
+        let one = radius_of(".a { border-radius: 8px; }");
+        assert_eq!(
+            [
+                one.top_left,
+                one.top_right,
+                one.bottom_right,
+                one.bottom_left
+            ],
+            [r(8.0); 4]
+        );
+        let four = radius_of(".a { border-radius: 1px 2px 3px 4px; }");
+        assert_eq!(four.top_left, r(1.0));
+        assert_eq!(four.top_right, r(2.0));
+        assert_eq!(four.bottom_right, r(3.0));
+        assert_eq!(four.bottom_left, r(4.0));
+    }
+
+    #[test]
+    fn border_radius_slash_form_is_elliptical_and_percentages_stay_unresolved() {
+        let radius = radius_of(".a { border-radius: 10px 50% / 20px 25%; }");
+        assert_eq!(radius.top_left, (lp(10.0, 0.0), lp(20.0, 0.0)));
+        assert_eq!(radius.top_right, (lp(0.0, 0.5), lp(0.0, 0.25)));
+    }
+
+    #[test]
+    fn border_radius_longhand_sets_only_its_own_corner() {
+        let radius = radius_of(".a { border-bottom-left-radius: 6px 3px; }");
+        assert_eq!(radius.bottom_left, (lp(6.0, 0.0), lp(3.0, 0.0)));
+        assert_eq!(radius.top_left, (lp(0.0, 0.0), lp(0.0, 0.0)));
+    }
+
+    #[test]
+    fn border_radius_calc_splits_into_length_and_percentage() {
+        let radius = radius_of(".a { border-top-left-radius: calc(4px + 10%); }");
+        let (horizontal, _) = radius.top_left;
+        assert_eq!(horizontal.length, 4.0);
+        assert!((horizontal.percentage - 0.1).abs() < 1e-4);
     }
 
     #[test]
