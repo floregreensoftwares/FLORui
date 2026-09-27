@@ -2594,6 +2594,20 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                                     TextEditOp::InsertOrReplace(value),
                                 );
                             }
+                            // A screen reader's own increment/decrement
+                            // gesture on a slider steps it the same way an
+                            // arrow key already does.
+                            action @ (accesskit::Action::Increment
+                            | accesskit::Action::Decrement) => {
+                                let step = if action == accesskit::Action::Increment {
+                                    crate::runtime::RangeStep::SmallIncrement
+                                } else {
+                                    crate::runtime::RangeStep::SmallDecrement
+                                };
+                                if state.runtime.step_range_value(node, step).is_some() {
+                                    state.update_and_request_redraw();
+                                }
+                            }
                             _ => {}
                         }
                     }
