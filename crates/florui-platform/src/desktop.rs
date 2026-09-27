@@ -1963,12 +1963,7 @@ impl WindowState {
     /// reconciles against, not this value directly; see that module's own
     /// doc.
     fn commit_text_input_value(&mut self, node: NodeId, new_text: String) {
-        let (arena, ..) = self.runtime.geometry();
-        if let Some(binding) = arena.value_binding(node, "value") {
-            binding.request_update(new_text);
-        } else if let Some(handler) = arena.value_handler(node, "value") {
-            handler.call(new_text);
-        }
+        self.runtime.commit_value(node, new_text);
         self.update_and_request_redraw();
     }
 }
