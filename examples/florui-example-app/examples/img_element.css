@@ -1,0 +1,110 @@
+.page {
+    display: flex;
+    flex-direction: column;
+    padding-top: 24px;
+    padding-right: 24px;
+    padding-bottom: 24px;
+    padding-left: 24px;
+    background-color: #1e1e22;
+    color: #ffffff;
+}
+
+.instructions {
+    margin-bottom: 16px;
+    font-size: 16px;
+}
+
+.section-title {
+    margin-top: 20px;
+    margin-bottom: 8px;
+    font-size: 14px;
+    color: #a0a0aa;
+}
+
+.row {
+    display: flex;
+    flex-direction: row;
+}
+
+.swatch {
+    display: flex;
+    flex-direction: column;
+    margin-right: 16px;
+}
+
+.swatch-box {
+    width: 140px;
+    height: 100px;
+    background-color: #3a3a46;
+    border-width: 1px;
+    border-style: solid;
+    border-color: #55555f;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.swatch-label {
+    margin-top: 6px;
+    font-size: 13px;
+    color: #c0c0c8;
+}
+
+.fit-fill {
+    object-fit: fill;
+}
+.fit-contain {
+    object-fit: contain;
+}
+.fit-cover {
+    object-fit: cover;
+}
+.fit-none {
+    object-fit: none;
+}
+.fit-scale-down {
+    object-fit: scale-down;
+}
+
+.position-top-left {
+    object-fit: none;
+    object-position: 0% 0%;
+}
+.position-bottom-right {
+    object-fit: none;
+    object-position: 100% 100%;
+}
+
+.swap-button {
+    width: 200px;
+    padding-top: 8px;
+    padding-bottom: 8px;
+    padding-left: 12px;
+    padding-right: 12px;
+    background-color: #4c8bf5;
+    color: #ffffff;
+    border-width: 0px;
+    border-radius: 4px;
+    margin-top: 8px;
+    margin-bottom: 8px;
+}
+
+.current-src {
+    font-size: 13px;
+    color: #a0a0aa;
+    margin-bottom: 12px;
+}
+
+.swapped-box {
+    width: 140px;
+    height: 100px;
+    background-color: #3a3a46;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.broken-box {
+    width: 140px;
+    height: 100px;
+    background-color: #3a3a46;
+    border-radius: 6px;
+}
