@@ -1953,6 +1953,7 @@ dependencies = [
  "stylo_atoms",
  "stylo_config",
  "stylo_dom",
+ "stylo_traits",
  "url",
 ]
 

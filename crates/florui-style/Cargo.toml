@@ -21,6 +21,7 @@ stylo = "0.8"
 stylo_atoms = "0.8"
 stylo_config = "0.8"
 stylo_dom = "0.8"
+stylo_traits = "0.8"
 url = "2"
 
 [dev-dependencies]
