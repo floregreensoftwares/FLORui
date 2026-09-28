@@ -97,6 +97,19 @@
 //! (a privacy restriction, not a bug), so there was no way to make a
 //! local one register as visited to check against. `underline`/`pointer`
 //! apply to both states alike, matching real Chromium.
+//!
+//! `img { display: block; }` is a deliberate, documented divergence from
+//! real CSS, not an oversight: a real, unstyled `<img>` is inline-level
+//! (it flows inside a line of text). Leaving `display` unset here instead
+//! computes to CSS's own generic initial value, `inline` — and
+//! `florui_layout`'s inline-formatting-context algorithm (see its own
+//! module doc) only understands plain text and `InlineBlock` children so
+//! far, not a replaced element's own intrinsic content; an `<img>` swept
+//! into that path silently got no box of its own at all — a real,
+//! observed regression (a single `<img>` inside an otherwise-empty
+//! container), not a hypothetical one. `display: block` sidesteps that
+//! entirely until inline flow for a replaced element is its own,
+//! separate follow-up.
 
 use std::sync::LazyLock;
 
@@ -105,7 +118,7 @@ use style::stylesheets::Origin;
 use crate::stylesheet_parse::{Rule, parse_stylesheet_with_origin};
 
 const CSS: &str = "
-    div, p, h1, h2, h3, h4, h5, h6 {
+    div, p, h1, h2, h3, h4, h5, h6, img {
         display: block;
     }
 
