@@ -444,6 +444,8 @@ impl UiRuntime {
         )
         .expect("this tree's explicit sizes never produce a layout failure");
         self.styles = styles;
+        self.icon_registry
+            .sync_controls(&self.arena, &self.styles, &*self.executor);
         let (layouts, content_extents) = self.fix_select_widths(layouts, content_extents, viewport);
         let (layouts, content_extents) =
             self.fix_image_intrinsic_sizes(layouts, content_extents, viewport);

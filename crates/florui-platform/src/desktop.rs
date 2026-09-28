@@ -728,20 +728,80 @@ fn build_icon_paint(
         let key = FocusPath::of(arena, node);
         let style = styles.get(&node);
 
-        if let Some(src) = arena.src_attr(node)
-            && let Some(&layout) = layouts.get(&node)
-        {
+        if let Some(&layout) = layouts.get(&node) {
             let (width, height) = content_box_raster_target(style, layout);
             let color = style.map_or(florui_style::Rgba::opaque(0, 0, 0), |s| s.color);
             registry.request_raster(
                 &key,
-                src,
                 florui_assets::RasterFit::Contain { width, height },
                 [color.r, color.g, color.b],
                 cache,
                 executor,
             );
         }
+
+        if let Some(image) = registry.decoded(&key) {
+            result.insert(node, image);
+        }
+    }
+    result
+}
+
+/// Builds one [`florui_paint::ImagePaint`] entry for every `<select>`'s
+/// own built-in chevron and every checked checkbox's own built-in check
+/// mark currently on screen — the same [`crate::icon::IconRegistry`]
+/// [`build_icon_paint`] already uses, just driven by
+/// [`crate::icon::IconRegistry::sync_controls`]'s own registrations
+/// instead of real `<icon>` tags (see that method's own doc). Skips a
+/// control whose own resolved `appearance` is
+/// [`florui_style::Appearance::None`] entirely -- nothing requested,
+/// nothing painted, matching `sync_controls`'s own registration skip.
+///
+/// Rasterized at a fixed [`florui_paint::CONTROL_ICON_SIZE`] (logical px,
+/// square) scaled to this canvas's own physical pixels -- a control
+/// decoration has no CSS box of its own to size against the way an
+/// `<img>`/`<icon>`'s own content-box does, and no `object-fit` to read
+/// either (this is UA chrome, not a replaced element's own content); a
+/// fixed size is the same pragmatic simplification `RasterFit::Contain`
+/// already is elsewhere, not full size-aware rasterization. *Positioned*
+/// within the control's own content box by `florui_paint`'s own
+/// control-icon paint branch, which reads that same constant.
+fn build_control_icon_paint(
+    arena: &florui_style::Arena,
+    styles: &HashMap<NodeId, ComputedStyle>,
+    registry: &crate::icon::IconRegistry,
+    cache: &Arc<florui_assets::AssetCache>,
+    executor: &dyn florui_reactive::Executor,
+    scale_factor: f32,
+) -> HashMap<NodeId, florui_paint::ImagePaint> {
+    let mut result = HashMap::new();
+    let is_control_icon_node = |arena: &florui_style::Arena, id: NodeId| {
+        arena.tag(id) == "select"
+            || (arena.tag(id) == "input"
+                && arena.input_type(id) == Some("checkbox")
+                && arena.is_checked(id))
+    };
+    let size = (florui_paint::CONTROL_ICON_SIZE * scale_factor)
+        .round()
+        .max(1.0) as u32;
+    for node in arena.find_all(is_control_icon_node) {
+        let key = FocusPath::of(arena, node);
+        let style = styles.get(&node);
+        if style.is_some_and(|s| s.appearance == florui_style::Appearance::None) {
+            continue;
+        }
+
+        let color = style.map_or(florui_style::Rgba::opaque(0, 0, 0), |s| s.color);
+        registry.request_raster(
+            &key,
+            florui_assets::RasterFit::Contain {
+                width: size,
+                height: size,
+            },
+            [color.r, color.g, color.b],
+            cache,
+            executor,
+        );
 
         if let Some(image) = registry.decoded(&key) {
             result.insert(node, image);
@@ -1144,6 +1204,14 @@ impl WindowState {
             &icon_registry,
             &asset_cache,
             &*executor,
+        ));
+        images.extend(build_control_icon_paint(
+            arena,
+            styles,
+            &icon_registry,
+            &asset_cache,
+            &*executor,
+            scale_factor as f32,
         ));
         if let Some(node) = focused
             && let Some(paint) = text_inputs.get(&node)
