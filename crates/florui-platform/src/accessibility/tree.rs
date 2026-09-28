@@ -206,6 +206,26 @@ impl AccessibilityTree {
                     node.add_action(Action::Click);
                 }
             }
+            // Never focusable -- `img` is deliberately absent from
+            // `is_focusable`'s own match (falls to its `_ => false` arm),
+            // so no Focus/Click action is ever added here, matching real
+            // `<img>` (content, not a control). `alt=""` is real HTML's
+            // own explicit "this is decorative" signal -- hidden from the
+            // AT tree entirely (`set_hidden`, `aria-hidden`'s
+            // equivalent), not just given an empty name, so it can't
+            // still interrupt screen-reader navigation with a silent
+            // stop. A present, non-empty `alt` becomes the accessible
+            // name; an *absent* `alt` (author never declared one) is left
+            // unlabeled rather than inventing one (e.g. from `src`) --
+            // an honest gap, not a fabricated name.
+            "img" => {
+                node.set_role(Role::Image);
+                match arena.alt_attr(id) {
+                    Some("") => node.set_hidden(),
+                    Some(alt) => node.set_label(alt),
+                    None => {}
+                }
+            }
             "input" if matches!(arena.input_type(id), Some("checkbox") | Some("radio")) => {
                 // `role="switch"` only applies to a checkbox; a radio stays
                 // a radio.
@@ -465,6 +485,62 @@ mod tests {
         let ak_id = *reverse.iter().find(|&(_, &n)| n == button).unwrap().0;
         let node = update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap();
         assert_eq!(node.1.label(), Some("Close"));
+    }
+
+    #[test]
+    fn an_img_with_alt_gets_the_image_role_and_alt_as_its_label() {
+        let tree: Element = view! { <img src="photo.png" alt="A red bicycle" /> };
+        let (update, reverse, arena) = build(&tree, None);
+        let img = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == img).unwrap().0;
+        assert_eq!(role_of(&update, ak_id), Role::Image);
+        let node = update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap();
+        assert_eq!(node.1.label(), Some("A red bicycle"));
+        assert!(!node.1.is_hidden());
+    }
+
+    #[test]
+    fn an_img_with_an_empty_alt_is_hidden_from_the_accessibility_tree() {
+        let tree: Element = view! { <img src="decoration.png" alt="" /> };
+        let (update, reverse, arena) = build(&tree, None);
+        let img = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == img).unwrap().0;
+        let node = update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap();
+        assert!(
+            node.1.is_hidden(),
+            "alt=\"\" is real HTML's own decorative marker"
+        );
+        assert_eq!(
+            node.1.label(),
+            None,
+            "no fabricated name for a decorative image"
+        );
+    }
+
+    #[test]
+    fn an_img_with_no_alt_attribute_at_all_gets_no_fabricated_label() {
+        let tree: Element = view! { <img src="photo.png" /> };
+        let (update, reverse, arena) = build(&tree, None);
+        let img = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == img).unwrap().0;
+        assert_eq!(role_of(&update, ak_id), Role::Image);
+        let node = update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap();
+        assert_eq!(node.1.label(), None);
+        assert!(
+            !node.1.is_hidden(),
+            "missing alt is an honest gap, not decorative"
+        );
+    }
+
+    #[test]
+    fn an_img_is_never_focusable_even_with_alt_text() {
+        let tree: Element = view! { <img src="photo.png" alt="A red bicycle" /> };
+        let (update, reverse, arena) = build(&tree, None);
+        let img = arena.roots()[0];
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == img).unwrap().0;
+        let node = update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap();
+        assert!(!node.1.supports_action(Action::Focus));
+        assert!(!node.1.supports_action(Action::Click));
     }
 
     #[test]
