@@ -226,6 +226,15 @@ impl AccessibilityTree {
                     None => {}
                 }
             }
+            // Always decorative -- no `alt`-equivalent attribute at all
+            // (see `crate::icon`'s own module doc): a themable glyph like
+            // a chevron or check exists to decorate a real control, which
+            // already has its own accessible name; exposing the icon too
+            // would duplicate it. Never focusable for the same reason
+            // `img` isn't (absent from `is_focusable`'s own match).
+            "icon" => {
+                node.set_hidden();
+            }
             "input" if matches!(arena.input_type(id), Some("checkbox") | Some("radio")) => {
                 // `role="switch"` only applies to a checkbox; a radio stays
                 // a radio.
