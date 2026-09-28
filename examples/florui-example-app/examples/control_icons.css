@@ -1,0 +1,76 @@
+.page {
+    display: flex;
+    flex-direction: column;
+    padding-top: 24px;
+    padding-right: 24px;
+    padding-bottom: 24px;
+    padding-left: 24px;
+    background-color: #1e1e22;
+    color: #ffffff;
+}
+
+.instructions {
+    margin-bottom: 16px;
+    font-size: 16px;
+}
+
+.row {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-end;
+    margin-bottom: 20px;
+}
+
+.swatch {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    margin-right: 24px;
+}
+
+.swatch-label {
+    margin-top: 6px;
+    font-size: 13px;
+    color: #c0c0c8;
+}
+
+.select-white {
+    width: 140px;
+    height: 32px;
+    background-color: #2a2a30;
+    border: 1px solid #4a4a52;
+    color: #ffffff;
+}
+
+.select-amber {
+    width: 140px;
+    height: 32px;
+    background-color: #2a2a30;
+    border: 1px solid #4a4a52;
+    color: #ffaa22;
+}
+
+.select-hidden {
+    width: 140px;
+    height: 32px;
+    background-color: #2a2a30;
+    border: 1px solid #4a4a52;
+    color: #ffffff;
+    --florui-appearance: none;
+}
+
+.checkbox-green {
+    width: 24px;
+    height: 24px;
+    background-color: #2a2a30;
+    border: 1px solid #4a4a52;
+    color: #33cc66;
+}
+
+.checkbox-blue {
+    width: 24px;
+    height: 24px;
+    background-color: #2a2a30;
+    border: 1px solid #4a4a52;
+    color: #3388ff;
+}
