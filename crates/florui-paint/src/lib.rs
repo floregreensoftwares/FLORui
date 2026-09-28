@@ -62,8 +62,8 @@ use std::rc::Rc;
 
 use florui_layout::{BoxLayout, absolute_position};
 use florui_style::{
-    Arena, ComputedStyle, Display, FilterFunction, NodeId, Position, Rgba, RoundedRect,
-    TransformFunction,
+    Arena, ComputedStyle, Display, FilterFunction, LengthPercentage, NodeId, ObjectFit, Position,
+    Rgba, RoundedRect, TransformFunction,
 };
 use florui_text::Font;
 use rounded::RoundedRectPath;
@@ -307,6 +307,14 @@ pub struct TextInputPaint {
     pub show_caret: bool,
 }
 
+/// A decoded `<img>`'s own real pixels — `object-fit`/`object-position`
+/// (already in `styles`, no need to duplicate them here) decide where and
+/// at what size they blit into this node's own content box. `Arc`,
+/// matching `florui_assets::AssetCache`'s own retention contract: the
+/// same handle a `crate::UiRuntime` host holds onto for as long as the
+/// image stays loaded, not a fresh copy per paint.
+pub type ImagePaint = std::sync::Arc<florui_assets::RasterImage>;
+
 /// Same painting as [`paint_to_png`], returning the pixel buffer directly
 /// instead of writing it to disk. `font` is the caller's own long-lived
 /// instance — see [`florui_layout::compute_layout`]'s own doc for why, and
@@ -344,7 +352,7 @@ pub fn paint_to_buffer(
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
 ) -> Canvas {
-    paint_to_buffer_with_text_inputs(
+    paint_to_buffer_with_desktop_extras(
         font,
         width,
         height,
@@ -354,17 +362,19 @@ pub fn paint_to_buffer(
         layouts,
         scale_factor,
         None,
+        None,
     )
 }
 
-/// Same as [`paint_to_buffer`], plus `text_inputs`: real caret/selection
-/// painting for every editable `<input>` node it has an entry for — kept
-/// as a separate function, rather than changing [`paint_to_buffer`]'s own
-/// signature, since text-input painting is only needed by a real desktop
-/// host and every other caller (conformance, devtools, benches) has no
-/// use for it.
+/// Same as [`paint_to_buffer`], plus `text_inputs` (real caret/selection
+/// painting for every editable `<input>` node it has an entry for) and
+/// `images` (a decoded `<img>`'s own real pixels, blitted per its
+/// `object-fit`/`object-position`) — kept as a separate function, rather
+/// than changing [`paint_to_buffer`]'s own signature, since both are only
+/// needed by a real desktop host and every other caller (conformance,
+/// devtools, benches) has no use for either.
 #[allow(clippy::too_many_arguments)]
-pub fn paint_to_buffer_with_text_inputs(
+pub fn paint_to_buffer_with_desktop_extras(
     font: &mut Font,
     width: u32,
     height: u32,
@@ -374,9 +384,10 @@ pub fn paint_to_buffer_with_text_inputs(
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
     text_inputs: Option<&HashMap<NodeId, TextInputPaint>>,
+    images: Option<&HashMap<NodeId, ImagePaint>>,
 ) -> Canvas {
     let pixmap = Pixmap::new(width, height)
-        .expect("paint_to_buffer_with_text_inputs requires a nonzero-sized canvas");
+        .expect("paint_to_buffer_with_desktop_extras requires a nonzero-sized canvas");
     let mut surface = Surface::root(pixmap);
     surface.pixmap.fill(to_tiny_skia_color(canvas));
     paint_nodes(
@@ -390,6 +401,7 @@ pub fn paint_to_buffer_with_text_inputs(
         scale_factor,
         None,
         text_inputs,
+        images,
     );
     surface.pixmap
 }
@@ -437,6 +449,7 @@ fn paint_nodes(
     scale_factor: f32,
     clip: Option<ClipRect>,
     text_inputs: Option<&HashMap<NodeId, TextInputPaint>>,
+    images: Option<&HashMap<NodeId, ImagePaint>>,
 ) {
     let mut stack: Vec<(NodeId, Option<ClipRect>)> = paint_order(styles, parent_display, nodes)
         .into_iter()
@@ -483,6 +496,7 @@ fn paint_nodes(
                 opacity,
                 transform,
                 text_inputs,
+                images,
             );
             continue;
         }
@@ -497,6 +511,7 @@ fn paint_nodes(
             scale_factor,
             node_mask.as_ref(),
             text_inputs,
+            images,
         );
         let child_clip = clip_for_children(arena, styles, layouts, node, node_clip, scale_factor);
         let child_display = styles.get(&node).map(|s| s.display);
@@ -1021,6 +1036,7 @@ fn paint_group(
     opacity: f32,
     transform: Transform,
     text_inputs: Option<&HashMap<NodeId, TextInputPaint>>,
+    images: Option<&HashMap<NodeId, ImagePaint>>,
 ) {
     let target_rect = ClipRect::from_xywh(
         buffer.origin.0 as f32,
@@ -1080,6 +1096,7 @@ fn paint_group(
         scale_factor,
         inner_mask.as_ref(),
         text_inputs,
+        images,
     );
     let content_clip = clip_for_children(arena, styles, layouts, node, clip.clone(), scale_factor);
     let child_display = styles.get(&node).map(|s| s.display);
@@ -1094,6 +1111,7 @@ fn paint_group(
         scale_factor,
         content_clip,
         text_inputs,
+        images,
     );
 
     let filter = styles.get(&node).map_or(&[][..], |s| &s.filter[..]);
@@ -1562,6 +1580,7 @@ fn paint_node(
     scale_factor: f32,
     clip: Option<&Mask>,
     text_inputs: Option<&HashMap<NodeId, TextInputPaint>>,
+    images: Option<&HashMap<NodeId, ImagePaint>>,
 ) {
     if let Some(&layout) = layouts.get(&node) {
         let style = styles.get(&node);
@@ -1634,6 +1653,12 @@ fn paint_node(
         // wrapped to fit stays wrapped identically here.
         let content_width =
             (layout.width - border.left.width - border.right.width - padding.left - padding.right)
+                .max(0.0);
+        // Same content-box math as `content_width`, for `<img>`'s own
+        // `object-fit` content rect below — nothing else needs a content
+        // *height* (text wraps against width alone).
+        let content_height =
+            (layout.height - border.top.width - border.bottom.width - padding.top - padding.bottom)
                 .max(0.0);
         // `content_width` is in the painted canvas's own (possibly scaled)
         // units, but shaping below runs at the *logical* `font_size`
@@ -1718,6 +1743,59 @@ fn paint_node(
                     );
                 }
             }
+        } else if arena.tag(node) == "img" {
+            if let Some(image) = images.and_then(|images| images.get(&node)) {
+                let object_fit = style.map_or(ObjectFit::Fill, |s| s.object_fit);
+                let object_position = style.map_or(
+                    (
+                        LengthPercentage {
+                            length: 0.0,
+                            percentage: 0.5,
+                        },
+                        LengthPercentage {
+                            length: 0.0,
+                            percentage: 0.5,
+                        },
+                    ),
+                    |s| s.object_position,
+                );
+                // Resolved in *logical* units, the same split
+                // `wrap_width` above uses for text: `content_width`/
+                // `content_height` are already in this canvas's own
+                // (possibly HiDPI-scaled) physical pixels, but
+                // `image.width`/`image.height` are the decoded source's
+                // own raw pixel counts -- real CSS's own object-fit
+                // treats those as this image's intrinsic *CSS*-pixel
+                // size (1 image pixel = 1 logical px, no 2x/3x
+                // image-density concept yet), so mixing a physical box
+                // size against a logical intrinsic one here would double
+                // (or halve) the result on any non-1x display.
+                // `paint_image` scales the resolved rect back up to this
+                // canvas's own physical pixels at blit time, mirroring
+                // how `paint_shaped_runs` scales logical-sized glyphs up
+                // when it rasterizes them.
+                let rect = florui_layout::resolve_object_fit_content_rect(
+                    object_fit,
+                    object_position,
+                    taffy::geometry::Size {
+                        width: content_width / scale_factor,
+                        height: content_height / scale_factor,
+                    },
+                    taffy::geometry::Size {
+                        width: image.width as f32,
+                        height: image.height as f32,
+                    },
+                );
+                paint_image(
+                    buffer,
+                    image,
+                    content_x,
+                    content_y,
+                    rect,
+                    scale_factor,
+                    clip,
+                );
+            }
         } else if florui_layout::is_inline_formatting_context(arena, styles, node) {
             // A real mixed text/inline-element node: rebuilt and
             // reshaped fresh here, since this crate doesn't share layout's
@@ -1781,6 +1859,79 @@ fn paint_node(
             }
         }
     }
+}
+
+/// Blits `image`'s own decoded pixels into `rect` (already resolved
+/// against this node's content box by `resolve_object_fit_content_rect`;
+/// `rect.x`/`rect.y` are relative to `content_x`/`content_y`, the same
+/// origin `object-position`'s own offset resolves against). `tiny-skia`'s
+/// own `draw_pixmap` does the actual scaling (`rect`'s size vs. `image`'s
+/// own), the same real resampling every other scaled blit in this crate
+/// (a transformed group, see [`paint_group`]) already goes through — no
+/// separate resize path needed.
+#[allow(clippy::too_many_arguments)]
+fn paint_image(
+    buffer: &mut Surface,
+    image: &florui_assets::RasterImage,
+    content_x: f32,
+    content_y: f32,
+    rect: florui_layout::BoxLayout,
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
+    if rect.width <= 0.0 || rect.height <= 0.0 || image.width == 0 || image.height == 0 {
+        return;
+    }
+    let Some(source) = premultiplied_pixmap(image) else {
+        return;
+    };
+    let (lx, ly) = buffer.local(
+        content_x + rect.x * scale_factor,
+        content_y + rect.y * scale_factor,
+    );
+    // The destination position has to be folded into the transform
+    // itself (`post_translate`, run *after* the scale), not passed as
+    // `draw_pixmap`'s own `(x, y)` alongside a non-identity transform:
+    // `draw_pixmap`'s `(x, y)` places the source's local `(0, 0)` at that
+    // position *before* `transform` runs (see `paint_group`'s own doc on
+    // this exact composition order), so a plain scale transform would
+    // scale the destination position too, not just the image — verified
+    // directly against a real render before landing this (a naive
+    // `draw_pixmap(lx, ly, ..., Transform::from_scale(sx, sy), ...)`
+    // pushed the image to roughly double its intended offset).
+    let transform = Transform::from_scale(
+        (rect.width * scale_factor) / image.width as f32,
+        (rect.height * scale_factor) / image.height as f32,
+    )
+    .post_translate(lx, ly);
+    buffer.pixmap.draw_pixmap(
+        0,
+        0,
+        source.as_ref(),
+        &PixmapPaint::default(),
+        transform,
+        clip,
+    );
+}
+
+/// `florui_assets::RasterImage::rgba` is straight (non-premultiplied)
+/// alpha (see that type's own doc); `tiny-skia`'s `Pixmap` requires
+/// premultiplied pixels as its own invariant. The exact inverse of
+/// `florui-assets`'s own `unpremultiply`: `premultiplied = straight *
+/// alpha / 255`, per channel, in `u16` to avoid the intermediate
+/// overflowing `u8` (max `255 * 255`).
+fn premultiplied_pixmap(image: &florui_assets::RasterImage) -> Option<Pixmap> {
+    let mut pixmap = Pixmap::new(image.width, image.height)?;
+    for (i, pixel) in pixmap.pixels_mut().iter_mut().enumerate() {
+        let bytes: [u8; 4] = image.rgba[i * 4..i * 4 + 4]
+            .try_into()
+            .expect("RasterImage guarantees rgba.len() == width * height * 4");
+        let [r, g, b, a] = bytes;
+        let premultiply = |channel: u8| ((channel as u16 * a as u16) / 255) as u8;
+        *pixel = PremultipliedColorU8::from_rgba(premultiply(r), premultiply(g), premultiply(b), a)
+            .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+    Some(pixmap)
 }
 
 fn fill_rect(
@@ -2954,6 +3105,234 @@ mod tests {
         assert_eq!(pixel_rgb(&buffer, 5, 5), [0x1e, 0x1e, 0x22]);
         // Inside the button (offset by the card's padding).
         assert_eq!(pixel_rgb(&buffer, 15, 15), [0x42, 0x73, 0x4f]);
+    }
+
+    fn solid_image(width: u32, height: u32, rgba: [u8; 4]) -> ImagePaint {
+        let mut pixels = Vec::with_capacity((width * height * 4) as usize);
+        for _ in 0..(width * height) {
+            pixels.extend_from_slice(&rgba);
+        }
+        std::sync::Arc::new(florui_assets::RasterImage {
+            rgba: pixels,
+            width,
+            height,
+        })
+    }
+
+    /// A real `<img>`, painted through the exact same `paint_nodes`/
+    /// `paint_node` path as any other content — not a special-cased blit
+    /// function tested in isolation.
+    fn paint_img(css: &str, width: u32, height: u32, image: ImagePaint) -> (Canvas, Arena) {
+        let tree: Element = view! { <img class="pic" /> };
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let node = arena.roots()[0];
+        let mut images = HashMap::new();
+        images.insert(node, image);
+        let buffer = paint_to_buffer_with_desktop_extras(
+            &mut font,
+            width,
+            height,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+            None,
+            Some(&images),
+        );
+        (buffer, arena)
+    }
+
+    #[test]
+    fn object_fit_fill_stretches_the_image_across_the_whole_content_box() {
+        // A 2x2 solid-red source, stretched (real CSS's own initial
+        // `object-fit: fill`) to fill a 40x20 box -- every corner and the
+        // center should read pure red, proving the blit really scales
+        // rather than just centering/cropping the source.
+        let (buffer, _) = paint_img(
+            ".pic { display: block; width: 40px; height: 20px; }",
+            40,
+            20,
+            solid_image(2, 2, [255, 0, 0, 255]),
+        );
+        for (x, y) in [(0, 0), (39, 0), (0, 19), (39, 19), (20, 10)] {
+            assert_eq!(pixel_rgb(&buffer, x, y), [255, 0, 0], "at ({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn object_fit_contain_letterboxes_and_the_boxs_own_background_shows_through() {
+        // A 2:1 red source in a 100x100 square box under `object-fit:
+        // contain` letterboxes to 100x50, centered -- the box's own
+        // green `background-color` should show through the empty top
+        // and bottom strips, exactly as it would behind any other
+        // narrower content.
+        let (buffer, _) = paint_img(
+            ".pic { display: block; width: 100px; height: 100px; \
+             background-color: #00ff00; object-fit: contain; }",
+            100,
+            100,
+            solid_image(100, 50, [255, 0, 0, 255]),
+        );
+        assert_eq!(pixel_rgb(&buffer, 50, 10), [0, 255, 0], "top letterbox");
+        assert_eq!(pixel_rgb(&buffer, 50, 50), [255, 0, 0], "image content");
+        assert_eq!(pixel_rgb(&buffer, 50, 90), [0, 255, 0], "bottom letterbox");
+    }
+
+    #[test]
+    fn opacity_on_an_img_blends_its_pixels_with_the_canvas_like_any_other_content() {
+        // Same offscreen-group compositing path opacity already uses for
+        // every other node (see this module's own doc) -- a solid-white
+        // image at 50% opacity over a black canvas should land close to
+        // mid-gray, not full white (proving it actually composited
+        // through the group, not painted directly at full strength).
+        let (buffer, _) = paint_img(
+            ".pic { display: block; width: 20px; height: 20px; opacity: 0.5; }",
+            20,
+            20,
+            solid_image(1, 1, [255, 255, 255, 255]),
+        );
+        let [r, g, b] = pixel_rgb(&buffer, 10, 10);
+        assert!(
+            (100..=160).contains(&r) && (100..=160).contains(&g) && (100..=160).contains(&b),
+            "expected roughly 50%-blended gray, got ({r}, {g}, {b})"
+        );
+    }
+
+    /// The bug this guards against: `content_width`/`content_height` (in
+    /// `paint_node`) are already this canvas's own *physical* pixels once
+    /// a real HiDPI host scales `layouts` before painting, but
+    /// `image.width`/`image.height` are the decoded source's own raw
+    /// (logical-equivalent) pixel counts — feeding the physical box size
+    /// into `resolve_object_fit_content_rect` directly, then scaling its
+    /// result by `scale_factor` *again* in `paint_image`, double-scales
+    /// everything `object-fit`/`object-position` depend on. `object-fit:
+    /// none` (content size independent of the box, only its *centering
+    /// offset* depends on it) exposes this clearly: the double-scaled
+    /// offset pushes the image out to the canvas's bottom-right corner
+    /// instead of centering it.
+    #[test]
+    fn object_fit_none_centers_correctly_on_a_hidpi_canvas_not_just_a_1x_one() {
+        let tree: Element = view! { <img class="pic" /> };
+        let css = ".pic { display: block; width: 20px; height: 20px; object-fit: none; }";
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let node = arena.roots()[0];
+
+        let scale_factor = 2.0_f32;
+        let physical_layouts = layouts
+            .iter()
+            .map(|(&id, l)| {
+                (
+                    id,
+                    BoxLayout {
+                        x: l.x * scale_factor,
+                        y: l.y * scale_factor,
+                        width: l.width * scale_factor,
+                        height: l.height * scale_factor,
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let mut images = HashMap::new();
+        images.insert(node, solid_image(10, 10, [255, 0, 0, 255]));
+
+        let buffer = paint_to_buffer_with_desktop_extras(
+            &mut font,
+            40,
+            40,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &physical_layouts,
+            scale_factor,
+            None,
+            Some(&images),
+        );
+
+        // A 20x20 logical box, 10x10 logical (unscaled) content, centered
+        // -> a 5px logical margin each side -> physical (10,10)-(30,30).
+        assert_eq!(pixel_rgb(&buffer, 20, 20), [255, 0, 0], "centered content");
+        assert_eq!(
+            pixel_rgb(&buffer, 2, 2),
+            [0, 0, 0],
+            "outside the content, top-left"
+        );
+        assert_eq!(
+            pixel_rgb(&buffer, 37, 37),
+            [0, 0, 0],
+            "outside the content, bottom-right -- where the double-scale bug \
+             would have wrongly pushed the whole image to"
+        );
+    }
+
+    #[test]
+    fn overflow_hidden_on_an_ancestor_clips_the_image_like_any_other_content() {
+        let tree: Element = view! {
+            <div class="clip">
+                <img class="pic" />
+            </div>
+        };
+        let css = "
+            .clip { display: block; width: 20px; height: 20px; overflow: hidden; }
+            .pic { display: block; width: 40px; height: 40px; }
+        ";
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let img_node = arena.children(arena.roots()[0])[0];
+        let mut images = HashMap::new();
+        images.insert(img_node, solid_image(2, 2, [255, 0, 0, 255]));
+
+        let buffer = paint_to_buffer_with_desktop_extras(
+            &mut font,
+            40,
+            40,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+            None,
+            Some(&images),
+        );
+
+        assert_eq!(pixel_rgb(&buffer, 10, 10), [255, 0, 0], "inside the clip");
+        assert_eq!(
+            pixel_rgb(&buffer, 30, 30),
+            [0, 0, 0],
+            "past the 20x20 clip -- the image's own overflow must not paint here"
+        );
     }
 
     #[test]
@@ -4486,7 +4865,7 @@ mod tests {
             },
         );
 
-        let buffer = paint_to_buffer_with_text_inputs(
+        let buffer = paint_to_buffer_with_desktop_extras(
             &mut font,
             width,
             height,
@@ -4496,6 +4875,7 @@ mod tests {
             &layouts,
             1.0,
             Some(&text_inputs),
+            None,
         );
 
         // Scanned only past the text's own measured width plus a small

@@ -24,7 +24,7 @@ use std::sync::Arc;
 use florui::Element;
 use florui_layout::BoxLayout;
 use florui_reactive::provide_context;
-use florui_style::{ComputedStyle, NodeId, Rgba, StyleError};
+use florui_style::{ComputedStyle, FocusPath, NodeId, Rgba, StyleError};
 use florui_text::editing::TextEditOp;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use taffy::prelude::*;
@@ -578,7 +578,7 @@ fn scale_layouts(layouts: &HashMap<NodeId, BoxLayout>, factor: f32) -> HashMap<N
 /// Builds one [`florui_paint::TextInputPaint`] entry for every editable
 /// `<input>` [`crate::text_input::TextInputRegistry`] currently tracks —
 /// the real glyphs and geometry [`crate::desktop`]'s own `redraw` hands
-/// to [`florui_paint::paint_to_buffer_with_text_inputs`]. Only `focused`
+/// to [`florui_paint::paint_to_buffer_with_desktop_extras`]. Only `focused`
 /// gets a real caret/selection highlight (`show_caret`/`selection_rects`);
 /// every other tracked input still needs its own text painted (it's a
 /// real, visible control either way), just without either — matching
@@ -658,6 +658,24 @@ fn build_text_input_paint(
                 show_caret: is_focused,
             },
         );
+    }
+    result
+}
+
+/// Builds one [`florui_paint::ImagePaint`] entry for every `<img>`
+/// [`crate::image::ImageRegistry`] currently has a real decode ready for
+/// — a still-loading or failed `<img>` simply has no entry (and paints
+/// nothing but its own background/border, same as an empty `<div>`).
+fn build_image_paint(
+    arena: &florui_style::Arena,
+    registry: &crate::image::ImageRegistry,
+) -> HashMap<NodeId, florui_paint::ImagePaint> {
+    let mut result = HashMap::new();
+    for node in arena.find_all(|arena, id| arena.tag(id) == "img") {
+        let key = FocusPath::of(arena, node);
+        if let Some(image) = registry.decoded(&key) {
+            result.insert(node, image);
+        }
     }
     result
 }
@@ -992,6 +1010,7 @@ impl WindowState {
 
         let scroll_registry = self.runtime.scroll_registry();
         let text_input_registry = self.runtime.text_input_registry();
+        let image_registry = self.runtime.image_registry();
         let focused = self.runtime.focused();
         let (arena, styles, layouts, font) = self.runtime.geometry_and_font_mut();
         let scroll_offsets = scroll_registry.offsets_by_node(arena);
@@ -1002,6 +1021,7 @@ impl WindowState {
         }
         let text_inputs =
             build_text_input_paint(arena, styles, font, &text_input_registry, focused);
+        let images = build_image_paint(arena, &image_registry);
         if let Some(node) = focused
             && let Some(paint) = text_inputs.get(&node)
             && let Some((x0, y0, x1, y1)) = paint.compose_rect
@@ -1032,7 +1052,7 @@ impl WindowState {
         self.accessibility_adapter
             .update_if_active(|| accessibility_update);
 
-        let canvas = florui_paint::paint_to_buffer_with_text_inputs(
+        let canvas = florui_paint::paint_to_buffer_with_desktop_extras(
             font,
             size.width,
             size.height,
@@ -1042,6 +1062,7 @@ impl WindowState {
             &physical_layouts,
             scale_factor as f32,
             Some(&text_inputs),
+            Some(&images),
         );
 
         match &mut self.presenter {

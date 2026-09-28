@@ -9,16 +9,17 @@ publish = false
 name = "florui_paint"
 
 [dependencies]
+florui-assets = { path = "../florui-assets" }
 florui-layout = { path = "../florui-layout" }
 florui-style = { path = "../florui-style" }
 florui-text = { path = "../florui-text" }
 png = "0.17"
 skrifa = "0.44"
+taffy = "0.14"
 tiny-skia = "0.11"
 
 [dev-dependencies]
 florui = { path = "../florui" }
-taffy = "0.14"
 criterion = "0.5"
 
 [[bench]]
