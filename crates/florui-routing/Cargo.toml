@@ -12,3 +12,11 @@ name = "florui_routing"
 [dependencies]
 florui = { path = "../florui" }
 florui-reactive = { path = "../florui-reactive" }
+
+# Test-only: `link`'s own tests build a real `Arena` to check the
+# rendered `<a>`'s tag/href/handler, the same way `florui`'s own tests
+# do -- never a runtime dependency of this crate (see this crate's own
+# module doc: florui-style has no `florui-platform`/OS dependency of its
+# own either, so this doesn't compromise "never florui-platform").
+[dev-dependencies]
+florui-style = { path = "../florui-style" }
