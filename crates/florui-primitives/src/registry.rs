@@ -191,6 +191,11 @@ pub const PRIMITIVES: &[Primitive] = &[
     primitive!("legend", Content::Normal, "a caption for a fieldset"),
     // Images.
     primitive!("img", Content::Void, "an image"),
+    // A themable SVG icon: unlike `img`, its `color` tints the icon via
+    // `currentColor`, and it is decorative by default (no accessible
+    // name, hidden from assistive technology) -- see
+    // `florui-platform::icon`'s own module doc.
+    primitive!("icon", Content::Void, "a themable SVG icon"),
 ];
 
 pub fn find(tag: &str) -> Option<&'static Primitive> {
