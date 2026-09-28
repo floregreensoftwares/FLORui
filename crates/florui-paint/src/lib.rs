@@ -77,6 +77,62 @@ use tiny_skia::{
 
 pub type Canvas = Pixmap;
 
+/// The fixed logical (CSS-pixel) size a built-in control decoration (a
+/// `<select>`'s own chevron, a checked checkbox's own check mark) is
+/// rasterized and painted at — see [`is_control_icon_node`]'s own doc for
+/// which nodes this applies to. A pragmatic simplification (no
+/// `object-fit`-aware or font-size-relative sizing for UA chrome that has
+/// no CSS box of its own to size against), the same category of
+/// documented trade-off `RasterFit::Contain` already is for an
+/// `<img>`/`<icon>`'s own raster target.
+pub const CONTROL_ICON_SIZE: f32 = 12.0;
+/// A `<select>`'s own chevron sits this many logical px in from its
+/// content box's right edge. Meaningless for a checkbox's check mark,
+/// which centers instead — see [`control_icon_rect`].
+const CONTROL_ICON_INSET: f32 = 4.0;
+
+/// Whether `node` is a built-in-control-decoration node — a `<select>`
+/// (always, regardless of open/closed) or a checked `<input
+/// type="checkbox">`. Shared by [`crate::desktop`]'s own registration
+/// query (`crate::platform`, not this crate) and this crate's own paint
+/// branch, so both agree on exactly which nodes this applies to.
+fn is_control_icon_node(arena: &Arena, node: NodeId) -> bool {
+    arena.tag(node) == "select"
+        || (arena.tag(node) == "input"
+            && arena.input_type(node) == Some("checkbox")
+            && arena.is_checked(node))
+}
+
+/// Where a control decoration paints within its own content box, in
+/// logical units relative to the content-box origin (the same convention
+/// [`florui_layout::resolve_object_fit_content_rect`] returns for an
+/// `<img>`/`<icon>`, consumed identically by [`paint_image`]) — a
+/// `<select>`'s chevron sits right-inset and vertically centered; a
+/// checkbox's check mark centers on both axes. Real CSS has no
+/// `object-fit`-like concept for either (this is UA chrome, not a
+/// replaced element's own content), so this is a fixed formula, not a
+/// resolved CSS property.
+fn control_icon_rect(
+    arena: &Arena,
+    node: NodeId,
+    content_width: f32,
+    content_height: f32,
+) -> BoxLayout {
+    let size = CONTROL_ICON_SIZE;
+    let y = ((content_height - size) / 2.0).max(0.0);
+    let x = if arena.tag(node) == "select" {
+        (content_width - CONTROL_ICON_INSET - size).max(0.0)
+    } else {
+        ((content_width - size) / 2.0).max(0.0)
+    };
+    BoxLayout {
+        x,
+        y,
+        width: size,
+        height: size,
+    }
+}
+
 /// One paint target: an owned pixel buffer, plus the absolute canvas
 /// pixel its own local `(0, 0)` corresponds to. The root canvas is a
 /// `Surface` with `origin: (0, 0)`; [`paint_group`] allocates a smaller
@@ -1673,7 +1729,42 @@ fn paint_node(
         // size the canvas actually needs.
         let wrap_width = content_width / scale_factor;
 
-        if arena.tag(node) == "input" {
+        if is_control_icon_node(arena, node)
+            && style.is_some_and(|s| s.appearance != florui_style::Appearance::None)
+            && let Some(image) = images.and_then(|images| images.get(&node))
+        {
+            // A built-in control decoration's own already-themed pixels
+            // (same `currentColor` theming, same registry, as a real
+            // `<icon>` — see `crate::icon::IconRegistry`'s own doc) —
+            // positioned by a fixed formula instead of `object-fit`,
+            // since this is UA chrome with no CSS box of its own to
+            // resolve that property against. Checked *before* the plain
+            // `tag == "input"` branch below: a checked checkbox is still
+            // an `<input>`, and would otherwise always match that branch
+            // first (a real, found regression — `text_inputs` simply has
+            // no entry for a checkbox, so skipping this branch entirely
+            // for one was silently a no-op, not a compile error).
+            // `content_width`/`content_height` are already this canvas's
+            // own physical pixels here; `control_icon_rect` returns
+            // logical units, the same split the `img`/`icon` branch below
+            // uses for the same reason (`paint_image` scales back up at
+            // blit time).
+            let rect = control_icon_rect(
+                arena,
+                node,
+                content_width / scale_factor,
+                content_height / scale_factor,
+            );
+            paint_image(
+                buffer,
+                image,
+                content_x,
+                content_y,
+                rect,
+                scale_factor,
+                clip,
+            );
+        } else if arena.tag(node) == "input" {
             if let Some(paint) = text_inputs.and_then(|inputs| inputs.get(&node)) {
                 // `caret_rect`/`selection_rects` come from the same
                 // logical-space editor layout `paint.runs`' own glyph
@@ -3212,6 +3303,108 @@ mod tests {
         assert!(
             (100..=160).contains(&r) && (100..=160).contains(&g) && (100..=160).contains(&b),
             "expected roughly 50%-blended gray, got ({r}, {g}, {b})"
+        );
+    }
+
+    fn paint_control_icon(tree: Element, css: &str, width: u32, height: u32) -> Canvas {
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let node = arena.roots()[0];
+        let mut images = HashMap::new();
+        images.insert(
+            node,
+            solid_image(
+                CONTROL_ICON_SIZE as u32,
+                CONTROL_ICON_SIZE as u32,
+                [0, 255, 0, 255],
+            ),
+        );
+        paint_to_buffer_with_desktop_extras(
+            &mut font,
+            width,
+            height,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+            None,
+            Some(&images),
+        )
+    }
+
+    #[test]
+    fn a_selects_chevron_paints_right_inset_and_vertically_centered_not_over_the_label() {
+        let tree: Element = view! { <select class="sel" /> };
+        let buffer = paint_control_icon(
+            tree,
+            ".sel { width: 100px; height: 20px; border: none; padding: 0px; \
+             background-color: transparent; }",
+            100,
+            20,
+        );
+        // Inside the chevron's own 12x12 box, right-inset 4px: spans
+        // x in [84, 96), y in [4, 16).
+        assert_eq!(
+            pixel_rgb(&buffer, 90, 10),
+            [0, 255, 0],
+            "inside the chevron"
+        );
+        // Far left, where a select's own label text sits -- must stay
+        // the plain canvas background, not painted over by the chevron.
+        assert_eq!(pixel_rgb(&buffer, 10, 10), [0, 0, 0], "left of the chevron");
+    }
+
+    #[test]
+    fn a_checked_checkboxs_check_paints_centered() {
+        let tree: Element = view! { <input type="checkbox" checked={true} class="cb" /> };
+        let buffer = paint_control_icon(
+            tree,
+            ".cb { width: 20px; height: 20px; border: none; padding: 0px; \
+             background-color: transparent; }",
+            20,
+            20,
+        );
+        // Centered 12x12 in a 20x20 box: spans x/y in [4, 16) on both axes.
+        assert_eq!(pixel_rgb(&buffer, 10, 10), [0, 255, 0], "center");
+        assert_eq!(
+            pixel_rgb(&buffer, 1, 1),
+            [0, 0, 0],
+            "corner, outside the check"
+        );
+    }
+
+    #[test]
+    fn florui_appearance_none_suppresses_the_built_in_control_icon() {
+        // Even with a real decoded image already sitting in the `images`
+        // map for this node (as `desktop.rs`'s own registry lookup would
+        // produce for an `appearance: none` control it *shouldn't* have
+        // requested in the first place -- see `IconRegistry::sync_controls`'s
+        // own doc), the paint branch itself must independently refuse to
+        // draw it. Defense in depth, not redundant: this is the only test
+        // that would catch a regression in the paint-side check alone.
+        let tree: Element = view! { <select class="sel" /> };
+        let buffer = paint_control_icon(
+            tree,
+            ".sel { width: 100px; height: 20px; border: none; padding: 0px; \
+             background-color: transparent; --florui-appearance: none; }",
+            100,
+            20,
+        );
+        assert_eq!(
+            pixel_rgb(&buffer, 90, 10),
+            [0, 0, 0],
+            "chevron must not paint"
         );
     }
 

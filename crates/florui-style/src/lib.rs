@@ -48,8 +48,8 @@ mod tree;
 
 pub use animation::AnimationTimeline;
 pub use cascade::{
-    AspectRatio, BorderSide, BoxShadow, ComputedStyle, ContainerType, ContentAlignment, Corners,
-    Display, Edges, FilterFunction, FlexDirection, FlexWrap, FontFamily, GridPlacement,
+    Appearance, AspectRatio, BorderSide, BoxShadow, ComputedStyle, ContainerType, ContentAlignment,
+    Corners, Display, Edges, FilterFunction, FlexDirection, FlexWrap, FontFamily, GridPlacement,
     GridTrackSize, ItemAlignment, LengthPercentage, ObjectFit, Position, TransformFunction,
     Viewport, compute, compute_with_container_query_signature,
 };
