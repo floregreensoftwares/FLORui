@@ -1,0 +1,63 @@
+.page {
+    display: flex;
+    flex-direction: column;
+    padding-top: 24px;
+    padding-right: 24px;
+    padding-bottom: 24px;
+    padding-left: 24px;
+    background-color: #1e1e22;
+    color: #ffffff;
+}
+
+.instructions {
+    margin-bottom: 16px;
+    font-size: 16px;
+}
+
+.row {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-end;
+}
+
+.swatch {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-right: 24px;
+}
+
+.swatch-label {
+    margin-top: 6px;
+    font-size: 13px;
+    color: #c0c0c8;
+}
+
+.icon-red {
+    width: 48px;
+    height: 48px;
+    color: #e6392b;
+}
+
+.icon-green {
+    width: 48px;
+    height: 48px;
+    color: #33cc66;
+}
+
+.icon-blue {
+    width: 48px;
+    height: 48px;
+    color: #3388ff;
+}
+
+.icon-amber {
+    width: 48px;
+    height: 48px;
+    color: #ffaa22;
+}
+
+.icon-inherited {
+    width: 48px;
+    height: 48px;
+}
