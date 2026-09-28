@@ -7,17 +7,24 @@ use std::sync::{Arc, Mutex, Weak};
 use crate::error::AssetError;
 use crate::raster::{RasterImage, decode_png};
 use crate::source::{AssetId, AssetSource};
-use crate::svg::{RasterFit, parse_svg, rasterize_svg};
+use crate::svg::{RasterFit, parse_svg, rasterize_svg, substitute_current_color};
 
 /// Which decode a cache entry holds the result of. A PNG (or any future
 /// raster format) decodes once at its native size regardless of how it
 /// will be displayed, so it needs no size parameter; an SVG is decoded
 /// per requested [`RasterFit`], since a different target size is
 /// genuinely a different pixel result worth caching separately.
+/// [`Self::RasterizedThemed`] additionally substitutes `currentColor`
+/// (see [`substitute_current_color`]'s own doc) before rasterizing, so a
+/// themed icon's own resolved color is part of its cache identity too —
+/// two components showing the same icon file in two different colors are
+/// genuinely two different results, not one cached result overwriting
+/// the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DecodeParams {
     Native,
     Rasterized(RasterFit),
+    RasterizedThemed(RasterFit, [u8; 3]),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -115,6 +122,12 @@ fn decode(source: &AssetSource<'_>, params: DecodeParams) -> Result<RasterImage,
         DecodeParams::Rasterized(fit) => {
             let text = source.read_text()?;
             let vector = parse_svg(&text)?;
+            rasterize_svg(&vector, fit)
+        }
+        DecodeParams::RasterizedThemed(fit, color) => {
+            let text = source.read_text()?;
+            let themed = substitute_current_color(&text, color);
+            let vector = parse_svg(&themed)?;
             rasterize_svg(&vector, fit)
         }
     }
@@ -265,6 +278,48 @@ mod tests {
             "only the still-held entry survives compact"
         );
         drop(alive_handle);
+    }
+
+    #[test]
+    fn get_or_load_treats_different_theme_colors_as_different_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("icon.svg");
+        std::fs::write(
+            &path,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <circle cx="16" cy="16" r="14" fill="currentColor"/>
+</svg>"##,
+        )
+        .unwrap();
+        let cache = AssetCache::new();
+        let fit = RasterFit::Contain {
+            width: 32,
+            height: 32,
+        };
+
+        let red = cache
+            .get_or_load(
+                &AssetSource::Path(&path),
+                DecodeParams::RasterizedThemed(fit, [0xff, 0x00, 0x00]),
+            )
+            .unwrap();
+        let green = cache
+            .get_or_load(
+                &AssetSource::Path(&path),
+                DecodeParams::RasterizedThemed(fit, [0x00, 0xff, 0x00]),
+            )
+            .unwrap();
+        assert!(
+            !Arc::ptr_eq(&red, &green),
+            "two different theme colors of the same file must not share a cache entry"
+        );
+        let offset = ((16 * 32 + 16) * 4) as usize;
+        assert_eq!(red.rgba[offset], 255, "red channel of the red-themed icon");
+        assert_eq!(
+            green.rgba[offset + 1],
+            255,
+            "green channel of the green-themed icon"
+        );
     }
 
     #[test]
