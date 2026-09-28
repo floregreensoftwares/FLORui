@@ -133,6 +133,17 @@ struct ArenaNode {
     role: Option<String>,
     /// The `href` attribute on `<a>`. See [`Arena::href`].
     href: Option<String>,
+    /// `<img>`'s own `src` — an asset source, not resolved or read here;
+    /// `crate::Arena` has no filesystem/asset dependency at all. See
+    /// [`Arena::src_attr`].
+    src: Option<String>,
+    /// `<img>`'s own `alt` — its accessible-name override, the same role
+    /// [`Self::accessible_label`] plays for other tags. Kept as its own
+    /// field (matching `<img>`'s own real HTML attribute name) rather
+    /// than folded into `accessible_label`, so an author never has to
+    /// declare a replaced element's alt text twice under two different
+    /// names. See [`Arena::alt_attr`].
+    alt: Option<String>,
     /// The node's own direct text, for text measurement — not inherited
     /// from or propagated to any other node.
     text: String,
@@ -287,6 +298,8 @@ impl Arena {
                         accessible_label: attr_value(&node.attrs, "accessible_label"),
                         role: attr_value(&node.attrs, "role"),
                         href: attr_value(&node.attrs, "href"),
+                        src: attr_value(&node.attrs, "src"),
+                        alt: attr_value(&node.attrs, "alt"),
                         text: collect_text(&node.children),
                         inline_items: Vec::new(),
                         handlers: node.handlers.clone(),
@@ -524,6 +537,18 @@ impl Arena {
     /// present.
     pub fn accessible_label(&self, id: NodeId) -> Option<&str> {
         self.nodes[id].accessible_label.as_deref()
+    }
+
+    /// `<img>`'s own `src` — meaningless on any other tag. Not resolved
+    /// or read from disk here; see `florui-platform`'s image loading.
+    pub fn src_attr(&self, id: NodeId) -> Option<&str> {
+        self.nodes[id].src.as_deref()
+    }
+
+    /// `<img>`'s own `alt` — its accessible-name override. See
+    /// [`Self::accessible_label`] for the equivalent on every other tag.
+    pub fn alt_attr(&self, id: NodeId) -> Option<&str> {
+        self.nodes[id].alt.as_deref()
     }
 
     /// This node's `role` attribute, if it names a role this crate
@@ -1123,6 +1148,24 @@ mod tests {
         let tree: Element = view! { <button>{"x"}</button> };
         let arena = Arena::build(&tree);
         assert_eq!(arena.accessible_label(arena.roots()[0]), None);
+    }
+
+    #[test]
+    fn src_and_alt_read_the_plain_string_form() {
+        let tree: Element = view! { <img src="photo.png" alt="A photo" /> };
+        let arena = Arena::build(&tree);
+        let img = arena.roots()[0];
+        assert_eq!(arena.src_attr(img), Some("photo.png"));
+        assert_eq!(arena.alt_attr(img), Some("A photo"));
+    }
+
+    #[test]
+    fn src_and_alt_are_none_without_the_attributes() {
+        let tree: Element = view! { <img /> };
+        let arena = Arena::build(&tree);
+        let img = arena.roots()[0];
+        assert_eq!(arena.src_attr(img), None);
+        assert_eq!(arena.alt_attr(img), None);
     }
 
     #[test]
