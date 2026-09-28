@@ -1,0 +1,61 @@
+.page {
+    display: flex;
+    flex-direction: column;
+    padding-top: 24px;
+    padding-right: 24px;
+    padding-bottom: 24px;
+    padding-left: 24px;
+    background-color: #1e1e22;
+    color: #ffffff;
+}
+
+.instructions {
+    margin-bottom: 16px;
+    font-size: 16px;
+}
+
+.section-title {
+    margin-top: 20px;
+    margin-bottom: 8px;
+    font-size: 14px;
+    color: #a0a0aa;
+}
+
+.row {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-end;
+}
+
+.swatch {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-right: 24px;
+}
+
+.swatch-label {
+    margin-top: 6px;
+    font-size: 13px;
+    color: #c0c0c8;
+}
+
+.icon-tiny {
+    width: 24px;
+    height: 24px;
+}
+
+.icon-small {
+    width: 48px;
+    height: 48px;
+}
+
+.icon-medium {
+    width: 96px;
+    height: 96px;
+}
+
+.icon-large {
+    width: 220px;
+    height: 220px;
+}
