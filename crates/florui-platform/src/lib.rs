@@ -11,6 +11,7 @@
 
 mod components;
 mod focus;
+mod image;
 mod position_observer;
 mod runtime;
 mod scroll;

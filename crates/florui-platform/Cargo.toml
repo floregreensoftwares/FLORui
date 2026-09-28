@@ -19,6 +19,7 @@ desktop = ["dep:notify", "dep:softbuffer", "dep:winit", "dep:wgpu", "dep:pollste
 
 [dependencies]
 florui = { path = "../florui" }
+florui-assets = { path = "../florui-assets" }
 florui-layout = { path = "../florui-layout" }
 florui-paint = { path = "../florui-paint" }
 florui-reactive = { path = "../florui-reactive" }
@@ -57,6 +58,10 @@ accesskit_winit = { version = "0.34", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+# Encoding a real PNG for `image.rs`'s own tests -- version matches
+# `florui-assets`'s own pin, for one resolved version across the
+# workspace.
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 
 # `crate::os::windows`'s own dependency — real Win32 calls (DWM caption
 # color, click-through, tray icon). Target-scoped so every other

@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use florui::{Element, Event};
 use florui_layout::BoxLayout;
@@ -143,6 +144,18 @@ pub struct UiRuntime {
     /// [`crate::text_input`]'s own module doc for why a bare `<input>` has
     /// no hook call-site to register through.
     text_input_registry: Rc<TextInputRegistry>,
+    /// Decoded/loading/failed state for every currently-live `<img>`,
+    /// keyed structurally (an `<img>` almost never has an `id`, unlike
+    /// `text_input_registry`'s own inputs) — synced structurally in
+    /// [`Self::update`], same reason as `text_input_registry`. Never
+    /// reachable via `use_context`; only [`Self::fix_image_intrinsic_sizes`]
+    /// and paint (via [`Self::image_registry`]) read it.
+    image_registry: Rc<crate::image::ImageRegistry>,
+    /// Backs `image_registry`'s own decoding — shared so a `src` reused by
+    /// multiple `<img>`s (or reloaded after this same render previously
+    /// loaded it) decodes once. See `florui_assets::AssetCache`'s own doc
+    /// for its retention policy.
+    asset_cache: Arc<florui_assets::AssetCache>,
     /// Extra `provide_context` calls a host supplied at construction — run
     /// every [`Self::update`] (including the very first one, inside
     /// [`Self::with_rules`] itself) alongside `executor`/`size_observers`,
@@ -259,6 +272,8 @@ impl UiRuntime {
             position_observers: Rc::new(PositionObserverRegistry::new()),
             scroll_registry: Rc::new(ScrollRegistry::new()),
             text_input_registry: Rc::new(TextInputRegistry::new()),
+            image_registry: Rc::new(crate::image::ImageRegistry::new()),
+            asset_cache: Arc::new(florui_assets::AssetCache::new()),
             extra_context_providers,
         };
         runtime.update(viewport);
@@ -305,6 +320,10 @@ impl UiRuntime {
 
     pub(crate) fn text_input_registry(&self) -> Rc<TextInputRegistry> {
         Rc::clone(&self.text_input_registry)
+    }
+
+    pub(crate) fn image_registry(&self) -> Rc<crate::image::ImageRegistry> {
+        Rc::clone(&self.image_registry)
     }
 
     /// Replaces the stylesheet driving every subsequent [`Self::update`].
@@ -382,6 +401,8 @@ impl UiRuntime {
         let mut tree = tree;
         self.option_summaries = crate::select::normalize(&mut tree);
         self.arena = Arena::build(&tree);
+        self.image_registry
+            .sync(&self.arena, &self.asset_cache, &*self.executor);
         self.resolve_hover();
         self.resolve_focus();
         self.animation_timeline
@@ -402,6 +423,8 @@ impl UiRuntime {
         .expect("this tree's explicit sizes never produce a layout failure");
         self.styles = styles;
         let (layouts, content_extents) = self.fix_select_widths(layouts, content_extents, viewport);
+        let (layouts, content_extents) =
+            self.fix_image_intrinsic_sizes(layouts, content_extents, viewport);
         self.layouts = layouts;
         self.position_open_selects(resolved_viewport.width, resolved_viewport.height);
         // After layout, not before: a committed-size/-position observer
@@ -484,6 +507,77 @@ impl UiRuntime {
             available,
         )
         .expect("a select-width fix-up never produces a layout failure")
+    }
+
+    /// Widens/heightens any `<img>` whose real decoded intrinsic size
+    /// just became known (or changed, on a `src` swap) since the layout
+    /// pass this fixes up — `image_registry.sync` (already run earlier
+    /// this same [`Self::update`]) starts a background load the instant a
+    /// new/changed `<img>` is seen, but that decode can only ever
+    /// complete on a *later* frame (see `crate::image`'s own doc); this
+    /// is the fix-up that applies it once it has.
+    ///
+    /// Same shape as [`Self::fix_select_widths`], but resolves through
+    /// [`florui_layout::resolve_replaced_size`] rather than reimplementing
+    /// its own sizing rule: this pass's own first-layout `current` box
+    /// (computed with no intrinsic size known, i.e. real CSS's own
+    /// "still loading" case) already reflects whatever this node's real
+    /// available space was, so re-running the same resolver with that as
+    /// `available_space` and the now-known intrinsic size as `intrinsic`
+    /// reproduces exactly what a single real layout pass with the
+    /// intrinsic size known from the start would have produced.
+    fn fix_image_intrinsic_sizes(
+        &mut self,
+        layouts: HashMap<NodeId, BoxLayout>,
+        content_extents: HashMap<NodeId, florui_layout::ContentExtent>,
+        available: Size<AvailableSpace>,
+    ) -> (
+        HashMap<NodeId, BoxLayout>,
+        HashMap<NodeId, florui_layout::ContentExtent>,
+    ) {
+        let mut any_fixed = false;
+        for img in self.arena.find_all(|arena, id| arena.tag(id) == "img") {
+            let Some(&current) = layouts.get(&img) else {
+                continue;
+            };
+            let key = FocusPath::of(&self.arena, img);
+            let Some(intrinsic) = self.image_registry.intrinsic_size(&key) else {
+                continue;
+            };
+            let Some(style) = self.styles.get(&img) else {
+                continue;
+            };
+            let resolved = florui_layout::resolve_replaced_size(
+                Some(intrinsic),
+                style.aspect_ratio,
+                Size {
+                    width: style.width,
+                    height: style.height,
+                },
+                Size {
+                    width: AvailableSpace::Definite(current.width),
+                    height: AvailableSpace::Definite(current.height),
+                },
+            );
+            if ((resolved.width - current.width).abs() > 0.01
+                || (resolved.height - current.height).abs() > 0.01)
+                && let Some(style) = self.styles.get_mut(&img)
+            {
+                style.width = Some(resolved.width);
+                style.height = Some(resolved.height);
+                any_fixed = true;
+            }
+        }
+        if !any_fixed {
+            return (layouts, content_extents);
+        }
+        florui_layout::compute_layout_with_content_extents(
+            &mut self.font,
+            &self.arena,
+            &self.styles,
+            available,
+        )
+        .expect("an image intrinsic-size fix-up never produces a layout failure")
     }
 
     /// Patches each open select's synthesized content div to its real
@@ -1613,6 +1707,80 @@ mod tests {
         runtime.clear_dirty();
         runtime.update(viewport());
         assert_eq!(status_text(find_status(&runtime), &runtime), "ready:42");
+    }
+
+    /// End-to-end through a real [`UiRuntime`]: an `<img>` with no CSS
+    /// size at all starts at `0x0` (a real intrinsic size not decoded
+    /// yet), then, once the real background PNG decode completes and
+    /// wakes the host on its own (same `on_needs_update` path the
+    /// `use_resource` tests above exercise, but via `image_registry`'s
+    /// own direct `executor.spawn` rather than a hook), the very next
+    /// `update` resizes it to its own real 17x9 intrinsic size — proving
+    /// `fix_image_intrinsic_sizes` actually applies a completed load, not
+    /// just that `ImageRegistry` reports one in isolation.
+    #[test]
+    fn an_img_resizes_to_its_real_intrinsic_size_once_a_background_decode_completes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("photo.png");
+        let image = image::RgbaImage::from_fn(17, 9, |_, _| image::Rgba([1, 2, 3, 255]));
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        let src = path.display().to_string();
+
+        let root = move || {
+            view! { <img id="pic" src={src.clone()} /> }
+        };
+
+        // `on_needs_update` (exercised in isolation by the two tests
+        // above, for the shared `spawn_blocking`/executor primitive
+        // itself) isn't used here: a tiny local PNG decode can complete
+        // faster than this test can even register a listener after
+        // `with_rules`'s own internal first `update` already started it,
+        // an inherent race for anything this fast rather than a real bug
+        // -- polling `update` directly still exercises the real
+        // background thread and the real fix-up pass, just without
+        // depending on that ordering.
+        let mut runtime = UiRuntime::with_rules(Vec::new(), root, viewport());
+
+        let find_img = |runtime: &UiRuntime| -> NodeId {
+            let (arena, ..) = runtime.geometry();
+            arena
+                .find(|arena, id| arena.id_attr(id) == Some("pic"))
+                .expect("root always renders the #pic img")
+        };
+        let img = find_img(&runtime);
+        let (_, _, layouts) = runtime.geometry();
+        assert_eq!(
+            (layouts[&img].width, layouts[&img].height),
+            (100.0, 0.0),
+            "no intrinsic size decoded yet -- fills the 100px viewport width \
+             (real CSS's own 'still loading' case), zero height (no ratio either)"
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut resized = false;
+        while std::time::Instant::now() < deadline {
+            runtime.clear_dirty();
+            runtime.update(viewport());
+            let img = find_img(&runtime);
+            let (_, _, layouts) = runtime.geometry();
+            if (layouts[&img].width, layouts[&img].height) == (17.0, 9.0) {
+                resized = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            resized,
+            "the <img> should resize to its real 17x9 intrinsic size once the real \
+             background PNG decode completes"
+        );
     }
 
     /// loading-boundaries.md's own acceptance requirement: "an externally
