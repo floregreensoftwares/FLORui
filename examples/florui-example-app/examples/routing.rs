@@ -17,8 +17,8 @@ use florui_platform::{ActivationEvent, use_activation_events};
 use florui_reactive::executor::{Executor, LocalExecutor};
 use florui_reactive::{provide_context, use_ref, use_signal};
 use florui_routing::{
-    ExternalNavigation, Guard, GuardDecision, Routable, RouteError, provide_router, route_outlet,
-    use_route, use_router,
+    ExternalNavigation, Guard, GuardDecision, Routable, RouteError, link, provide_router,
+    route_outlet, use_route, use_router,
 };
 use florui_style::Rgba;
 
@@ -170,6 +170,9 @@ fn root() -> Element {
                     <button class="button" onclick={toggle_dirty}>
                         {if dirty.get() { "Form is dirty (click to clear)" } else { "Mark form dirty" }}
                     </button>
+                    {link(&AppRoute::Settings(SettingsRoute::Profile), || {
+                        view! { {"Go to Settings / Profile"} }
+                    })}
                 </div>
             },
             AppRoute::Settings(sub) => route_outlet(sub, |sub| match sub {
