@@ -109,7 +109,9 @@
 //! observed regression (a single `<img>` inside an otherwise-empty
 //! container), not a hypothetical one. `display: block` sidesteps that
 //! entirely until inline flow for a replaced element is its own,
-//! separate follow-up.
+//! separate follow-up. `icon` (a themable SVG icon, see
+//! `florui-platform::icon`'s own doc) is the exact same kind of replaced
+//! element, so it needs the identical rule for the identical reason.
 
 use std::sync::LazyLock;
 
@@ -118,7 +120,7 @@ use style::stylesheets::Origin;
 use crate::stylesheet_parse::{Rule, parse_stylesheet_with_origin};
 
 const CSS: &str = "
-    div, p, h1, h2, h3, h4, h5, h6, img {
+    div, p, h1, h2, h3, h4, h5, h6, img, icon {
         display: block;
     }
 
