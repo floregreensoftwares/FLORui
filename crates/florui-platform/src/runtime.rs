@@ -151,10 +151,14 @@ pub struct UiRuntime {
     /// reachable via `use_context`; only [`Self::fix_image_intrinsic_sizes`]
     /// and paint (via [`Self::image_registry`]) read it.
     image_registry: Rc<crate::image::ImageRegistry>,
-    /// Backs `image_registry`'s own decoding — shared so a `src` reused by
-    /// multiple `<img>`s (or reloaded after this same render previously
-    /// loaded it) decodes once. See `florui_assets::AssetCache`'s own doc
-    /// for its retention policy.
+    /// Same shape as `image_registry`, for `<icon>` instead — see
+    /// `crate::icon`'s own module doc for why a themable icon is a
+    /// separate tag/registry rather than an `<img>` variant.
+    icon_registry: Rc<crate::icon::IconRegistry>,
+    /// Backs `image_registry`'s and `icon_registry`'s own decoding —
+    /// shared so a `src` reused by multiple elements (or reloaded after
+    /// this same render previously loaded it) decodes once. See
+    /// `florui_assets::AssetCache`'s own doc for its retention policy.
     asset_cache: Arc<florui_assets::AssetCache>,
     /// Extra `provide_context` calls a host supplied at construction — run
     /// every [`Self::update`] (including the very first one, inside
@@ -273,6 +277,7 @@ impl UiRuntime {
             scroll_registry: Rc::new(ScrollRegistry::new()),
             text_input_registry: Rc::new(TextInputRegistry::new()),
             image_registry: Rc::new(crate::image::ImageRegistry::new()),
+            icon_registry: Rc::new(crate::icon::IconRegistry::new()),
             asset_cache: Arc::new(florui_assets::AssetCache::new()),
             extra_context_providers,
         };
@@ -326,10 +331,14 @@ impl UiRuntime {
         Rc::clone(&self.image_registry)
     }
 
-    /// Backs `image_registry`'s own decoding — `crate::desktop`'s own
-    /// paint setup needs both together to request an SVG `<img>`'s real
-    /// rasterization once it knows a real resolved box size for it (see
-    /// `crate::image`'s own doc).
+    pub(crate) fn icon_registry(&self) -> Rc<crate::icon::IconRegistry> {
+        Rc::clone(&self.icon_registry)
+    }
+
+    /// Backs `image_registry`'s and `icon_registry`'s own decoding —
+    /// `crate::desktop`'s own paint setup needs both together to request
+    /// an SVG `<img>`'s or `<icon>`'s real rasterization once it knows a
+    /// real resolved box size for it (see `crate::image`'s own doc).
     pub(crate) fn asset_cache(&self) -> Arc<florui_assets::AssetCache> {
         Arc::clone(&self.asset_cache)
     }
@@ -415,6 +424,7 @@ impl UiRuntime {
         self.arena = Arena::build(&tree);
         self.image_registry
             .sync(&self.arena, &self.asset_cache, &*self.executor);
+        self.icon_registry.sync(&self.arena, &*self.executor);
         self.resolve_hover();
         self.resolve_focus();
         self.animation_timeline
@@ -521,13 +531,14 @@ impl UiRuntime {
         .expect("a select-width fix-up never produces a layout failure")
     }
 
-    /// Widens/heightens any `<img>` whose real decoded intrinsic size
-    /// just became known (or changed, on a `src` swap) since the layout
-    /// pass this fixes up — `image_registry.sync` (already run earlier
-    /// this same [`Self::update`]) starts a background load the instant a
-    /// new/changed `<img>` is seen, but that decode can only ever
-    /// complete on a *later* frame (see `crate::image`'s own doc); this
-    /// is the fix-up that applies it once it has.
+    /// Widens/heightens any `<img>`/`<icon>` whose real decoded intrinsic
+    /// size just became known (or changed, on a `src` swap) since the
+    /// layout pass this fixes up — `image_registry.sync`/`icon_registry.sync`
+    /// (already run earlier this same [`Self::update`]) start a
+    /// background load the instant a new/changed element is seen, but
+    /// that decode can only ever complete on a *later* frame (see
+    /// `crate::image`'s own doc); this is the fix-up that applies it once
+    /// it has.
     ///
     /// Same shape as [`Self::fix_select_widths`], but resolves through
     /// [`florui_layout::resolve_replaced_size`] rather than reimplementing
@@ -548,15 +559,23 @@ impl UiRuntime {
         HashMap<NodeId, florui_layout::ContentExtent>,
     ) {
         let mut any_fixed = false;
-        for img in self.arena.find_all(|arena, id| arena.tag(id) == "img") {
-            let Some(&current) = layouts.get(&img) else {
+        for node in self
+            .arena
+            .find_all(|arena, id| matches!(arena.tag(id), "img" | "icon"))
+        {
+            let Some(&current) = layouts.get(&node) else {
                 continue;
             };
-            let key = FocusPath::of(&self.arena, img);
-            let Some(intrinsic) = self.image_registry.intrinsic_size(&key) else {
+            let key = FocusPath::of(&self.arena, node);
+            let intrinsic = if self.arena.tag(node) == "img" {
+                self.image_registry.intrinsic_size(&key)
+            } else {
+                self.icon_registry.intrinsic_size(&key)
+            };
+            let Some(intrinsic) = intrinsic else {
                 continue;
             };
-            let Some(style) = self.styles.get(&img) else {
+            let Some(style) = self.styles.get(&node) else {
                 continue;
             };
             let resolved = florui_layout::resolve_replaced_size(
@@ -573,7 +592,7 @@ impl UiRuntime {
             );
             if ((resolved.width - current.width).abs() > 0.01
                 || (resolved.height - current.height).abs() > 0.01)
-                && let Some(style) = self.styles.get_mut(&img)
+                && let Some(style) = self.styles.get_mut(&node)
             {
                 style.width = Some(resolved.width);
                 style.height = Some(resolved.height);
