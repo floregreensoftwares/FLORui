@@ -1743,7 +1743,12 @@ fn paint_node(
                     );
                 }
             }
-        } else if arena.tag(node) == "img" {
+        } else if matches!(arena.tag(node), "img" | "icon") {
+            // An `<icon>`'s own decoded pixels are already fully themed
+            // (real `currentColor` substitution happened before
+            // rasterization, on the platform side that owns style/color
+            // resolution) -- this crate just blits either tag's own
+            // pixels identically, no icon-specific painting path needed.
             if let Some(image) = images.and_then(|images| images.get(&node)) {
                 let object_fit = style.map_or(ObjectFit::Fill, |s| s.object_fit);
                 let object_position = style.map_or(
