@@ -33,6 +33,23 @@ pub struct Size2D {
     pub height: f32,
 }
 
+/// Substitutes every literal `currentColor` occurrence in `svg_text` with
+/// `color`'s own `#rrggbb` hex form, before parsing -- `resvg`/`usvg`
+/// 0.48.1 has no built-in override for the keyword (checked directly
+/// against `usvg::Options`'s real fields, not assumed), so a themable
+/// icon needs this pre-parse text substitution instead, the same
+/// technique this project already uses elsewhere for a CSS keyword its
+/// backend has no native way to parameterize.
+///
+/// Scope: the color's own alpha channel is not applied (SVG's `fill`/
+/// `stroke` attributes don't carry one; that would need `fill-opacity`
+/// handling, out of scope here) -- `color` is read as opaque RGB only.
+/// A source that never uses `currentColor` at all is returned unchanged.
+pub fn substitute_current_color(svg_text: &str, color: [u8; 3]) -> String {
+    let [r, g, b] = color;
+    svg_text.replace("currentColor", &format!("#{r:02x}{g:02x}{b:02x}"))
+}
+
 /// Parses `svg_text` and reads its intrinsic size. Pure -- takes no path,
 /// touches no disk.
 pub fn parse_svg(svg_text: &str) -> Result<VectorImage, AssetError> {
@@ -160,6 +177,45 @@ mod tests {
     fn pixel(rgba: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
         let offset = ((y * width + x) * 4) as usize;
         rgba[offset..offset + 4].try_into().unwrap()
+    }
+
+    #[test]
+    fn substitute_current_color_replaces_every_occurrence() {
+        let svg = r##"<svg><path fill="currentColor" stroke="currentColor"/></svg>"##;
+        let result = substitute_current_color(svg, [0x33, 0x66, 0xff]);
+        assert_eq!(
+            result,
+            r##"<svg><path fill="#3366ff" stroke="#3366ff"/></svg>"##
+        );
+    }
+
+    #[test]
+    fn substitute_current_color_leaves_a_source_that_never_uses_it_unchanged() {
+        let result = substitute_current_color(BLUE_CIRCLE_SVG, [0xff, 0x00, 0x00]);
+        assert_eq!(result, BLUE_CIRCLE_SVG);
+    }
+
+    #[test]
+    fn substitute_current_color_is_actually_honored_by_a_real_rasterize() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <circle cx="16" cy="16" r="14" fill="currentColor"/>
+</svg>"##;
+        let themed = substitute_current_color(svg, [0x00, 0xff, 0x00]);
+        let image = parse_svg(&themed).unwrap();
+        let raster = rasterize_svg(
+            &image,
+            RasterFit::Contain {
+                width: 32,
+                height: 32,
+            },
+        )
+        .unwrap();
+        let [r, g, b, a] = pixel(&raster.rgba, 32, 16, 16);
+        assert_eq!(a, 255);
+        assert!(
+            g > r && g > b,
+            "center should be green-dominant after theming, got {r},{g},{b}"
+        );
     }
 
     #[test]

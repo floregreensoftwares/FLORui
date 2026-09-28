@@ -61,6 +61,6 @@ pub use cache::{AssetCache, DecodeParams};
 pub use error::AssetError;
 pub use raster::{RasterImage, decode_png};
 pub use source::{AssetId, AssetSource};
-pub use svg::{RasterFit, Size2D, VectorImage, parse_svg, rasterize_svg};
+pub use svg::{RasterFit, Size2D, VectorImage, parse_svg, rasterize_svg, substitute_current_color};
 #[cfg(feature = "watch")]
 pub use watch::{WatchError, watch_path};
