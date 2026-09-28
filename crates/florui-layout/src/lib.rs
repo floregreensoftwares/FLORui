@@ -1181,7 +1181,12 @@ fn build_node(
                 let arena_children = arena.children(node);
                 let id = if arena_children.is_empty() {
                     let style = to_taffy_style(styles.get(&node));
-                    if arena.tag(node) == "img" {
+                    // `icon` (a themable SVG icon) is the same kind of
+                    // replaced element as `img` -- same intrinsic-size
+                    // sizing rule, same missing channel into this crate
+                    // (see `ImageContext`'s own doc), just a different
+                    // registry on the platform side supplies it later.
+                    if matches!(arena.tag(node), "img" | "icon") {
                         tree.new_leaf_with_context(
                             style,
                             LeafContext::Image(ImageContext {
