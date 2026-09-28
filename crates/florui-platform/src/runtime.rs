@@ -326,6 +326,18 @@ impl UiRuntime {
         Rc::clone(&self.image_registry)
     }
 
+    /// Backs `image_registry`'s own decoding — `crate::desktop`'s own
+    /// paint setup needs both together to request an SVG `<img>`'s real
+    /// rasterization once it knows a real resolved box size for it (see
+    /// `crate::image`'s own doc).
+    pub(crate) fn asset_cache(&self) -> Arc<florui_assets::AssetCache> {
+        Arc::clone(&self.asset_cache)
+    }
+
+    pub(crate) fn executor(&self) -> Rc<LocalExecutor> {
+        Rc::clone(&self.executor)
+    }
+
     /// Replaces the stylesheet driving every subsequent [`Self::update`].
     /// Only `rules` changes — `scope` (every `Signal`, `use_memo`,
     /// `use_effect`, and the rest of a component's persistent state) is
