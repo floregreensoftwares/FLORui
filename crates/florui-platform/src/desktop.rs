@@ -666,13 +666,61 @@ fn build_text_input_paint(
 /// [`crate::image::ImageRegistry`] currently has a real decode ready for
 /// — a still-loading or failed `<img>` simply has no entry (and paints
 /// nothing but its own background/border, same as an empty `<div>`).
+///
+/// Also requests SVG rasterization at each `<img>`'s own real, current
+/// content-box size (already-physical/HiDPI-scaled `layouts`, so the
+/// raster target matches real on-screen pixels, not logical ones) — a
+/// no-op for a PNG entry, or an SVG entry already rasterized at this
+/// exact size; see [`crate::image::ImageRegistry::request_raster`]'s own
+/// doc for why this has to happen here rather than as soon as an SVG's
+/// intrinsic size is known. Runs every redraw, so a later resize/DPI
+/// change re-requests at the new size on its own.
+#[allow(clippy::too_many_arguments)]
 fn build_image_paint(
     arena: &florui_style::Arena,
+    styles: &HashMap<NodeId, ComputedStyle>,
+    layouts: &HashMap<NodeId, florui_layout::BoxLayout>,
     registry: &crate::image::ImageRegistry,
+    cache: &Arc<florui_assets::AssetCache>,
+    executor: &dyn florui_reactive::Executor,
 ) -> HashMap<NodeId, florui_paint::ImagePaint> {
     let mut result = HashMap::new();
     for node in arena.find_all(|arena, id| arena.tag(id) == "img") {
         let key = FocusPath::of(arena, node);
+
+        if let Some(src) = arena.src_attr(node)
+            && let Some(&layout) = layouts.get(&node)
+        {
+            let style = styles.get(&node);
+            let (content_width, content_height) = match style {
+                Some(s) => (
+                    (layout.width
+                        - s.border.left.width
+                        - s.border.right.width
+                        - s.padding.left
+                        - s.padding.right)
+                        .max(0.0),
+                    (layout.height
+                        - s.border.top.width
+                        - s.border.bottom.width
+                        - s.padding.top
+                        - s.padding.bottom)
+                        .max(0.0),
+                ),
+                None => (layout.width, layout.height),
+            };
+            registry.request_raster(
+                &key,
+                src,
+                florui_assets::RasterFit::Contain {
+                    width: content_width.round().max(1.0) as u32,
+                    height: content_height.round().max(1.0) as u32,
+                },
+                cache,
+                executor,
+            );
+        }
+
         if let Some(image) = registry.decoded(&key) {
             result.insert(node, image);
         }
@@ -1011,6 +1059,8 @@ impl WindowState {
         let scroll_registry = self.runtime.scroll_registry();
         let text_input_registry = self.runtime.text_input_registry();
         let image_registry = self.runtime.image_registry();
+        let asset_cache = self.runtime.asset_cache();
+        let executor = self.runtime.executor();
         let focused = self.runtime.focused();
         let (arena, styles, layouts, font) = self.runtime.geometry_and_font_mut();
         let scroll_offsets = scroll_registry.offsets_by_node(arena);
@@ -1021,7 +1071,14 @@ impl WindowState {
         }
         let text_inputs =
             build_text_input_paint(arena, styles, font, &text_input_registry, focused);
-        let images = build_image_paint(arena, &image_registry);
+        let images = build_image_paint(
+            arena,
+            styles,
+            &physical_layouts,
+            &image_registry,
+            &asset_cache,
+            &*executor,
+        );
         if let Some(node) = focused
             && let Some(paint) = text_inputs.get(&node)
             && let Some((x0, y0, x1, y1)) = paint.compose_rect
