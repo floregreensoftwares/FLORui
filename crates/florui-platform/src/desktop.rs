@@ -691,31 +691,11 @@ fn build_image_paint(
         if let Some(src) = arena.src_attr(node)
             && let Some(&layout) = layouts.get(&node)
         {
-            let style = styles.get(&node);
-            let (content_width, content_height) = match style {
-                Some(s) => (
-                    (layout.width
-                        - s.border.left.width
-                        - s.border.right.width
-                        - s.padding.left
-                        - s.padding.right)
-                        .max(0.0),
-                    (layout.height
-                        - s.border.top.width
-                        - s.border.bottom.width
-                        - s.padding.top
-                        - s.padding.bottom)
-                        .max(0.0),
-                ),
-                None => (layout.width, layout.height),
-            };
+            let (width, height) = content_box_raster_target(styles.get(&node), layout);
             registry.request_raster(
                 &key,
                 src,
-                florui_assets::RasterFit::Contain {
-                    width: content_width.round().max(1.0) as u32,
-                    height: content_height.round().max(1.0) as u32,
-                },
+                florui_assets::RasterFit::Contain { width, height },
                 cache,
                 executor,
             );
@@ -726,6 +706,80 @@ fn build_image_paint(
         }
     }
     result
+}
+
+/// Same as [`build_image_paint`], for `<icon>` instead of `<img>` — see
+/// `crate::icon`'s own doc for why they're separate tags/registries. The
+/// one real difference in what has to happen here: an icon's own
+/// rasterization also needs its resolved `color` (real CSS's
+/// `currentColor` source), read the normal way any other style value
+/// already is — nothing icon-specific about *that* part.
+#[allow(clippy::too_many_arguments)]
+fn build_icon_paint(
+    arena: &florui_style::Arena,
+    styles: &HashMap<NodeId, ComputedStyle>,
+    layouts: &HashMap<NodeId, florui_layout::BoxLayout>,
+    registry: &crate::icon::IconRegistry,
+    cache: &Arc<florui_assets::AssetCache>,
+    executor: &dyn florui_reactive::Executor,
+) -> HashMap<NodeId, florui_paint::ImagePaint> {
+    let mut result = HashMap::new();
+    for node in arena.find_all(|arena, id| arena.tag(id) == "icon") {
+        let key = FocusPath::of(arena, node);
+        let style = styles.get(&node);
+
+        if let Some(src) = arena.src_attr(node)
+            && let Some(&layout) = layouts.get(&node)
+        {
+            let (width, height) = content_box_raster_target(style, layout);
+            let color = style.map_or(florui_style::Rgba::opaque(0, 0, 0), |s| s.color);
+            registry.request_raster(
+                &key,
+                src,
+                florui_assets::RasterFit::Contain { width, height },
+                [color.r, color.g, color.b],
+                cache,
+                executor,
+            );
+        }
+
+        if let Some(image) = registry.decoded(&key) {
+            result.insert(node, image);
+        }
+    }
+    result
+}
+
+/// A node's own content-box size, in whatever units `layout` (physical
+/// or logical) is already in — the raster target both
+/// [`build_image_paint`] and [`build_icon_paint`] request, rounded up to
+/// at least one real pixel so a momentarily zero-size box never requests
+/// an empty raster.
+fn content_box_raster_target(
+    style: Option<&ComputedStyle>,
+    layout: florui_layout::BoxLayout,
+) -> (u32, u32) {
+    let (content_width, content_height) = match style {
+        Some(s) => (
+            (layout.width
+                - s.border.left.width
+                - s.border.right.width
+                - s.padding.left
+                - s.padding.right)
+                .max(0.0),
+            (layout.height
+                - s.border.top.width
+                - s.border.bottom.width
+                - s.padding.top
+                - s.padding.bottom)
+                .max(0.0),
+        ),
+        None => (layout.width, layout.height),
+    };
+    (
+        content_width.round().max(1.0) as u32,
+        content_height.round().max(1.0) as u32,
+    )
 }
 
 /// A `type="password"` substitute — verified directly against real
@@ -1059,6 +1113,7 @@ impl WindowState {
         let scroll_registry = self.runtime.scroll_registry();
         let text_input_registry = self.runtime.text_input_registry();
         let image_registry = self.runtime.image_registry();
+        let icon_registry = self.runtime.icon_registry();
         let asset_cache = self.runtime.asset_cache();
         let executor = self.runtime.executor();
         let focused = self.runtime.focused();
@@ -1071,7 +1126,10 @@ impl WindowState {
         }
         let text_inputs =
             build_text_input_paint(arena, styles, font, &text_input_registry, focused);
-        let images = build_image_paint(
+        // One combined map: `florui_paint` blits either tag's own decoded
+        // pixels identically (see its own "img"/"icon" tag check), so it
+        // only needs one `NodeId -> ImagePaint` map, not one per registry.
+        let mut images = build_image_paint(
             arena,
             styles,
             &physical_layouts,
@@ -1079,6 +1137,14 @@ impl WindowState {
             &asset_cache,
             &*executor,
         );
+        images.extend(build_icon_paint(
+            arena,
+            styles,
+            &physical_layouts,
+            &icon_registry,
+            &asset_cache,
+            &*executor,
+        ));
         if let Some(node) = focused
             && let Some(paint) = text_inputs.get(&node)
             && let Some((x0, y0, x1, y1)) = paint.compose_rect
