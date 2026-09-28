@@ -511,6 +511,34 @@ pub struct ComputedStyle {
     /// `aspect-ratio`. Meaningful on any box (not just a replaced
     /// element) — see [`AspectRatio`]'s own doc.
     pub aspect_ratio: AspectRatio,
+    /// Real CSS's `appearance` — narrowed to just the two values this
+    /// crate can actually act on (see [`Appearance`]'s own doc for why
+    /// it isn't the real property).
+    pub appearance: Appearance,
+}
+
+/// A narrow stand-in for real CSS's `appearance` property: whether a
+/// built-in control decoration with no real DOM node of its own (a
+/// `<select>`'s own chevron, a checked checkbox's own check mark) should
+/// paint at all. The real `appearance` property would be the standard
+/// fit, but the `style` crate this project's cascade runs on compiles it
+/// out entirely under Servo mode (`engines="gecko"` in its own source) —
+/// pulling in Gecko/Firefox FFI bindings just for this one toggle isn't
+/// viable. Read instead from a plain custom property, `--florui-appearance`
+/// (the same naming spirit as a vendor prefix like `-webkit-appearance`,
+/// since this genuinely stands in for the real thing): real CSS syntax,
+/// cascaded/inherited by Stylo's own existing (and already exercised)
+/// custom-property machinery, no engine changes, just a value this crate
+/// defines the meaning of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Appearance {
+    /// The built-in decoration paints normally. Real CSS's initial value,
+    /// and this crate's fallback whenever `--florui-appearance` is unset
+    /// or holds anything other than `none`.
+    #[default]
+    Auto,
+    /// The built-in decoration doesn't paint at all -- `--florui-appearance: none;`.
+    None,
 }
 
 /// `object-fit`'s exact CSS-spec variant set — a replaced element's
@@ -2557,6 +2585,51 @@ mod tests {
         );
         let span = arena.find(|a, id| a.tag(id) == "span").unwrap();
         assert_eq!(computed[&span].background_color, Rgba::opaque(0, 0xff, 0));
+    }
+
+    #[test]
+    fn appearance_defaults_to_auto_with_zero_author_css() {
+        let tree: Element = view! { <select /> };
+        let (arena, computed) = styles(&tree, "", &InteractionState::new());
+        assert_eq!(computed[&arena.roots()[0]].appearance, Appearance::Auto);
+    }
+
+    #[test]
+    fn florui_appearance_none_reads_as_appearance_none() {
+        let tree: Element = view! { <select class="plain" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".plain { --florui-appearance: none; }",
+            &InteractionState::new(),
+        );
+        assert_eq!(computed[&arena.roots()[0]].appearance, Appearance::None);
+    }
+
+    #[test]
+    fn florui_appearance_inherits_to_a_descendant_like_any_other_custom_property() {
+        let tree: Element = view! {
+            <div class="outer">
+                <select />
+            </div>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".outer { --florui-appearance: none; }",
+            &InteractionState::new(),
+        );
+        let select = arena.find(|a, id| a.tag(id) == "select").unwrap();
+        assert_eq!(computed[&select].appearance, Appearance::None);
+    }
+
+    #[test]
+    fn florui_appearance_with_any_other_value_reads_as_auto() {
+        let tree: Element = view! { <select class="odd" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".odd { --florui-appearance: auto; }",
+            &InteractionState::new(),
+        );
+        assert_eq!(computed[&arena.roots()[0]].appearance, Appearance::Auto);
     }
 
     #[test]

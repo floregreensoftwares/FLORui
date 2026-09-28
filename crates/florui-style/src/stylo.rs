@@ -49,17 +49,18 @@ use style::values::AtomIdent;
 use style::values::computed::font::GenericFontFamily;
 use style::values::computed::{CSSPixelLength, Display, Length};
 use style::{Atom, LocalName};
+use style_traits::CssWriter;
 use stylo_atoms::Atom as WeakAtom;
 use stylo_dom::ElementState;
 
 use crate::animation::AnimationTimeline;
 use crate::cascade::{
-    AspectRatio as FlorAspectRatio, BorderSide as FlorBorderSide, BoxShadow as FlorBoxShadow,
-    ComputedStyle, ContainerType as FlorContainerType, ContentAlignment, Corners,
-    Display as FlorDisplay, Edges, FilterFunction as FlorFilterFunction, FlexDirection, FlexWrap,
-    FontFamily as FlorFontFamily, ItemAlignment, LengthPercentage as FlorLengthPercentage,
-    ObjectFit as FlorObjectFit, TransformFunction as FlorTransformFunction,
-    Viewport as FlorViewport,
+    Appearance as FlorAppearance, AspectRatio as FlorAspectRatio, BorderSide as FlorBorderSide,
+    BoxShadow as FlorBoxShadow, ComputedStyle, ContainerType as FlorContainerType,
+    ContentAlignment, Corners, Display as FlorDisplay, Edges,
+    FilterFunction as FlorFilterFunction, FlexDirection, FlexWrap, FontFamily as FlorFontFamily,
+    ItemAlignment, LengthPercentage as FlorLengthPercentage, ObjectFit as FlorObjectFit,
+    TransformFunction as FlorTransformFunction, Viewport as FlorViewport,
 };
 use crate::color::Rgba;
 use crate::interaction::InteractionState;
@@ -1498,6 +1499,39 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         object_fit: to_object_fit(position.object_fit),
         object_position: to_object_position(&position.object_position),
         aspect_ratio: to_aspect_ratio(&position.aspect_ratio),
+        appearance: to_appearance(values),
+    }
+}
+
+/// Reads `--florui-appearance` the same way `var()` substitution already
+/// does internally (proven by this crate's own custom-property tests) --
+/// but read directly, not substituted into another property, since there
+/// is no real property to substitute it into (see [`FlorAppearance`]'s
+/// own doc for why). Every custom property this crate's authors can
+/// declare is unregistered (no `@property` support), so
+/// [`PropertyRegistrationData::unregistered`] (universal syntax,
+/// inherits) is always the right registration to read it against -- the
+/// same default the cascade itself already applies when substituting
+/// `var()`.
+fn to_appearance(values: &ComputedValues) -> FlorAppearance {
+    use style::properties_and_values::registry::PropertyRegistrationData;
+    use style_traits::ToCss;
+
+    let name = Atom::from("florui-appearance");
+    let Some(value) = values
+        .custom_properties()
+        .get(PropertyRegistrationData::unregistered(), &name)
+    else {
+        return FlorAppearance::Auto;
+    };
+    let mut css = String::new();
+    if value.to_css(&mut CssWriter::new(&mut css)).is_err() {
+        return FlorAppearance::Auto;
+    }
+    if css.trim() == "none" {
+        FlorAppearance::None
+    } else {
+        FlorAppearance::Auto
     }
 }
 
