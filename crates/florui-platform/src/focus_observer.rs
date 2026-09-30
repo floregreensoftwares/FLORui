@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use florui_reactive::{Cleanup, use_attachment, use_context};
+use florui_reactive::{Cleanup, FocusHost, use_attachment, use_context};
 use florui_style::{Arena, NodeId};
 
 use crate::components::popover::is_self_or_descendant;
@@ -94,6 +94,7 @@ const REQUEST_LIFETIME: u8 = 2;
 #[derive(Default)]
 pub struct FocusController {
     pending: RefCell<Option<(String, u8)>>,
+    focused: RefCell<Option<String>>,
 }
 
 impl FocusController {
@@ -107,6 +108,13 @@ impl FocusController {
     /// couple of renders; one that never appears is dropped.
     pub fn request_focus(&self, id: impl Into<String>) {
         *self.pending.borrow_mut() = Some((id.into(), REQUEST_LIFETIME));
+    }
+
+    /// Records the `id` of the element focus is on now (`None` when nothing
+    /// is focused or it has no `id`); the runtime calls this whenever focus
+    /// changes.
+    pub(crate) fn set_focused_id(&self, id: Option<String>) {
+        *self.focused.borrow_mut() = id;
     }
 
     /// The queued request, if any, without consuming it.
@@ -128,6 +136,16 @@ impl FocusController {
                 *pending = None;
             }
         }
+    }
+}
+
+impl FocusHost for FocusController {
+    fn focused_id(&self) -> Option<String> {
+        self.focused.borrow().clone()
+    }
+
+    fn request_focus(&self, id: &str) {
+        FocusController::request_focus(self, id);
     }
 }
 
@@ -248,6 +266,46 @@ mod tests {
         assert_eq!(runtime.focused(), Some(node(&runtime, "late")));
     }
 
+    #[test]
+    fn the_host_reports_the_focused_elements_id_and_serves_requests() {
+        let slot: Rc<RefCell<Option<Rc<dyn FocusHost>>>> = Rc::new(RefCell::new(None));
+        let slot_in = Rc::clone(&slot);
+        let mut runtime = UiRuntime::with_rules(
+            Vec::new(),
+            move || {
+                *slot_in.borrow_mut() = florui_reactive::use_focus_host();
+                view! {
+                    <div>
+                        <button id="first">{"First"}</button>
+                        <button>{"No id"}</button>
+                        <button id="third">{"Third"}</button>
+                    </div>
+                }
+            },
+            viewport(),
+        );
+        runtime.update(viewport());
+        let host = slot.borrow().clone().expect("the runtime provides a host");
+        assert_eq!(host.focused_id(), None, "nothing focused yet");
+
+        host.request_focus("third");
+        runtime.update(viewport());
+        assert_eq!(host.focused_id().as_deref(), Some("third"));
+
+        let no_id = {
+            let (arena, ..) = runtime.geometry();
+            arena.find_all(|a, n| a.tag(n) == "button")[1]
+        };
+        runtime.set_focused(Some(no_id), true);
+        assert_eq!(host.focused_id(), None, "a focused element without an id");
+
+        runtime.set_focused(Some(node(&runtime, "first")), true);
+        assert_eq!(
+            host.focused_id().as_deref(),
+            Some("first"),
+            "kept current between renders"
+        );
+    }
     #[test]
     fn a_request_for_an_element_that_never_appears_is_dropped() {
         let show = Rc::new(Cell::new(false));
