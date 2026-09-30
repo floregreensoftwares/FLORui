@@ -86,6 +86,15 @@ mod desktop;
 mod host_observer;
 
 #[cfg(feature = "desktop")]
+mod frame;
+
+#[cfg(feature = "desktop")]
+mod headless;
+
+#[cfg(feature = "desktop")]
+pub use headless::{A11yNode, HeadlessFrame, HeadlessOptions, HeadlessWindow, TestKey};
+
+#[cfg(feature = "desktop")]
 mod input;
 
 #[cfg(feature = "desktop")]
