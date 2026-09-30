@@ -1593,9 +1593,23 @@ impl WindowState {
     /// `winit`'s own `drag_window` takes over the mouse for the rest of a
     /// single-click drag gesture, so there is no matching press to
     /// remember here.
+    /// A press dismisses the validation bubble, except one that only moves
+    /// the caret inside the very field the bubble hangs from (measured in
+    /// Edge: clicking empty page area dismisses it).
+    fn dismiss_bubble_on_press(&mut self, hit: Option<NodeId>) {
+        let inside_own_text_field = hit.is_some_and(|node| {
+            self.runtime.validation_bubble_field() == Some(node)
+                && self.is_editable_text_input(node)
+        });
+        if !inside_own_text_field && self.runtime.dismiss_validation_bubble() {
+            self.update_and_request_redraw();
+        }
+    }
+
     fn handle_press(&mut self) {
         let (x, y) = self.to_logical_cursor(self.last_cursor.0, self.last_cursor.1);
         let hit = self.runtime.hit_test(x, y);
+        self.dismiss_bubble_on_press(hit);
 
         // Checked before any early return below -- must fire regardless
         // of what `hit` turns out to be.

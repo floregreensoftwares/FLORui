@@ -429,6 +429,10 @@ impl AccessibilityTree {
             _ => {}
         }
 
+        if arena.id_attr(id) == Some(crate::validation_bubble::BUBBLE_ID) {
+            node.set_role(Role::Alert);
+            node.set_live(accesskit::Live::Assertive);
+        }
         if arena.is_disabled(id) {
             node.set_disabled();
         }
@@ -708,6 +712,35 @@ mod tests {
         assert!(node.is_read_only());
         assert!(node.supports_action(Action::SetValue));
         assert!(node.supports_action(Action::Focus));
+    }
+
+    #[test]
+    fn the_validation_bubble_is_an_assertive_alert_carrying_its_text_once() {
+        let tree: Element = view! {
+            <div>
+                {crate::validation_bubble::element("Please fill out this field.", None)}
+            </div>
+        };
+        let (update, reverse, arena) = build(&tree, None);
+        let bubble = arena
+            .find(|a, id| a.id_attr(id) == Some(crate::validation_bubble::BUBBLE_ID))
+            .unwrap();
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == bubble).unwrap().0;
+        assert_eq!(role_of(&update, ak_id), Role::Alert);
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert_eq!(node.live(), Some(accesskit::Live::Assertive));
+        let mentions = update
+            .nodes
+            .iter()
+            .filter(|(_, n)| {
+                n.value() == Some("Please fill out this field.")
+                    || n.label() == Some("Please fill out this field.")
+            })
+            .count();
+        assert_eq!(
+            mentions, 1,
+            "the text is spoken once, not on the alert and its child"
+        );
     }
 
     #[test]

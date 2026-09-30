@@ -488,6 +488,33 @@ fn number_entries(ctx: &FormContext, node: NodeId) -> Vec<String> {
     vec![number_value(ctx, node)]
 }
 
+/// A number field's `min` and `max`, when they are valid numbers.
+pub(crate) fn number_limits(arena: &Arena, node: NodeId) -> (Option<f64>, Option<f64>) {
+    (
+        number_attr(arena, node, "min"),
+        number_attr(arena, node, "max"),
+    )
+}
+
+/// The valid values just below and just above a number field's off-grid
+/// value, each `None` when it would fall outside `min`/`max`; `None` when
+/// the field has no step grid or no number to place on it.
+pub(crate) fn number_grid(ctx: &FormContext, node: NodeId) -> Option<(Option<f64>, Option<f64>)> {
+    let arena = ctx.arena;
+    let number = parse_number(&number_value(ctx, node))?;
+    let step = number_step(arena, node)?;
+    let (min, max) = number_limits(arena, node);
+    let base = min.unwrap_or(0.0);
+    let below = base + ((number - base) / step).floor() * step;
+    let above = below + step;
+    let round = |value: f64| (value * 1e9).round() / 1e9;
+    let (below, above) = (round(below), round(above));
+    Some((
+        min.is_none_or(|min| below >= min).then_some(below),
+        max.is_none_or(|max| above <= max).then_some(above),
+    ))
+}
+
 /// Whether `value` sits on the step grid anchored at `base`.
 fn on_step_grid(value: f64, base: f64, step: f64) -> bool {
     let ratio = (value - base) / step;
@@ -501,7 +528,9 @@ fn number_constraints(ctx: &FormContext, node: NodeId) -> Validity {
         .id_attr(node)
         .is_some_and(|id| ctx.text_inputs.is_bad_input(id));
     let mut result = Validity {
-        value_missing: is_required(arena, node) && value.is_empty(),
+        // Measured in Edge: typing `e` into a required number field reports
+        // bad input, not a missing value.
+        value_missing: is_required(arena, node) && value.is_empty() && !bad_input,
         bad_input,
         ..Validity::default()
     };
