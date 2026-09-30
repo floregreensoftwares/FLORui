@@ -1336,6 +1336,24 @@ impl WindowState {
         // marks the scope dirty on its own.
         if self.runtime.scroll_registry().wheel_scroll_by(&id, dx, dy) {
             self.window.request_redraw();
+            self.refresh_hover_at_cursor();
+        }
+    }
+
+    /// Re-resolves `:hover` and the content cursor for a pointer that hasn't
+    /// moved but has different content under it, as after a wheel tick.
+    fn refresh_hover_at_cursor(&mut self) {
+        let (x, y) = self.to_logical_cursor(self.last_cursor.0, self.last_cursor.1);
+        let hit = self
+            .runtime
+            .hit_test(x, y)
+            .filter(|&node| !self.is_disabled(node));
+        self.set_hovered_and_redraw(hit);
+        let over_resize_edge = self.decorations == DecorationMode::Custom
+            && self.resize_direction_at_cursor(x, y).is_some();
+        if !over_resize_edge {
+            let icon = self.content_cursor(hit, x, y);
+            self.controls.set_content_cursor(icon);
         }
     }
 
