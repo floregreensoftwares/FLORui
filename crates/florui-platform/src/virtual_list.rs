@@ -28,6 +28,7 @@ use florui_reactive::{
     Key, KeyedExtents, Ref, ScrollAnchor, use_child_scope_keyed, use_memo, use_ref, use_signal,
 };
 
+use crate::focus_observer::{use_focus_controller, use_focus_within};
 use crate::scroll::ScrollHandle;
 use crate::size_observer::use_committed_size;
 use crate::use_scroll_offset;
@@ -214,6 +215,13 @@ pub fn use_virtual_list(
     let measures = height.measures();
     let extents = use_ref(|| KeyedExtents::new(height.default_estimate()));
     let extents_version = use_signal(|| 0u64);
+    // The focused row stays mounted wherever it scrolls (a bounded policy: one
+    // row), so typing, a caret or an IME composition in it is never torn down.
+    let pinned = use_ref(|| None::<Key>);
+    let pinned_index = use_ref(|| 0usize);
+    let pin_version = use_signal(|| 0u64);
+    let focus = use_focus_controller();
+    let _ = pin_version.get();
 
     let layout: Rc<ListLayout> = {
         let extents = extents.clone();
@@ -276,12 +284,35 @@ pub fn use_virtual_list(
             .get(range.end)
             .copied()
             .unwrap_or_else(|| layout.total());
-    let mut children = Vec::with_capacity(range.len() + 2);
-    children.push(spacer(before));
-    for i in range {
+
+    // The focused row is found by key, so it follows its item through any
+    // reorder; if the item left the dataset, focus falls back to whatever now
+    // sits at its index.
+    let mut pin = pinned
+        .get()
+        .and_then(|key| layout.keys.iter().position(|k| *k == key));
+    if pin.is_none() && pinned.get().is_some() {
+        match item_count
+            .checked_sub(1)
+            .map(|last| pinned_index.get().min(last))
+        {
+            Some(fallback) => {
+                pinned.set(Some(layout.keys[fallback].clone()));
+                focus.request_focus(row_id_of(&id, &layout.keys[fallback]));
+                pin = Some(fallback);
+            }
+            None => pinned.set(None),
+        }
+    }
+    if let Some(index) = pin {
+        pinned_index.set(index);
+    }
+    let pinned_outside = pin.filter(|index| !range.contains(index));
+
+    let mount_row = |i: usize| -> Element {
         let key = layout.keys[i].clone();
-        let row_id = format!("{id}__row__{i}");
-        let mut element = use_child_scope_keyed(key.clone(), || {
+        let row_id = row_id_of(&id, &key);
+        let element = use_child_scope_keyed(key.clone(), || {
             if measures {
                 let extents = extents.clone();
                 let extents_version = extents_version.clone();
@@ -297,29 +328,53 @@ pub fn use_virtual_list(
                     }
                 });
             }
+            {
+                let pinned = pinned.clone();
+                let pin_version = pin_version.clone();
+                let row_key = key.clone();
+                use_focus_within(row_id.clone(), move |within| {
+                    let changed = pinned.with_mut(|current| {
+                        if within && current.as_ref() != Some(&row_key) {
+                            *current = Some(row_key.clone());
+                            true
+                        } else if !within && current.as_ref() == Some(&row_key) {
+                            *current = None;
+                            true
+                        } else {
+                            false
+                        }
+                    });
+                    if changed {
+                        pin_version.set(pin_version.get() + 1);
+                    }
+                });
+            }
             render_item(i)
         });
-        if measures {
-            // `use_committed_size` above measures whatever real element in
-            // the tree carries this same id -- `render_item`'s own output
-            // has no way to know what id to declare itself, so it's
-            // stamped on directly here: onto the returned node's own attrs
-            // when it already is one (the common case), or a synthetic
-            // wrapper otherwise (a bare text/fragment result has no
-            // attrs of its own to carry it).
-            match &mut element {
-                Element::Node(node) => {
-                    node.attrs.retain(|(name, _)| name != "id");
-                    node.attrs.push(("id".to_string(), row_id));
-                }
-                Element::Text(_) | Element::Fragment(_) | Element::Portal(_) => {
-                    element = Element::node("div", vec![("id".to_string(), row_id)], vec![element]);
-                }
-            }
+        stamp_row(element, row_id, i + 1, item_count)
+    };
+
+    let offset = |index: usize| layout.cumulative[index];
+    let mut children = Vec::with_capacity(range.len() + 4);
+    match pinned_outside {
+        Some(p) if p < range.start => {
+            children.push(spacer(offset(p)));
+            children.push(mount_row(p));
+            children.push(spacer((offset(range.start) - offset(p + 1)).max(0.0)));
         }
-        children.push(element);
+        _ => children.push(spacer(before)),
     }
-    children.push(spacer(after.max(0.0)));
+    for i in range.clone() {
+        children.push(mount_row(i));
+    }
+    match pinned_outside {
+        Some(p) if p >= range.end => {
+            children.push(spacer((offset(p) - offset(range.end)).max(0.0)));
+            children.push(mount_row(p));
+            children.push(spacer((layout.total() - offset(p + 1)).max(0.0)));
+        }
+        _ => children.push(spacer(after.max(0.0))),
+    }
 
     (
         Element::Fragment(children),
@@ -329,6 +384,35 @@ pub fn use_virtual_list(
             layout: last_layout,
         },
     )
+}
+
+fn row_id_of(list_id: &str, key: &Key) -> String {
+    format!("{list_id}__row__{}", key.as_str())
+}
+
+/// Stamps what the list owns onto a row: its `id` (which the size and focus
+/// observers find it by, replacing an author's own), its `listitem` role
+/// unless the author gave one, and its place in the whole collection for the
+/// accessibility tree. A bare text, fragment or portal result gets a wrapper
+/// div to carry them.
+fn stamp_row(element: Element, row_id: String, position: usize, size: usize) -> Element {
+    let mut element = match element {
+        Element::Node(_) => element,
+        other => Element::node("div", Vec::new(), vec![other]),
+    };
+    if let Element::Node(node) = &mut element {
+        node.attrs
+            .retain(|(name, _)| !matches!(name.as_str(), "id" | "set_size" | "position_in_set"));
+        node.attrs.push(("id".to_string(), row_id));
+        node.attrs.push(("set_size".to_string(), size.to_string()));
+        node.attrs
+            .push(("position_in_set".to_string(), position.to_string()));
+        if !node.attrs.iter().any(|(name, _)| name == "role") {
+            node.attrs
+                .push(("role".to_string(), "listitem".to_string()));
+        }
+    }
+    element
 }
 
 #[cfg(test)]
@@ -433,6 +517,148 @@ mod tests {
             .collect()
     }
 
+    type Keys = std::rc::Rc<std::cell::RefCell<Vec<usize>>>;
+
+    /// A 20px-row list over a mutable list of keys, each row holding a
+    /// button `b<key>` that can take focus, in a 100px viewport.
+    fn focus_runtime(keys: &Keys, version: &std::rc::Rc<std::cell::Cell<u32>>) -> UiRuntime {
+        let (keys, version) = (std::rc::Rc::clone(keys), std::rc::Rc::clone(version));
+        let root = move || {
+            let items = keys.borrow().clone();
+            let key_items = items.clone();
+            let (content, _handle) = use_virtual_list(
+                "list",
+                items.len(),
+                version.get(),
+                ItemHeight::Fixed(20.0),
+                Overscan::Items(0),
+                move |i| Key::from(key_items[i]),
+                move |i| {
+                    Element::node(
+                        "div",
+                        vec![("class".to_string(), "row".to_string())],
+                        vec![Element::node(
+                            "button",
+                            vec![("id".to_string(), format!("b{}", items[i]))],
+                            vec![Element::text(items[i].to_string())],
+                        )],
+                    )
+                },
+            );
+            Element::node(
+                "div",
+                vec![
+                    ("id".to_string(), "list".to_string()),
+                    ("class".to_string(), "viewport".to_string()),
+                ],
+                vec![content],
+            )
+        };
+        let css = ".viewport { width: 100px; height: 100px; overflow-y: auto; } \
+                   .row { height: 20px; }";
+        let mut runtime = UiRuntime::new(css, root, viewport()).expect("valid CSS");
+        runtime.update(viewport());
+        runtime
+    }
+
+    fn button(runtime: &UiRuntime, key: usize) -> Option<NodeId> {
+        let (arena, ..) = runtime.geometry();
+        arena.find(|a, id| a.id_attr(id) == Some(format!("b{key}").as_str()))
+    }
+
+    fn settle(runtime: &mut UiRuntime) {
+        for _ in 0..4 {
+            runtime.update(viewport());
+        }
+    }
+
+    #[test]
+    fn a_focused_row_stays_mounted_when_it_scrolls_out_of_the_window() {
+        let keys: Keys = std::rc::Rc::new(std::cell::RefCell::new((0..100).collect()));
+        let mut runtime = focus_runtime(&keys, &std::rc::Rc::new(std::cell::Cell::new(0)));
+        runtime.set_focused(button(&runtime, 2), true);
+        settle(&mut runtime);
+
+        assert!(runtime.scroll_registry().scroll_to("list", 0.0, 1200.0));
+        settle(&mut runtime);
+
+        assert!(
+            button(&runtime, 2).is_some(),
+            "the focused row is pinned outside the window"
+        );
+        assert_eq!(runtime.focused(), button(&runtime, 2), "and keeps focus");
+        assert_eq!(
+            runtime.scroll_registry().content_size("list").1,
+            2000.0,
+            "the pinned row sits at its own offset, so the scroll extent is unchanged"
+        );
+    }
+
+    #[test]
+    fn a_row_is_released_once_focus_leaves_it() {
+        let keys: Keys = std::rc::Rc::new(std::cell::RefCell::new((0..100).collect()));
+        let mut runtime = focus_runtime(&keys, &std::rc::Rc::new(std::cell::Cell::new(0)));
+        runtime.set_focused(button(&runtime, 2), true);
+        settle(&mut runtime);
+        runtime.scroll_registry().scroll_to("list", 0.0, 1200.0);
+        settle(&mut runtime);
+        assert!(button(&runtime, 2).is_some());
+
+        runtime.set_focused(None, true);
+        settle(&mut runtime);
+        assert!(
+            button(&runtime, 2).is_none(),
+            "an unfocused row outside the window unmounts"
+        );
+    }
+
+    #[test]
+    fn removing_the_focused_item_focuses_the_one_now_at_its_index() {
+        let keys: Keys = std::rc::Rc::new(std::cell::RefCell::new((0..10).collect()));
+        let version = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut runtime = focus_runtime(&keys, &version);
+        runtime.set_focused(button(&runtime, 2), true);
+        settle(&mut runtime);
+
+        keys.borrow_mut().remove(2);
+        version.set(1);
+        settle(&mut runtime);
+
+        assert_eq!(runtime.focused(), button(&runtime, 3), "the next item");
+    }
+
+    #[test]
+    fn removing_the_focused_last_item_focuses_the_new_last_one() {
+        let keys: Keys = std::rc::Rc::new(std::cell::RefCell::new((0..4).collect()));
+        let version = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut runtime = focus_runtime(&keys, &version);
+        runtime.set_focused(button(&runtime, 3), true);
+        settle(&mut runtime);
+
+        keys.borrow_mut().pop();
+        version.set(1);
+        settle(&mut runtime);
+
+        assert_eq!(runtime.focused(), button(&runtime, 2));
+    }
+
+    #[test]
+    fn rows_carry_their_place_in_the_whole_collection() {
+        let runtime = build_runtime(100, 20.0, 100.0, Overscan::Items(0));
+        let (arena, ..) = runtime.geometry();
+        let rows: Vec<_> = arena
+            .children(list_node(arena))
+            .iter()
+            .copied()
+            .filter(|&id| arena.classes(id).iter().any(|c| c == "row"))
+            .collect();
+        assert_eq!(
+            arena.role(rows[0]),
+            Some(florui_style::AccessibleRole::ListItem)
+        );
+        assert_eq!(arena.collection_position(rows[0]), Some((1, 100)));
+        assert_eq!(arena.collection_position(rows[4]), Some((5, 100)));
+    }
     #[test]
     fn only_the_visible_window_is_mounted() {
         // 100 rows of 20px inside a 100px-tall viewport -- exactly 5 fit.
