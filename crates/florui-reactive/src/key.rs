@@ -10,6 +10,13 @@
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Key(String);
 
+impl Key {
+    /// The key's string form, for building an id from it.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 impl<T: std::fmt::Display> From<T> for Key {
     fn from(value: T) -> Self {
         Key(value.to_string())
