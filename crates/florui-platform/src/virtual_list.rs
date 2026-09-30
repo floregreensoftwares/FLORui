@@ -25,11 +25,12 @@ use std::rc::Rc;
 
 use florui::Element;
 use florui_reactive::{
-    Key, KeyedExtents, Ref, ScrollAnchor, Signal, use_child_scope_keyed, use_memo, use_ref,
-    use_signal,
+    Cleanup, Key, KeyedExtents, Ref, ScrollAnchor, Signal, use_attachment, use_child_scope_keyed,
+    use_context, use_memo, use_ref, use_signal,
 };
 
 use crate::focus_observer::{FocusController, use_focus_controller, use_focus_within};
+use crate::list_keys::{ListKey, ListKeyRegistry};
 use crate::scroll::ScrollHandle;
 use crate::size_observer::use_committed_size;
 use crate::use_scroll_offset;
@@ -220,6 +221,41 @@ impl VirtualListHandle {
         } else if bottom > y + viewport {
             self.scroll.scroll_to(x, bottom - viewport);
         }
+    }
+
+    /// Moves focus from the focused row to the one `key` names, clamped at
+    /// the ends; `false` when no row of this list has focus. Consumes the key
+    /// even at an end, so it does not fall through to another control.
+    pub(crate) fn move_focus(&self, key: ListKey) -> bool {
+        let Some(layout) = self.layout.get() else {
+            return false;
+        };
+        let Some(current) = self
+            .pinned
+            .get()
+            .and_then(|key| layout.keys.iter().position(|k| *k == key))
+        else {
+            return false;
+        };
+        let last = layout.keys.len() - 1;
+        // Rows that fit in the viewport from the current one, at least one.
+        let page = {
+            let reach = layout.cumulative[current] + self.viewport_height.get();
+            let end = layout.cumulative.partition_point(|&c| c <= reach) - 1;
+            end.saturating_sub(current).max(1)
+        };
+        let target = match key {
+            ListKey::Previous => current.saturating_sub(1),
+            ListKey::Next => (current + 1).min(last),
+            ListKey::PageUp => current.saturating_sub(page),
+            ListKey::PageDown => (current + page).min(last),
+            ListKey::First => 0,
+            ListKey::Last => last,
+        };
+        if target != current {
+            self.focus_item(layout.keys[target].clone());
+        }
+        true
     }
 
     /// Brings `key`'s item into view (see [`Self::reveal_item`]), mounts it
@@ -448,19 +484,28 @@ pub fn use_virtual_list(
         _ => children.push(spacer(after.max(0.0))),
     }
 
-    (
-        Element::Fragment(children),
-        VirtualListHandle {
-            id,
-            scroll,
-            extents,
-            layout: last_layout,
-            pinned,
-            pin_version,
-            focus,
-            viewport_height: viewport_height_ref,
-        },
-    )
+    let handle = VirtualListHandle {
+        id: id.clone(),
+        scroll,
+        extents,
+        layout: last_layout,
+        pinned,
+        pin_version,
+        focus,
+        viewport_height: viewport_height_ref,
+    };
+    let keys = use_context::<Rc<ListKeyRegistry>>().expect(
+        "use_virtual_list needs a ListKeyRegistry in context — only a \
+         UiRuntime-hosted render provides one",
+    );
+    let for_keys = handle.clone();
+    use_attachment(keys, id.clone(), move |keys| {
+        keys.set(id.clone(), Rc::new(move |key| for_keys.move_focus(key)));
+        let keys = Rc::clone(keys);
+        Some(Box::new(move || keys.remove(&id)) as Cleanup)
+    });
+
+    (Element::Fragment(children), handle)
 }
 
 fn row_id_of(list_id: &str, key: &Key) -> String {
@@ -750,6 +795,88 @@ mod tests {
         handle.borrow().as_ref().unwrap().focus_item(99);
         settle(&mut runtime);
         assert_eq!(runtime.focused(), None);
+    }
+
+    /// Focuses `from`'s button, presses `key`, and returns the runtime.
+    fn press_from(from: usize, key: ListKey) -> (UiRuntime, bool) {
+        let keys: Keys = std::rc::Rc::new(std::cell::RefCell::new((0..100).collect()));
+        let (mut runtime, _) = focus_runtime(&keys, &std::rc::Rc::new(std::cell::Cell::new(0)));
+        if from > 4 {
+            runtime
+                .scroll_registry()
+                .scroll_to("list", 0.0, from as f32 * 20.0);
+            settle(&mut runtime);
+        }
+        runtime.set_focused(button(&runtime, from), true);
+        settle(&mut runtime);
+        let consumed = runtime.list_key(key);
+        settle(&mut runtime);
+        (runtime, consumed)
+    }
+
+    #[test]
+    fn next_and_previous_move_focus_one_row() {
+        let (runtime, consumed) = press_from(2, ListKey::Next);
+        assert!(consumed);
+        assert_eq!(runtime.focused(), button(&runtime, 3));
+        let (runtime, _) = press_from(2, ListKey::Previous);
+        assert_eq!(runtime.focused(), button(&runtime, 1));
+    }
+
+    #[test]
+    fn page_keys_move_by_the_rows_that_fit_the_viewport() {
+        // 100px viewport, 20px rows: five rows per page.
+        let (runtime, _) = press_from(2, ListKey::PageDown);
+        assert_eq!(runtime.focused(), button(&runtime, 7));
+        let (runtime, _) = press_from(20, ListKey::PageUp);
+        assert_eq!(runtime.focused(), button(&runtime, 15));
+    }
+
+    #[test]
+    fn first_and_last_reach_rows_that_are_not_mounted() {
+        let (runtime, _) = press_from(2, ListKey::Last);
+        assert_eq!(runtime.focused(), button(&runtime, 99));
+        let (runtime, _) = press_from(50, ListKey::First);
+        assert_eq!(runtime.focused(), button(&runtime, 0));
+    }
+
+    #[test]
+    fn the_ends_clamp_and_still_consume_the_key() {
+        let (runtime, consumed) = press_from(0, ListKey::Previous);
+        assert!(consumed, "the key must not fall through to another control");
+        assert_eq!(runtime.focused(), button(&runtime, 0));
+        let (runtime, consumed) = press_from(99, ListKey::PageDown);
+        assert!(consumed);
+        assert_eq!(runtime.focused(), button(&runtime, 99));
+    }
+
+    #[test]
+    fn a_key_with_no_focused_row_is_not_consumed() {
+        let keys: Keys = std::rc::Rc::new(std::cell::RefCell::new((0..10).collect()));
+        let (runtime, _) = focus_runtime(&keys, &std::rc::Rc::new(std::cell::Cell::new(0)));
+        assert!(!runtime.list_key(ListKey::Next));
+    }
+
+    #[test]
+    fn stepping_scrolls_only_when_the_row_would_leave_the_view() {
+        let keys: Keys = std::rc::Rc::new(std::cell::RefCell::new((0..100).collect()));
+        let (mut runtime, handle) =
+            focus_runtime(&keys, &std::rc::Rc::new(std::cell::Cell::new(0)));
+        let handle = handle.borrow().clone().unwrap();
+        runtime.set_focused(button(&runtime, 3), true);
+        settle(&mut runtime);
+
+        // Item 4 is still the last visible row: no scroll.
+        assert!(runtime.list_key(ListKey::Next));
+        settle(&mut runtime);
+        assert_eq!(runtime.focused(), button(&runtime, 4));
+        assert_eq!(handle.offset().1, 0.0);
+
+        // Item 5 is below: its bottom edge lands on the viewport's.
+        assert!(runtime.list_key(ListKey::Next));
+        settle(&mut runtime);
+        assert_eq!(runtime.focused(), button(&runtime, 5));
+        assert_eq!(handle.offset().1, 20.0);
     }
 
     fn offset_after_reveal(start: f32, key: usize) -> f32 {
