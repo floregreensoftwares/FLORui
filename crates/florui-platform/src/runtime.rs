@@ -434,6 +434,7 @@ impl UiRuntime {
         let scroll_registry = Rc::clone(&self.scroll_registry);
         // Resolved once so use_viewport_size sees the same value layout uses.
         let resolved_viewport = media_viewport(viewport);
+        scroll_registry.begin_render();
         let tree = self.scope.render(|| {
             provide_context(Rc::clone(&executor) as Rc<dyn Executor>);
             provide_context(Rc::clone(&size_observers));
@@ -451,6 +452,7 @@ impl UiRuntime {
             }
             (self.root)()
         });
+        scroll_registry.end_render();
         // Lets any resource the render just started (or a prior task's
         // waker already requeued) make progress before this frame commits.
         self.executor.run_until_stalled();

@@ -2,17 +2,14 @@
 //! scroll`/`auto` element — the [`crate::use_committed_size`] counterpart
 //! for a scrollable container.
 //!
-//! The offset itself is a real [`Signal`], not a plain value behind a
-//! bespoke notification path: [`florui_reactive::DirtyFlag::mark`] is
-//! crate-private to `florui-reactive`, so this crate cannot mark one
-//! directly the way a `Signal::set` does internally. Backing the offset
-//! with an actual `Signal` means both the real wheel-driven path and a
-//! future imperative `scroll_to` go through the exact same write, so a
-//! component reading [`ScrollHandle::offset`] is correctly reactive to
-//! either, with nothing here to keep in sync by hand.
+//! The offset is a plain cell, with a version [`Signal`] bumped to mark the
+//! owning scope dirty. An imperative scroll always bumps it; a real wheel
+//! tick bumps it only if a render read the offset via
+//! [`ScrollHandle::offset`], so a scroll box nothing rendered from just
+//! repaints.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use florui_layout::{BoxLayout, ContentExtent};
@@ -20,7 +17,11 @@ use florui_reactive::{Cleanup, Signal, use_attachment, use_context, use_signal};
 use florui_style::{Arena, NodeId};
 
 struct ScrollEntry {
-    offset: Signal<(f32, f32)>,
+    offset: Rc<Cell<(f32, f32)>>,
+    /// Bumped to mark the owning scope dirty; the offset itself is a plain
+    /// cell so a wheel tick nobody rendered from can skip a re-render.
+    version: Signal<u64>,
+    read_in_render: Cell<bool>,
     viewport_size: (f32, f32),
     content_size: (f32, f32),
     last_notified: Option<(f32, f32)>,
@@ -33,6 +34,14 @@ struct ScrollEntry {
 #[derive(Default)]
 pub struct ScrollRegistry {
     entries: RefCell<HashMap<String, ScrollEntry>>,
+    rendering: Cell<bool>,
+    /// Ids read during a render before their entry existed (the first
+    /// render), so registration can still record the dependency.
+    read_before_registration: RefCell<HashSet<String>>,
+}
+
+fn bump(version: &Signal<u64>) {
+    version.set(version.get().wrapping_add(1));
 }
 
 impl ScrollRegistry {
@@ -40,11 +49,39 @@ impl ScrollRegistry {
         Self::default()
     }
 
-    fn set(&self, id: String, offset: Signal<(f32, f32)>, on_scroll: Box<dyn FnMut(f32, f32)>) {
+    /// Starts a render pass: an offset read from here until
+    /// [`Self::end_render`] is one the rendered output depends on.
+    pub(crate) fn begin_render(&self) {
+        self.rendering.set(true);
+        self.read_before_registration.borrow_mut().clear();
+        for entry in self.entries.borrow().values() {
+            entry.read_in_render.set(false);
+        }
+    }
+
+    pub(crate) fn end_render(&self) {
+        self.rendering.set(false);
+    }
+
+    fn set(
+        &self,
+        id: String,
+        offset: Rc<Cell<(f32, f32)>>,
+        version: Signal<u64>,
+        on_scroll: Box<dyn FnMut(f32, f32)>,
+    ) {
+        let pending_read = self.read_before_registration.borrow_mut().remove(&id)
+            || self
+                .entries
+                .borrow()
+                .get(&id)
+                .is_some_and(|entry| entry.read_in_render.get());
         self.entries.borrow_mut().insert(
             id,
             ScrollEntry {
                 offset,
+                version,
+                read_in_render: Cell::new(pending_read),
                 viewport_size: (0.0, 0.0),
                 content_size: (0.0, 0.0),
                 last_notified: None,
@@ -96,6 +133,7 @@ impl ScrollRegistry {
             let clamped = clamp_offset(current, viewport_size, content_size);
             if clamped != current {
                 entry.offset.set(clamped);
+                bump(&entry.version);
             }
             if entry.last_notified != Some(clamped) {
                 entry.last_notified = Some(clamped);
@@ -110,17 +148,19 @@ impl ScrollRegistry {
     /// actually changed — the real wheel handler only needs to repaint
     /// when it did.
     pub(crate) fn scroll_by(&self, id: &str, dx: f32, dy: f32) -> bool {
-        let current = self.offset(id);
+        let current = self.current_offset(id);
         self.scroll_to(id, current.0 + dx, current.1 + dy)
     }
 
-    /// Sets `id`'s offset to `(x, y)`, clamped the same way. Returns
-    /// whether the offset actually changed.
+    /// Sets `id`'s offset to `(x, y)`, clamped the same way, and always
+    /// marks the owning scope dirty so an imperative scroll reaches the
+    /// screen. Returns whether the offset actually changed.
     pub(crate) fn scroll_to(&self, id: &str, x: f32, y: f32) -> bool {
-        let Some((offset, viewport_size, content_size)) =
+        let Some((offset, version, viewport_size, content_size)) =
             self.entries.borrow().get(id).map(|entry| {
                 (
-                    entry.offset.clone(),
+                    Rc::clone(&entry.offset),
+                    entry.version.clone(),
                     entry.viewport_size,
                     entry.content_size,
                 )
@@ -133,14 +173,77 @@ impl ScrollRegistry {
             return false;
         }
         offset.set(clamped);
+        bump(&version);
         true
     }
 
-    fn offset(&self, id: &str) -> (f32, f32) {
+    /// The real wheel's [`Self::scroll_by`]: the scope is only marked dirty
+    /// when a render read this offset, so a plain scroll box repaints
+    /// without re-rendering or re-laying-out. `on_scroll` still runs
+    /// immediately. Returns whether the offset actually changed.
+    pub(crate) fn wheel_scroll_by(&self, id: &str, dx: f32, dy: f32) -> bool {
+        let Some((offset, version, read_in_render, viewport_size, content_size)) =
+            self.entries.borrow().get(id).map(|entry| {
+                (
+                    Rc::clone(&entry.offset),
+                    entry.version.clone(),
+                    entry.read_in_render.get(),
+                    entry.viewport_size,
+                    entry.content_size,
+                )
+            })
+        else {
+            return false;
+        };
+        let current = offset.get();
+        let clamped = clamp_offset(
+            (current.0 + dx, current.1 + dy),
+            viewport_size,
+            content_size,
+        );
+        if clamped == current {
+            return false;
+        }
+        offset.set(clamped);
+        // Removed and reinserted around the callback for the same
+        // re-entrancy reason as in `sync`.
+        let removed = self.entries.borrow_mut().remove(id);
+        if let Some(mut entry) = removed {
+            if entry.last_notified != Some(clamped) {
+                entry.last_notified = Some(clamped);
+                (entry.on_scroll)(clamped.0, clamped.1);
+            }
+            self.entries.borrow_mut().insert(id.to_string(), entry);
+        }
+        if read_in_render {
+            bump(&version);
+        }
+        true
+    }
+
+    fn current_offset(&self, id: &str) -> (f32, f32) {
         self.entries
             .borrow()
             .get(id)
             .map_or((0.0, 0.0), |entry| entry.offset.get())
+    }
+
+    /// What [`ScrollHandle::offset`] reads: during a render it also records
+    /// that the output depends on this offset.
+    fn offset(&self, id: &str) -> (f32, f32) {
+        let entries = self.entries.borrow();
+        let Some(entry) = entries.get(id) else {
+            if self.rendering.get() {
+                self.read_before_registration
+                    .borrow_mut()
+                    .insert(id.to_string());
+            }
+            return (0.0, 0.0);
+        };
+        if self.rendering.get() {
+            entry.read_in_render.set(true);
+        }
+        entry.offset.get()
     }
 
     pub(crate) fn viewport_size(&self, id: &str) -> (f32, f32) {
@@ -253,10 +356,16 @@ pub fn use_scroll_offset(
         "use_scroll_offset needs a ScrollRegistry in context — only a UiRuntime-hosted render \
          provides one",
     );
-    let offset = use_signal(|| (0.0f32, 0.0f32));
+    let offset = use_signal(|| Rc::new(Cell::new((0.0f32, 0.0f32)))).get();
+    let version = use_signal(|| 0u64);
     let setup_id = id.clone();
     use_attachment(Rc::clone(&registry), id.clone(), move |registry| {
-        registry.set(setup_id.clone(), offset.clone(), Box::new(on_scroll));
+        registry.set(
+            setup_id.clone(),
+            Rc::clone(&offset),
+            version.clone(),
+            Box::new(on_scroll),
+        );
         let registry = Rc::clone(registry);
         let cleanup_id = setup_id;
         Some(Box::new(move || registry.remove(&cleanup_id)) as Cleanup)
@@ -355,5 +464,85 @@ mod tests {
             2,
             "on_scroll must not fire again when the offset does not actually change"
         );
+    }
+
+    fn scroll_box_runtime(
+        read_offset_in_render: bool,
+        log: Rc<RefCell<Vec<(f32, f32)>>>,
+    ) -> UiRuntime {
+        let root = move || {
+            let log = Rc::clone(&log);
+            let handle = use_scroll_offset("box", move |x, y| log.borrow_mut().push((x, y)));
+            if read_offset_in_render {
+                let _ = handle.offset();
+            }
+            view! {
+                <div id="box" class="box">
+                    <div class="content" />
+                </div>
+            }
+        };
+        let rules = florui_style::parse_stylesheet(
+            ".box { width: 50px; height: 50px; } .content { width: 10px; height: 200px; }",
+        )
+        .unwrap();
+        let runtime = UiRuntime::with_rules(rules, root, viewport());
+        runtime.clear_dirty();
+        runtime
+    }
+
+    #[test]
+    fn a_wheel_tick_nothing_rendered_from_moves_the_offset_without_dirtying_the_scope() {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let runtime = scroll_box_runtime(false, Rc::clone(&log));
+        let registry = runtime.scroll_registry();
+
+        assert!(registry.wheel_scroll_by("box", 0.0, 30.0));
+
+        assert!(
+            !runtime.is_dirty(),
+            "no render read the offset, so nothing needs re-rendering"
+        );
+        assert_eq!(registry.current_offset("box"), (0.0, 30.0));
+        assert_eq!(log.borrow().last(), Some(&(0.0, 30.0)));
+    }
+
+    #[test]
+    fn a_wheel_tick_dirties_the_scope_when_a_render_read_the_offset() {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let runtime = scroll_box_runtime(true, log);
+        let registry = runtime.scroll_registry();
+
+        assert!(registry.wheel_scroll_by("box", 0.0, 30.0));
+
+        assert!(
+            runtime.is_dirty(),
+            "a component rendered from this offset must be re-rendered"
+        );
+    }
+
+    #[test]
+    fn an_imperative_scroll_always_dirties_the_scope() {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let runtime = scroll_box_runtime(false, log);
+        let registry = runtime.scroll_registry();
+
+        assert!(registry.scroll_to("box", 0.0, 30.0));
+
+        assert!(
+            runtime.is_dirty(),
+            "nothing else would repaint an imperative scroll"
+        );
+    }
+
+    #[test]
+    fn a_wheel_tick_that_clamps_to_no_change_reports_nothing() {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let runtime = scroll_box_runtime(false, log);
+        let registry = runtime.scroll_registry();
+
+        assert!(registry.wheel_scroll_by("box", 0.0, 1000.0));
+        assert_eq!(registry.current_offset("box"), (0.0, 150.0));
+        assert!(!registry.wheel_scroll_by("box", 0.0, 10.0));
     }
 }

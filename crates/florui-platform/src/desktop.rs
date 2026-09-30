@@ -1330,11 +1330,11 @@ impl WindowState {
         let Some(id) = self.scrollable_ancestor_id(hit, dx, dy) else {
             return;
         };
-        if self.runtime.scroll_registry().scroll_by(&id, dx, dy) {
-            let viewport = layout_viewport(self.viewport_scale());
-            self.runtime.update(viewport);
+        // No `update`: `redraw` already applies the registry's offsets, and a
+        // render that read the offset (or an `on_scroll` that set state)
+        // marks the scope dirty on its own.
+        if self.runtime.scroll_registry().wheel_scroll_by(&id, dx, dy) {
             self.window.request_redraw();
-            self.refresh_animation_schedule();
         }
     }
 
