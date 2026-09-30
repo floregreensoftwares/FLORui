@@ -22,6 +22,7 @@ mod scroll;
 mod select;
 mod size_observer;
 mod text_input;
+mod textarea_resize;
 mod validation_bubble;
 mod validation_message;
 mod viewport;

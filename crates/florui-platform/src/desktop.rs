@@ -585,14 +585,35 @@ fn scale_layouts(layouts: &HashMap<NodeId, BoxLayout>, factor: f32) -> HashMap<N
 /// real browsers, which never show a selection swatch on an unfocused
 /// text field. `type="password"` gets a masked substitute run instead of
 /// its real glyphs — see [`masked_runs`].
-fn build_text_input_paint(
-    arena: &florui_style::Arena,
-    styles: &HashMap<NodeId, ComputedStyle>,
-    font: &mut florui_text::Font,
-    registry: &crate::text_input::TextInputRegistry,
+/// What [`build_text_input_paint`] reads about the frame being painted.
+#[derive(Clone, Copy)]
+struct TextInputPaintContext<'a> {
+    arena: &'a florui_style::Arena,
+    styles: &'a HashMap<NodeId, ComputedStyle>,
+    layouts: &'a HashMap<NodeId, BoxLayout>,
+    registry: &'a crate::text_input::TextInputRegistry,
     focused: Option<NodeId>,
+    hovered: Option<NodeId>,
+    pointer: (f32, f32),
+    /// The `id` of the textarea whose scrollbar thumb is being dragged.
+    scroll_dragging: Option<&'a str>,
+}
+
+fn build_text_input_paint(
+    font: &mut florui_text::Font,
+    context: TextInputPaintContext<'_>,
     spinner_for: &dyn Fn(NodeId) -> Option<florui_paint::SpinnerHover>,
 ) -> HashMap<NodeId, florui_paint::TextInputPaint> {
+    let TextInputPaintContext {
+        arena,
+        styles,
+        layouts,
+        registry,
+        focused,
+        hovered,
+        pointer,
+        scroll_dragging,
+    } = context;
     let mut result = HashMap::new();
     let editable_inputs = arena.find_all(crate::focus::is_text_control);
     for node in editable_inputs {
@@ -663,9 +684,53 @@ fn build_text_input_paint(
                     font.shape(family, text, font_size, font_weight).runs
                 }
             });
+        let (scrollbar, resizer) = if arena.tag(node) == "textarea" {
+            let resizer = style.is_none_or(|s| s.resize != florui_style::Resize::None);
+            let border = style.map_or((0.0, 0.0, 0.0, 0.0), |s| {
+                (
+                    s.border.left.width,
+                    s.border.top.width,
+                    s.border.right.width,
+                    s.border.bottom.width,
+                )
+            });
+            let layout = layouts.get(&node);
+            let client_height = layout.map_or(0.0, |l| l.height - border.1 - border.3);
+            let scrollbar = registry
+                .scroll_metrics(id, font)
+                .map(|(scroll, max_scroll)| florui_paint::ScrollbarPaint {
+                    scroll,
+                    max_scroll,
+                    viewport: client_height,
+                    active: florui_paint::ScrollbarPart::None,
+                });
+            let scrollbar = scrollbar.map(|mut bar| {
+                if scroll_dragging == Some(id) {
+                    bar.active = florui_paint::ScrollbarPart::Thumb;
+                } else if hovered == Some(node)
+                    && let Some(layout) = layout
+                {
+                    let (x, y) = florui_layout::absolute_position(arena, layouts, node);
+                    let geometry = florui_paint::scrollbar_geometry(
+                        (layout.width, layout.height),
+                        border,
+                        resizer,
+                        bar,
+                    );
+                    bar.active =
+                        florui_paint::scrollbar_part_at(&geometry, (pointer.0 - x, pointer.1 - y));
+                }
+                bar
+            });
+            (scrollbar, resizer)
+        } else {
+            (None, false)
+        };
         result.insert(
             node,
             florui_paint::TextInputPaint {
+                scrollbar,
+                resizer,
                 placeholder,
                 runs,
                 caret_rect: is_focused.then_some(caret_rect).flatten(),
@@ -994,6 +1059,9 @@ struct WindowState {
     next_animation_wake: Option<std::time::Instant>,
     /// The spinner arrow currently held down, repeating until release.
     spinner_hold: Option<SpinnerHold>,
+    scroll_hold: Option<ScrollHold>,
+    scroll_drag: Option<ScrollDrag>,
+    resize_drag: Option<ResizeDrag>,
     /// Only set for a window built via [`WindowSpec::with_css_reload`] —
     /// [`Self::reload_css`] is a no-op without it.
     css_path: Option<PathBuf>,
@@ -1066,11 +1134,71 @@ struct WindowState {
 /// "two clicks this close together count as one double-click."
 const DOUBLE_CLICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(400);
 
-/// Holding a number field's spinner arrow steps once on the press, waits this
-/// long, then steps every [`SPINNER_REPEAT_INTERVAL`] until the button is
-/// released (measured in Edge: first repeat ~250ms, then about every 50ms).
-const SPINNER_REPEAT_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
-const SPINNER_REPEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+/// Holding a number field's spinner arrow, or a textarea scrollbar's button
+/// or track, acts once on the press, waits this long, then acts every
+/// [`HOLD_REPEAT_INTERVAL`] until released (measured in Edge: first repeat
+/// ~250ms, then about every 50ms).
+const HOLD_REPEAT_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+const HOLD_REPEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// A scrollbar thumb being dragged: `grab` is how far below the thumb's top
+/// the pointer was when the drag began.
+struct ScrollDrag {
+    id: String,
+    grab: f32,
+}
+
+/// A textarea's geometry as the pointer sees it.
+struct TextareaBox {
+    id: String,
+    origin: (f32, f32),
+    size: (f32, f32),
+    border: (f32, f32, f32, f32),
+    chrome: (f32, f32),
+    mode: florui_style::Resize,
+    bar: Option<florui_paint::ScrollbarPaint>,
+}
+
+/// A textarea's resize corner being dragged.
+struct ResizeDrag {
+    id: String,
+    start_pointer: (f32, f32),
+    start_border_box: (f32, f32),
+    /// Border plus padding, horizontally and vertically, to turn a border
+    /// box size back into the content size the element is sized by.
+    chrome: (f32, f32),
+    mode: florui_style::Resize,
+}
+
+/// The cursor over a textarea's resize corner, by the directions it resizes.
+fn resize_cursor(mode: florui_style::Resize) -> winit::window::CursorIcon {
+    use winit::window::CursorIcon;
+    match mode {
+        florui_style::Resize::Vertical => CursorIcon::NsResize,
+        florui_style::Resize::Horizontal => CursorIcon::EwResize,
+        _ => CursorIcon::NwseResize,
+    }
+}
+
+/// How far one action on `part` scrolls a textarea whose visible height is
+/// `viewport`; `None` for the parts that don't scroll by a step.
+fn scroll_step(part: florui_paint::ScrollbarPart, viewport: f32) -> Option<f32> {
+    use florui_paint::ScrollbarPart as Part;
+    match part {
+        Part::ButtonUp => Some(-WHEEL_LINE_HEIGHT),
+        Part::ButtonDown => Some(WHEEL_LINE_HEIGHT),
+        Part::TrackBefore => Some(-viewport * 0.875),
+        Part::TrackAfter => Some(viewport * 0.875),
+        Part::Thumb | Part::None => None,
+    }
+}
+
+/// A textarea scrollbar button or track being held down.
+struct ScrollHold {
+    id: String,
+    part: florui_paint::ScrollbarPart,
+    next_step: std::time::Instant,
+}
 
 /// A number field's spinner arrow being held down.
 struct SpinnerHold {
@@ -1261,11 +1389,17 @@ impl WindowState {
             })
         };
         let text_inputs = build_text_input_paint(
-            arena,
-            styles,
             font,
-            &text_input_registry,
-            focused,
+            TextInputPaintContext {
+                arena,
+                styles,
+                layouts,
+                registry: &text_input_registry,
+                focused,
+                hovered,
+                pointer: cursor,
+                scroll_dragging: self.scroll_drag.as_ref().map(|drag| drag.id.as_str()),
+            },
             &spinner_for,
         );
         // One combined map: `florui_paint` blits either tag's own decoded
@@ -1492,6 +1626,12 @@ impl WindowState {
         if self.decorations == DecorationMode::Custom {
             self.controls.set_resize_cursor(resize_direction);
         }
+        if let Some(drag) = self.resize_drag.as_ref() {
+            self.controls.set_content_cursor(resize_cursor(drag.mode));
+        }
+        if self.drag_textarea_chrome(x, y) {
+            return;
+        }
         if let Some(node) = self.text_selecting {
             let Some(id) = ({
                 let (arena, ..) = self.runtime.geometry();
@@ -1523,17 +1663,54 @@ impl WindowState {
         self.set_hovered_and_redraw(hit);
         if hit.is_some_and(|node| {
             let (arena, ..) = self.runtime.geometry();
-            arena.input_type(node) == Some("number")
+            arena.input_type(node) == Some("number") || arena.tag(node) == "textarea"
         }) {
             self.window.request_redraw();
         }
         if resize_direction.is_none() {
-            let (_, styles, ..) = self.runtime.geometry();
-            let pointer = hit
-                .and_then(|node| styles.get(&node))
-                .is_some_and(|style| style.cursor_pointer);
-            self.controls.set_content_cursor(pointer);
+            let icon = self.content_cursor(hit, x, y);
+            self.controls.set_content_cursor(icon);
         }
+    }
+
+    /// The cursor for what's under the pointer: measured in Edge, an I-beam
+    /// over an enabled text field's text (not its spinner) and the resize
+    /// arrows over a resizable textarea's corner; everything else, scrollbar
+    /// included, keeps the arrow.
+    fn content_cursor(&mut self, hit: Option<NodeId>, x: f32, y: f32) -> winit::window::CursorIcon {
+        use winit::window::CursorIcon;
+        let Some(node) = hit else {
+            return CursorIcon::Default;
+        };
+        if let Some(b) = self.textarea_box(node) {
+            let rel = (x - b.origin.0, y - b.origin.1);
+            if b.mode != florui_style::Resize::None
+                && florui_paint::is_over_resizer(b.size, b.border, rel)
+            {
+                return resize_cursor(b.mode);
+            }
+            if let Some(bar) = b.bar {
+                let geometry = florui_paint::scrollbar_geometry(
+                    b.size,
+                    b.border,
+                    b.mode != florui_style::Resize::None,
+                    bar,
+                );
+                if florui_paint::scrollbar_part_at(&geometry, rel)
+                    != florui_paint::ScrollbarPart::None
+                {
+                    return CursorIcon::Default;
+                }
+            }
+        }
+        let (_, styles, ..) = self.runtime.geometry();
+        if styles.get(&node).is_some_and(|style| style.cursor_pointer) {
+            return CursorIcon::Pointer;
+        }
+        if self.is_editable_text_input(node) && self.spinner_press_direction(node, x, y).is_none() {
+            return CursorIcon::Text;
+        }
+        CursorIcon::Default
     }
 
     /// The cursor leaving the window cancels any in-progress press (there
@@ -1598,6 +1775,7 @@ impl WindowState {
         self.controls.set_focused(focused);
         if !focused {
             self.spinner_hold = None;
+            self.scroll_hold = None;
             self.runtime.window_focus_lost();
         }
         self.update_and_request_redraw();
@@ -1614,6 +1792,198 @@ impl WindowState {
     /// `winit`'s own `drag_window` takes over the mouse for the rest of a
     /// single-click drag gesture, so there is no matching press to
     /// remember here.
+    /// A textarea's current box, border, padding, resize mode and, when its
+    /// text overflows, the scrollbar it is drawn with.
+    fn textarea_box(&mut self, node: NodeId) -> Option<TextareaBox> {
+        let (id, origin, size, border, chrome, mode, client_height) = {
+            let (arena, styles, layouts) = self.runtime.geometry();
+            if arena.tag(node) != "textarea" {
+                return None;
+            }
+            let id = arena.id_attr(node)?.to_string();
+            let style = styles.get(&node)?;
+            let layout = layouts.get(&node)?;
+            let border = (
+                style.border.left.width,
+                style.border.top.width,
+                style.border.right.width,
+                style.border.bottom.width,
+            );
+            let chrome = (
+                border.0 + border.2 + style.padding.left + style.padding.right,
+                border.1 + border.3 + style.padding.top + style.padding.bottom,
+            );
+            (
+                id,
+                florui_layout::absolute_position(arena, layouts, node),
+                (layout.width, layout.height),
+                border,
+                chrome,
+                style.resize,
+                layout.height - border.1 - border.3,
+            )
+        };
+        let registry = self.runtime.text_input_registry();
+        let (_, _, _, font) = self.runtime.geometry_and_font_mut();
+        let bar = registry
+            .scroll_metrics(&id, font)
+            .map(|(scroll, max_scroll)| florui_paint::ScrollbarPaint {
+                scroll,
+                max_scroll,
+                viewport: client_height,
+                active: florui_paint::ScrollbarPart::None,
+            });
+        Some(TextareaBox {
+            id,
+            origin,
+            size,
+            border,
+            chrome,
+            mode,
+            bar,
+        })
+    }
+
+    /// A press on a textarea's scrollbar or resize corner; `true` if it
+    /// landed on one (and was handled), `false` for the text itself.
+    fn press_textarea_chrome(&mut self, node: NodeId, x: f32, y: f32) -> bool {
+        let Some(b) = self.textarea_box(node) else {
+            return false;
+        };
+        let rel = (x - b.origin.0, y - b.origin.1);
+        let resizable = b.mode != florui_style::Resize::None;
+        if resizable && florui_paint::is_over_resizer(b.size, b.border, rel) {
+            self.resize_drag = Some(ResizeDrag {
+                id: b.id,
+                start_pointer: (x, y),
+                start_border_box: b.size,
+                chrome: b.chrome,
+                mode: b.mode,
+            });
+            return true;
+        }
+        let Some(bar) = b.bar else {
+            return false;
+        };
+        let geometry = florui_paint::scrollbar_geometry(b.size, b.border, resizable, bar);
+        let registry = self.runtime.text_input_registry();
+        let part = florui_paint::scrollbar_part_at(&geometry, rel);
+        if part == florui_paint::ScrollbarPart::Thumb {
+            self.scroll_drag = Some(ScrollDrag {
+                id: b.id,
+                grab: rel.1 - geometry.thumb.1,
+            });
+            self.update_and_request_redraw();
+            return true;
+        }
+        let Some(step) = scroll_step(part, bar.viewport) else {
+            return false;
+        };
+        let (_, _, _, font) = self.runtime.geometry_and_font_mut();
+        registry.scroll_by(&b.id, step, font);
+        self.scroll_hold = Some(ScrollHold {
+            id: b.id,
+            part,
+            next_step: std::time::Instant::now() + HOLD_REPEAT_DELAY,
+        });
+        self.update_and_request_redraw();
+        true
+    }
+
+    /// Repeats a held scrollbar button or track once its next step is due,
+    /// and returns when the one after that is, or `None` when nothing is
+    /// held. Like a browser, a track stops paging once the thumb reaches the
+    /// pointer, and a button pauses while the pointer is off it.
+    fn repeat_scroll_if_due(&mut self, now: std::time::Instant) -> Option<std::time::Instant> {
+        let hold = self.scroll_hold.as_ref()?;
+        if now < hold.next_step {
+            return Some(hold.next_step);
+        }
+        let (id, part) = (hold.id.clone(), hold.part);
+        let node = {
+            let (arena, ..) = self.runtime.geometry();
+            arena.find(|a, n| a.id_attr(n) == Some(id.as_str()))
+        };
+        let Some(b) = node.and_then(|node| self.textarea_box(node)) else {
+            self.scroll_hold = None;
+            return None;
+        };
+        if let Some(bar) = b.bar {
+            let (x, y) = self.to_logical_cursor(self.last_cursor.0, self.last_cursor.1);
+            let rel = (x - b.origin.0, y - b.origin.1);
+            let geometry = florui_paint::scrollbar_geometry(
+                b.size,
+                b.border,
+                b.mode != florui_style::Resize::None,
+                bar,
+            );
+            if florui_paint::scrollbar_part_at(&geometry, rel) == part
+                && let Some(step) = scroll_step(part, bar.viewport)
+            {
+                let registry = self.runtime.text_input_registry();
+                let (_, _, _, font) = self.runtime.geometry_and_font_mut();
+                registry.scroll_by(&id, step, font);
+                self.update_and_request_redraw();
+            }
+        }
+        let next = now + HOLD_REPEAT_INTERVAL;
+        if let Some(hold) = self.scroll_hold.as_mut() {
+            hold.next_step = next;
+        }
+        Some(next)
+    }
+
+    /// Follows the pointer while a scrollbar thumb or resize corner is being
+    /// dragged; `true` if one is, so nothing else reacts to the move.
+    fn drag_textarea_chrome(&mut self, x: f32, y: f32) -> bool {
+        if let Some(drag) = self.scroll_drag.as_ref().map(|d| (d.id.clone(), d.grab)) {
+            let node = {
+                let (arena, ..) = self.runtime.geometry();
+                arena.find(|a, n| a.id_attr(n) == Some(drag.0.as_str()))
+            };
+            if let Some(b) = node.and_then(|node| self.textarea_box(node))
+                && let Some(bar) = b.bar
+            {
+                let geometry = florui_paint::scrollbar_geometry(
+                    b.size,
+                    b.border,
+                    b.mode != florui_style::Resize::None,
+                    bar,
+                );
+                let travel =
+                    (geometry.track_bottom - geometry.track_top - geometry.thumb.3).max(1.0);
+                let top = (y - b.origin.1) - drag.1;
+                let fraction = ((top - geometry.track_top) / travel).clamp(0.0, 1.0);
+                let registry = self.runtime.text_input_registry();
+                let (_, _, _, font) = self.runtime.geometry_and_font_mut();
+                registry.scroll_to(&b.id, fraction * bar.max_scroll, font);
+                self.update_and_request_redraw();
+            }
+            return true;
+        }
+        if let Some(drag) = &self.resize_drag {
+            let (dx, dy) = (x - drag.start_pointer.0, y - drag.start_pointer.1);
+            let horizontal = !matches!(drag.mode, florui_style::Resize::Vertical);
+            let vertical = !matches!(drag.mode, florui_style::Resize::Horizontal);
+            let min = crate::textarea_resize::MIN_CONTENT_SIZE;
+            let width = if horizontal {
+                (drag.start_border_box.0 + dx - drag.chrome.0).max(min.0)
+            } else {
+                drag.start_border_box.0 - drag.chrome.0
+            };
+            let height = if vertical {
+                (drag.start_border_box.1 + dy - drag.chrome.1).max(min.1)
+            } else {
+                drag.start_border_box.1 - drag.chrome.1
+            };
+            let id = drag.id.clone();
+            self.runtime.set_resized(&id, (width, height));
+            self.update_and_request_redraw();
+            return true;
+        }
+        false
+    }
+
     /// Tabbing into a single-line text field selects everything in it, as
     /// Edge does (measured); a textarea keeps its caret, and a click never
     /// selects all.
@@ -1685,6 +2055,12 @@ impl WindowState {
         }
         if let Some(node) = hit
             && !self.is_disabled(node)
+            && self.press_textarea_chrome(node, x, y)
+        {
+            return;
+        }
+        if let Some(node) = hit
+            && !self.is_disabled(node)
             && let Some(direction) = self.spinner_press_direction(node, x, y)
         {
             self.runtime.set_focused(Some(node), false);
@@ -1692,7 +2068,7 @@ impl WindowState {
             self.spinner_hold = Some(SpinnerHold {
                 field: florui_style::FocusPath::of(self.runtime.geometry().0, node),
                 direction,
-                next_step: std::time::Instant::now() + SPINNER_REPEAT_DELAY,
+                next_step: std::time::Instant::now() + HOLD_REPEAT_DELAY,
             });
             return;
         }
@@ -1934,7 +2310,7 @@ impl WindowState {
             return None;
         };
         self.step_spinner(node, direction);
-        let next = now + SPINNER_REPEAT_INTERVAL;
+        let next = now + HOLD_REPEAT_INTERVAL;
         if let Some(hold) = self.spinner_hold.as_mut() {
             hold.next_step = next;
         }
@@ -1943,7 +2319,10 @@ impl WindowState {
 
     fn handle_release(&mut self) {
         self.text_selecting = None;
+        self.scroll_drag = None;
+        self.resize_drag = None;
         self.spinner_hold = None;
+        self.scroll_hold = None;
         if self.runtime.is_range_dragging() {
             self.runtime.end_range_drag();
             self.update_and_request_redraw();
@@ -2996,6 +3375,9 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 presenter,
                 next_animation_wake: None,
                 spinner_hold: None,
+                scroll_hold: None,
+                scroll_drag: None,
+                resize_drag: None,
                 css_path: spec.css_path,
                 _css_watcher: css_watcher,
                 _drag_drop: drag_drop_registration,
@@ -3039,7 +3421,13 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 }
                 None => {}
             }
-            if let Some(deadline) = state.repeat_spinner_if_due(now) {
+            for deadline in [
+                state.repeat_spinner_if_due(now),
+                state.repeat_scroll_if_due(now),
+            ]
+            .into_iter()
+            .flatten()
+            {
                 next_wake = Some(next_wake.map_or(deadline, |current| current.min(deadline)));
             }
             state.flush_geometry_save_if_due(now);
@@ -3327,6 +3715,27 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_resize_corner_cursor_follows_the_directions_it_resizes() {
+        use florui_style::Resize;
+        use winit::window::CursorIcon;
+        assert_eq!(resize_cursor(Resize::Both), CursorIcon::NwseResize);
+        assert_eq!(resize_cursor(Resize::Vertical), CursorIcon::NsResize);
+        assert_eq!(resize_cursor(Resize::Horizontal), CursorIcon::EwResize);
+    }
+    #[test]
+    fn scrollbar_buttons_step_a_line_and_the_track_a_page() {
+        use florui_paint::ScrollbarPart as Part;
+        assert_eq!(
+            scroll_step(Part::ButtonDown, 100.0),
+            Some(WHEEL_LINE_HEIGHT)
+        );
+        assert_eq!(scroll_step(Part::ButtonUp, 100.0), Some(-WHEEL_LINE_HEIGHT));
+        assert_eq!(scroll_step(Part::TrackAfter, 120.0), Some(105.0));
+        assert_eq!(scroll_step(Part::TrackBefore, 120.0), Some(-105.0));
+        assert_eq!(scroll_step(Part::Thumb, 120.0), None);
+    }
 
     #[test]
     fn window_options_default_respects_reduced_motion() {

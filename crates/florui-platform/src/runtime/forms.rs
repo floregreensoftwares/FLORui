@@ -132,6 +132,14 @@ impl UiRuntime {
         });
     }
 
+    /// Remembers that the user resized the textarea `id` to this content
+    /// box; it keeps that size from the next render on.
+    pub(crate) fn set_resized(&self, id: &str, content_size: (f32, f32)) {
+        self.resized
+            .borrow_mut()
+            .insert(id.to_string(), content_size);
+    }
+
     /// Hides the validation bubble; `true` if one was showing, so the caller
     /// knows a redraw is due.
     pub(crate) fn dismiss_validation_bubble(&self) -> bool {

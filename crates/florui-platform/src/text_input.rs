@@ -100,10 +100,6 @@ struct TextInputState {
     viewport: (f32, f32),
 }
 
-/// Width a vertical scrollbar takes from a textarea's text once the
-/// content overflows (measured in Edge on Windows).
-pub(crate) const SCROLLBAR_WIDTH: f32 = 15.0;
-
 impl TextInputState {
     /// Wraps a multiline field at the viewport width, giving up the
     /// scrollbar's width once the text is taller than the viewport, then
@@ -116,7 +112,8 @@ impl TextInputState {
         self.editor.set_width(Some(vw.max(1.0)));
         let (_, height) = font.content_size(&mut self.editor);
         if height > vh {
-            self.editor.set_width(Some((vw - SCROLLBAR_WIDTH).max(1.0)));
+            self.editor
+                .set_width(Some((vw - florui_paint::SCROLLBAR_WIDTH).max(1.0)));
         }
         self.clamp_scroll(font);
     }
@@ -513,6 +510,28 @@ impl TextInputRegistry {
         state.bad_input = !raw.is_empty() && new_text.is_empty() && state.kind == ValueKind::Number;
         state.last_committed_text = new_text.clone();
         Some(new_text)
+    }
+
+    /// `(scroll, max scroll)` for a multiline field whose text overflows its
+    /// box, `None` for anything else — what its scrollbar is drawn from.
+    pub(crate) fn scroll_metrics(&self, id: &str, font: &mut Font) -> Option<(f32, f32)> {
+        let mut states = self.states.borrow_mut();
+        let state = states.get_mut(id).filter(|state| state.multiline)?;
+        let (_, content_height) = font.content_size(&mut state.editor);
+        let max_scroll = (content_height - state.viewport.1).max(0.0);
+        (max_scroll > 0.0).then_some((state.scroll.1, max_scroll))
+    }
+
+    /// Scrolls a multiline field to `y`, clamped; `true` if it moved.
+    pub(crate) fn scroll_to(&self, id: &str, y: f32, font: &mut Font) -> bool {
+        let mut states = self.states.borrow_mut();
+        let Some(state) = states.get_mut(id).filter(|state| state.multiline) else {
+            return false;
+        };
+        let before = state.scroll.1;
+        state.scroll.1 = y;
+        state.clamp_scroll(font);
+        state.scroll.1 != before
     }
 
     /// `id`'s content box in logical pixels, `(0, 0)` for an untracked id.
