@@ -501,6 +501,19 @@ mod tests {
         presenter.present(&vec![0x40; (width * height * 4) as usize])
     }
 
+    /// `destroy()` reports the loss on a later poll, not on the next one: on a
+    /// slow adapter a single poll right after it can still say "not lost".
+    fn wait_until_lost(presenter: &GpuPresenter) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline {
+            if presenter.is_lost() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        presenter.is_lost()
+    }
+
     #[test]
     #[ignore = "needs a real Windows session: cargo test -p florui-platform -- --ignored"]
     fn a_lost_device_is_reported_and_a_new_presenter_works() {
@@ -516,7 +529,10 @@ mod tests {
             assert_ne!(frame(&mut presenter), PresentOutcome::Lost);
 
             presenter.lose_device();
-            assert!(presenter.is_lost(), "wgpu reports the destroyed device");
+            assert!(
+                wait_until_lost(&presenter),
+                "wgpu reports the destroyed device"
+            );
             assert_eq!(frame(&mut presenter), PresentOutcome::Lost);
             presenter.resize(128, 128);
             assert_eq!(
