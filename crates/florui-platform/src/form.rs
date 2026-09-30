@@ -134,6 +134,7 @@ pub(crate) fn form_state(
     let candidate = will_validate(arena, node);
     let valid = candidate && validity(ctx, node).is_valid();
     let invalid = candidate && !valid;
+    let (in_range, out_of_range) = range_state(ctx, node, candidate);
     let writable =
         spec.text_field && !arena.attr_flag(node, "readonly") && !arena.is_disabled(node);
     let required = spec.tag != "button" && is_required(arena, node);
@@ -147,7 +148,8 @@ pub(crate) fn form_state(
         read_only: !writable,
         read_write: writable,
         default: is_default(arena, node),
-        in_range: spec.input_type == Some("range"),
+        in_range,
+        out_of_range,
     })
 }
 
@@ -195,5 +197,28 @@ fn is_default(arena: &Arena, node: NodeId) -> bool {
                 && matches!(arena.input_type(node), Some("checkbox") | Some("radio"))
                 && arena.is_checked(node)
         }
+    }
+}
+
+/// `(:in-range, :out-of-range)` for `node`. Measured in Edge: a `range`
+/// input is always in range; a `number` input is out of range when it
+/// violates `min`/`max`, and in range when empty or when it has a limit it
+/// respects (a limitless number with a value matches neither); anything
+/// else, or a control that is not a validation candidate, matches neither.
+fn range_state(ctx: &FormContext, node: NodeId, candidate: bool) -> (bool, bool) {
+    let arena = ctx.arena;
+    if !candidate {
+        return (false, false);
+    }
+    match arena.input_type(node) {
+        Some("range") if arena.tag(node) == "input" => (true, false),
+        Some("number") if arena.tag(node) == "input" => {
+            let result = validity(ctx, node);
+            let out = result.range_underflow || result.range_overflow;
+            let empty = arena.value_attr(node).is_none_or(str::is_empty);
+            let limited = arena.attr(node, "min").is_some() || arena.attr(node, "max").is_some();
+            (!out && (empty || limited), out)
+        }
+        _ => (false, false),
     }
 }

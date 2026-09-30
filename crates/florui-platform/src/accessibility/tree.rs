@@ -281,6 +281,34 @@ impl AccessibilityTree {
                     node.add_action(Action::Decrement);
                 }
             }
+            "input" if arena.input_type(id) == Some("number") => {
+                node.set_role(Role::SpinButton);
+                let number = |name: &str| {
+                    arena
+                        .attr(id, name)
+                        .and_then(|raw| raw.trim().parse::<f64>().ok())
+                };
+                if let Some(value) = arena
+                    .value_attr(id)
+                    .and_then(|raw| raw.trim().parse::<f64>().ok())
+                {
+                    node.set_numeric_value(value);
+                }
+                if let Some(min) = number("min") {
+                    node.set_min_numeric_value(min);
+                }
+                if let Some(max) = number("max") {
+                    node.set_max_numeric_value(max);
+                }
+                node.set_numeric_value_step(number("step").unwrap_or(1.0));
+                node.set_value(arena.value_attr(id).unwrap_or_default());
+                if is_focusable(arena, id) {
+                    node.add_action(Action::Focus);
+                    node.add_action(Action::SetValue);
+                    node.add_action(Action::Increment);
+                    node.add_action(Action::Decrement);
+                }
+            }
             "input" if arena.input_type(id) == Some("hidden") => node.set_hidden(),
             "input" => {
                 let role = match arena.input_type(id) {
@@ -650,6 +678,22 @@ mod tests {
         assert_eq!(role_of(&update, ak_id), Role::ListBoxOption);
         let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
         assert_eq!(node.is_selected(), Some(true));
+    }
+
+    #[test]
+    fn a_number_input_is_a_spin_button_with_its_numeric_limits() {
+        let tree: Element = view! {
+            <input id="qty" type="number" min="1" max="9" step="2" value="3" />
+        };
+        let (update, reverse, arena) = build(&tree, None);
+        let qty = arena.find(|a, id| a.id_attr(id) == Some("qty")).unwrap();
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == qty).unwrap().0;
+        assert_eq!(role_of(&update, ak_id), Role::SpinButton);
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert_eq!(node.numeric_value(), Some(3.0));
+        assert_eq!(node.min_numeric_value(), Some(1.0));
+        assert_eq!(node.max_numeric_value(), Some(9.0));
+        assert_eq!(node.numeric_value_step(), Some(2.0));
     }
 
     #[test]
