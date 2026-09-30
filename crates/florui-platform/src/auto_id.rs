@@ -1,12 +1,9 @@
-//! Gives every control that keeps per-node state a stable `id`, so an
-//! author isn't required to write one: text editing and a `<select>`'s
-//! option list are keyed by `id` (see [`crate::text_input`] and
-//! [`crate::select`]).
+//! Gives every stateful control a stable `id` when the author wrote none:
+//! text editing and a `<select>`'s options are keyed by it.
 //!
-//! The generated id is the element's path: each ancestor's tag and its
-//! position among same-tag siblings, so inserting an unrelated element
-//! elsewhere never shifts it. `Fragment`s are transparent, like in the
-//! [`florui_style::Arena`]; each `Portal` starts its own path.
+//! The id is the element's path (each ancestor's tag and its index among
+//! same-tag siblings), so unrelated insertions never shift it. `Fragment`s
+//! are transparent; each `Portal` starts its own path.
 
 use florui::{Element, ElementNode};
 

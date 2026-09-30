@@ -1,8 +1,7 @@
-//! The registry of form-associated controls. Submission, validation,
-//! the `:valid`/`:required`/... pseudo-classes and radio grouping
-//! all read a control through its [`ControlSpec`] and never match on a
-//! tag or `type` themselves, so supporting a new control (`<textarea>`
-//! editing, another `<input type>`) is one entry in [`CONTROLS`].
+//! The registry of form-associated controls. Submission, validation, the
+//! form pseudo-classes and radio grouping read a control only through its
+//! [`ControlSpec`], so a new control or `<input type>` is one entry in
+//! [`CONTROLS`].
 
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
@@ -298,10 +297,9 @@ fn text_constraints(ctx: &FormContext, node: NodeId) -> Validity {
     }
 }
 
-/// `pattern` must match the whole value. A pattern that doesn't compile is
-/// ignored, as in a browser. The `regex` crate's syntax is a subset of
-/// JavaScript's (no lookaround or backreferences), so those patterns are
-/// ignored here rather than mismatching.
+/// `pattern` must match the whole value. One that doesn't compile is ignored,
+/// as in a browser; that includes JavaScript-only syntax `regex` lacks
+/// (lookaround, backreferences).
 fn matches_pattern(pattern: &str, value: &str) -> bool {
     match regex::Regex::new(&format!("^(?:{pattern})$")) {
         Ok(regex) => regex.is_match(value),
@@ -625,10 +623,8 @@ fn number_constraints(ctx: &FormContext, node: NodeId) -> Validity {
 }
 
 /// The value one arrow-key step from `current` (empty counts as 0) in
-/// `direction` (`1` up, `-1` down), clamped to `min`/`max`; `None` when
-/// the field is at its limit already. Measured in Edge: an off-grid value
-/// snaps to the next grid point in that direction (2.5 up gives 3), and a
-/// step past a limit holds at the limit's nearest grid value.
+/// `direction` (`1` up, `-1` down); `None` at a limit. Measured in Edge: an
+/// off-grid value snaps to the next grid point (2.5 up gives 3).
 pub(crate) fn stepped_number(
     arena: &Arena,
     node: NodeId,

@@ -575,16 +575,6 @@ fn scale_layouts(layouts: &HashMap<NodeId, BoxLayout>, factor: f32) -> HashMap<N
         .collect()
 }
 
-/// Builds one [`florui_paint::TextInputPaint`] entry for every editable
-/// `<input>` [`crate::text_input::TextInputRegistry`] currently tracks —
-/// the real glyphs and geometry [`crate::desktop`]'s own `redraw` hands
-/// to [`florui_paint::paint_to_buffer_with_desktop_extras`]. Only `focused`
-/// gets a real caret/selection highlight (`show_caret`/`selection_rects`);
-/// every other tracked input still needs its own text painted (it's a
-/// real, visible control either way), just without either — matching
-/// real browsers, which never show a selection swatch on an unfocused
-/// text field. `type="password"` gets a masked substitute run instead of
-/// its real glyphs — see [`masked_runs`].
 /// What [`build_text_input_paint`] reads about the frame being painted.
 #[derive(Clone, Copy)]
 struct TextInputPaintContext<'a> {
@@ -599,6 +589,16 @@ struct TextInputPaintContext<'a> {
     scroll_dragging: Option<&'a str>,
 }
 
+/// Builds one [`florui_paint::TextInputPaint`] entry for every editable
+/// `<input>` [`crate::text_input::TextInputRegistry`] currently tracks —
+/// the real glyphs and geometry [`crate::desktop`]'s own `redraw` hands
+/// to [`florui_paint::paint_to_buffer_with_desktop_extras`]. Only `focused`
+/// gets a real caret/selection highlight (`show_caret`/`selection_rects`);
+/// every other tracked input still needs its own text painted (it's a
+/// real, visible control either way), just without either — matching
+/// real browsers, which never show a selection swatch on an unfocused
+/// text field. `type="password"` gets a masked substitute run instead of
+/// its real glyphs — see [`masked_glyphs`].
 fn build_text_input_paint(
     font: &mut florui_text::Font,
     context: TextInputPaintContext<'_>,
@@ -646,13 +646,8 @@ fn build_text_input_paint(
                         .copied()
                         .unwrap_or_else(|| mask_positions.last().copied().unwrap_or(0.0))
                 };
-                // `caret_rect`/`selection_rects`/`compose_rect` are all
-                // `(x0, y0, x1, y1)` -- two real corners, not a width/height
-                // pair (see `Font::caret_rect`'s own doc and `florui-paint`'s
-                // identical destructuring) -- so every one of these x's needs
-                // remapping through the same real-x -> mask-x lookup, not
-                // just the first.
-                // A caret keeps its own width rather than spanning a bullet.
+                // The rects are `(x0, y0, x1, y1)` corners, so both x's are
+                // mapped from real to mask positions; a caret keeps its width.
                 let caret_rect = caret_rect.map(|(x0, y0, x1, y1)| {
                     let x = mask_x(x0);
                     (x, y0, x + (x1 - x0), y1)
@@ -1302,12 +1297,6 @@ impl WindowState {
         None
     }
 
-    /// Real mouse-wheel/trackpad input, hit-tested and routed to whichever
-    /// scrollable ancestor actually owns it — see
-    /// [`Self::scrollable_ancestor_id`]. Keyboard-driven scrolling (arrow
-    /// keys, Page Up/Down, Home/End) is a real, documented gap: no focus
-    /// model exists anywhere in this crate yet for a keyboard event to
-    /// resolve *which* element it should even move.
     /// The `id` of `node` when it is a `<textarea>`, which scrolls its own
     /// text before any ancestor does.
     fn textarea_id(&self, node: NodeId) -> Option<String> {
@@ -1317,6 +1306,12 @@ impl WindowState {
             .flatten()
     }
 
+    /// Real mouse-wheel/trackpad input, hit-tested and routed to whichever
+    /// scrollable ancestor actually owns it — see
+    /// [`Self::scrollable_ancestor_id`]. Keyboard-driven scrolling (arrow
+    /// keys, Page Up/Down, Home/End) is a real, documented gap: no focus
+    /// model exists anywhere in this crate yet for a keyboard event to
+    /// resolve *which* element it should even move.
     fn handle_mouse_wheel(&mut self, delta: MouseScrollDelta) {
         let (dx, dy) = self.to_logical_scroll_delta(delta);
         let (x, y) = self.to_logical_cursor(self.last_cursor.0, self.last_cursor.1);
@@ -1781,19 +1776,8 @@ impl WindowState {
         self.update_and_request_redraw();
     }
 
-    /// Remembers whichever node is under the cursor at press time — the
-    /// click itself only fires on release, and only if that release lands
-    /// back on this same node (so dragging off a button and releasing
-    /// elsewhere cancels it). A press that lands exactly on
-    /// [`crate::WINDOW_DRAG_REGION_ID`] is a different gesture entirely —
-    /// see that constant's own doc — and starts a real window drag instead
-    /// of ever becoming a click candidate, unless it's a second press
-    /// within [`DOUBLE_CLICK_INTERVAL`], which toggles maximize instead;
-    /// `winit`'s own `drag_window` takes over the mouse for the rest of a
-    /// single-click drag gesture, so there is no matching press to
-    /// remember here.
-    /// A textarea's current box, border, padding, resize mode and, when its
-    /// text overflows, the scrollbar it is drawn with.
+    /// A textarea's box, border, padding, resize mode and, when its text
+    /// overflows, the scrollbar it is drawn with.
     fn textarea_box(&mut self, node: NodeId) -> Option<TextareaBox> {
         let (id, origin, size, border, chrome, mode, client_height) = {
             let (arena, styles, layouts) = self.runtime.geometry();
@@ -2017,6 +2001,17 @@ impl WindowState {
         }
     }
 
+    /// Remembers whichever node is under the cursor at press time — the
+    /// click itself only fires on release, and only if that release lands
+    /// back on this same node (so dragging off a button and releasing
+    /// elsewhere cancels it). A press that lands exactly on
+    /// [`crate::WINDOW_DRAG_REGION_ID`] is a different gesture entirely —
+    /// see that constant's own doc — and starts a real window drag instead
+    /// of ever becoming a click candidate, unless it's a second press
+    /// within [`DOUBLE_CLICK_INTERVAL`], which toggles maximize instead;
+    /// `winit`'s own `drag_window` takes over the mouse for the rest of a
+    /// single-click drag gesture, so there is no matching press to
+    /// remember here.
     fn handle_press(&mut self) {
         let (x, y) = self.to_logical_cursor(self.last_cursor.0, self.last_cursor.1);
         let hit = self.runtime.hit_test(x, y);

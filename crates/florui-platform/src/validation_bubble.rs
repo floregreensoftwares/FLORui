@@ -1,13 +1,10 @@
-//! The message bubble Edge shows under the first invalid control when a
-//! submit is blocked. It is an overlay built into the tree, so it is laid
-//! out, painted and hit like any other element and can be restyled by class;
-//! its default look is in the framework's own element stylesheet.
+//! The message bubble shown under the first invalid control when a submit
+//! is blocked: an overlay in the tree, restyled by class.
 //!
-//! Measured in Edge on a 220x30 field: the box sits 8px below the field,
-//! centred on it and kept inside the window; the arrow's tip touches the
-//! field and is 17px in from the box's left edge, but never left of 7px in
-//! from the field's own left edge. With no room below it flips above the
-//! field, the arrow on the bottom border and the same 8px gap.
+//! Measured in Edge: the box sits 8px from the field, centred and kept in
+//! the window, flipping above it when there is no room below; the arrow's
+//! tip touches the field, 17px in from the box's left edge but never less
+//! than 7px in from the field's.
 
 use std::collections::HashMap;
 
@@ -42,13 +39,12 @@ fn node(classes: &str, children: Vec<Element>) -> Element {
     )
 }
 
-/// The width the message text may take, given the field's left edge: Edge wraps
-/// the text once the box would run past the window's right edge, so a field
-/// near it gets a narrow box (measured: 217px across for a field 220px from
-/// it).
 /// The text size the default stylesheet gives the message, for measuring it.
 pub(crate) const TEXT_FONT_SIZE: f32 = 14.0;
 
+/// The width the message text may take: a field near the window's right edge
+/// gets a narrow box that wraps (Edge: 217px across for a field 220px from
+/// the edge).
 pub(crate) fn max_text_width(field_left: f32, viewport_width: f32) -> f32 {
     (viewport_width - field_left - 3.0 - TEXT_CHROME).clamp(0.0, TEXT_MAX_WIDTH)
 }
