@@ -8,6 +8,9 @@
 //! stays mounted (and keeps focus) until focus leaves it. "Focus row 7500"
 //! brings a row that is not mounted into view and focuses it.
 //!
+//! With a row focused, Up and Down move between rows, Page Up and Page Down by a
+//! screenful, Home and End to the first and last row.
+//!
 //! `cargo run --example virtualized_list -p florui-example-app`
 
 use florui::prelude::*;
