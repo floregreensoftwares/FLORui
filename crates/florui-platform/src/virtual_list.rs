@@ -25,10 +25,11 @@ use std::rc::Rc;
 
 use florui::Element;
 use florui_reactive::{
-    Key, KeyedExtents, Ref, ScrollAnchor, use_child_scope_keyed, use_memo, use_ref, use_signal,
+    Key, KeyedExtents, Ref, ScrollAnchor, Signal, use_child_scope_keyed, use_memo, use_ref,
+    use_signal,
 };
 
-use crate::focus_observer::{use_focus_controller, use_focus_within};
+use crate::focus_observer::{FocusController, use_focus_controller, use_focus_within};
 use crate::scroll::ScrollHandle;
 use crate::size_observer::use_committed_size;
 use crate::use_scroll_offset;
@@ -149,9 +150,13 @@ fn visible_range(
 /// renders.
 #[derive(Clone)]
 pub struct VirtualListHandle {
+    id: String,
     scroll: ScrollHandle,
     extents: Ref<KeyedExtents>,
     layout: Ref<Option<Rc<ListLayout>>>,
+    pinned: Ref<Option<Key>>,
+    pin_version: Signal<u64>,
+    focus: Rc<FocusController>,
 }
 
 impl VirtualListHandle {
@@ -177,6 +182,24 @@ impl VirtualListHandle {
             let (x, _) = self.scroll.offset();
             self.scroll.scroll_to(x, target_y);
         }
+    }
+
+    /// Brings `key`'s item into view, mounts it if it was not, and moves
+    /// focus to it (its first focusable part when the row itself is not
+    /// focusable) — for keyboard movement to an item that is not mounted
+    /// yet. A key no longer present does nothing.
+    pub fn focus_item(&self, key: impl Into<Key>) {
+        let key = key.into();
+        let Some(layout) = self.layout.get() else {
+            return;
+        };
+        if !layout.keys.contains(&key) {
+            return;
+        }
+        self.scroll_to_item(key.clone());
+        self.focus.request_focus(row_id_of(&self.id, &key));
+        self.pinned.set(Some(key));
+        self.pin_version.set(self.pin_version.get() + 1);
     }
 }
 
@@ -379,9 +402,13 @@ pub fn use_virtual_list(
     (
         Element::Fragment(children),
         VirtualListHandle {
+            id,
             scroll,
             extents,
             layout: last_layout,
+            pinned,
+            pin_version,
+            focus,
         },
     )
 }
@@ -521,12 +548,20 @@ mod tests {
 
     /// A 20px-row list over a mutable list of keys, each row holding a
     /// button `b<key>` that can take focus, in a 100px viewport.
-    fn focus_runtime(keys: &Keys, version: &std::rc::Rc<std::cell::Cell<u32>>) -> UiRuntime {
+    fn focus_runtime(
+        keys: &Keys,
+        version: &std::rc::Rc<std::cell::Cell<u32>>,
+    ) -> (
+        UiRuntime,
+        std::rc::Rc<std::cell::RefCell<Option<VirtualListHandle>>>,
+    ) {
+        let slot: std::rc::Rc<std::cell::RefCell<Option<VirtualListHandle>>> = Default::default();
+        let slot_in = std::rc::Rc::clone(&slot);
         let (keys, version) = (std::rc::Rc::clone(keys), std::rc::Rc::clone(version));
         let root = move || {
             let items = keys.borrow().clone();
             let key_items = items.clone();
-            let (content, _handle) = use_virtual_list(
+            let (content, handle) = use_virtual_list(
                 "list",
                 items.len(),
                 version.get(),
@@ -545,6 +580,7 @@ mod tests {
                     )
                 },
             );
+            *slot_in.borrow_mut() = Some(handle);
             Element::node(
                 "div",
                 vec![
@@ -558,7 +594,7 @@ mod tests {
                    .row { height: 20px; }";
         let mut runtime = UiRuntime::new(css, root, viewport()).expect("valid CSS");
         runtime.update(viewport());
-        runtime
+        (runtime, slot)
     }
 
     fn button(runtime: &UiRuntime, key: usize) -> Option<NodeId> {
@@ -575,7 +611,7 @@ mod tests {
     #[test]
     fn a_focused_row_stays_mounted_when_it_scrolls_out_of_the_window() {
         let keys: Keys = std::rc::Rc::new(std::cell::RefCell::new((0..100).collect()));
-        let mut runtime = focus_runtime(&keys, &std::rc::Rc::new(std::cell::Cell::new(0)));
+        let (mut runtime, _) = focus_runtime(&keys, &std::rc::Rc::new(std::cell::Cell::new(0)));
         runtime.set_focused(button(&runtime, 2), true);
         settle(&mut runtime);
 
@@ -597,7 +633,7 @@ mod tests {
     #[test]
     fn a_row_is_released_once_focus_leaves_it() {
         let keys: Keys = std::rc::Rc::new(std::cell::RefCell::new((0..100).collect()));
-        let mut runtime = focus_runtime(&keys, &std::rc::Rc::new(std::cell::Cell::new(0)));
+        let (mut runtime, _) = focus_runtime(&keys, &std::rc::Rc::new(std::cell::Cell::new(0)));
         runtime.set_focused(button(&runtime, 2), true);
         settle(&mut runtime);
         runtime.scroll_registry().scroll_to("list", 0.0, 1200.0);
@@ -616,7 +652,7 @@ mod tests {
     fn removing_the_focused_item_focuses_the_one_now_at_its_index() {
         let keys: Keys = std::rc::Rc::new(std::cell::RefCell::new((0..10).collect()));
         let version = std::rc::Rc::new(std::cell::Cell::new(0));
-        let mut runtime = focus_runtime(&keys, &version);
+        let (mut runtime, _) = focus_runtime(&keys, &version);
         runtime.set_focused(button(&runtime, 2), true);
         settle(&mut runtime);
 
@@ -631,7 +667,7 @@ mod tests {
     fn removing_the_focused_last_item_focuses_the_new_last_one() {
         let keys: Keys = std::rc::Rc::new(std::cell::RefCell::new((0..4).collect()));
         let version = std::rc::Rc::new(std::cell::Cell::new(0));
-        let mut runtime = focus_runtime(&keys, &version);
+        let (mut runtime, _) = focus_runtime(&keys, &version);
         runtime.set_focused(button(&runtime, 3), true);
         settle(&mut runtime);
 
@@ -642,6 +678,29 @@ mod tests {
         assert_eq!(runtime.focused(), button(&runtime, 2));
     }
 
+    #[test]
+    fn focus_item_mounts_an_unmounted_item_and_focuses_it() {
+        let keys: Keys = std::rc::Rc::new(std::cell::RefCell::new((0..100).collect()));
+        let (mut runtime, handle) =
+            focus_runtime(&keys, &std::rc::Rc::new(std::cell::Cell::new(0)));
+        assert!(button(&runtime, 70).is_none(), "far outside the window");
+
+        handle.borrow().as_ref().unwrap().focus_item(70);
+        settle(&mut runtime);
+
+        assert!(button(&runtime, 70).is_some());
+        assert_eq!(runtime.focused(), button(&runtime, 70));
+    }
+
+    #[test]
+    fn focus_item_on_a_key_that_is_not_there_does_nothing() {
+        let keys: Keys = std::rc::Rc::new(std::cell::RefCell::new((0..10).collect()));
+        let (mut runtime, handle) =
+            focus_runtime(&keys, &std::rc::Rc::new(std::cell::Cell::new(0)));
+        handle.borrow().as_ref().unwrap().focus_item(99);
+        settle(&mut runtime);
+        assert_eq!(runtime.focused(), None);
+    }
     #[test]
     fn rows_carry_their_place_in_the_whole_collection() {
         let runtime = build_runtime(100, 20.0, 100.0, Overscan::Items(0));
