@@ -37,6 +37,10 @@ pub struct Report {
     pub geometry: GeometryReport,
     pub artifacts: ArtifactPaths,
     pub outcome: Outcome,
+    /// The elements drawn where the pixels differ, innermost first, with where
+    /// each was written when the tree recorded it. Empty when nothing differs.
+    #[serde(default)]
+    pub culprits: Vec<String>,
 }
 
 /// A fixture passes when its pixel comparison meets its declared
@@ -239,6 +243,7 @@ mod tests {
                 anaglyph: PathBuf::from("anaglyph.png"),
             },
             outcome: Outcome::Pass,
+            culprits: vec!["div > div.card > h2".to_owned()],
         };
 
         let json = serde_json::to_string(&report).unwrap();
@@ -246,5 +251,53 @@ mod tests {
         assert_eq!(round_tripped.fixture_id, report.fixture_id);
         assert_eq!(round_tripped.outcome, report.outcome);
         assert_eq!(round_tripped.geometry, report.geometry);
+        assert_eq!(round_tripped.culprits, report.culprits);
+    }
+
+    #[test]
+    fn a_report_written_before_culprits_existed_still_loads() {
+        let mut value = serde_json::to_value(sample_report()).unwrap();
+        value.as_object_mut().unwrap().remove("culprits");
+        let loaded: Report = serde_json::from_value(value).unwrap();
+        assert!(loaded.culprits.is_empty());
+    }
+
+    fn sample_report() -> Report {
+        Report {
+            fixture_id: "x".to_owned(),
+            captured_at_unix_seconds: 1,
+            chromium_executable: PathBuf::from("chrome"),
+            pixels: PixelSummary {
+                differing_pixels: 0,
+                total_pixels: 1,
+                percent_different: 0.0,
+                mean_error: 0.0,
+                max_error: 0,
+            },
+            geometry: compare_geometry(
+                BoxGeometryPx {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+                BoxGeometryPx {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+                0.0,
+            ),
+            artifacts: ArtifactPaths {
+                reference: PathBuf::from("a"),
+                result: PathBuf::from("b"),
+                diff: PathBuf::from("c"),
+                overlay: PathBuf::from("d"),
+                anaglyph: PathBuf::from("e"),
+            },
+            outcome: Outcome::Pass,
+            culprits: vec!["div > a".to_owned()],
+        }
     }
 }

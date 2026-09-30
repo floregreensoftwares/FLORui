@@ -67,6 +67,9 @@ impl std::error::Error for EngineError {
 pub struct EngineRender {
     pub image: RgbaImage,
     pub element_box_css_px: BoxGeometryPx,
+    /// Every element under the synthetic wrapper, in document order, for
+    /// naming what lies behind a differing region.
+    pub elements: Vec<crate::regions::ElementInfo>,
 }
 
 /// The fixed set of tags this harness's fixtures build — a `&'static str`
@@ -207,6 +210,7 @@ pub fn render_fixture(
     Ok(EngineRender {
         image,
         element_box_css_px,
+        elements: crate::regions::describe_elements(&arena, &styles, &layouts, 1),
     })
 }
 
@@ -237,7 +241,7 @@ fn scale_layouts(layouts: &HashMap<NodeId, BoxLayout>, factor: f32) -> HashMap<N
 /// `1.0` here regardless of the fixture's own `device_pixel_ratio`: see
 /// this module's own doc for why `element_box_css_px` stays
 /// DPR-independent.
-fn box_geometry_of(
+pub(crate) fn box_geometry_of(
     arena: &Arena,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,

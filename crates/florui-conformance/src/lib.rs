@@ -11,5 +11,6 @@ pub mod geometry;
 pub mod pin;
 pub mod pixels;
 pub mod reference_fixture;
+pub mod regions;
 pub mod report;
 pub mod run_history;
