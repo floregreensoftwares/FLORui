@@ -377,6 +377,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "needs a real Windows session: cargo test -p florui-platform -- --ignored"]
     fn probe_capability_succeeds_on_a_real_windows_session() {
         assert!(probe_capability());
     }

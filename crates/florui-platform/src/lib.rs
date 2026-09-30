@@ -8,6 +8,15 @@
 //! without resetting any component state; a mobile or game host that
 //! wants [`UiRuntime`] alone, without pulling in `winit`/`softbuffer`/
 //! `notify` at all, can disable it (`default-features = false`).
+//!
+//! # Tests
+//!
+//! Two tiers. `cargo test` runs the headless ones: a [`UiRuntime`] driven
+//! directly, no window or OS service. Tests that need a real Windows session
+//! (the single-instance mutex, the application-data folder) are `#[ignore]`d
+//! and run with `cargo test -p florui-platform -- --ignored`, as CI does on a
+//! Windows runner. What needs real windows, mouse and keyboard input is
+//! driven through UI Automation by the scripts in `scripts/real-session/`.
 
 mod auto_id;
 mod components;
