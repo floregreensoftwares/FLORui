@@ -46,6 +46,7 @@ use crate::dpi::{self, ViewportScale};
 use crate::drag_drop::{self, DragDropRegistration};
 use crate::file_dialog::{OpenFileDialogOutcome, SaveFileDialogOutcome};
 use crate::gpu::{self, GpuPresenter};
+use crate::list_keys::ListKey;
 use crate::menu_keys::{self, MenuKey, MenuMove};
 use crate::single_instance::{self, HandoffOutcome, InstanceRole};
 use crate::window_controls::{InputMode, ScreenRect, WindowControls, resize_direction_at};
@@ -2514,6 +2515,30 @@ impl WindowState {
             if let Some(menu_key) = menu_key
                 && self.handle_menu_key(menu_key)
             {
+                return;
+            }
+        }
+        // A virtualized list moves between rows, repeating with a held key. A
+        // select or a radio keeps the arrows for itself.
+        if let Key::Named(key) = event.logical_key {
+            let list_key = match key {
+                NamedKey::ArrowDown => Some(ListKey::Next),
+                NamedKey::ArrowUp => Some(ListKey::Previous),
+                NamedKey::PageDown => Some(ListKey::PageDown),
+                NamedKey::PageUp => Some(ListKey::PageUp),
+                NamedKey::Home => Some(ListKey::First),
+                NamedKey::End => Some(ListKey::Last),
+                _ => None,
+            };
+            let owns_keys = self.runtime.focused().is_some_and(|node| {
+                let (arena, ..) = self.runtime.geometry();
+                arena.tag(node) == "select" || crate::focus::is_radio(arena, node)
+            });
+            if let Some(list_key) = list_key
+                && !owns_keys
+                && self.runtime.list_key(list_key)
+            {
+                self.update_and_request_redraw();
                 return;
             }
         }

@@ -23,6 +23,7 @@ use taffy::prelude::*;
 
 use crate::focus;
 use crate::focus_observer::{FocusController, FocusObserverRegistry};
+use crate::list_keys::{ListKey, ListKeyRegistry};
 use crate::menu_keys;
 use crate::position_observer::PositionObserverRegistry;
 use crate::scroll::ScrollRegistry;
@@ -155,6 +156,8 @@ pub struct UiRuntime {
     /// after layout, requests consumed by [`Self::resolve_focus`].
     focus_observers: Rc<FocusObserverRegistry>,
     focus_controller: Rc<FocusController>,
+    /// Lists that take Arrow/Page/Home/End; see [`Self::list_key`].
+    list_keys: Rc<ListKeyRegistry>,
     /// Reachable by [`crate::use_scroll_offset`] via context, the same way
     /// `size_observers` is — synced right after it, once this render's own
     /// real layout and content extents exist.
@@ -304,6 +307,7 @@ impl UiRuntime {
             position_observers: Rc::new(PositionObserverRegistry::new()),
             focus_observers: Rc::new(FocusObserverRegistry::new()),
             focus_controller: Rc::new(FocusController::new()),
+            list_keys: Rc::new(ListKeyRegistry::new()),
             scroll_registry: Rc::new(ScrollRegistry::new()),
             text_input_registry: Rc::new(TextInputRegistry::new()),
             image_registry: Rc::new(crate::image::ImageRegistry::new()),
@@ -431,6 +435,7 @@ impl UiRuntime {
         let position_observers = Rc::clone(&self.position_observers);
         let focus_observers = Rc::clone(&self.focus_observers);
         let focus_controller = Rc::clone(&self.focus_controller);
+        let list_keys = Rc::clone(&self.list_keys);
         let scroll_registry = Rc::clone(&self.scroll_registry);
         // Resolved once so use_viewport_size sees the same value layout uses.
         let resolved_viewport = media_viewport(viewport);
@@ -441,6 +446,7 @@ impl UiRuntime {
             provide_context(Rc::clone(&focus_observers));
             provide_context(Rc::clone(&focus_controller));
             provide_context(Rc::clone(&focus_controller) as Rc<dyn FocusHost>);
+            provide_context(Rc::clone(&list_keys));
             provide_context(Rc::clone(&scroll_registry));
             provide_context(ViewportSize {
                 width: resolved_viewport.width,
@@ -1439,6 +1445,13 @@ impl UiRuntime {
         } else if let Some(handler) = self.arena.value_handler(node, "value") {
             handler.call(value);
         }
+    }
+
+    /// Offers a list-navigation key to the nearest virtualized list around
+    /// the focused element; `true` when a list consumed it.
+    pub(crate) fn list_key(&self, key: ListKey) -> bool {
+        self.focused_node
+            .is_some_and(|focused| self.list_keys.handle(&self.arena, focused, key))
     }
 
     /// Same as [`Self::dispatch_click`], generalized to an arbitrary

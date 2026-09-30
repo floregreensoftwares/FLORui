@@ -54,7 +54,7 @@ pub(crate) fn is_labelable(arena: &Arena, id: NodeId) -> bool {
     matches!(arena.tag(id), "input" | "button" | "select" | "textarea")
 }
 
-fn is_radio(arena: &Arena, id: NodeId) -> bool {
+pub(crate) fn is_radio(arena: &Arena, id: NodeId) -> bool {
     arena.tag(id) == "input" && arena.input_type(id) == Some("radio")
 }
 

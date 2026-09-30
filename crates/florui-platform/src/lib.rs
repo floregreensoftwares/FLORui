@@ -29,6 +29,7 @@ mod form;
 mod form_control;
 mod icon;
 mod image;
+mod list_keys;
 mod menu_keys;
 mod position_observer;
 mod runtime;
@@ -58,6 +59,7 @@ pub use components::switch::{
 pub use focus_observer::{
     FocusController, FocusObserverRegistry, use_focus_controller, use_focus_within,
 };
+pub use list_keys::ListKeyRegistry;
 pub use position_observer::{PositionObserverRegistry, use_committed_position};
 pub use runtime::UiRuntime;
 pub use scroll::{ScrollHandle, ScrollRegistry, use_scroll_offset};
