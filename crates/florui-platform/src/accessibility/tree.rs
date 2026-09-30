@@ -244,7 +244,7 @@ impl AccessibilityTree {
                 node.set_role(match (arena.input_type(id), arena.role(id)) {
                     (Some("radio"), _) => Role::RadioButton,
                     (_, Some(AccessibleRole::Switch)) => Role::Switch,
-                    (_, None) => Role::CheckBox,
+                    (_, _) => Role::CheckBox,
                 });
                 if let Some(label) = arena.accessible_label(id) {
                     node.set_label(label);

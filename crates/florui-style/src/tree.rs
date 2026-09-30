@@ -10,18 +10,31 @@ use florui_reactive::Binding;
 
 pub type NodeId = usize;
 
-/// The `role` attribute values this crate understands. Only `switch`, and
-/// only meaningful on `<input type="checkbox">`, for now; any other value
-/// is reported by [`Arena::unsupported_role`] rather than guessed at.
+/// The `role` attribute values this crate understands: `switch`, only
+/// meaningful on `<input type="checkbox">`, and the overlay roles, valid on
+/// any element. Any other value is reported by [`Arena::unsupported_role`]
+/// rather than guessed at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessibleRole {
     Switch,
+    Dialog,
+    AlertDialog,
+    Menu,
+    MenuBar,
+    MenuItem,
+    Tooltip,
 }
 
 impl AccessibleRole {
     fn parse(value: &str) -> Option<Self> {
         match value {
             "switch" => Some(Self::Switch),
+            "dialog" => Some(Self::Dialog),
+            "alertdialog" => Some(Self::AlertDialog),
+            "menu" => Some(Self::Menu),
+            "menubar" => Some(Self::MenuBar),
+            "menuitem" => Some(Self::MenuItem),
+            "tooltip" => Some(Self::Tooltip),
             _ => None,
         }
     }
@@ -1186,6 +1199,44 @@ mod tests {
         assert_eq!(arena.unsupported_role(inputs[1]), Some("slider"));
         assert_eq!(arena.role(inputs[2]), None);
         assert_eq!(arena.unsupported_role(inputs[2]), None);
+    }
+
+    #[test]
+    fn the_overlay_roles_are_parsed_on_any_element() {
+        let tree: Element = view! {
+            <div>
+                <div role="dialog" />
+                <div role="alertdialog" />
+                <div role="menu" />
+                <div role="menubar" />
+                <button role="menuitem">{"x"}</button>
+                <div role="tooltip" />
+                <div role="grid" />
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let roles: Vec<_> = arena
+            .find_all(|a, id| a.tag(id) != "div" || a.children(id).is_empty())
+            .into_iter()
+            .map(|id| arena.role(id))
+            .collect();
+        use AccessibleRole::*;
+        assert_eq!(
+            roles,
+            [
+                Some(Dialog),
+                Some(AlertDialog),
+                Some(Menu),
+                Some(MenuBar),
+                Some(MenuItem),
+                Some(Tooltip),
+                None
+            ]
+        );
+        let grid = arena
+            .find(|a, id| a.unsupported_role(id).is_some())
+            .unwrap();
+        assert_eq!(arena.unsupported_role(grid), Some("grid"));
     }
 
     #[test]
