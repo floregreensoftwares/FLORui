@@ -6,12 +6,31 @@
 //! runtime) decides which [`NodeId`]s are in which state and builds this
 //! directly — [`crate::cascade::compute`] only consumes it.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::tree::NodeId;
 
+/// Which form pseudo-classes match one control. Computed by the platform
+/// from constraint validation, since the values a control is validated
+/// against (a closed `<select>`'s options, what the user has edited)
+/// aren't all in the [`crate::Arena`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FormState {
+    pub required: bool,
+    pub optional: bool,
+    pub valid: bool,
+    pub invalid: bool,
+    pub user_valid: bool,
+    pub user_invalid: bool,
+    pub read_only: bool,
+    pub read_write: bool,
+    pub default: bool,
+    pub in_range: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InteractionState {
+    form_states: HashMap<NodeId, FormState>,
     hovered: HashSet<NodeId>,
     focused: HashSet<NodeId>,
     active: HashSet<NodeId>,
@@ -50,6 +69,15 @@ impl InteractionState {
     pub fn with_focus_visible(mut self, id: NodeId) -> Self {
         self.focus_visible.insert(id);
         self
+    }
+
+    pub fn with_form_state(mut self, id: NodeId, state: FormState) -> Self {
+        self.form_states.insert(id, state);
+        self
+    }
+
+    pub fn form_state(&self, id: NodeId) -> Option<FormState> {
+        self.form_states.get(&id).copied()
     }
 
     pub fn is_hovered(&self, id: NodeId) -> bool {

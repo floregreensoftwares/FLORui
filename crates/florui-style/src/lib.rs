@@ -57,7 +57,7 @@ pub use color::{ColorParseError, Rgba, parse_hex_color};
 pub use container_query_adapter::{ContentBoxSize, resolve_container_query_signatures};
 pub use error::StyleError;
 pub use focus::FocusPath;
-pub use interaction::InteractionState;
+pub use interaction::{FormState, InteractionState};
 pub use rounded::RoundedRect;
 pub use stylesheet_parse::{Rule, compile_sources, parse_stylesheet};
 pub use tree::{AccessibleRole, Arena, InlineItem, NodeId};

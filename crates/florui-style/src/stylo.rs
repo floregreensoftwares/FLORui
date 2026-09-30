@@ -161,7 +161,10 @@ impl StyloTree {
             // :disabled nor :enabled ever matches there either -- the same
             // as real HTML, where both pseudo-classes only apply to form
             // controls.
-            if matches!(arena.tag(id), "button" | "select") {
+            if matches!(
+                arena.tag(id),
+                "button" | "select" | "textarea" | "fieldset" | "input"
+            ) {
                 if arena.is_disabled(id) {
                     node_state |= ElementState::DISABLED;
                 } else {
@@ -195,6 +198,24 @@ impl StyloTree {
                     node_state |= ElementState::DISABLED;
                 } else {
                     node_state |= ElementState::ENABLED;
+                }
+            }
+            if let Some(form) = state.form_state(id) {
+                for (on, flag) in [
+                    (form.required, ElementState::REQUIRED),
+                    (form.optional, ElementState::OPTIONAL_),
+                    (form.valid, ElementState::VALID),
+                    (form.invalid, ElementState::INVALID),
+                    (form.user_valid, ElementState::USER_VALID),
+                    (form.user_invalid, ElementState::USER_INVALID),
+                    (form.read_only, ElementState::READONLY),
+                    (form.read_write, ElementState::READWRITE),
+                    (form.default, ElementState::DEFAULT),
+                    (form.in_range, ElementState::INRANGE),
+                ] {
+                    if on {
+                        node_state |= flag;
+                    }
                 }
             }
             // `:link`/`:visited` for `<a href>` -- exactly one of the two
