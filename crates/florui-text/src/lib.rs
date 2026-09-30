@@ -37,6 +37,7 @@
 //! constraint (no definite width anywhere) still gets unwrapped
 //! measurement, which overstates how narrow the text could actually go.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use parley::{
@@ -194,6 +195,66 @@ impl std::error::Error for TextError {}
 /// back into [`Font::measure_cached`].
 pub struct CachedLayout(parley::Layout<[u8; 4]>);
 
+/// Metrics of text already measured, by exactly what was asked: style, text
+/// and wrap width. The same tree asks the same questions every frame, so a
+/// hit skips shaping and line breaking entirely. Flattened into two levels
+/// so a lookup borrows the text instead of allocating a key for it.
+/// Family, font size bits and font weight bits.
+type MemoStyle = (u8, u32, u32);
+
+/// A wrap width (bits, `None` for unwrapped) and what it measured.
+type MemoWidth = (Option<u32>, TextMetrics);
+
+struct MetricsMemo {
+    by_style: HashMap<MemoStyle, HashMap<String, Vec<MemoWidth>>>,
+    entries: usize,
+    capacity: usize,
+    #[cfg(test)]
+    misses: usize,
+}
+
+/// Entries kept before the memo is emptied and refilled by the next frame.
+const METRICS_MEMO_CAPACITY: usize = 50_000;
+
+impl MetricsMemo {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            by_style: HashMap::new(),
+            entries: 0,
+            capacity,
+            #[cfg(test)]
+            misses: 0,
+        }
+    }
+
+    fn get(&self, style: MemoStyle, text: &str, width: Option<u32>) -> Option<TextMetrics> {
+        self.by_style
+            .get(&style)?
+            .get(text)?
+            .iter()
+            .find(|(wrap, _)| *wrap == width)
+            .map(|&(_, metrics)| metrics)
+    }
+
+    fn insert(&mut self, style: MemoStyle, text: &str, width: Option<u32>, metrics: TextMetrics) {
+        if self.entries >= self.capacity {
+            self.clear();
+        }
+        self.by_style
+            .entry(style)
+            .or_default()
+            .entry(text.to_owned())
+            .or_default()
+            .push((width, metrics));
+        self.entries += 1;
+    }
+
+    fn clear(&mut self) {
+        self.by_style.clear();
+        self.entries = 0;
+    }
+}
+
 /// Holds the (deliberately reused, per Parley's own guidance) scratch
 /// state needed to measure text, plus every font this crate currently
 /// knows about.
@@ -206,6 +267,7 @@ pub struct Font {
     pub(crate) layout_cx: LayoutContext,
     sans_serif_family_name: String,
     monospace_family_name: String,
+    metrics_memo: MetricsMemo,
 }
 
 impl Font {
@@ -223,6 +285,7 @@ impl Font {
             layout_cx: LayoutContext::new(),
             sans_serif_family_name,
             monospace_family_name,
+            metrics_memo: MetricsMemo::with_capacity(METRICS_MEMO_CAPACITY),
         }
     }
 
@@ -233,6 +296,8 @@ impl Font {
     /// considers every font in the collection, this one included, the
     /// moment it's registered.
     pub fn register(&mut self, font_bytes: &[u8]) -> Result<String, TextError> {
+        // A newly registered font can change what text measures.
+        self.metrics_memo.clear();
         Self::register_into(&mut self.font_cx, font_bytes)
     }
 
@@ -338,6 +403,35 @@ impl Font {
             .0;
         layout.break_all_lines(max_width);
         Self::metrics_of_ref(layout)
+    }
+
+    /// [`Self::measure_cached`], remembered across calls: the same style,
+    /// text and wrap width answer from the memo without shaping or breaking
+    /// lines, which is what a frame that changed nothing asks for again.
+    pub fn measure_memoized(
+        &mut self,
+        cache: &mut Option<CachedLayout>,
+        family: FontFamily,
+        text: &str,
+        font_size: f32,
+        font_weight: f32,
+        max_width: Option<f32>,
+    ) -> TextMetrics {
+        let style = (family as u8, font_size.to_bits(), font_weight.to_bits());
+        let width = max_width.map(f32::to_bits);
+        if let Some(metrics) = self.metrics_memo.get(style, text, width) {
+            return metrics;
+        }
+        let metrics = self.measure_cached(cache, family, text, font_size, font_weight, max_width);
+        #[cfg(test)]
+        {
+            self.metrics_memo.misses += 1;
+        }
+        // Empty text measures to zero without shaping; not worth an entry.
+        if !text.is_empty() {
+            self.metrics_memo.insert(style, text, width, metrics);
+        }
+        metrics
     }
 
     fn metrics_of(layout: Option<parley::Layout<[u8; 4]>>) -> TextMetrics {
@@ -672,6 +766,98 @@ mod tests {
     fn rejects_data_that_is_not_a_font() {
         let mut font = Font::load_embedded();
         assert!(font.register(b"not a font").is_err());
+    }
+
+    const MEMO_CASES: [(FontFamily, &str, f32, f32, Option<f32>); 5] = [
+        (FontFamily::SansSerif, "Hello world", 16.0, 400.0, None),
+        (
+            FontFamily::SansSerif,
+            "Hello world",
+            16.0,
+            400.0,
+            Some(40.0),
+        ),
+        (
+            FontFamily::SansSerif,
+            "Hello world",
+            16.0,
+            700.0,
+            Some(40.0),
+        ),
+        (
+            FontFamily::Monospace,
+            "fn main() {}",
+            14.0,
+            400.0,
+            Some(60.0),
+        ),
+        (
+            FontFamily::SansSerif,
+            "A longer line of text that has to wrap",
+            18.0,
+            400.0,
+            Some(120.0),
+        ),
+    ];
+
+    #[test]
+    fn a_memoized_measure_equals_a_fresh_one_and_repeats_without_remeasuring() {
+        let mut font = Font::load_embedded();
+        let mut reference = Font::load_embedded();
+        for round in 0..3 {
+            for (family, text, size, weight, width) in MEMO_CASES {
+                let memoized = font.measure_memoized(&mut None, family, text, size, weight, width);
+                let fresh = reference.measure_cached(&mut None, family, text, size, weight, width);
+                assert_eq!(memoized, fresh, "{text:?} at {width:?}, round {round}");
+            }
+            assert_eq!(
+                font.metrics_memo.misses,
+                MEMO_CASES.len(),
+                "every case misses once, then only hits (round {round})"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_text_measures_to_zero_and_is_not_kept() {
+        let mut font = Font::load_embedded();
+        let metrics =
+            font.measure_memoized(&mut None, FontFamily::SansSerif, "", 16.0, 400.0, None);
+        assert_eq!(
+            (metrics.width, metrics.height, metrics.baseline),
+            (0.0, 0.0, 0.0)
+        );
+        assert_eq!(font.metrics_memo.entries, 0);
+    }
+
+    #[test]
+    fn registering_a_font_empties_the_memo() {
+        let mut font = Font::load_embedded();
+        font.measure_memoized(&mut None, FontFamily::SansSerif, "kept", 16.0, 400.0, None);
+        assert_eq!(font.metrics_memo.entries, 1);
+
+        font.register(EMBEDDED_MONOSPACE_FONT).unwrap();
+
+        assert_eq!(font.metrics_memo.entries, 0);
+    }
+
+    #[test]
+    fn the_memo_is_emptied_once_it_reaches_its_capacity() {
+        let mut memo = MetricsMemo::with_capacity(2);
+        let metrics = TextMetrics {
+            width: 1.0,
+            height: 2.0,
+            baseline: 3.0,
+        };
+        memo.insert((0, 0, 0), "a", None, metrics);
+        memo.insert((0, 0, 0), "b", None, metrics);
+        assert_eq!(memo.entries, 2);
+
+        memo.insert((0, 0, 0), "c", None, metrics);
+
+        assert_eq!(memo.entries, 1, "emptied, then the new entry stored");
+        assert!(memo.get((0, 0, 0), "a", None).is_none());
+        assert!(memo.get((0, 0, 0), "c", None).is_some());
     }
 
     #[test]

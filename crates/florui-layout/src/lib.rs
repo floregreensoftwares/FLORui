@@ -804,7 +804,7 @@ fn layout_root_group(
                 let baseline = measured_baseline.or_else(|| {
                     baseline_source.map(|source| match source {
                         BaselineSource::Text(text, font_size, font_weight, font_family) => {
-                            font.measure_cached(
+                            font.measure_memoized(
                                 shaping_cache,
                                 font_family,
                                 &text,
@@ -979,7 +979,7 @@ fn measure_leaf(
             // closure for this same leaf during one layout pass — see its
             // own doc, and the cache's own doc for why re-breaking a
             // shaped layout at a new width is safe to do repeatedly.
-            let metrics = font.measure_cached(
+            let metrics = font.measure_memoized(
                 shaping_cache,
                 text_context.font_family,
                 &text_context.text,
@@ -2130,6 +2130,40 @@ mod tests {
             None,
             "inside the child's box but outside the clip"
         );
+    }
+
+    #[test]
+    fn a_layout_with_the_text_memo_warm_is_identical_to_a_cold_one() {
+        let tree: Element = view! {
+            <div class="row">
+                <span class="label">{"A label that wraps onto several lines when it is narrow"}</span>
+                <button class="action">{"Open"}</button>
+                <p class="note">{"Second paragraph, different text and size"}</p>
+            </div>
+        };
+        let css = ".row { display: flex; flex-wrap: wrap; width: 160px; } \
+                   .label { width: 90px; } .action { padding: 2px 8px; } \
+                   .note { font-size: 13px; font-weight: 700; width: 120px; }";
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let layout = |font: &mut florui_text::Font| {
+            compute_layout(font, &arena, &styles, Size::MAX_CONTENT).unwrap()
+        };
+
+        let mut font = florui_text::Font::load_embedded();
+        let cold = layout(&mut font);
+        let warm = layout(&mut font);
+        let fresh = layout(&mut florui_text::Font::load_embedded());
+
+        assert_eq!(warm, cold, "the second pass answers from the memo");
+        assert_eq!(fresh, cold, "and matches a font that never memoized");
     }
 
     fn layout_for(tree: &Element, css: &str) -> (Arena, HashMap<NodeId, BoxLayout>) {
