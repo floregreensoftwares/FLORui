@@ -591,6 +591,7 @@ fn build_text_input_paint(
     font: &mut florui_text::Font,
     registry: &crate::text_input::TextInputRegistry,
     focused: Option<NodeId>,
+    spinner_for: &dyn Fn(NodeId) -> Option<florui_paint::SpinnerHover>,
 ) -> HashMap<NodeId, florui_paint::TextInputPaint> {
     let mut result = HashMap::new();
     let editable_inputs = arena.find_all(|arena, id| {
@@ -656,6 +657,7 @@ fn build_text_input_paint(
                 },
                 compose_rect: is_focused.then_some(compose_rect).flatten(),
                 show_caret: is_focused,
+                spinner: spinner_for(node),
             },
         );
     }
@@ -970,6 +972,8 @@ struct WindowState {
     /// recent [`Self::redraw`] left here — no separate cross-thread
     /// signal needed to drive continuous repaints.
     next_animation_wake: Option<std::time::Instant>,
+    /// The spinner arrow currently held down, repeating until release.
+    spinner_hold: Option<SpinnerHold>,
     /// Only set for a window built via [`WindowSpec::with_css_reload`] —
     /// [`Self::reload_css`] is a no-op without it.
     css_path: Option<PathBuf>,
@@ -1041,6 +1045,19 @@ struct WindowState {
 /// Not spec-mandated to an exact number — a common real-OS default for
 /// "two clicks this close together count as one double-click."
 const DOUBLE_CLICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// Holding a number field's spinner arrow steps once on the press, waits this
+/// long, then steps every [`SPINNER_REPEAT_INTERVAL`] until the button is
+/// released (measured in Edge: first repeat ~250ms, then about every 50ms).
+const SPINNER_REPEAT_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+const SPINNER_REPEAT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// A number field's spinner arrow being held down.
+struct SpinnerHold {
+    field: florui_style::FocusPath,
+    direction: i32,
+    next_step: std::time::Instant,
+}
 
 /// Long enough that a drag-resize (many `Resized`/`Moved` events per
 /// second) collapses into one save after the user stops; short enough
@@ -1177,6 +1194,8 @@ impl WindowState {
         let asset_cache = self.runtime.asset_cache();
         let executor = self.runtime.executor();
         let focused = self.runtime.focused();
+        let hovered = self.runtime.hovered();
+        let cursor = self.to_logical_cursor(self.last_cursor.0, self.last_cursor.1);
         let (arena, styles, layouts, font, interaction) =
             self.runtime.geometry_font_and_interaction_mut();
         let scroll_offsets = scroll_registry.offsets_by_node(arena);
@@ -1185,8 +1204,33 @@ impl WindowState {
         if self.controls.input_mode() == InputMode::Selective {
             sync_input_regions(&self.controls, &window, arena, &physical_layouts);
         }
-        let text_inputs =
-            build_text_input_paint(arena, styles, font, &text_input_registry, focused);
+        let spinner_for = |node: NodeId| {
+            if arena.input_type(node) != Some("number")
+                || arena.is_disabled(node)
+                || arena.attr_flag(node, "readonly")
+            {
+                return None;
+            }
+            let is_hovered = hovered == Some(node);
+            if !is_hovered && focused != Some(node) {
+                return None;
+            }
+            let layout = layouts.get(&node)?;
+            let (x, y) = florui_layout::absolute_position(arena, layouts, node);
+            Some(if is_hovered {
+                florui_paint::spinner_half_at((x, y, layout.width, layout.height), cursor)
+            } else {
+                florui_paint::SpinnerHover::None
+            })
+        };
+        let text_inputs = build_text_input_paint(
+            arena,
+            styles,
+            font,
+            &text_input_registry,
+            focused,
+            &spinner_for,
+        );
         // One combined map: `florui_paint` blits either tag's own decoded
         // pixels identically (see its own "img"/"icon" tag check), so it
         // only needs one `NodeId -> ImagePaint` map, not one per registry.
@@ -1436,6 +1480,12 @@ impl WindowState {
             .hit_test(x, y)
             .filter(|&node| !self.is_disabled(node));
         self.set_hovered_and_redraw(hit);
+        if hit.is_some_and(|node| {
+            let (arena, ..) = self.runtime.geometry();
+            arena.input_type(node) == Some("number")
+        }) {
+            self.window.request_redraw();
+        }
         if resize_direction.is_none() {
             let (_, styles, ..) = self.runtime.geometry();
             let pointer = hit
@@ -1506,6 +1556,7 @@ impl WindowState {
     fn handle_focus_changed(&mut self, focused: bool) {
         self.controls.set_focused(focused);
         if !focused {
+            self.spinner_hold = None;
             self.runtime.window_focus_lost();
         }
         self.update_and_request_redraw();
@@ -1559,6 +1610,19 @@ impl WindowState {
         }
         if let Some(node) = hit
             && !self.is_disabled(node)
+            && let Some(direction) = self.spinner_press_direction(node, x, y)
+        {
+            self.runtime.set_focused(Some(node), false);
+            self.step_spinner(node, direction);
+            self.spinner_hold = Some(SpinnerHold {
+                field: florui_style::FocusPath::of(self.runtime.geometry().0, node),
+                direction,
+                next_step: std::time::Instant::now() + SPINNER_REPEAT_DELAY,
+            });
+            return;
+        }
+        if let Some(node) = hit
+            && !self.is_disabled(node)
             && self.is_editable_text_input(node)
         {
             self.handle_text_input_press(node, x);
@@ -1601,6 +1665,25 @@ impl WindowState {
         let hit = self.runtime.hit_test(x, y);
         if hit.is_some_and(|node| self.is_drag_region(node)) {
             self.controls.show_system_menu_at_cursor();
+        }
+    }
+
+    /// `1`/`-1` when a press at `(x, y)` lands on the up/down arrow of the
+    /// spinner of the editable number field at `node`, else `None`.
+    fn spinner_press_direction(&self, node: NodeId, x: f32, y: f32) -> Option<i32> {
+        let (arena, _, layouts) = self.runtime.geometry();
+        if arena.tag(node) != "input"
+            || arena.input_type(node) != Some("number")
+            || arena.attr_flag(node, "readonly")
+        {
+            return None;
+        }
+        let layout = layouts.get(&node)?;
+        let (bx, by) = florui_layout::absolute_position(arena, layouts, node);
+        match florui_paint::spinner_half_at((bx, by, layout.width, layout.height), (x, y)) {
+            florui_paint::SpinnerHover::Up => Some(1),
+            florui_paint::SpinnerHover::Down => Some(-1),
+            florui_paint::SpinnerHover::None => None,
         }
     }
 
@@ -1730,8 +1813,44 @@ impl WindowState {
         }
     }
 
+    /// One arrow step of the number field at `node`, or just a redraw at its
+    /// limit.
+    fn step_spinner(&mut self, node: NodeId, direction: i32) {
+        match self.runtime.step_number_value(node, direction) {
+            Some(next) => self.commit_text_input_value(node, next),
+            None => self.update_and_request_redraw(),
+        }
+    }
+
+    /// Repeats a held spinner arrow once its next step is due, and returns
+    /// when the one after that is, or `None` when nothing is held. A held
+    /// field that disappeared or was disabled ends the hold.
+    fn repeat_spinner_if_due(&mut self, now: std::time::Instant) -> Option<std::time::Instant> {
+        let hold = self.spinner_hold.as_ref()?;
+        if now < hold.next_step {
+            return Some(hold.next_step);
+        }
+        let (field, direction) = (hold.field.clone(), hold.direction);
+        let node = {
+            let (arena, ..) = self.runtime.geometry();
+            let candidates = arena.find_all(|_, _| true);
+            field.resolve(arena, &candidates)
+        };
+        let Some(node) = node.filter(|&node| !self.is_disabled(node)) else {
+            self.spinner_hold = None;
+            return None;
+        };
+        self.step_spinner(node, direction);
+        let next = now + SPINNER_REPEAT_INTERVAL;
+        if let Some(hold) = self.spinner_hold.as_mut() {
+            hold.next_step = next;
+        }
+        Some(next)
+    }
+
     fn handle_release(&mut self) {
         self.text_selecting = None;
+        self.spinner_hold = None;
         if self.runtime.is_range_dragging() {
             self.runtime.end_range_drag();
             self.update_and_request_redraw();
@@ -2766,6 +2885,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 controls,
                 presenter,
                 next_animation_wake: None,
+                spinner_hold: None,
                 css_path: spec.css_path,
                 _css_watcher: css_watcher,
                 _drag_drop: drag_drop_registration,
@@ -2808,6 +2928,9 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                     next_wake = Some(next_wake.map_or(deadline, |current| current.min(deadline)));
                 }
                 None => {}
+            }
+            if let Some(deadline) = state.repeat_spinner_if_due(now) {
+                next_wake = Some(next_wake.map_or(deadline, |current| current.min(deadline)));
             }
             state.flush_geometry_save_if_due(now);
             if let Some(changed_at) = state.pending_geometry_save {
