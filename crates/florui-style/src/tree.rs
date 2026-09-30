@@ -23,6 +23,8 @@ pub enum AccessibleRole {
     MenuBar,
     MenuItem,
     Tooltip,
+    List,
+    ListItem,
 }
 
 impl AccessibleRole {
@@ -35,6 +37,8 @@ impl AccessibleRole {
             "menubar" => Some(Self::MenuBar),
             "menuitem" => Some(Self::MenuItem),
             "tooltip" => Some(Self::Tooltip),
+            "list" => Some(Self::List),
+            "listitem" => Some(Self::ListItem),
             _ => None,
         }
     }
@@ -150,6 +154,12 @@ struct ArenaNode {
     accessible_label: Option<String>,
     /// The raw `role` attribute. See [`Arena::role`].
     role: Option<String>,
+    /// The `set_size` and `position_in_set` attributes: how many items the
+    /// collection this item belongs to holds and its 1-based place in it,
+    /// for a virtualized list that mounts only some of them. See
+    /// [`Arena::collection_position`].
+    set_size: Option<usize>,
+    position_in_set: Option<usize>,
     /// The `href` attribute on `<a>`. See [`Arena::href`].
     href: Option<String>,
     /// `<img>`'s own `src` — an asset source, not resolved or read here;
@@ -334,6 +344,9 @@ impl Arena {
                         label_for: attr_value(&node.attrs, "for"),
                         accessible_label: attr_value(&node.attrs, "accessible_label"),
                         role: attr_value(&node.attrs, "role"),
+                        set_size: attr_value(&node.attrs, "set_size").and_then(|v| v.parse().ok()),
+                        position_in_set: attr_value(&node.attrs, "position_in_set")
+                            .and_then(|v| v.parse().ok()),
                         href: attr_value(&node.attrs, "href"),
                         src: attr_value(&node.attrs, "src"),
                         alt: attr_value(&node.attrs, "alt"),
@@ -616,6 +629,15 @@ impl Arena {
             .role
             .as_deref()
             .and_then(AccessibleRole::parse)
+    }
+
+    /// `(position, size)` of this item within its collection, both from its
+    /// `position_in_set` (1-based) and `set_size` attributes; `None` unless
+    /// both are present and the position fits the size.
+    pub fn collection_position(&self, id: NodeId) -> Option<(usize, usize)> {
+        let node = &self.nodes[id];
+        let (position, size) = (node.position_in_set?, node.set_size?);
+        (position >= 1 && position <= size).then_some((position, size))
     }
 
     /// This node's `role` attribute when it names a role this crate does
@@ -1239,6 +1261,30 @@ mod tests {
         assert_eq!(arena.unsupported_role(grid), Some("grid"));
     }
 
+    #[test]
+    fn list_roles_and_a_collection_position_are_read() {
+        let tree: Element = view! {
+            <div role="list">
+                <div role="listitem" set_size="500" position_in_set="42" />
+                <div set_size="3" position_in_set="4" />
+                <div position_in_set="2" />
+                <div set_size="3" position_in_set="0" />
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let list = arena.roots()[0];
+        assert_eq!(arena.role(list), Some(AccessibleRole::List));
+        let items = arena.children(list);
+        assert_eq!(arena.role(items[0]), Some(AccessibleRole::ListItem));
+        assert_eq!(arena.collection_position(items[0]), Some((42, 500)));
+        assert_eq!(arena.collection_position(items[1]), None, "past the end");
+        assert_eq!(arena.collection_position(items[2]), None, "no size");
+        assert_eq!(
+            arena.collection_position(items[3]),
+            None,
+            "positions start at 1"
+        );
+    }
     #[test]
     fn accessible_label_is_none_without_the_attribute() {
         let tree: Element = view! { <button>{"x"}</button> };

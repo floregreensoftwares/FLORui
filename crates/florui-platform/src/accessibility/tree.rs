@@ -52,6 +52,8 @@ fn overlay_role(role: AccessibleRole) -> Option<Role> {
         AccessibleRole::MenuBar => Some(Role::MenuBar),
         AccessibleRole::MenuItem => Some(Role::MenuItem),
         AccessibleRole::Tooltip => Some(Role::Tooltip),
+        AccessibleRole::List => Some(Role::List),
+        AccessibleRole::ListItem => Some(Role::ListItem),
     }
 }
 
