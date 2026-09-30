@@ -8,7 +8,9 @@ use std::rc::Rc;
 
 use florui::Element;
 use florui_reactive::executor::Executor;
-use florui_reactive::{provide_context, use_context, use_effect, use_ref, use_signal};
+use florui_reactive::{
+    provide_context, use_context, use_effect, use_focus_host, use_ref, use_signal,
+};
 
 use crate::routable::Routable;
 use crate::router::{Guard, HistoryEntry, NavKind, Router};
@@ -37,6 +39,7 @@ pub fn provide_router<R: Routable>(
         vec![HistoryEntry {
             route: initial,
             scroll_anchor: None,
+            focus_id: None,
         }]
     });
     let index = use_signal(|| 0usize);
@@ -58,7 +61,8 @@ pub fn provide_router<R: Routable>(
         executor,
         transition_generation,
         last_transition_kind,
-    );
+    )
+    .with_focus_host(use_focus_host());
     provide_context(router);
     children()
 }
@@ -92,6 +96,32 @@ pub fn use_route_transition<R: Routable>(on_committed: impl Fn(NavKind) + 'stati
     use_effect(generation, move || {
         on_committed(router_for_effect.last_transition_kind());
         None
+    });
+}
+
+/// Moves focus on every committed navigation, for a host that provides a
+/// [`florui_reactive::FocusHost`] (none: does nothing). Back and Forward
+/// return focus to the element, by `id`, the user left that entry on; a Push
+/// or Replace, or a return with nothing remembered, lands on
+/// `entry_point(route)`, the `id` of the page's own starting element. A target
+/// that has not mounted yet is waited for, and one that never appears is
+/// dropped. Scroll stays the app's own, through
+/// [`crate::Router::set_current_scroll_anchor`].
+pub fn use_route_focus<R: Routable>(entry_point: impl Fn(&R) -> Option<String> + 'static) {
+    let router = use_router::<R>();
+    let host = use_focus_host();
+    use_route_transition::<R>(move |kind| {
+        let Some(host) = &host else {
+            return;
+        };
+        let entry = router.current_entry();
+        let saved = match kind {
+            NavKind::Back | NavKind::Forward => entry.focus_id.clone(),
+            NavKind::Push | NavKind::Replace => None,
+        };
+        if let Some(id) = saved.or_else(|| entry_point(&entry.route)) {
+            host.request_focus(&id);
+        }
     });
 }
 
@@ -173,6 +203,108 @@ mod tests {
         assert_eq!(route_on_second_render, TestRoute::About);
     }
 
+    use std::cell::RefCell;
+
+    use florui_reactive::FocusHost;
+
+    #[derive(Default)]
+    struct MockHost {
+        focused: RefCell<Option<String>>,
+        requests: RefCell<Vec<String>>,
+    }
+
+    impl FocusHost for MockHost {
+        fn focused_id(&self) -> Option<String> {
+            self.focused.borrow().clone()
+        }
+
+        fn request_focus(&self, id: &str) {
+            self.requests.borrow_mut().push(id.to_string());
+        }
+    }
+
+    /// Renders an app with `use_route_focus` (entry point `entry-<path>`),
+    /// optionally under `host`, and returns its router.
+    fn focus_app(scope: &ComponentScope, host: Option<&Rc<MockHost>>) -> Router<TestRoute> {
+        let executor = Rc::new(LocalExecutor::new()) as Rc<dyn Executor>;
+        let host = host.map(|host| Rc::clone(host) as Rc<dyn FocusHost>);
+        scope.render(move || {
+            provide_context(executor);
+            if let Some(host) = host {
+                provide_context(host);
+            }
+            provide_router(TestRoute::Home, Vec::new(), || {
+                use_route_focus::<TestRoute>(|route| Some(format!("entry-{}", route.format())));
+                empty_page()
+            });
+            use_router::<TestRoute>()
+        })
+    }
+
+    #[test]
+    fn navigation_moves_focus_to_the_entry_point_and_back_returns_to_where_it_was() {
+        let (scope, _dirty) = ComponentScope::new();
+        let host = Rc::new(MockHost::default());
+        let router = focus_app(&scope, Some(&host));
+        assert_eq!(*host.requests.borrow(), ["entry-/"], "first render");
+
+        *host.focused.borrow_mut() = Some("search".to_string());
+        router.push(TestRoute::About);
+        focus_app(&scope, Some(&host));
+        assert_eq!(host.requests.borrow().last().unwrap(), "entry-/about");
+
+        *host.focused.borrow_mut() = Some("email".to_string());
+        router.back();
+        focus_app(&scope, Some(&host));
+        assert_eq!(
+            host.requests.borrow().last().unwrap(),
+            "search",
+            "back returns to the control the user left"
+        );
+
+        router.forward();
+        focus_app(&scope, Some(&host));
+        assert_eq!(
+            host.requests.borrow().last().unwrap(),
+            "email",
+            "and forward to the one left on the other page"
+        );
+    }
+
+    #[test]
+    fn a_return_with_nothing_remembered_lands_on_the_entry_point() {
+        let (scope, _dirty) = ComponentScope::new();
+        let host = Rc::new(MockHost::default());
+        let router = focus_app(&scope, Some(&host));
+        router.push(TestRoute::About);
+        focus_app(&scope, Some(&host));
+
+        router.back();
+        focus_app(&scope, Some(&host));
+        assert_eq!(host.requests.borrow().last().unwrap(), "entry-/");
+    }
+
+    #[test]
+    fn replace_goes_to_the_entry_point_and_forgets_the_old_focus() {
+        let (scope, _dirty) = ComponentScope::new();
+        let host = Rc::new(MockHost::default());
+        let router = focus_app(&scope, Some(&host));
+        *host.focused.borrow_mut() = Some("search".to_string());
+        router.replace(TestRoute::About);
+        focus_app(&scope, Some(&host));
+        assert_eq!(host.requests.borrow().last().unwrap(), "entry-/about");
+        assert_eq!(router.current_entry().focus_id, None);
+    }
+
+    #[test]
+    fn without_a_focus_host_navigation_just_works() {
+        let (scope, _dirty) = ComponentScope::new();
+        let router = focus_app(&scope, None);
+        router.push(TestRoute::About);
+        focus_app(&scope, None);
+        assert_eq!(router.current(), TestRoute::About);
+        assert_eq!(router.current_entry().focus_id, None);
+    }
     #[test]
     #[should_panic(expected = "no provide_router")]
     fn use_router_without_a_provider_panics() {

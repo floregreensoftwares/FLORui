@@ -11,12 +11,16 @@
 //! Leaving a route disposes its whole subtree by default (every signal,
 //! effect, and nested outlet it owns) -- there is no keep-alive cache;
 //! an app that needs one builds it itself on top of [`route_outlet`].
-//! Scroll and focus restoration are similarly the app's own job: this
-//! crate has no window or viewport handle, so it only stores and hands
-//! back a [`florui_reactive::ScrollAnchor`] per history entry (see
+//! Each history entry also carries what it needs to be re-entered as the
+//! user left it. Focus is handled for the app: when the host provides a
+//! [`florui_reactive::FocusHost`], the router records the focused element's
+//! `id` as an entry is left and [`use_route_focus`] gives it back on Back or
+//! Forward, or lands on the page's entry point otherwise. Scroll stays the
+//! app's own job, since only it knows which region scrolls: the router stores
+//! and hands back a [`florui_reactive::ScrollAnchor`] per entry (see
 //! [`Router::set_current_scroll_anchor`]) and reports when a navigation
-//! committed (see [`use_route_transition`]) -- it never scrolls or
-//! focuses anything itself.
+//! committed (see [`use_route_transition`]) -- it never scrolls anything
+//! itself.
 
 mod link;
 mod outlet;
@@ -28,7 +32,7 @@ pub mod testing;
 
 pub use link::link;
 pub use outlet::route_outlet;
-pub use provider::{provide_router, use_route, use_route_transition, use_router};
+pub use provider::{provide_router, use_route, use_route_focus, use_route_transition, use_router};
 pub use query::{decode_query_pairs, split_query};
 pub use routable::{Routable, RouteError};
 pub use router::{
