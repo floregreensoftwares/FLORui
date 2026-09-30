@@ -131,17 +131,20 @@ fn timed(group: &mut BenchmarkGroup<'_, WallTime>, name: &str, scene: &Scene) {
 fn case(group: &mut BenchmarkGroup<'_, WallTime>, name: &str, plain: &Scene, effect: &Scene) {
     let mut font = Font::load_embedded();
     let (plain_canvas, plain_peak) = peak_heap(|| plain.paint(&mut font));
+    let first_paint = std::time::Instant::now();
     let (effect_canvas, effect_peak) = peak_heap(|| effect.paint(&mut font));
+    let first_paint = first_paint.elapsed();
     assert_ne!(
         plain_canvas.data(),
         effect_canvas.data(),
         "{name}: the effect did not change the picture"
     );
     eprintln!(
-        "MEMORY {name}: peak {} KiB, plain {} KiB, effect adds {} KiB",
+        "MEMORY {name}: peak {} KiB, plain {} KiB, effect adds {} KiB; first paint {:.1} ms",
         kib(effect_peak),
         kib(plain_peak),
         kib(effect_peak.saturating_sub(plain_peak)),
+        first_paint.as_secs_f64() * 1000.0,
     );
     group.bench_function(name, |b| b.iter(|| effect.paint(&mut font)));
 }
