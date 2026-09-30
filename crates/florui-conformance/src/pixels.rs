@@ -30,9 +30,20 @@ impl PixelSummary {
     }
 }
 
+/// The smallest box, in physical pixels, that holds every differing pixel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PixelRegion {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Debug)]
 pub struct PixelReport {
     pub summary: PixelSummary,
+    /// Where the differing pixels are; `None` when nothing differs.
+    pub diff_region: Option<PixelRegion>,
     /// Transparent where pixels match, opaque red where they differ.
     pub diff_image: RgbaImage,
 }
@@ -85,6 +96,7 @@ pub fn compare_pixels(
     let mut error_sum = 0f64;
     let mut max_error = 0u8;
     let mut diff_image = RgbaImage::new(width, height);
+    let mut bounds: Option<(u32, u32, u32, u32)> = None;
 
     for (x, y, reference_pixel) in reference.enumerate_pixels() {
         let result_pixel = result.get_pixel(x, y);
@@ -101,6 +113,10 @@ pub fn compare_pixels(
         if differs {
             differing_pixels += 1;
             diff_image.put_pixel(x, y, ImageRgba([255, 0, 0, 255]));
+            bounds = Some(match bounds {
+                Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
+                None => (x, y, x, y),
+            });
         } else {
             diff_image.put_pixel(x, y, ImageRgba([0, 0, 0, 0]));
         }
@@ -128,6 +144,12 @@ pub fn compare_pixels(
             mean_error,
             max_error,
         },
+        diff_region: bounds.map(|(x0, y0, x1, y1)| PixelRegion {
+            x: x0,
+            y: y0,
+            width: x1 - x0 + 1,
+            height: y1 - y0 + 1,
+        }),
         diff_image,
     })
 }
@@ -183,6 +205,32 @@ mod tests {
 
     fn solid(width: u32, height: u32, color: [u8; 4]) -> RgbaImage {
         RgbaImage::from_fn(width, height, |_, _| ImageRgba(color))
+    }
+
+    #[test]
+    fn the_differing_pixels_are_bounded_by_a_region() {
+        let a = solid(20, 20, [0, 0, 0, 255]);
+        let mut b = solid(20, 20, [0, 0, 0, 255]);
+        for (x, y) in [(4, 6), (9, 6), (4, 11), (9, 11)] {
+            b.put_pixel(x, y, ImageRgba([255, 255, 255, 255]));
+        }
+        let report = compare_pixels(&a, &b, &PixelDiffOptions::default()).unwrap();
+        assert_eq!(
+            report.diff_region,
+            Some(PixelRegion {
+                x: 4,
+                y: 6,
+                width: 6,
+                height: 6
+            })
+        );
+    }
+
+    #[test]
+    fn identical_images_have_no_region() {
+        let a = solid(5, 5, [1, 2, 3, 255]);
+        let report = compare_pixels(&a, &a.clone(), &PixelDiffOptions::default()).unwrap();
+        assert_eq!(report.diff_region, None);
     }
 
     #[test]

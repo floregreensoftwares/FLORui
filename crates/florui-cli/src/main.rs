@@ -14,6 +14,7 @@ use florui_conformance::pixels::{
     PixelDiffOptions, PixelSummary, anaglyph_overlay, compare_pixels, overlay_images,
 };
 use florui_conformance::reference_fixture::load_reference_fixture;
+use florui_conformance::regions::culprit_lines;
 use florui_conformance::report::{ArtifactPaths, Outcome, Report, classify, write_report};
 use florui_conformance::run_history::{
     self, BaselineSelector, DeltaStatus, FixtureOutcome, RunManifest, RunReport, RunStatus,
@@ -534,6 +535,8 @@ struct CompareResult {
     pixels: PixelSummary,
     geometry: GeometryReport,
     artifacts_dir: PathBuf,
+    /// The elements drawn where the pixels differ, innermost first.
+    culprits: Vec<String>,
 }
 
 /// Runs one fixture's capture/compare/report cycle against an
@@ -576,6 +579,10 @@ fn compare_fixture(
         &pixel_report.summary,
         &geometry_report,
     );
+    let culprits = pixel_report
+        .diff_region
+        .map(|region| culprit_lines(&engine.elements, region, viewport.device_pixel_ratio, 5))
+        .unwrap_or_default();
 
     let fixture_out_dir = out_dir.join(&fixture.manifest.id);
     std::fs::create_dir_all(&fixture_out_dir)
@@ -620,6 +627,7 @@ fn compare_fixture(
             anaglyph: anaglyph_path,
         },
         outcome,
+        culprits: culprits.clone(),
     };
     write_report(&report, &fixture_out_dir).map_err(|err| err.to_string())?;
 
@@ -629,6 +637,7 @@ fn compare_fixture(
         pixels: pixel_report.summary,
         geometry: geometry_report,
         artifacts_dir: fixture_out_dir,
+        culprits,
     })
 }
 
@@ -651,6 +660,15 @@ fn print_compare_result(result: &CompareResult) {
                     result.geometry.max_axis_delta_px
                 ))
             );
+            if !result.culprits.is_empty() {
+                println!(
+                    "{}",
+                    dim_text("elements behind the difference, innermost first:")
+                );
+                for line in &result.culprits {
+                    println!("{}", dim_text(&format!("  {line}")));
+                }
+            }
             println!(
                 "{}",
                 dim_text(&format!(
