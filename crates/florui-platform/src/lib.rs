@@ -86,6 +86,9 @@ mod desktop;
 mod host_observer;
 
 #[cfg(feature = "desktop")]
+mod input;
+
+#[cfg(feature = "desktop")]
 pub use host_observer::{HostObserver, ObservedFrame, OverlayCanvas};
 
 #[cfg(feature = "desktop")]
