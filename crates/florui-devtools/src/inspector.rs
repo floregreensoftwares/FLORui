@@ -68,6 +68,10 @@ pub struct InspectorNode {
     /// honor — today, an unsupported `role` attribute, which is otherwise
     /// silently ignored. Empty when there is nothing to report.
     pub diagnostics: Vec<String>,
+    /// Where the element was written, when `view!` recorded it: a debug build,
+    /// or one with `florui`'s `source-locations` feature. `None` for an element
+    /// built by hand.
+    pub source: Option<florui::SourceLocation>,
 }
 
 /// Everything the inspector needs to render one frame. Rebuilt by the
@@ -237,6 +241,18 @@ fn format_margin(edge: Option<f32>) -> String {
     }
 }
 
+/// The lines the panel shows for where an element was written: the file with
+/// its line and column, the component that built it, and its place in the
+/// `view!` block.
+fn source_lines(source: &florui::SourceLocation) -> Vec<String> {
+    let mut lines = vec![format!("{}:{}:{}", source.file, source.line, source.column)];
+    if let Some(component) = source.component {
+        lines.push(format!("component: {component}"));
+    }
+    lines.push(format!("in the block: {}", source.path));
+    lines
+}
+
 fn format_z_index(z_index: Option<i32>) -> String {
     match z_index {
         Some(value) => value.to_string(),
@@ -287,6 +303,20 @@ fn draw_ui(ui: &mut egui::Ui, model: &InspectorModel) -> Option<InspectorAction>
                 ui.label("No element selected — click one in the tree or the preview.");
             }
             Some(node) => {
+                ui.heading("Source");
+                match &node.source {
+                    Some(source) => {
+                        for line in source_lines(source) {
+                            ui.monospace(line);
+                        }
+                    }
+                    None => {
+                        ui.label(
+                            "not recorded: built by hand, or in a build that leaves source \
+                             locations off",
+                        );
+                    }
+                }
                 ui.heading("Styles");
                 ui.monospace(format!("display: {}", node.display));
                 ui.monospace(format!(
@@ -351,4 +381,40 @@ fn draw_ui(ui: &mut egui::Ui, model: &InspectorModel) -> Option<InspectorAction>
     });
 
     action
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_source_panel_names_the_file_the_component_and_the_place_in_the_block() {
+        let source = florui::SourceLocation {
+            file: "src/card.rs",
+            line: 14,
+            column: 9,
+            component: Some("Card"),
+            path: "div > ul > li[3]",
+        };
+        assert_eq!(
+            source_lines(&source),
+            vec![
+                "src/card.rs:14:9".to_string(),
+                "component: Card".to_string(),
+                "in the block: div > ul > li[3]".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn an_element_with_no_component_shows_no_component_line() {
+        let source = florui::SourceLocation {
+            file: "src/main.rs",
+            line: 3,
+            column: 5,
+            component: None,
+            path: "div",
+        };
+        assert_eq!(source_lines(&source).len(), 2);
+    }
 }

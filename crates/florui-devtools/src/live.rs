@@ -180,6 +180,7 @@ fn push_node(
         margin: style.margin,
         size_cause: causes.get(&id).map(format_size_cause),
         diagnostics: node_diagnostics(arena, id),
+        source: arena.source(id),
     });
 }
 
@@ -589,6 +590,7 @@ mod tests {
             },
             size_cause: None,
             diagnostics: Vec::new(),
+            source: None,
         }
     }
 
@@ -615,5 +617,32 @@ mod tests {
         let (x, y, width, height) = padding_box(bounds, &node.border, 2.0);
         assert_eq!((x, y), (6.0, 4.0));
         assert_eq!((width, height), (108.0, 64.0));
+    }
+
+    #[test]
+    fn inspector_nodes_report_where_their_element_was_written() {
+        let marker = line!();
+        let tree: Element = view! {
+            <div>
+                <p>{"x"}</p>
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let rules = parse_stylesheet("").unwrap();
+        let styles = compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+
+        let model = build_inspector_model(&arena, &styles, &HashMap::new(), None, false);
+
+        let div = model.nodes[0].source.expect("view! records it");
+        let p = model.nodes[1].source.expect("view! records it");
+        assert_eq!((div.line, div.path), (marker + 2, "div"));
+        assert_eq!((p.line, p.path), (marker + 3, "div > p"));
+        assert!(div.file.ends_with("live.rs"));
     }
 }
