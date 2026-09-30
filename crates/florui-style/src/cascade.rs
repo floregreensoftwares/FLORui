@@ -532,6 +532,11 @@ pub struct ComputedStyle {
     /// user-agent sheet in the servo build of the style engine); `None`
     /// keeps the browser default.
     pub placeholder_color: Option<Rgba>,
+    /// `scroll-behavior: smooth`. Real `scroll-behavior` is gecko-only in
+    /// the style engine, so an adapter spells it `--florui-scroll-behavior`
+    /// (see `scroll_behavior_adapter`); unlike a custom property it does
+    /// not inherit. It animates programmatic scrolls of this element.
+    pub scroll_behavior_smooth: bool,
 }
 
 /// The values of `resize`, spelled through `--florui-resize`. Only a
@@ -2675,6 +2680,112 @@ mod tests {
             &InteractionState::new(),
         );
         assert_eq!(computed[&arena.roots()[0]].appearance, Appearance::Auto);
+    }
+
+    fn smooth_of(css: &str, tree: &Element, class: &str) -> bool {
+        let (arena, computed) = styles(tree, css, &InteractionState::new());
+        let node = arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == class))
+            .unwrap();
+        computed[&node].scroll_behavior_smooth
+    }
+
+    #[test]
+    fn scroll_behavior_is_auto_until_an_author_asks_for_smooth() {
+        let tree: Element = view! { <div class="a" /> };
+        assert!(!smooth_of("", &tree, "a"));
+        assert!(smooth_of(".a { scroll-behavior: smooth; }", &tree, "a"));
+        assert!(!smooth_of(".a { scroll-behavior: auto; }", &tree, "a"));
+    }
+
+    #[test]
+    fn scroll_behavior_does_not_inherit_like_the_real_property() {
+        let tree: Element = view! {
+            <div class="outer">
+                <div class="inner" />
+            </div>
+        };
+        let css = ".outer { scroll-behavior: smooth; }";
+        assert!(smooth_of(css, &tree, "outer"));
+        assert!(
+            !smooth_of(css, &tree, "inner"),
+            "a nested scroller stays auto"
+        );
+    }
+
+    #[test]
+    fn scroll_behavior_inherit_takes_the_parents_value() {
+        let tree: Element = view! {
+            <div class="outer">
+                <div class="inner" />
+            </div>
+        };
+        let css = ".outer { scroll-behavior: smooth; } .inner { scroll-behavior: inherit; }";
+        assert!(smooth_of(css, &tree, "inner"));
+    }
+
+    #[test]
+    fn scroll_behavior_unset_and_initial_are_auto_even_under_a_smooth_parent() {
+        let tree: Element = view! {
+            <div class="outer">
+                <div class="inner" />
+            </div>
+        };
+        for keyword in ["unset", "initial"] {
+            let css = format!(
+                ".outer {{ scroll-behavior: smooth; }} .inner {{ scroll-behavior: {keyword}; }}"
+            );
+            assert!(!smooth_of(&css, &tree, "inner"), "{keyword}");
+        }
+        let css = ".a { scroll-behavior: smooth; } .a { scroll-behavior: unset; }";
+        let single: Element = view! { <div class="a" /> };
+        assert!(
+            !smooth_of(css, &single, "a"),
+            "unset after smooth on the same element"
+        );
+    }
+
+    #[test]
+    fn an_invalid_scroll_behavior_is_dropped_and_the_earlier_value_survives() {
+        let tree: Element = view! { <div class="a" /> };
+        let css = ".a { scroll-behavior: smooth; } .a { scroll-behavior: instant; }";
+        assert!(smooth_of(css, &tree, "a"));
+    }
+
+    #[test]
+    fn scroll_behavior_follows_the_normal_cascade_and_important() {
+        let tree: Element = view! { <div class="a b" /> };
+        let css = ".a { scroll-behavior: smooth !important; } .a.b { scroll-behavior: auto; }";
+        assert!(
+            smooth_of(css, &tree, "a"),
+            "!important beats higher specificity"
+        );
+        let css = ".a { scroll-behavior: smooth; } .a.b { scroll-behavior: auto; }";
+        assert!(!smooth_of(css, &tree, "a"), "the more specific rule wins");
+    }
+
+    #[test]
+    fn a_style_attribute_can_set_scroll_behavior() {
+        let tree: Element = view! { <div class="a" style="scroll-behavior: smooth" /> };
+        assert!(smooth_of("", &tree, "a"));
+    }
+
+    #[test]
+    fn an_inline_scroll_behavior_does_not_leak_to_a_nested_scroller_either() {
+        let tree: Element = view! {
+            <div class="outer" style="scroll-behavior: smooth">
+                <div class="inner" />
+            </div>
+        };
+        assert!(smooth_of("", &tree, "outer"));
+        assert!(!smooth_of("", &tree, "inner"));
+    }
+
+    #[test]
+    fn scroll_behavior_works_inside_a_media_query() {
+        let tree: Element = view! { <div class="a" /> };
+        let css = "@media (min-width: 1px) { .a { scroll-behavior: smooth; } }";
+        assert!(smooth_of(css, &tree, "a"));
     }
 
     #[test]

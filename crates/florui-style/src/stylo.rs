@@ -117,6 +117,9 @@ struct StyloTree {
     /// rather than `index_of's arbitrary `HashMap` iteration order, so an
     /// ancestor is always styled before any of its descendants.
     order: Vec<NodeId>,
+    /// Whether any `style` attribute declares `scroll-behavior`, which needs
+    /// the same user-agent reset an author sheet declaring it does.
+    uses_inline_scroll_behavior: bool,
 }
 
 impl StyloTree {
@@ -308,11 +311,17 @@ impl StyloTree {
         // for a bare multi-root Fragment, which resolves each of its own
         // roots as if it were independently the document.
         let primary_root = order[0];
+        let uses_inline_scroll_behavior = order.iter().any(|&id| {
+            arena
+                .style_attr(id)
+                .is_some_and(|css| css.to_ascii_lowercase().contains("scroll-behavior"))
+        });
         (
             Self {
                 slots,
                 index_of,
                 order,
+                uses_inline_scroll_behavior,
             },
             primary_root,
         )
@@ -936,11 +945,12 @@ pub(crate) fn shared_lock() -> &'static SharedRwLock {
 /// malformed inline declaration is dropped silently, the same as any other
 /// unsupported declaration this crate's cascade already tolerates.
 fn parse_inline_style(css: &str) -> Arc<Locked<PropertyDeclarationBlock>> {
+    let css = crate::scroll_behavior_adapter::rewrite_declarations(css);
     let url_data: style::stylesheets::UrlExtraData = url::Url::parse("about:florui")
         .expect("a fixed, valid URL literal")
         .into();
     let block = style::properties::parse_style_attribute(
-        css,
+        &css,
         &url_data,
         None,
         QuirksMode::NoQuirks,
@@ -1030,6 +1040,18 @@ fn compute_in_layout_state(
         )),
         &lock.read(),
     );
+    if tree.uses_inline_scroll_behavior || rules.iter().any(Rule::uses_scroll_behavior) {
+        stylist.append_stylesheet(
+            DocumentStyleSheet(
+                crate::default_stylesheet::scroll_behavior_reset_rule().stylesheet(
+                    viewport.height,
+                    &[],
+                    timeline.prefers_reduced_motion(),
+                ),
+            ),
+            &lock.read(),
+        );
+    }
     // `container_query_signature` is one flat, in-order slice spanning
     // every rule's own `@container` blocks — each rule here only reads the
     // sub-slice its own `container_query_blocks()` contributed. Shorter
@@ -1530,7 +1552,25 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         appearance: to_appearance(values),
         resize: to_resize(values),
         placeholder_color: to_placeholder_color(values),
+        scroll_behavior_smooth: to_scroll_behavior_smooth(values),
     }
+}
+
+/// Reads `--florui-scroll-behavior` the way [`to_appearance`] reads its
+/// property: smooth only for the exact keyword.
+fn to_scroll_behavior_smooth(values: &ComputedValues) -> bool {
+    use style::properties_and_values::registry::PropertyRegistrationData;
+    use style_traits::ToCss;
+
+    let name = Atom::from("florui-scroll-behavior");
+    let Some(value) = values
+        .custom_properties()
+        .get(PropertyRegistrationData::unregistered(), &name)
+    else {
+        return false;
+    };
+    let mut css = String::new();
+    value.to_css(&mut CssWriter::new(&mut css)).is_ok() && css.trim().eq_ignore_ascii_case("smooth")
 }
 
 /// Reads `--florui-appearance` the same way `var()` substitution already

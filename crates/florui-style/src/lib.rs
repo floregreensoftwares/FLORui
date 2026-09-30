@@ -42,6 +42,7 @@ mod interaction;
 mod reduced_motion_adapter;
 mod rounded;
 mod scope_adapter;
+mod scroll_behavior_adapter;
 mod stylesheet_parse;
 mod stylo;
 mod tree;
