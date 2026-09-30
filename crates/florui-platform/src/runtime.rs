@@ -1145,10 +1145,8 @@ impl UiRuntime {
     /// - **just closed**: restores focus to [`Self::modal_return_path`]
     ///   (taken, so a later close doesn't reuse a stale path), resolved
     ///   against the *whole* document again since the modal is gone —
-    ///   falling back to nothing focused if that original trigger was
-    ///   itself removed while the modal was open (no invented fallback,
-    ///   matching this crate's own long-standing precedent for a focus
-    ///   target that disappears).
+    ///   falling back to the document's first focusable node if that
+    ///   original trigger was itself removed while the modal was open.
     /// - **no modal, no transition**: unchanged from before this modal
     ///   support existed.
     fn resolve_focus(&mut self) {
@@ -1169,9 +1167,17 @@ impl UiRuntime {
             }
             (None, true) => {
                 self.had_modal_last_render = false;
+                let had_return = self.modal_return_path.is_some();
                 self.focused_path = self.modal_return_path.take();
                 let candidates = focus::focus_order(&self.arena);
                 self.resolve_against(&candidates);
+                // A removed trigger falls back to the start of the document.
+                if self.focused_node.is_none() && had_return {
+                    self.focused_node = candidates.first().copied();
+                    self.focused_path = self
+                        .focused_node
+                        .map(|node| FocusPath::of(&self.arena, node));
+                }
                 if self.focused_node.is_some() {
                     self.focus_visible = true;
                 }
@@ -3070,7 +3076,61 @@ mod tests {
         assert_eq!(
             runtime.focused(),
             None,
-            "no invented fallback when the original trigger no longer exists"
+            "nothing focusable is left to fall back to"
         );
+    }
+
+    #[test]
+    fn closing_a_modal_dialog_whose_trigger_was_removed_focuses_the_first_focusable() {
+        let open = Rc::new(Cell::new(false));
+        let remove_trigger = Rc::new(Cell::new(false));
+        let (open_in, remove_in) = (Rc::clone(&open), Rc::clone(&remove_trigger));
+        let mut runtime = UiRuntime::with_rules(
+            Vec::new(),
+            move || {
+                let dialog = if open_in.get() {
+                    view! {
+                        <Dialog label={"Test dialog".to_string()} onclose={Handler::new(|| {})}>
+                            <button id="inside">{"Inside"}</button>
+                        </Dialog>
+                    }
+                } else {
+                    view! { <div /> }
+                };
+                let trigger = if remove_in.get() {
+                    view! { <div /> }
+                } else {
+                    view! { <button id="trigger">{"Trigger"}</button> }
+                };
+                view! {
+                    <div>
+                        <button id="first">{"First"}</button>
+                        {trigger}
+                        {dialog}
+                    </div>
+                }
+            },
+            viewport(),
+        );
+        let trigger = node_id(&runtime, "trigger");
+        runtime.set_focused(Some(trigger), true);
+        open.set(true);
+        runtime.update(viewport());
+        remove_trigger.set(true);
+        open.set(false);
+        runtime.update(viewport());
+
+        assert_eq!(runtime.focused(), Some(node_id(&runtime, "first")));
+    }
+
+    #[test]
+    fn closing_a_modal_opened_with_nothing_focused_leaves_nothing_focused() {
+        let open = Rc::new(Cell::new(false));
+        let mut runtime = dialog_runtime(Rc::clone(&open), Rc::new(Cell::new(false)));
+        open.set(true);
+        runtime.update(viewport());
+        open.set(false);
+        runtime.update(viewport());
+        assert_eq!(runtime.focused(), None);
     }
 }
