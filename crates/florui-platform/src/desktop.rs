@@ -1019,6 +1019,31 @@ enum Presenter {
         surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
         _context: softbuffer::Context<Arc<Window>>,
     },
+    /// Between a lost presenter being dropped and its replacement; draws
+    /// nothing.
+    Detached,
+}
+
+/// Builds the presentation path for `window`: hardware or software GPU, else
+/// `softbuffer`. `software_only` skips the hardware adapters.
+fn new_presenter(
+    window: &Arc<Window>,
+    software_only: bool,
+) -> Result<Presenter, softbuffer::SoftBufferError> {
+    let gpu = if software_only {
+        GpuPresenter::try_new_software(window.clone())
+    } else {
+        GpuPresenter::try_new(window.clone())
+    };
+    if let Some(gpu) = gpu {
+        return Ok(Presenter::Gpu(Box::new(gpu)));
+    }
+    let context = softbuffer::Context::new(window.clone())?;
+    let surface = softbuffer::Surface::new(&context, window.clone())?;
+    Ok(Presenter::Cpu {
+        surface,
+        _context: context,
+    })
 }
 
 /// One real, live window: its actual `winit::window::Window`, real
@@ -1046,6 +1071,9 @@ struct WindowState {
     /// itself, without a component needing to wire that up by hand.
     controls: Rc<WindowControls>,
     presenter: Presenter,
+    /// How many times this window's GPU presenter was lost; see
+    /// [`Self::recover_presenter`].
+    gpu_losses: u8,
     /// When a `transition`/`@keyframes` animation still needs sampling —
     /// `None` once nothing is animating. Read and rescheduled only in
     /// [`ApplicationHandler::about_to_wait`], which runs after every loop
@@ -1471,8 +1499,11 @@ impl WindowState {
                 // texture format exactly, so the painted bytes go straight
                 // across with no channel swizzle.
                 presenter.resize(width.get(), height.get());
-                presenter.present(canvas.data());
+                if presenter.present(canvas.data()) == crate::gpu::PresentOutcome::Lost {
+                    self.recover_presenter();
+                }
             }
+            Presenter::Detached => {}
             Presenter::Cpu { surface, .. } => {
                 if let Err(error) = surface.resize(width, height) {
                     eprintln!("florui-platform: could not resize the render surface: {error}");
@@ -1500,6 +1531,32 @@ impl WindowState {
                 }
             }
         }
+    }
+
+    /// Replaces a GPU presenter whose device or surface was lost. The first
+    /// loss tries the hardware again; a second one moves to `wgpu`'s software
+    /// adapter for good, so a driver that keeps failing cannot loop. Either
+    /// way the frame is redrawn at once on the new presenter.
+    fn recover_presenter(&mut self) {
+        self.gpu_losses += 1;
+        eprintln!(
+            "florui-platform: the GPU device was lost; {}",
+            if self.gpu_losses == 1 {
+                "rebuilding the presenter"
+            } else {
+                "falling back to software rendering"
+            }
+        );
+        // The old presenter must release the window before a new one takes it.
+        self.presenter = Presenter::Detached;
+        match new_presenter(&self.window, self.gpu_losses > 1) {
+            Ok(presenter) => self.presenter = presenter,
+            Err(error) => {
+                eprintln!("florui-platform: could not recover the render surface: {error}");
+                return;
+            }
+        }
+        self.window.request_redraw();
     }
 
     /// The real handler for `WindowEvent::RedrawRequested`: if the reason
@@ -3337,26 +3394,9 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             // GPU-preferred, `softbuffer` fallback — see `crate::gpu`'s own
             // doc for the two-tier (three-way, counting this CPU path)
             // capability contract this implements.
-            let presenter = match GpuPresenter::try_new(window.clone()) {
-                Some(gpu_presenter) => Presenter::Gpu(Box::new(gpu_presenter)),
-                None => {
-                    let context = match softbuffer::Context::new(window.clone()) {
-                        Ok(context) => context,
-                        Err(error) => {
-                            return self.fail(event_loop, RunError::SurfaceCreation(error));
-                        }
-                    };
-                    let surface = match softbuffer::Surface::new(&context, window.clone()) {
-                        Ok(surface) => surface,
-                        Err(error) => {
-                            return self.fail(event_loop, RunError::SurfaceCreation(error));
-                        }
-                    };
-                    Presenter::Cpu {
-                        surface,
-                        _context: context,
-                    }
-                }
+            let presenter = match new_presenter(&window, false) {
+                Ok(presenter) => presenter,
+                Err(error) => return self.fail(event_loop, RunError::SurfaceCreation(error)),
             };
 
             let viewport = layout_viewport(dpi::viewport_scale(
@@ -3461,6 +3501,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 window,
                 controls,
                 presenter,
+                gpu_losses: 0,
                 next_animation_wake: None,
                 spinner_hold: None,
                 scroll_hold: None,
