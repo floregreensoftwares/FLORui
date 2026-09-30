@@ -48,7 +48,10 @@ fn app() -> Element {
                 {"Open dialog"}
             </button>
             {open.get().then(move || view! {
-                <Dialog onclose={Handler::new(move || close_from_escape.set(false))}>
+                <Dialog
+                    label={"Example dialog".to_string()}
+                    onclose={Handler::new(move || close_from_escape.set(false))}
+                >
                     <div class="backdrop" onclick={move || close_from_backdrop.set(false)}>
                         <div class="dialog">
                             <p class="dialog-title">{"Real modal content"}</p>

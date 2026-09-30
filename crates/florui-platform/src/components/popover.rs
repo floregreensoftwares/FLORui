@@ -163,6 +163,30 @@ pub(crate) fn trigger_for(arena: &Arena, popover_root: NodeId) -> Option<NodeId>
     arena.find(|arena, id| arena.id_attr(id) == Some(trigger_id))
 }
 
+/// Each popover trigger's own control (its first focusable descendant) with
+/// whether its popover is open, for the accessibility `expanded` state.
+pub(crate) fn trigger_controls(arena: &Arena) -> Vec<(NodeId, bool)> {
+    let open: Vec<NodeId> = popover_roots(arena)
+        .into_iter()
+        .filter_map(|root| trigger_for(arena, root))
+        .collect();
+    arena
+        .find_all(|arena, id| {
+            arena
+                .classes(id)
+                .iter()
+                .any(|class| class == POPOVER_TRIGGER_CLASS)
+        })
+        .into_iter()
+        .filter_map(|wrapper| {
+            let control = crate::focus::focusable_within(arena, wrapper)
+                .into_iter()
+                .next()?;
+            Some((control, open.contains(&wrapper)))
+        })
+        .collect()
+}
+
 /// Whether `node` is `root` itself or one of its descendants — no such
 /// primitive exists on `Arena`, so this walks up via `parent` instead of
 /// a downward DFS, since one membership check only needs one path.
