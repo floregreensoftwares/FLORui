@@ -771,6 +771,22 @@ impl UiRuntime {
         florui_layout::hit_test(&self.arena, &scrolled, &self.styles, x, y)
     }
 
+    /// [`florui_layout::absolute_position`] where `node` is drawn: shifted
+    /// by every scrolled ancestor's offset, for comparing against a pointer.
+    pub(crate) fn drawn_position(&self, node: NodeId) -> (f32, f32) {
+        let (mut x, mut y) = florui_layout::absolute_position(&self.arena, &self.layouts, node);
+        let mut current = self.arena.parent(node);
+        while let Some(ancestor) = current {
+            if let Some(id) = self.arena.id_attr(ancestor) {
+                let (offset_x, offset_y) = self.scroll_registry.current_offset(id);
+                x -= offset_x;
+                y -= offset_y;
+            }
+            current = self.arena.parent(ancestor);
+        }
+        (x, y)
+    }
+
     /// The currently `:hover`ed node, against the last computed geometry —
     /// `None` if the cursor isn't over anything. A caller dispatching
     /// `mouseenter`/`mouseleave` around [`Self::set_hovered`] needs this
@@ -3353,6 +3369,26 @@ mod tests {
             hit_id(&runtime, 5.0, 60.0),
             None,
             "below the 50px box nothing is hit, even though scrolled content reaches there"
+        );
+    }
+
+    #[test]
+    fn drawn_position_subtracts_every_scrolled_ancestors_offset() {
+        let runtime = rows_runtime();
+        let row_b = {
+            let (arena, ..) = runtime.geometry();
+            arena.find(|a, id| a.id_attr(id) == Some("b")).unwrap()
+        };
+        assert_eq!(runtime.drawn_position(row_b), (0.0, 40.0));
+
+        runtime.scroll_registry().scroll_to("box", 0.0, 45.0);
+
+        assert_eq!(runtime.drawn_position(row_b), (0.0, -5.0));
+        let (arena, _, layouts) = runtime.geometry();
+        assert_eq!(
+            florui_layout::absolute_position(arena, layouts, row_b),
+            (0.0, 40.0),
+            "the layout itself stays unscrolled"
         );
     }
 }
