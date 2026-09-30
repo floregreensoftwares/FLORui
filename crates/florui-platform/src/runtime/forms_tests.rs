@@ -999,3 +999,250 @@ fn a_readonly_field_selects_but_never_edits() {
         );
     }
 }
+
+fn bubble_runtime(width: &'static str) -> UiRuntime {
+    runtime("", move || {
+        view! {
+            <div>
+                <form id="f">
+                    <input id="name" type="text" name="name" required="true"
+                        style={format!("width: {width}px; height: 30px;")} />
+                    <button id="go">{"Go"}</button>
+                </form>
+            </div>
+        }
+    })
+}
+
+fn bubble_nodes(rt: &UiRuntime) -> Option<(NodeId, NodeId)> {
+    let (arena, ..) = rt.geometry();
+    let root = arena.find(|a, id| a.id_attr(id) == Some("florui-validation-bubble"))?;
+    let arrow = arena.children(root).iter().copied().find(|&c| {
+        arena
+            .classes(c)
+            .iter()
+            .any(|k| k == crate::BUBBLE_ARROW_CLASS)
+    })?;
+    Some((root, arrow))
+}
+
+fn rect(rt: &UiRuntime, node: NodeId) -> (f32, f32, f32, f32) {
+    let (arena, _, layouts) = rt.geometry();
+    let (x, y) = florui_layout::absolute_position(arena, layouts, node);
+    (x, y, layouts[&node].width, layouts[&node].height)
+}
+
+#[test]
+fn a_blocked_submit_shows_the_first_invalid_controls_message_and_nothing_else_does() {
+    let mut rt = bubble_runtime("220");
+    assert!(bubble_nodes(&rt).is_none(), "no bubble before a submit");
+    let (form, go) = (node(&rt, "f"), node(&rt, "go"));
+    rt.submit_form(form, Some(go), false);
+    rt.update(viewport());
+    let (root, _) = bubble_nodes(&rt).expect("the bubble is in the tree");
+    let (arena, ..) = rt.geometry();
+    assert!(
+        arena
+            .text_content(arena.children(root)[1])
+            .contains("Please fill out this field.")
+    );
+}
+
+/// Measured in Edge: the box is centred on the field and starts 8px below
+/// it; the arrow sits 17px in from the box's left edge, but never less than
+/// 7px in from the field's own left edge.
+#[test]
+fn the_bubble_sits_eight_pixels_below_its_field_centred_with_the_arrow_rule() {
+    let mut rt = bubble_runtime("400");
+    let (form, go, field) = (node(&rt, "f"), node(&rt, "go"), node(&rt, "name"));
+    rt.submit_form(form, Some(go), false);
+    rt.update(viewport());
+    let (root, arrow) = bubble_nodes(&rt).unwrap();
+    let (fx, fy, fw, fh) = rect(&rt, field);
+    let (bx, by, bw, _) = rect(&rt, root);
+    assert!((by - (fy + fh) - 8.0).abs() < 0.01, "8px below the field");
+    assert!(
+        ((bx + bw / 2.0) - (fx + fw / 2.0)).abs() < 0.5,
+        "centred on the field"
+    );
+    let (ax, _, aw, _) = rect(&rt, arrow);
+    let tip_x = ax + aw / 2.0;
+    assert!(
+        (tip_x - (bx + 17.0)).abs() < 0.5,
+        "17px in from the box's left edge"
+    );
+}
+
+#[test]
+fn a_narrow_field_keeps_the_arrow_over_itself_not_over_the_clamped_box() {
+    let mut rt = bubble_runtime("60");
+    let (form, go, field) = (node(&rt, "f"), node(&rt, "go"), node(&rt, "name"));
+    rt.submit_form(form, Some(go), false);
+    rt.update(viewport());
+    let (root, arrow) = bubble_nodes(&rt).unwrap();
+    let (fx, ..) = rect(&rt, field);
+    let (bx, ..) = rect(&rt, root);
+    let (ax, _, aw, _) = rect(&rt, arrow);
+    assert!(bx >= 0.0, "kept inside the window");
+    assert!(
+        ax + aw / 2.0 >= fx + 7.0 - 0.5,
+        "the arrow is at least 7px in from the field's left"
+    );
+}
+
+#[test]
+fn typing_moving_focus_or_removing_the_field_dismisses_the_bubble_but_a_caret_move_does_not() {
+    let mut rt = bubble_runtime("220");
+    let show = |rt: &mut UiRuntime| {
+        let (form, go) = (node(rt, "f"), node(rt, "go"));
+        rt.submit_form(form, Some(go), false);
+        rt.update(viewport());
+        assert!(bubble_nodes(rt).is_some());
+    };
+    let field = node(&rt, "name");
+    show(&mut rt);
+    let registry = rt.text_input_registry();
+    let field_id = node_id_string(&rt, "name");
+    let (_, _, _, font) = rt.geometry_and_font_mut();
+    registry.apply(&field_id, florui_text::editing::TextEditOp::MoveLeft, font);
+    rt.update(viewport());
+    assert!(bubble_nodes(&rt).is_some(), "a caret move keeps it");
+
+    rt.commit_value(field, "x".to_string());
+    rt.update(viewport());
+    assert!(bubble_nodes(&rt).is_none(), "an edit dismisses it");
+
+    rt.commit_value(field, String::new());
+    rt.update(viewport());
+    show(&mut rt);
+    let go = node(&rt, "go");
+    rt.set_focused(Some(go), true);
+    rt.update(viewport());
+    assert!(
+        bubble_nodes(&rt).is_none(),
+        "focus moving away dismisses it"
+    );
+}
+
+fn node_id_string(rt: &UiRuntime, id: &str) -> String {
+    let (arena, ..) = rt.geometry();
+    let node = arena.find(|a, n| a.id_attr(n) == Some(id)).unwrap();
+    arena.id_attr(node).unwrap().to_string()
+}
+
+fn message_of(rt: &UiRuntime, id: &str) -> Option<String> {
+    let field = node(rt, id);
+    rt.with_form_context(|ctx| crate::validation_message::validation_message(ctx, field))
+}
+
+/// Every string measured in Edge (`validationMessage`).
+#[test]
+fn validation_messages_match_what_edge_reported() {
+    let rt = runtime("", || {
+        view! {
+            <form>
+                <input id="req" type="text" required="true" />
+                <input id="chk" type="checkbox" required="true" />
+                <input id="rad" type="radio" name="g" required="true" />
+                <select id="sel" required="true"><option value="">{"--"}</option><option>{"x"}</option></select>
+                <textarea id="ta" required="true"></textarea>
+                <input id="mail" type="email" required="true" />
+                <input id="pat" type="text" pattern="[a-z]+" value="A1" />
+                <input id="custom" type="text" required="true" custom_validity="Taken!" />
+                <input id="ok" type="text" value="fine" />
+                <input id="n-under" type="number" min="1" step="2" value="0"
+                    oninput={move |_v: String| {}} />
+                <input id="n-over" type="number" min="1" max="10" step="3" value="12"
+                    oninput={move |_v: String| {}} />
+                <input id="n-step" type="number" min="1" max="10" step="3" value="5"
+                    oninput={move |_v: String| {}} />
+                <input id="n-half" type="number" min="0.5" step="1" value="7"
+                    oninput={move |_v: String| {}} />
+                <input id="n-edge" type="number" min="1" max="5" step="2" value="6"
+                    oninput={move |_v: String| {}} />
+            </form>
+        }
+    });
+    let expected = [
+        ("req", "Please fill out this field."),
+        ("chk", "Please check this box if you want to proceed."),
+        ("rad", "Please select one of these options."),
+        ("sel", "Please select an item in the list."),
+        ("ta", "Please fill out this field."),
+        ("mail", "Please fill out this field."),
+        ("pat", "Please match the requested format."),
+        ("custom", "Taken!"),
+        ("n-under", "Value must be greater than or equal to 1."),
+        ("n-over", "Value must be less than or equal to 10."),
+        (
+            "n-step",
+            "Please enter a valid value. The two nearest valid values are 4 and 7.",
+        ),
+        (
+            "n-half",
+            "Please enter a valid value. The two nearest valid values are 6.5 and 7.5.",
+        ),
+        ("n-edge", "Value must be less than or equal to 5."),
+    ];
+    for (id, message) in expected {
+        assert_eq!(message_of(&rt, id).as_deref(), Some(message), "{id}");
+    }
+    assert_eq!(message_of(&rt, "ok"), None, "a valid field has no message");
+}
+
+#[test]
+fn length_messages_singularize_and_the_pattern_is_reported_before_minlength() {
+    let rt = runtime("", || {
+        view! {
+            <form>
+                <input id="one" type="text" minlength="2" value="a" />
+                <input id="both" type="text" minlength="5" pattern="[a-z]+" value="AB" />
+                <textarea id="area" minlength="5" value="abc"></textarea>
+            </form>
+        }
+    });
+    // Length limits only apply once the user has edited the value.
+    for id in ["one", "both", "area"] {
+        let field = node(&rt, id);
+        rt.commit_value(field, String::new());
+    }
+    assert_eq!(
+        message_of(&rt, "one").as_deref(),
+        Some(
+            "Please lengthen this text to 2 characters or more (you are currently using 1 character)."
+        )
+    );
+    assert_eq!(
+        message_of(&rt, "both").as_deref(),
+        Some("Please match the requested format.")
+    );
+    assert_eq!(
+        message_of(&rt, "area").as_deref(),
+        Some(
+            "Please lengthen this text to 5 characters or more (you are currently using 3 characters)."
+        )
+    );
+}
+
+#[test]
+fn a_number_typed_into_bad_input_reports_a_number_is_needed_even_when_required() {
+    let mut rt = runtime("", || {
+        view! {
+            <form>
+                <input id="n" type="number" required="true" value="" oninput={move |_v: String| {}} />
+            </form>
+        }
+    });
+    let key = node_id_string(&rt, "n");
+    let registry = rt.text_input_registry();
+    let (_, _, _, font) = rt.geometry_and_font_mut();
+    registry.apply(
+        &key,
+        florui_text::editing::TextEditOp::InsertOrReplace("e".to_string()),
+        font,
+    );
+    assert_eq!(
+        message_of(&rt, "n").as_deref(),
+        Some("Please enter a number.")
+    );
+}

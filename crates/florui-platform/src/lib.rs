@@ -22,6 +22,8 @@ mod scroll;
 mod select;
 mod size_observer;
 mod text_input;
+mod validation_bubble;
+mod validation_message;
 mod viewport;
 mod virtual_list;
 mod visited_links;
@@ -43,6 +45,10 @@ pub use runtime::UiRuntime;
 pub use scroll::{ScrollHandle, ScrollRegistry, use_scroll_offset};
 pub use select::SELECT_OPTIONS_CLASS;
 pub use size_observer::{SizeObserverRegistry, use_committed_size};
+pub use validation_bubble::{
+    BUBBLE_ARROW_CLASS, BUBBLE_CLASS, BUBBLE_ICON_CLASS, BUBBLE_ICON_DOT_CLASS,
+    BUBBLE_ICON_STEM_CLASS, BUBBLE_TEXT_CLASS,
+};
 pub use viewport::{ViewportSize, use_viewport_size};
 pub use virtual_list::{ItemHeight, Overscan, VirtualListHandle, use_virtual_list};
 pub use visited_links::VisitedLinks;

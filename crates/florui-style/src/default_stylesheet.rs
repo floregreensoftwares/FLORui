@@ -171,6 +171,78 @@ const CSS: &str = "
         padding-left: 2px;
     }
 
+    .florui-validation-bubble {
+        position: absolute;
+        top: 0px;
+        left: 0px;
+        display: flex;
+        flex-direction: row;
+        align-items: flex-start;
+        padding-top: 8px;
+        padding-right: 9px;
+        padding-bottom: 11px;
+        padding-left: 7px;
+        background-color: #ffffff;
+        border: 1px solid #838383;
+        border-radius: 3px;
+        box-shadow: 2px 2px 6px rgba(0, 0, 0, 0.3);
+        color: #000000;
+        font-size: 14px;
+    }
+
+    .florui-validation-bubble-icon {
+        position: relative;
+        width: 23px;
+        height: 23px;
+        margin-right: 9px;
+        background-color: #ed5e01;
+        border-radius: 2px;
+    }
+
+    .florui-validation-bubble-stem {
+        position: absolute;
+        left: 10px;
+        top: 5px;
+        width: 3px;
+        height: 7px;
+        background-color: #ffffff;
+    }
+
+    .florui-validation-bubble-dot {
+        position: absolute;
+        left: 10px;
+        top: 14px;
+        width: 3px;
+        height: 4px;
+        background-color: #ffffff;
+    }
+
+    .florui-validation-bubble-text {
+        max-width: 317px;
+        margin-top: 2px;
+        margin-bottom: 2px;
+    }
+
+    .florui-validation-bubble-arrow {
+        position: absolute;
+        width: 9px;
+        height: 9px;
+        background-color: #ffffff;
+        border-left: 1px solid #838383;
+        border-top: 1px solid #838383;
+        transform: rotate(45deg);
+    }
+
+    .florui-validation-bubble-arrow-below {
+        position: absolute;
+        width: 9px;
+        height: 9px;
+        background-color: #ffffff;
+        border-right: 1px solid #838383;
+        border-bottom: 1px solid #838383;
+        transform: rotate(45deg);
+    }
+
     textarea {
         display: inline-block;
         border: 1px solid #767676;

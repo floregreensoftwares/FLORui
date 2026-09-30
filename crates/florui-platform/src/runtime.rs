@@ -29,6 +29,12 @@ use crate::text_input::TextInputRegistry;
 use crate::viewport::ViewportSize;
 use crate::visited_links::VisitedLinks;
 
+/// A validation message and the control it hangs from.
+pub(crate) struct ValidationBubble {
+    pub field: FocusPath,
+    pub message: String,
+}
+
 pub struct UiRuntime {
     scope: ComponentScope,
     dirty: DirtyFlag,
@@ -108,6 +114,10 @@ pub struct UiRuntime {
     /// Controls whose `:user-valid`/`:user-invalid` may match: edited
     /// and then blurred, or their form was submitted.
     user_validated: HashSet<FocusPath>,
+    /// The validation message showing under a control, if any — see
+    /// [`crate::validation_bubble`]. Interior-mutable because an edit to
+    /// its control ([`Self::commit_value`]) dismisses it through `&self`.
+    validation_bubble: RefCell<Option<ValidationBubble>>,
     /// Carries real `transition`/`@keyframes` state across [`Self::update`]
     /// calls, sampled against a real wall clock captured once at
     /// [`Self::with_rules_and_context`] — see
@@ -278,6 +288,7 @@ impl UiRuntime {
             multiselect_anchor: None,
             edited: RefCell::new(HashSet::new()),
             user_validated: HashSet::new(),
+            validation_bubble: RefCell::new(None),
             animation_timeline,
             animation_epoch: std::time::Instant::now(),
             font: florui_text::Font::load_embedded(),
@@ -431,7 +442,28 @@ impl UiRuntime {
         self.executor.run_until_stalled();
         let mut tree = tree;
         self.option_summaries = crate::select::normalize(&mut tree);
+        if let Some(bubble) = self.validation_bubble.borrow().as_ref() {
+            let natural = self
+                .font
+                .measure(
+                    florui_text::FontFamily::SansSerif,
+                    &bubble.message,
+                    crate::validation_bubble::TEXT_FONT_SIZE,
+                    400.0,
+                )
+                .width;
+            let wrap_width = self.validation_bubble_field().and_then(|field| {
+                let (left, _) = florui_layout::absolute_position(&self.arena, &self.layouts, field);
+                let limit = crate::validation_bubble::max_text_width(left, resolved_viewport.width);
+                (natural > limit).then_some(limit)
+            });
+            tree = Element::Fragment(vec![
+                tree,
+                crate::validation_bubble::element(&bubble.message, wrap_width),
+            ]);
+        }
         self.arena = Arena::build(&tree);
+        self.drop_validation_bubble_if_orphaned();
         self.image_registry
             .sync(&self.arena, &self.asset_cache, &*self.executor);
         self.icon_registry.sync(&self.arena, &*self.executor);
@@ -461,6 +493,7 @@ impl UiRuntime {
             self.fix_image_intrinsic_sizes(layouts, content_extents, viewport);
         self.layouts = layouts;
         self.position_open_selects(resolved_viewport.width, resolved_viewport.height);
+        self.position_validation_bubble(resolved_viewport.width, resolved_viewport.height);
         // After layout, not before: a committed-size/-position observer
         // must see this render's own real geometry, not the previous one's.
         self.size_observers.notify(&self.arena, &self.layouts);
@@ -746,6 +779,9 @@ impl UiRuntime {
         let focus_visible = via_keyboard && node.is_some();
         if node == self.focused_node && focus_visible == self.focus_visible {
             return false;
+        }
+        if node != self.focused_node {
+            self.dismiss_validation_bubble();
         }
         if node != self.focused_node
             && let Some(previous) = self.focused_path.take()
@@ -1306,6 +1342,7 @@ impl UiRuntime {
                 .borrow_mut()
                 .insert(FocusPath::of(&self.arena, node));
         }
+        self.dismiss_validation_bubble_of(node);
         if let Some(binding) = self.arena.value_binding(node, "value") {
             binding.request_update(value);
         } else if let Some(handler) = self.arena.value_handler(node, "value") {

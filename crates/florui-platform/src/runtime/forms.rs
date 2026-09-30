@@ -2,9 +2,10 @@
 
 use florui_style::{FocusPath, FormState, NodeId};
 
-use super::UiRuntime;
+use super::{UiRuntime, ValidationBubble};
 use crate::form;
 use crate::form_control::{ButtonKind, FormContext, button_kind};
+use crate::validation_message::validation_message;
 
 /// What Enter in a text field does to its form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +67,9 @@ impl UiRuntime {
                 if !self.set_focused(target, via_keyboard) {
                     self.rebuild_interaction();
                 }
+                if let Some(target) = target {
+                    self.show_validation_bubble(target);
+                }
                 return SubmitOutcome::Blocked;
             }
         }
@@ -115,6 +119,53 @@ impl UiRuntime {
         }
         let current = arena.value_attr(node).unwrap_or("");
         crate::form_control::stepped_number(arena, node, current, direction)
+    }
+
+    /// Shows the validation message of `node` in a bubble under it.
+    fn show_validation_bubble(&mut self, node: NodeId) {
+        let Some(message) = self.with_form_context(|ctx| validation_message(ctx, node)) else {
+            return;
+        };
+        *self.validation_bubble.borrow_mut() = Some(ValidationBubble {
+            field: FocusPath::of(&self.arena, node),
+            message,
+        });
+    }
+
+    /// Hides the validation bubble; `true` if one was showing, so the caller
+    /// knows a redraw is due.
+    pub(crate) fn dismiss_validation_bubble(&self) -> bool {
+        self.validation_bubble.borrow_mut().take().is_some()
+    }
+
+    /// Hides the bubble if it hangs from `node`.
+    pub(super) fn dismiss_validation_bubble_of(&self, node: NodeId) {
+        let path = FocusPath::of(&self.arena, node);
+        let mut bubble = self.validation_bubble.borrow_mut();
+        if bubble.as_ref().is_some_and(|shown| shown.field == path) {
+            *bubble = None;
+        }
+    }
+
+    /// The control the bubble hangs from, in the current arena, if any.
+    pub(crate) fn validation_bubble_field(&self) -> Option<NodeId> {
+        let bubble = self.validation_bubble.borrow();
+        let field = &bubble.as_ref()?.field;
+        let candidates = self.arena.find_all(|_, _| true);
+        field.resolve(&self.arena, &candidates)
+    }
+
+    /// A control that left the tree takes its bubble with it.
+    pub(super) fn drop_validation_bubble_if_orphaned(&mut self) {
+        if self.validation_bubble.borrow().is_some() && self.validation_bubble_field().is_none() {
+            *self.validation_bubble.borrow_mut() = None;
+        }
+    }
+
+    pub(super) fn position_validation_bubble(&mut self, width: f32, height: f32) {
+        if let Some(field) = self.validation_bubble_field() {
+            crate::validation_bubble::place(&self.arena, &mut self.layouts, field, (width, height));
+        }
     }
 
     /// The window lost focus: like a browser, the focused control blurs, so
