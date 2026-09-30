@@ -125,8 +125,13 @@ fn main() {
     )
     .expect("window B's stylesheet should parse");
 
-    run_windows(vec![spec_a, spec_b])
-        .expect("event loop should not fail on a real desktop session");
+    let specs = vec![spec_a, spec_b];
+    if std::env::args().any(|arg| arg == "--inspect") {
+        florui_devtools::live::run_windows(specs).map_err(|error| error.to_string())
+    } else {
+        run_windows(specs).map_err(|error| error.to_string())
+    }
+    .expect("event loop should not fail on a real desktop session");
 }
 
 /// Also demonstrates two-window independence: closing this window (the
