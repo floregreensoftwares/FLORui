@@ -28,6 +28,7 @@ florui-text = { path = "../../crates/florui-text" }
 florui-layout = { path = "../../crates/florui-layout" }
 florui-paint = { path = "../../crates/florui-paint" }
 florui-platform = { path = "../../crates/florui-platform" }
+florui-test = { path = "../../crates/florui-test" }
 florui-routing = { path = "../../crates/florui-routing" }
 florui-devtools = { path = "../../crates/florui-devtools" }
 florui-config = { path = "../../crates/florui-config" }

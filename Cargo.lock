@@ -1801,6 +1801,7 @@ dependencies = [
  "florui-reactive",
  "florui-routing",
  "florui-style",
+ "florui-test",
  "florui-text",
  "notify",
  "softbuffer",
