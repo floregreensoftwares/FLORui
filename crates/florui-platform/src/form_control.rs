@@ -5,6 +5,7 @@
 //! editing, another `<input type>`) is one entry in [`CONTROLS`].
 
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 use florui_style::{Arena, FocusPath, NodeId};
 
@@ -29,6 +30,7 @@ pub(crate) struct Validity {
     pub too_short: bool,
     pub too_long: bool,
     pub pattern_mismatch: bool,
+    pub type_mismatch: bool,
     pub custom_error: bool,
 }
 
@@ -107,6 +109,15 @@ pub(crate) static CONTROLS: &[ControlSpec] = &[
         text_field: false,
         entries: range_entries,
         constraints: unconstrained,
+    },
+    ControlSpec {
+        tag: "input",
+        input_type: Some("email"),
+        submittable: true,
+        validatable: true,
+        text_field: true,
+        entries: email_entries,
+        constraints: email_constraints,
     },
     ControlSpec {
         tag: "input",
@@ -232,6 +243,7 @@ fn text_constraints(ctx: &FormContext, node: NodeId) -> Validity {
             && arena
                 .attr(node, "pattern")
                 .is_some_and(|pattern| !matches_pattern(pattern, value)),
+        type_mismatch: false,
         custom_error: false,
     }
 }
@@ -323,6 +335,82 @@ fn select_constraints(ctx: &FormContext, node: NodeId) -> Validity {
     }
 }
 
+/// How a text field turns what the user typed into its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ValueKind {
+    Plain,
+    Email { multiple: bool },
+}
+
+pub(crate) fn value_kind(arena: &Arena, node: NodeId) -> ValueKind {
+    match (arena.tag(node), arena.input_type(node)) {
+        ("input", Some("email")) => ValueKind::Email {
+            multiple: arena.attr_flag(node, "multiple"),
+        },
+        _ => ValueKind::Plain,
+    }
+}
+
+/// The value a field holds for `raw` typed text: an email drops line breaks
+/// and surrounding whitespace, and with `multiple` each comma-separated
+/// address is trimmed (measured in Edge).
+pub(crate) fn sanitize_value(kind: ValueKind, raw: &str) -> String {
+    match kind {
+        ValueKind::Plain => raw.to_string(),
+        ValueKind::Email { multiple } => {
+            let flat: String = raw.chars().filter(|c| !matches!(c, '\r' | '\n')).collect();
+            if multiple {
+                flat.split(',')
+                    .map(|part| part.trim_matches(|c: char| c.is_ascii_whitespace()))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            } else {
+                flat.trim_matches(|c: char| c.is_ascii_whitespace())
+                    .to_string()
+            }
+        }
+    }
+}
+
+/// The address grammar HTML defines for `type=email`.
+static EMAIL_ADDRESS: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        r"^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$",
+    )
+    .expect("the email address pattern is a constant, valid regex")
+});
+
+/// Whether a sanitized email value is well formed; an empty value is never
+/// a mismatch (that is `required`'s job).
+pub(crate) fn is_valid_email(value: &str, multiple: bool) -> bool {
+    if value.is_empty() {
+        return true;
+    }
+    if multiple {
+        value.split(',').all(|part| EMAIL_ADDRESS.is_match(part))
+    } else {
+        EMAIL_ADDRESS.is_match(value)
+    }
+}
+
+fn email_value(ctx: &FormContext, node: NodeId) -> String {
+    sanitize_value(value_kind(ctx.arena, node), text_value(ctx, node))
+}
+
+fn email_entries(ctx: &FormContext, node: NodeId) -> Vec<String> {
+    vec![email_value(ctx, node)]
+}
+
+fn email_constraints(ctx: &FormContext, node: NodeId) -> Validity {
+    let value = email_value(ctx, node);
+    let multiple = ctx.arena.attr_flag(node, "multiple");
+    Validity {
+        value_missing: is_required(ctx.arena, node) && value.is_empty(),
+        type_mismatch: !is_valid_email(&value, multiple),
+        ..text_constraints(ctx, node)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use florui_primitives::INITIAL_INPUT_TYPES;
@@ -342,6 +430,50 @@ mod tests {
         for tag in ["button", "select", "textarea"] {
             assert!(CONTROLS.iter().any(|spec| spec.tag == tag), "`{tag}`");
         }
+    }
+
+    /// Every row measured in Edge (`validity.typeMismatch` on `type=email`).
+    #[test]
+    fn email_validity_matches_what_edge_measured() {
+        let single = |raw: &str| {
+            is_valid_email(
+                &sanitize_value(ValueKind::Email { multiple: false }, raw),
+                false,
+            )
+        };
+        for ok in ["", "a@b", "a@b.c", " a@b.c "] {
+            assert!(single(ok), "{ok:?} should be valid");
+        }
+        for bad in [
+            "a",
+            "a@",
+            "@b.c",
+            "a b@c.d",
+            "a@b..c",
+            "a@-b.c",
+            "a@b.c,d@e.f",
+            "\u{fc}n\u{ef}@x.de",
+            "a@b.c.",
+        ] {
+            assert!(!single(bad), "{bad:?} should be a type mismatch");
+        }
+        let multiple = |raw: &str| {
+            is_valid_email(
+                &sanitize_value(ValueKind::Email { multiple: true }, raw),
+                true,
+            )
+        };
+        assert!(multiple("a@b.c,d@e.f") && multiple("a@b.c, d@e.f"));
+        assert!(!multiple("a@b.c,x") && !multiple("a@b.c,"));
+    }
+
+    #[test]
+    fn email_sanitizing_trims_and_drops_line_breaks() {
+        let one = ValueKind::Email { multiple: false };
+        let many = ValueKind::Email { multiple: true };
+        assert_eq!(sanitize_value(one, "  a@b.c \n"), "a@b.c");
+        assert_eq!(sanitize_value(many, "a@b.c,  d@e.f "), "a@b.c,d@e.f");
+        assert_eq!(sanitize_value(ValueKind::Plain, "  keep  "), "  keep  ");
     }
 
     #[test]

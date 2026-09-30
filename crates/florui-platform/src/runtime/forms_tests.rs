@@ -581,3 +581,48 @@ fn a_hidden_input_is_submitted_but_never_focusable_or_validated() {
     let state = rt.form_state_of(node(&rt, "token")).unwrap();
     assert!(!state.valid && !state.invalid, "not a validation candidate");
 }
+
+#[test]
+fn an_email_field_submits_its_trimmed_value_and_a_type_mismatch_blocks_submission() {
+    let (log, on_submit) = submitted();
+    let mut rt = runtime("", move || {
+        let on_submit = on_submit.clone();
+        view! {
+            <form id="f" onsubmit={move |data: FormData| on_submit(data)}>
+                <input id="mail" type="email" name="mail" value="  ada@example.com " />
+            </form>
+        }
+    });
+    let form = node(&rt, "f");
+    assert_eq!(rt.submit_form(form, None, false), SubmitOutcome::Submitted);
+    assert_eq!(pairs(&log.borrow()[0]), [entry("mail", "ada@example.com")]);
+
+    let mut bad = runtime("", || {
+        view! {
+            <form id="f"><input id="mail" type="email" name="mail" value="not-an-email" /></form>
+        }
+    });
+    let form = node(&bad, "f");
+    assert_eq!(bad.submit_form(form, None, false), SubmitOutcome::Blocked);
+    assert!(bad.form_state_of(node(&bad, "mail")).unwrap().invalid);
+}
+
+#[test]
+fn typing_into_an_email_field_hands_the_owner_the_trimmed_value_but_keeps_the_typed_text() {
+    let rt = runtime("", || {
+        view! { <form><input id="mail" type="email" name="mail" value="" oninput={move |_v: String| {}} /></form> }
+    });
+    let (arena, ..) = rt.geometry();
+    let field = arena.find(|a, id| a.tag(id) == "input").unwrap();
+    let id = arena.id_attr(field).unwrap().to_string();
+    let registry = rt.text_input_registry();
+    let mut font = florui_text::Font::load_embedded();
+    let committed = registry.apply(
+        &id,
+        florui_text::editing::TextEditOp::InsertOrReplace("  a@b.c ".to_string()),
+        &mut font,
+    );
+    assert_eq!(committed.as_deref(), Some("a@b.c"));
+    registry.apply(&id, florui_text::editing::TextEditOp::SelectAll, &mut font);
+    assert_eq!(registry.selected_text(&id).as_deref(), Some("  a@b.c "));
+}

@@ -28,6 +28,7 @@ use florui_text::Font;
 use florui_text::editing::{ByteSelection, TextEditOp, TextEditor};
 
 use crate::focus;
+use crate::form_control::{ValueKind, sanitize_value, value_kind};
 
 /// Real shaped glyphs, a caret rect (`x0,y0,x1,y1`), selection rects, and
 /// the current IME preedit area (`None` unless actually composing) — see
@@ -61,6 +62,9 @@ struct TextInputState {
     /// was rejected (or the owner changed independently) and the buffer
     /// resyncs to whatever the owner actually holds.
     last_committed_text: String,
+    /// How typed text becomes the value handed to the owner: the buffer
+    /// keeps what was typed, the owner gets the sanitized form.
+    kind: ValueKind,
     /// Refreshed every [`TextInputRegistry::sync`] from the current
     /// render's own `ComputedStyle` — [`TextInputRegistry::apply`]/
     /// `undo`/`redo` all reshape with whatever this input's real font
@@ -130,6 +134,7 @@ impl TextInputRegistry {
             if let Some(state) = states.get_mut(id) {
                 state.font_family = font_family;
                 state.font_weight = font_weight;
+                state.kind = value_kind(arena, node);
                 if state.last_committed_text != value {
                     state.editor.set_text(value);
                     font.apply_text_edit(
@@ -158,6 +163,7 @@ impl TextInputRegistry {
                     TextInputState {
                         editor,
                         last_committed_text: value.to_string(),
+                        kind: value_kind(arena, node),
                         font_family,
                         font_weight,
                         undo_stack: Vec::new(),
@@ -209,7 +215,7 @@ impl TextInputRegistry {
         state.coalescing_insert = is_coalescable_insert;
         state.redo_stack.clear();
 
-        let new_text = state.editor.text();
+        let new_text = sanitize_value(state.kind, &state.editor.text());
         state.last_committed_text = new_text.clone();
         Some(new_text)
     }
@@ -256,7 +262,7 @@ impl TextInputRegistry {
             state.font_weight,
         );
         state.coalescing_insert = false;
-        let new_text = state.editor.text();
+        let new_text = sanitize_value(state.kind, &state.editor.text());
         state.last_committed_text = new_text.clone();
         Some(new_text)
     }
