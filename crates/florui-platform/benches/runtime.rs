@@ -151,11 +151,72 @@ fn bench_frame(c: &mut Criterion) {
     group.finish();
 }
 
+/// Where `UiRuntime::update` spends its time, reproduced from the public
+/// stages on the same rows: building the element tree, the arena, the
+/// cascade alone, and cascade plus layout (`compute_with_style`, which is
+/// what `update` calls). Compare the sum against `platform/update`; any
+/// remainder is the runtime's own bookkeeping.
+fn bench_update_phases(c: &mut Criterion) {
+    let mut group = c.benchmark_group("platform/update_phases");
+    group.sample_size(20);
+    let rules = florui_style::parse_stylesheet(CSS).expect("benchmark CSS must be valid");
+    let viewport = florui_style::Viewport {
+        width: 800.0,
+        height: 600.0,
+    };
+    for &n in &[100usize, 1000] {
+        group.bench_function(format!("{n}_rows_build_tree"), |b| {
+            b.iter(|| black_box(list("list", n)))
+        });
+
+        let tree = list("list", n);
+        group.bench_function(format!("{n}_rows_arena_build"), |b| {
+            b.iter(|| black_box(florui_style::Arena::build(&tree)))
+        });
+
+        let arena = florui_style::Arena::build(&tree);
+        let state = florui_style::InteractionState::new();
+        let mut timeline = florui_style::AnimationTimeline::default();
+        group.bench_function(format!("{n}_rows_cascade"), |b| {
+            b.iter(|| {
+                black_box(florui_style::compute(
+                    &arena,
+                    &rules,
+                    &state,
+                    viewport,
+                    &mut timeline,
+                ))
+            })
+        });
+
+        let mut font = florui_text::Font::load_embedded();
+        let mut timeline = florui_style::AnimationTimeline::default();
+        group.bench_function(format!("{n}_rows_cascade_and_layout"), |b| {
+            b.iter(|| {
+                black_box(
+                    florui_layout::compute_with_style(
+                        &mut font,
+                        &arena,
+                        &rules,
+                        &state,
+                        viewport,
+                        &mut timeline,
+                        VIEWPORT,
+                    )
+                    .expect("benchmark tree must lay out"),
+                )
+            })
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_update,
     bench_update_after_signal,
     bench_hit_test,
     bench_frame,
+    bench_update_phases,
 );
 criterion_main!(benches);
