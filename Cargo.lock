@@ -1876,6 +1876,7 @@ dependencies = [
  "accesskit 0.25.0",
  "accesskit_winit",
  "arboard",
+ "criterion",
  "florui",
  "florui-assets",
  "florui-icon",
@@ -1926,6 +1927,7 @@ version = "0.1.0"
 name = "florui-reactive"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "futures",
 ]
 
