@@ -110,6 +110,7 @@ fn app() -> Element {
                     class="text-field"
                     type="text"
                     name="username"
+                    placeholder="e.g. ada99"
                     required="true"
                     minlength="3"
                     pattern="[a-z0-9]+"
@@ -134,6 +135,7 @@ fn app() -> Element {
                     class="text-field"
                     type="email"
                     name="email"
+                    placeholder="you@example.com"
                     required="true"
                     value={email.get()}
                     oninput={move |value: String| email_input.set(value)}
@@ -156,6 +158,7 @@ fn app() -> Element {
                     id="notes"
                     class="text-field"
                     name="notes"
+                    placeholder="Anything else we should know?"
                     rows="3"
                     cols="40"
                     value={notes.get()}

@@ -27,6 +27,7 @@ pub struct FormState {
     pub default: bool,
     pub in_range: bool,
     pub out_of_range: bool,
+    pub placeholder_shown: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

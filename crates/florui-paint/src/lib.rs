@@ -351,6 +351,9 @@ pub struct TextInputPaint {
     pub spinner: Option<SpinnerHover>,
     /// How far the text is scrolled inside the field, in logical pixels.
     pub scroll: (f32, f32),
+    /// The placeholder text shaped for painting, `Some` while the field is
+    /// empty and has one.
+    pub placeholder: Option<Vec<florui_text::ShapedRun>>,
     pub runs: Vec<florui_text::ShapedRun>,
     pub caret_rect: Option<(f32, f32, f32, f32)>,
     pub selection_rects: Vec<(f32, f32, f32, f32)>,
@@ -720,6 +723,10 @@ const SPINNER_WIDTH: f32 = 15.0;
 const SPINNER_HEIGHT: f32 = 18.0;
 const SPINNER_IDLE: Rgba = Rgba::opaque(139, 139, 139);
 const SPINNER_HOVER: Rgba = Rgba::opaque(99, 99, 99);
+
+/// Edge's default placeholder color, `rgb(117, 117, 117)`, whatever the
+/// field's own text color is.
+const PLACEHOLDER_COLOR: Rgba = Rgba::opaque(117, 117, 117);
 
 /// Which arrow of a number input's spinner the point `(px, py)` is over,
 /// for an input whose border box is `(x, y, width, height)` in the same
@@ -1902,16 +1909,15 @@ fn paint_node(
             }
         } else if matches!(arena.tag(node), "input" | "textarea") {
             if let Some(paint) = text_inputs.and_then(|inputs| inputs.get(&node)) {
-                // A textarea scrolls its own text, so that text is cut at
-                // its own padding box (an ancestor's clip still applies).
-                let own_clip = (arena.tag(node) == "textarea").then(|| {
+                // A text field's own text is cut at its padding box (an
+                // ancestor's clip still applies): a textarea scrolls it, and
+                // an input's typed or placeholder text may be longer than it.
+                let Some(own_clip) =
                     padding_box_mask(buffer, (x, y, layout.width, layout.height), border, clip)
-                });
-                if own_clip.as_ref().is_some_and(Option::is_none) {
+                else {
                     return;
-                }
-                let own_clip = own_clip.flatten();
-                let clip = own_clip.as_ref().or(clip);
+                };
+                let clip = Some(&own_clip);
                 let content_x = content_x - paint.scroll.0 * scale_factor;
                 let content_y = content_y - paint.scroll.1 * scale_factor;
                 // `caret_rect`/`selection_rects` come from the same
@@ -1951,6 +1957,17 @@ fn paint_node(
                     scale_factor,
                     clip,
                 );
+                if let Some(placeholder) = &paint.placeholder {
+                    paint_shaped_runs(
+                        buffer,
+                        placeholder,
+                        content_x,
+                        content_y,
+                        PLACEHOLDER_COLOR,
+                        scale_factor,
+                        clip,
+                    );
+                }
                 // A live IME preedit composition already painted above
                 // (its glyphs are real, spliced straight into `paint.runs`
                 // by Parley) -- this underline is the only visual cue
@@ -5300,6 +5317,7 @@ mod tests {
                 show_caret: false,
                 spinner: Some(hover),
                 scroll: (0.0, 0.0),
+                placeholder: None,
             },
         );
         paint_to_buffer_with_desktop_extras(
@@ -5314,6 +5332,109 @@ mod tests {
             Some(&text_inputs),
             None,
         )
+    }
+
+    /// Paints a 60x20 text input holding `runs` (or a placeholder) and
+    /// returns the canvas, 200px wide so any overflow past the box shows.
+    fn paint_text_field(
+        runs: Vec<florui_text::ShapedRun>,
+        placeholder: Option<Vec<florui_text::ShapedRun>>,
+    ) -> Canvas {
+        let tree: Element = view! { <input type="text" class="f" /> };
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(
+            ".f { width: 60px; height: 20px; border: none; padding: 0px; \
+             background-color: #ffffff; color: #000000; }",
+        )
+        .unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let node = arena.roots()[0];
+        let mut text_inputs = HashMap::new();
+        text_inputs.insert(
+            node,
+            TextInputPaint {
+                runs,
+                caret_rect: None,
+                selection_rects: Vec::new(),
+                compose_rect: None,
+                show_caret: false,
+                spinner: None,
+                scroll: (0.0, 0.0),
+                placeholder,
+            },
+        );
+        paint_to_buffer_with_desktop_extras(
+            &mut font,
+            200,
+            20,
+            Rgba::opaque(255, 255, 255),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+            Some(&text_inputs),
+            None,
+        )
+    }
+
+    #[test]
+    fn a_placeholder_paints_in_edges_gray_and_never_past_the_field() {
+        let mut font = Font::load_embedded();
+        let long = font
+            .shape(
+                florui_text::FontFamily::SansSerif,
+                "A placeholder much longer than sixty pixels",
+                16.0,
+                400.0,
+            )
+            .runs;
+        let buffer = paint_text_field(Vec::new(), Some(long));
+        let mut darkest = 255;
+        let mut outside = 0;
+        for x in 0..200 {
+            for y in 0..20 {
+                let [r, ..] = pixel_rgb(&buffer, x, y);
+                if r < 250 {
+                    darkest = darkest.min(r);
+                    if x >= 60 {
+                        outside += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            darkest, 117,
+            "the placeholder's own gray, not the text color"
+        );
+        assert_eq!(outside, 0, "nothing is painted past the 60px field");
+    }
+
+    #[test]
+    fn typed_text_longer_than_its_input_is_cut_at_the_edge() {
+        let mut font = Font::load_embedded();
+        let runs = font
+            .shape(
+                florui_text::FontFamily::SansSerif,
+                "typed text that is far too long for the box",
+                16.0,
+                400.0,
+            )
+            .runs;
+        let buffer = paint_text_field(runs, None);
+        let outside = (60..200)
+            .flat_map(|x| (0..20).map(move |y| (x, y)))
+            .filter(|&(x, y)| pixel_rgb(&buffer, x, y) != [255, 255, 255])
+            .count();
+        assert_eq!(outside, 0);
     }
 
     #[test]
@@ -5364,7 +5485,8 @@ mod tests {
 
     #[test]
     fn a_text_input_paints_its_caret_in_its_own_declared_color() {
-        let tree: Element = view! { <input type="text" value="Hi" style="color: #ff0000;" /> };
+        let tree: Element =
+            view! { <input type="text" value="Hi" style="color: #ff0000; width: 60px;" /> };
         let arena = Arena::build(&tree);
         let rules = florui_style::parse_stylesheet("").unwrap();
         let styles = florui_style::compute(
@@ -5401,6 +5523,7 @@ mod tests {
                 show_caret: true,
                 spinner: None,
                 scroll: (0.0, 0.0),
+                placeholder: None,
             },
         );
 

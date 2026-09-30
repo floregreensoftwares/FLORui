@@ -605,47 +605,68 @@ fn build_text_input_paint(
         };
         let is_focused = focused == Some(node);
         let style = styles.get(&node);
-        let (runs, caret_rect, selection_rects, compose_rect) = if arena.input_type(node)
-            == Some("password")
-        {
-            let font_size = style.map_or(16.0, |s| s.font_size);
-            let font_weight = style.map_or(400.0, |s| s.font_weight);
-            let family = style.map_or(florui_text::FontFamily::SansSerif, |s| {
-                florui_layout::to_text_font_family(s.font_family)
-            });
-            let real_glyphs: Vec<florui_text::ShapedGlyph> = runs
-                .iter()
-                .flat_map(|run| run.glyphs.iter().copied())
-                .collect();
-            let (mask_runs, mask_positions) =
-                masked_glyphs(font, real_glyphs.len(), family, font_size, font_weight);
-            let mask_x = |real_x: f32| -> f32 {
-                let index = char_index_at(&real_glyphs, real_x);
-                mask_positions
-                    .get(index)
-                    .copied()
-                    .unwrap_or_else(|| mask_positions.last().copied().unwrap_or(0.0))
+        let (runs, caret_rect, selection_rects, compose_rect) =
+            if arena.input_type(node) == Some("password") {
+                let font_size = style.map_or(16.0, |s| s.font_size);
+                let font_weight = style.map_or(400.0, |s| s.font_weight);
+                let family = style.map_or(florui_text::FontFamily::SansSerif, |s| {
+                    florui_layout::to_text_font_family(s.font_family)
+                });
+                let real_glyphs: Vec<florui_text::ShapedGlyph> = runs
+                    .iter()
+                    .flat_map(|run| run.glyphs.iter().copied())
+                    .collect();
+                let (mask_runs, mask_positions) =
+                    masked_glyphs(font, real_glyphs.len(), family, font_size, font_weight);
+                let mask_x = |real_x: f32| -> f32 {
+                    let index = char_index_at(&real_glyphs, real_x);
+                    mask_positions
+                        .get(index)
+                        .copied()
+                        .unwrap_or_else(|| mask_positions.last().copied().unwrap_or(0.0))
+                };
+                // `caret_rect`/`selection_rects`/`compose_rect` are all
+                // `(x0, y0, x1, y1)` -- two real corners, not a width/height
+                // pair (see `Font::caret_rect`'s own doc and `florui-paint`'s
+                // identical destructuring) -- so every one of these x's needs
+                // remapping through the same real-x -> mask-x lookup, not
+                // just the first.
+                // A caret keeps its own width rather than spanning a bullet.
+                let caret_rect = caret_rect.map(|(x0, y0, x1, y1)| {
+                    let x = mask_x(x0);
+                    (x, y0, x + (x1 - x0), y1)
+                });
+                let selection_rects = selection_rects
+                    .into_iter()
+                    .map(|(x0, y0, x1, y1)| (mask_x(x0), y0, mask_x(x1), y1))
+                    .collect();
+                let compose_rect =
+                    compose_rect.map(|(x0, y0, x1, y1)| (mask_x(x0), y0, mask_x(x1), y1));
+                (mask_runs, caret_rect, selection_rects, compose_rect)
+            } else {
+                (runs, caret_rect, selection_rects, compose_rect)
             };
-            // `caret_rect`/`selection_rects`/`compose_rect` are all
-            // `(x0, y0, x1, y1)` -- two real corners, not a width/height
-            // pair (see `Font::caret_rect`'s own doc and `florui-paint`'s
-            // identical destructuring) -- so every one of these x's needs
-            // remapping through the same real-x -> mask-x lookup, not
-            // just the first.
-            let caret_rect = caret_rect.map(|(x0, y0, x1, y1)| (mask_x(x0), y0, mask_x(x1), y1));
-            let selection_rects = selection_rects
-                .into_iter()
-                .map(|(x0, y0, x1, y1)| (mask_x(x0), y0, mask_x(x1), y1))
-                .collect();
-            let compose_rect =
-                compose_rect.map(|(x0, y0, x1, y1)| (mask_x(x0), y0, mask_x(x1), y1));
-            (mask_runs, caret_rect, selection_rects, compose_rect)
-        } else {
-            (runs, caret_rect, selection_rects, compose_rect)
-        };
+        let placeholder = (runs.is_empty() && crate::form::shows_placeholder(arena, node, true))
+            .then(|| arena.attr(node, "placeholder"))
+            .flatten()
+            .map(|text| {
+                let font_size = style.map_or(16.0, |s| s.font_size);
+                let font_weight = style.map_or(400.0, |s| s.font_weight);
+                let family = style.map_or(florui_text::FontFamily::SansSerif, |s| {
+                    florui_layout::to_text_font_family(s.font_family)
+                });
+                if arena.tag(node) == "textarea" {
+                    let width = registry.viewport(id).0.max(1.0);
+                    font.shape_wrapped(family, text, font_size, font_weight, width)
+                        .runs
+                } else {
+                    font.shape(family, text, font_size, font_weight).runs
+                }
+            });
         result.insert(
             node,
             florui_paint::TextInputPaint {
+                placeholder,
                 runs,
                 caret_rect: is_focused.then_some(caret_rect).flatten(),
                 selection_rects: if is_focused {
@@ -1812,10 +1833,15 @@ impl WindowState {
 
     /// The pointer position `(x, y)` in the editor's own space: relative to
     /// the content box, shifted by how far the field is scrolled.
-    fn text_input_local_point(&self, node: NodeId, id: &str, x: f32, y: f32) -> (f32, f32) {
+    fn text_input_local_point(&mut self, node: NodeId, id: &str, x: f32, y: f32) -> (f32, f32) {
         let (origin_x, origin_y) = self.text_input_content_origin(node);
-        let (scroll_x, scroll_y) = self.runtime.text_input_registry().scroll_offset(id);
-        (x - origin_x + scroll_x, y - origin_y + scroll_y)
+        let registry = self.runtime.text_input_registry();
+        let (scroll_x, scroll_y) = registry.scroll_offset(id);
+        let (_, _, _, font) = self.runtime.geometry_and_font_mut();
+        // A password's painted bullets are spaced differently from its real
+        // text, so a click is mapped back onto the real glyph positions.
+        let local_x = registry.unmask_x(id, x - origin_x + scroll_x, font);
+        (local_x, y - origin_y + scroll_y)
     }
 
     fn is_drag_region(&self, node: NodeId) -> bool {

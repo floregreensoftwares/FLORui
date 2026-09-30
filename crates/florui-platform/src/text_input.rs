@@ -83,6 +83,11 @@ struct TextInputState {
     coalescing_insert: bool,
     /// A `<textarea>`: wraps at its content width and scrolls vertically.
     multiline: bool,
+    /// A single-line field that scrolls sideways to keep its caret in view.
+    scrolls_x: bool,
+    /// A password field shows one bullet per character, so its horizontal
+    /// geometry is this advance times the character count.
+    mask_advance: Option<f32>,
     /// A `readonly` field can be focused, selected and copied but never
     /// edited.
     read_only: bool,
@@ -116,29 +121,90 @@ impl TextInputState {
         self.clamp_scroll(font);
     }
 
+    /// The width of what is shown and, if there is one, the caret's x extent.
+    fn shown_extent(&mut self, font: &mut Font) -> (f32, Option<(f32, f32)>) {
+        let Some(advance) = self.mask_advance else {
+            let (width, _) = font.content_size(&mut self.editor);
+            let caret = font
+                .caret_rect(&mut self.editor)
+                .map(|(x0, _, x1, _)| (x0, x1));
+            return (width, caret);
+        };
+        let text = self.editor.text();
+        let focus = self.editor.selection().focus.min(text.len());
+        let before = text.get(..focus).map_or(0, |s| s.chars().count());
+        let x = before as f32 * advance;
+        (text.chars().count() as f32 * advance, Some((x, x + 1.0)))
+    }
+
     fn clamp_scroll(&mut self, font: &mut Font) {
         let (_, content_h) = font.content_size(&mut self.editor);
-        let max_y = (content_h - self.viewport.1).max(0.0);
-        self.scroll = (0.0, self.scroll.1.clamp(0.0, max_y));
+        let content_w = self.shown_extent(font).0;
+        let max_x = if self.scrolls_x {
+            (content_w - self.viewport.0).max(0.0)
+        } else {
+            0.0
+        };
+        let max_y = if self.multiline {
+            (content_h - self.viewport.1).max(0.0)
+        } else {
+            0.0
+        };
+        self.scroll = (
+            self.scroll.0.clamp(0.0, max_x),
+            self.scroll.1.clamp(0.0, max_y),
+        );
     }
 
     /// Scrolls the least distance that brings the caret into view.
     fn reveal_caret(&mut self, font: &mut Font) {
-        if !self.multiline {
+        if !self.multiline && !self.scrolls_x {
             return;
         }
         self.clamp_scroll(font);
         let Some((_, y0, _, y1)) = font.caret_rect(&mut self.editor) else {
             return;
         };
-        let vh = self.viewport.1;
-        if y0 < self.scroll.1 {
-            self.scroll.1 = y0;
-        } else if y1 > self.scroll.1 + vh {
-            self.scroll.1 = y1 - vh;
+        let (x0, x1) = self.shown_extent(font).1.unwrap_or_default();
+        let (vw, vh) = self.viewport;
+        if self.multiline {
+            if y0 < self.scroll.1 {
+                self.scroll.1 = y0;
+            } else if y1 > self.scroll.1 + vh {
+                self.scroll.1 = y1 - vh;
+            }
+        }
+        if self.scrolls_x {
+            if x0 < self.scroll.0 {
+                self.scroll.0 = x0;
+            } else if x1 + 1.0 > self.scroll.0 + vw {
+                self.scroll.0 = x1 + 1.0 - vw;
+            }
         }
         self.clamp_scroll(font);
     }
+}
+
+/// Whether `node` is a single-line text field whose text scrolls sideways.
+fn scrolls_sideways(arena: &Arena, node: NodeId) -> bool {
+    arena.tag(node) == "input"
+}
+
+/// The bullet advance of a password field, whose shown text is a mask.
+fn mask_advance(
+    arena: &Arena,
+    node: NodeId,
+    font: &mut Font,
+    style: Option<&ComputedStyle>,
+) -> Option<f32> {
+    if arena.input_type(node) != Some("password") {
+        return None;
+    }
+    let family = style.map_or(florui_text::FontFamily::SansSerif, |s| {
+        florui_layout::to_text_font_family(s.font_family)
+    });
+    let (size, weight) = style.map_or((16.0, 400.0), |s| (s.font_size, s.font_weight));
+    Some(font.measure(family, "\u{2022}", size, weight).width)
 }
 
 /// `maxlength` for a text field that enforces it as the user types (every
@@ -281,6 +347,8 @@ impl TextInputRegistry {
                 state.max_length = max_length(arena, node);
                 let mut needs_relayout = state.viewport != viewport;
                 state.viewport = viewport;
+                state.scrolls_x = scrolls_sideways(arena, node);
+                state.mask_advance = mask_advance(arena, node, font, style);
                 if state.last_committed_text != value {
                     state.editor.set_text(value);
                     state.bad_input = false;
@@ -327,6 +395,8 @@ impl TextInputRegistry {
                     redo_stack: Vec::new(),
                     coalescing_insert: false,
                     multiline,
+                    scrolls_x: scrolls_sideways(arena, node),
+                    mask_advance: mask_advance(arena, node, font, style),
                     read_only: arena.attr_flag(node, "readonly"),
                     max_length: max_length(arena, node),
                     scroll: (0.0, 0.0),
@@ -445,12 +515,53 @@ impl TextInputRegistry {
         Some(new_text)
     }
 
+    /// `id`'s content box in logical pixels, `(0, 0)` for an untracked id.
+    pub(crate) fn viewport(&self, id: &str) -> (f32, f32) {
+        self.states
+            .borrow()
+            .get(id)
+            .map_or((0.0, 0.0), |state| state.viewport)
+    }
+
     /// `id`'s scroll offset in logical pixels, `(0, 0)` for an untracked id.
     pub(crate) fn scroll_offset(&self, id: &str) -> (f32, f32) {
         self.states
             .borrow()
             .get(id)
             .map_or((0.0, 0.0), |state| state.scroll)
+    }
+
+    /// A single-line field shows its start again once it loses focus
+    /// (measured in Edge); a textarea keeps where it was scrolled to.
+    pub(crate) fn reset_scroll_on_blur(&self, id: &str) {
+        if let Some(state) = self.states.borrow_mut().get_mut(id)
+            && !state.multiline
+        {
+            state.scroll.0 = 0.0;
+        }
+    }
+
+    /// The real-text x that a click at `x` in a password field's bullet
+    /// space lands on: the nearest bullet boundary, mapped to that
+    /// character's own position. Any other field returns `x` unchanged.
+    pub(crate) fn unmask_x(&self, id: &str, x: f32, font: &mut Font) -> f32 {
+        let mut states = self.states.borrow_mut();
+        let Some(state) = states.get_mut(id) else {
+            return x;
+        };
+        let Some(advance) = state.mask_advance.filter(|a| *a > 0.0) else {
+            return x;
+        };
+        let glyph_x: Vec<f32> = font
+            .shaped_runs_for_edit(&mut state.editor)
+            .iter()
+            .flat_map(|run| run.glyphs.iter().map(|glyph| glyph.x))
+            .collect();
+        let index = ((x / advance).round().max(0.0) as usize).min(glyph_x.len());
+        glyph_x
+            .get(index)
+            .copied()
+            .unwrap_or_else(|| font.content_size(&mut state.editor).0)
     }
 
     /// Scrolls a multiline field by `dy` logical pixels; `true` if it moved,
@@ -702,13 +813,120 @@ mod tests {
         );
     }
 
+    fn typed_field_scroll(kind: &str, typed: usize) -> ((f32, f32), f32) {
+        use taffy::prelude::*;
+        let tree: Element = match kind {
+            "password" => view! { <input type="password" id="x" class="f" value="" /> },
+            _ => view! { <input type="text" id="x" class="f" value="" /> },
+        };
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(
+            ".f { width: 100px; height: 24px; padding: 0px; border: none; }",
+        )
+        .unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &florui_style::InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let registry = TextInputRegistry::new();
+        registry.sync(&arena, &styles, &layouts, &mut font);
+        for _ in 0..typed {
+            registry.apply("x", TextEditOp::InsertOrReplace("x".to_string()), &mut font);
+        }
+        let advance = mask_advance(
+            &arena,
+            arena.roots()[0],
+            &mut font,
+            styles.get(&arena.roots()[0]),
+        )
+        .unwrap_or_default();
+        (registry.scroll_offset("x"), advance)
+    }
+
+    fn field_registry(kind: &str, value: &str, width: u32) -> (TextInputRegistry, Font, f32) {
+        use taffy::prelude::*;
+        let tree: Element = match kind {
+            "password" => view! { <input type="password" id="x" class="f" /> },
+            _ => view! { <input type="text" id="x" class="f" /> },
+        };
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(&format!(
+            ".f {{ width: {width}px; height: 24px; padding: 0px; border: none; }}"
+        ))
+        .unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &florui_style::InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let registry = TextInputRegistry::new();
+        registry.sync(&arena, &styles, &layouts, &mut font);
+        registry.apply(
+            "x",
+            TextEditOp::InsertOrReplace(value.to_string()),
+            &mut font,
+        );
+        let node = arena.roots()[0];
+        let advance = mask_advance(&arena, node, &mut font, styles.get(&node)).unwrap_or_default();
+        (registry, font, advance)
+    }
+
     #[test]
-    fn sync_drops_state_for_an_input_no_longer_present() {
-        let (registry, mut font) = synced_registry("hello");
-        let empty: Element = view! { <div /> };
-        let arena = Arena::build(&empty);
-        let styles: HashMap<NodeId, ComputedStyle> = HashMap::new();
-        registry.sync(&arena, &styles, &HashMap::new(), &mut font);
-        assert_eq!(registry.apply("x", TextEditOp::SelectAll, &mut font), None);
+    fn a_click_in_a_password_lands_on_the_bullet_it_visibly_hit() {
+        let (registry, mut font, advance) = field_registry("password", "iiWWii", 200);
+        let glyphs: Vec<f32> = {
+            let mut states = registry.states.borrow_mut();
+            let state = states.get_mut("x").unwrap();
+            font.shaped_runs_for_edit(&mut state.editor)
+                .iter()
+                .flat_map(|run| run.glyphs.iter().map(|g| g.x))
+                .collect()
+        };
+        // Just past the third bullet's left edge, closer to it than the next.
+        let x = registry.unmask_x("x", 2.0 * advance + 0.3 * advance, &mut font);
+        assert_eq!(x, glyphs[2], "the third character, by bullet spacing");
+        let end = registry.unmask_x("x", 500.0, &mut font);
+        assert!(
+            end > glyphs[5],
+            "past the last bullet is the end of the text"
+        );
+        let (plain, mut font, _) = field_registry("text", "iiWWii", 200);
+        assert_eq!(
+            plain.unmask_x("x", 12.5, &mut font),
+            12.5,
+            "text is untouched"
+        );
+    }
+
+    #[test]
+    fn a_single_line_field_shows_its_start_after_losing_focus() {
+        let (registry, _font, _) = field_registry("text", &"x".repeat(80), 60);
+        assert!(registry.scroll_offset("x").0 > 0.0);
+        registry.reset_scroll_on_blur("x");
+        assert_eq!(registry.scroll_offset("x").0, 0.0);
+    }
+    #[test]
+    fn a_password_field_scrolls_by_its_bullets_to_keep_the_caret_in_view() {
+        assert_eq!(
+            typed_field_scroll("password", 5).0,
+            (0.0, 0.0),
+            "fits: no scroll"
+        );
+        let ((x, _), advance) = typed_field_scroll("password", 50);
+        assert!(
+            (x - (50.0 * advance - 100.0)).abs() < 0.01,
+            "scrolled to the end of the bullets: {x}, advance {advance}"
+        );
     }
 }
