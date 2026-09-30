@@ -513,3 +513,43 @@ fn an_edit_the_owner_rejects_reaches_neither_form_data_nor_validity() {
     rt.submit_form(form, None, false);
     assert_eq!(pairs(&log.borrow()[0]), [entry("name", "ada")]);
 }
+
+/// Measured in Edge with real key presses: a control the user edited into an
+/// invalid state stays neutral while focused, matches `:user-invalid` once it
+/// loses focus, and also when the whole window loses focus. Focusing and
+/// leaving a control without editing it never matches.
+#[test]
+fn user_invalid_follows_edit_then_blur_and_window_blur_but_not_a_bare_focus_change() {
+    let mut rt = runtime("", || {
+        view! {
+            <form>
+                <input id="edited" type="text" required="true" oninput={move |_v: String| {}} />
+                <input id="touched" type="text" required="true" oninput={move |_v: String| {}} />
+                <input id="windowed" type="text" required="true" oninput={move |_v: String| {}} />
+            </form>
+        }
+    });
+    let user_invalid =
+        |rt: &UiRuntime, id: &str| rt.form_state_of(node(rt, id)).unwrap().user_invalid;
+    let (edited, touched, windowed) = (
+        node(&rt, "edited"),
+        node(&rt, "touched"),
+        node(&rt, "windowed"),
+    );
+
+    rt.set_focused(Some(edited), true);
+    rt.commit_value(edited, "x".to_string());
+    rt.commit_value(edited, String::new());
+    assert!(!user_invalid(&rt, "edited"), "still focused");
+    rt.set_focused(Some(touched), true);
+    assert!(user_invalid(&rt, "edited"), "edited, then blurred");
+
+    rt.set_focused(Some(windowed), true);
+    assert!(!user_invalid(&rt, "touched"), "focus and leave, no edit");
+
+    rt.commit_value(windowed, "y".to_string());
+    rt.commit_value(windowed, String::new());
+    assert!(!user_invalid(&rt, "windowed"), "still focused");
+    rt.window_focus_lost();
+    assert!(user_invalid(&rt, "windowed"), "window blur counts as blur");
+}

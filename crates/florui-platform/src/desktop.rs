@@ -1505,6 +1505,9 @@ impl WindowState {
     /// change immediately rather than waiting for an unrelated redraw.
     fn handle_focus_changed(&mut self, focused: bool) {
         self.controls.set_focused(focused);
+        if !focused {
+            self.runtime.window_focus_lost();
+        }
         self.update_and_request_redraw();
     }
 
