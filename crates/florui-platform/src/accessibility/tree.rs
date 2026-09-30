@@ -17,7 +17,7 @@
 //! tree every call rather than diffing against the previous one —
 //! AccessKit's own docs allow sending a complete tree every update, just
 //! not optimally; incremental updates are a later, measured-cost
-//! optimization, not this slice's concern.
+//! optimization.
 //!
 //! Inbound `Action::Focus`/`Action::Click`/`Action::SetValue`/
 //! `Action::ReplaceSelectedText` are wired up (see `desktop.rs`'s own
@@ -463,6 +463,10 @@ impl AccessibilityTree {
                 node.set_label(label);
             }
         }
+        if let Some((position, size)) = arena.collection_position(id) {
+            node.set_position_in_set(position);
+            node.set_size_of_set(size);
+        }
         if arena
             .classes(id)
             .iter()
@@ -792,6 +796,28 @@ mod tests {
         assert!(item.supports_action(Action::Click) && item.supports_action(Action::Focus));
     }
 
+    #[test]
+    fn a_list_item_reports_its_place_in_the_whole_collection() {
+        let tree: Element = view! {
+            <div role="list" accessible_label="Tracks">
+                <div role="listitem" set_size="500" position_in_set="42">{"Track 42"}</div>
+                <div role="listitem">{"No position"}</div>
+            </div>
+        };
+        let (update, reverse, arena) = build(&tree, None);
+        let list = node_with(&update, &reverse, arena.roots()[0]);
+        assert_eq!(list.role(), Role::List);
+        let items = arena.children(arena.roots()[0]);
+        let first = node_with(&update, &reverse, items[0]);
+        assert_eq!(first.role(), Role::ListItem);
+        assert_eq!(first.position_in_set(), Some(42));
+        assert_eq!(first.size_of_set(), Some(500));
+        let second = node_with(&update, &reverse, items[1]);
+        assert_eq!(
+            (second.position_in_set(), second.size_of_set()),
+            (None, None)
+        );
+    }
     #[test]
     fn a_tooltip_gets_the_tooltip_role() {
         let tree: Element = view! { <div role="tooltip">{"Saves the file"}</div> };
