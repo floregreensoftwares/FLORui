@@ -10,7 +10,7 @@ mod into_nodes;
 mod stylesheets;
 
 pub use children::Children;
-pub use element::{Element, ElementNode};
+pub use element::{Element, ElementNode, Provenance, SOURCE_LOCATIONS, SourceLocation, SourceSite};
 /// Named slots — a component's own typed, non-`children` props — are
 /// required at compile time exactly like any other prop: omitting one
 /// leaves the generated props struct literal incomplete.

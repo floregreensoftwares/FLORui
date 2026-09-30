@@ -11,11 +11,142 @@
 //! `IntoNodes::into_nodes` so a single element, a fragment, `Children`, or
 //! text all compose the same way.
 
-use proc_macro2::TokenStream;
+use std::cell::{Cell, RefCell};
+
+use proc_macro2::{Literal, Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
 use syn::{Expr, Ident};
 
 use florui_view_syntax::{AttrValue, Node};
+
+/// Finds where each element of one `view!` block was written, from the text
+/// of the invocation. A macro cannot read a token's own line on stable Rust,
+/// and `line!()` in generated code is the line of the whole invocation, so the
+/// element's offset inside the invocation text is found by searching for its
+/// `<tag` in document order, and added to the invocation's own line.
+///
+/// Without the text (some tools hand a macro no source) every element gets
+/// the invocation's line and column; its path in the block is still exact.
+struct Locator {
+    text: Option<String>,
+    /// Where in `text` the last element's tag ended; the next search starts
+    /// there, since elements are visited in the order they were written.
+    cursor: Cell<usize>,
+    path: RefCell<Vec<String>>,
+}
+
+/// An element's place among its siblings: one-based among those with the same
+/// tag, and how many share that tag.
+#[derive(Clone, Copy)]
+struct Place {
+    index: usize,
+    of: usize,
+}
+
+impl Locator {
+    fn new() -> Self {
+        Self {
+            text: Span::call_site().source_text(),
+            cursor: Cell::new(0),
+            path: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Enters the element with `tag`, returning the expression that builds its
+    /// provenance. Pair with [`Self::leave`] after its children.
+    fn enter(&self, tag: &str, place: Place) -> TokenStream {
+        let segment = if place.of > 1 {
+            format!("{tag}[{}]", place.index)
+        } else {
+            tag.to_string()
+        };
+        self.path.borrow_mut().push(segment);
+        let path = self.path.borrow().join(" > ");
+
+        let (lines, column) = match self.find(tag) {
+            Some((0, column)) => {
+                let offset = Literal::u32_suffixed(column);
+                (0, quote! { ::std::column!() + #offset })
+            }
+            Some((lines, column)) => {
+                let column = Literal::u32_suffixed(column + 1);
+                (lines, quote! { #column })
+            }
+            None => (0, quote! { ::std::column!() }),
+        };
+        let lines = Literal::u32_suffixed(lines);
+        // A constant per element: the element holds a reference to it, and a
+        // build that leaves locations off never uses it, so none is emitted.
+        quote! {
+            if ::florui::SOURCE_LOCATIONS {
+                const SITE: ::florui::SourceSite = ::florui::SourceSite {
+                    file: ::std::file!(),
+                    line: ::std::line!() + #lines,
+                    column: #column,
+                    path: #path,
+                };
+                ::florui::Provenance::at(&SITE)
+            } else {
+                ::florui::Provenance::none()
+            }
+        }
+    }
+
+    fn leave(&self) {
+        self.path.borrow_mut().pop();
+    }
+
+    /// The number of line breaks before the next `<tag` in the invocation
+    /// text, and its column within its own line (zero-based).
+    fn find(&self, tag: &str) -> Option<(u32, u32)> {
+        let text = self.text.as_deref()?;
+        let mut from = self.cursor.get();
+        loop {
+            let open = from + text.get(from..)?.find('<')?;
+            let after = &text[open + 1..];
+            let trimmed = after.trim_start();
+            let skipped = after.len() - trimmed.len();
+            if let Some(rest) = trimmed.strip_prefix(tag)
+                && !rest
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '-')
+            {
+                self.cursor.set(open + 1 + skipped + tag.len());
+                let before = &text[..open];
+                let lines = before.matches('\n').count() as u32;
+                let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+                let column = text[line_start..open].chars().count() as u32;
+                return Some((lines, column));
+            }
+            from = open + 1;
+        }
+    }
+}
+
+/// Each element's place among siblings with the same tag; other nodes get a
+/// place that is never shown.
+fn places(nodes: &[Node]) -> Vec<Place> {
+    nodes
+        .iter()
+        .map(|node| {
+            let Node::Element { tag, .. } = node else {
+                return Place { index: 1, of: 1 };
+            };
+            let same = |other: &&Node| matches!(other, Node::Element { tag: t, .. } if t == tag);
+            let of = nodes.iter().filter(same).count();
+            let before = nodes
+                .iter()
+                .take_while(|other| !std::ptr::eq(*other, node))
+                .filter(same)
+                .count();
+            Place {
+                index: before + 1,
+                of,
+            }
+        })
+        .collect()
+}
 
 /// `onclick`, `onmouseenter`, ... — any attribute in this shape names an
 /// event handler rather than a plain string attribute; `view!` has no
@@ -45,7 +176,13 @@ pub fn expand(nodes: Vec<Node>) -> TokenStream {
         };
     }
 
-    let values = nodes.iter().map(|node| child_value(node, None));
+    let locator = Locator::new();
+    let places = places(&nodes);
+    let values: Vec<TokenStream> = nodes
+        .iter()
+        .zip(places)
+        .map(|(node, place)| child_value(node, None, &locator, place))
+        .collect();
     quote! {
         {
             let mut __roots: ::std::vec::Vec<::florui::Element> = ::std::vec::Vec::new();
@@ -65,7 +202,12 @@ pub fn expand(nodes: Vec<Node>) -> TokenStream {
 /// own body is a separate `view!` expansion this one has no visibility
 /// into (that boundary is what keeps scoping from leaking into a child
 /// component's own internals for free).
-fn child_value(node: &Node, scope: Option<&TokenStream>) -> TokenStream {
+fn child_value(
+    node: &Node,
+    scope: Option<&TokenStream>,
+    locator: &Locator,
+    place: Place,
+) -> TokenStream {
     match node {
         Node::Expr(expr) => quote! { (#expr) },
         Node::Text(text) => quote! { #text },
@@ -76,16 +218,20 @@ fn child_value(node: &Node, scope: Option<&TokenStream>) -> TokenStream {
             self_closing,
         } => {
             if Node::is_component(tag) {
-                component_call(tag, attrs, children, *self_closing, scope)
+                component_call(tag, attrs, children, *self_closing, scope, locator, place)
             } else {
-                primitive_element(tag, attrs, children, scope)
+                primitive_element(tag, attrs, children, scope, locator, place)
             }
         }
     }
 }
 
-fn children_vec(children: &[Node], scope: Option<&TokenStream>) -> TokenStream {
-    let values = children.iter().map(|node| child_value(node, scope));
+fn children_vec(children: &[Node], scope: Option<&TokenStream>, locator: &Locator) -> TokenStream {
+    let values: Vec<TokenStream> = children
+        .iter()
+        .zip(places(children))
+        .map(|(node, place)| child_value(node, scope, locator, place))
+        .collect();
     quote! {
         {
             let mut __children: ::std::vec::Vec<::florui::Element> = ::std::vec::Vec::new();
@@ -107,8 +253,11 @@ fn primitive_element(
     attrs: &[(Ident, AttrValue)],
     children: &[Node],
     inherited_scope: Option<&TokenStream>,
+    locator: &Locator,
+    place: Place,
 ) -> TokenStream {
     let tag_str = tag.to_string();
+    let provenance = locator.enter(&tag_str, place);
     let own_scope =
         attrs
             .iter()
@@ -228,7 +377,8 @@ fn primitive_element(
             attr_pairs.push(quote! { (#name_str.to_string(), #value_expr) });
         }
     }
-    let children = children_vec(children, effective_scope);
+    let children = children_vec(children, effective_scope, locator);
+    locator.leave();
 
     let element = if !selection_handler_pairs.is_empty() {
         quote! {
@@ -278,13 +428,14 @@ fn primitive_element(
         }
     };
 
-    if submit_handler_pairs.is_empty() {
+    let element = if submit_handler_pairs.is_empty() {
         element
     } else {
         quote! {
             (#element).with_submit_handlers(::std::vec![ #(#submit_handler_pairs),* ])
         }
-    }
+    };
+    quote! { (#element).with_source(#provenance) }
 }
 
 /// `key={...}` on a component call is its caller-assigned identity (see
@@ -305,7 +456,13 @@ fn component_call(
     children: &[Node],
     self_closing: bool,
     scope: Option<&TokenStream>,
+    locator: &Locator,
+    place: Place,
 ) -> TokenStream {
+    // A component call builds no element of its own, but it is a step in the
+    // path of the markup slotted into it, and the search for the next tag
+    // moves past it.
+    let _ = locator.enter(&tag.to_string(), place);
     let props_ident = format_ident!("{tag}Props");
     let key_attr = attrs.iter().find(|(name, _)| is_key_attr(name));
     let field_inits = attrs
@@ -322,9 +479,10 @@ fn component_call(
     let children_field = if self_closing {
         TokenStream::new()
     } else {
-        let children = children_vec(children, scope);
+        let children = children_vec(children, scope, locator);
         quote! { children: ::florui::Children::from(#children), }
     };
+    locator.leave();
 
     let props = quote! { #props_ident { #(#field_inits)* #children_field } };
 
