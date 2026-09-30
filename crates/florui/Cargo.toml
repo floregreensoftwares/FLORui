@@ -8,6 +8,10 @@ publish = false
 [lib]
 name = "florui"
 
+[features]
+# Keeps each element's source location in a release build too, for profiling.
+source-locations = []
+
 [dependencies]
 florui-macros = { path = "../florui-macros" }
 florui-reactive = { path = "../florui-reactive" }

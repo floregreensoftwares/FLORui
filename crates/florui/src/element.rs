@@ -9,6 +9,103 @@ use florui_reactive::Binding;
 
 use crate::{Handler, SelectionHandler, SubmitHandler, ValueHandler};
 
+/// Whether `view!` records where each element was written. On in a debug
+/// build and with the `source-locations` feature; off otherwise, so a release
+/// build carries no file paths and pays nothing for it.
+pub const SOURCE_LOCATIONS: bool = cfg!(debug_assertions) || cfg!(feature = "source-locations");
+
+/// The part of where an element was written that is known when the code is
+/// compiled: the file, line and column of its own `<tag` in a `view!` block,
+/// and its place in the block (`div > ul > li[3]` is the third `li` of the
+/// `ul`). `view!` emits one constant of this per element, so an element holds
+/// a reference to it rather than a copy.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SourceSite {
+    pub file: &'static str,
+    pub line: u32,
+    pub column: u32,
+    pub path: &'static str,
+}
+
+/// Where an element was written and by whom: its [`SourceSite`] plus the
+/// component whose body built it, which is only known while it runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceLocation {
+    pub file: &'static str,
+    pub line: u32,
+    pub column: u32,
+    /// The component active while the element was built, if any.
+    pub component: Option<&'static str>,
+    pub path: &'static str,
+}
+
+impl std::fmt::Display for SourceLocation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(component) = self.component {
+            write!(f, "{component} ")?;
+        }
+        write!(
+            f,
+            "{}:{}:{} {}",
+            self.file, self.line, self.column, self.path
+        )
+    }
+}
+
+/// An element's [`SourceLocation`], if it has one. Where an element was
+/// written is not part of what it is, so two elements with the same content are
+/// equal whatever their locations: a `view!` element equals a hand-built one.
+#[derive(Clone, Copy, Default)]
+pub struct Provenance {
+    site: Option<&'static SourceSite>,
+    component: Option<&'static str>,
+}
+
+impl Provenance {
+    pub const fn none() -> Self {
+        Self {
+            site: None,
+            component: None,
+        }
+    }
+
+    /// The provenance of an element built now at `site`: the component is
+    /// whichever one is active on this thread.
+    pub fn at(site: &'static SourceSite) -> Self {
+        Self {
+            site: Some(site),
+            component: florui_reactive::trace::current_component(),
+        }
+    }
+
+    pub fn location(&self) -> Option<SourceLocation> {
+        self.site.map(|site| SourceLocation {
+            file: site.file,
+            line: site.line,
+            column: site.column,
+            component: self.component,
+            path: site.path,
+        })
+    }
+}
+
+impl PartialEq for Provenance {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Provenance {}
+
+impl std::fmt::Debug for Provenance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.location() {
+            Some(location) => write!(f, "Provenance({location})"),
+            None => f.write_str("Provenance(none)"),
+        }
+    }
+}
+
 /// A node produced by `view!`: a tagged element, a text run, or a fragment
 /// (a sequence of siblings with no wrapping box of their own).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +146,8 @@ pub struct ElementNode {
     pub selection_handlers: Vec<(String, SelectionHandler)>,
     /// `onsubmit` on `<form>` -- see [`SubmitHandler`].
     pub submit_handlers: Vec<(String, SubmitHandler)>,
+    /// Where this element was written; see [`Provenance`].
+    pub source: Provenance,
     pub children: Vec<Element>,
 }
 
@@ -113,6 +212,7 @@ impl Element {
             value_handlers,
             selection_handlers,
             submit_handlers: Vec::new(),
+            source: Provenance::none(),
             children,
         })
     }
@@ -124,6 +224,23 @@ impl Element {
             node.submit_handlers = handlers;
         }
         self
+    }
+
+    /// Records where an element built by one of the constructors above was
+    /// written. A no-op for anything but a node.
+    pub fn with_source(mut self, source: Provenance) -> Self {
+        if let Element::Node(node) = &mut self {
+            node.source = source;
+        }
+        self
+    }
+
+    /// Where this element was written, if it is a node and that was recorded.
+    pub fn source(&self) -> Option<SourceLocation> {
+        match self {
+            Element::Node(node) => node.source.location(),
+            _ => None,
+        }
     }
 
     pub fn text(text: impl Into<String>) -> Self {
