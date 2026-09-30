@@ -34,6 +34,7 @@ mod menu_keys;
 mod position_observer;
 mod runtime;
 mod scroll;
+mod scroll_animation;
 mod select;
 mod size_observer;
 mod text_input;

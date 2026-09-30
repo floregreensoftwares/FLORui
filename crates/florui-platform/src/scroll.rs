@@ -16,8 +16,11 @@ use florui_layout::{BoxLayout, ContentExtent};
 use florui_reactive::{Cleanup, Signal, use_attachment, use_context, use_signal};
 use florui_style::{Arena, NodeId};
 
+use crate::scroll_animation::{ScrollAnimation, ScrollKind};
+
 struct ScrollEntry {
     offset: Rc<Cell<(f32, f32)>>,
+    animation: Option<ScrollAnimation>,
     /// Bumped to mark the owning scope dirty; the offset itself is a plain
     /// cell so a wheel tick nobody rendered from can skip a re-render.
     version: Signal<u64>,
@@ -34,6 +37,7 @@ struct ScrollEntry {
 #[derive(Default)]
 pub struct ScrollRegistry {
     entries: RefCell<HashMap<String, ScrollEntry>>,
+    epoch: Cell<Option<std::time::Instant>>,
     rendering: Cell<bool>,
     /// Ids read during a render before their entry existed (the first
     /// render), so registration can still record the dependency.
@@ -80,6 +84,7 @@ impl ScrollRegistry {
             id,
             ScrollEntry {
                 offset,
+                animation: None,
                 version,
                 read_in_render: Cell::new(pending_read),
                 viewport_size: (0.0, 0.0),
@@ -133,7 +138,13 @@ impl ScrollRegistry {
             let clamped = clamp_offset(current, viewport_size, content_size);
             if clamped != current {
                 entry.offset.set(clamped);
+                entry.animation = None;
                 bump(&entry.version);
+            }
+            if entry.animation.is_some_and(|animation| {
+                animation.target() != clamp_offset(animation.target(), viewport_size, content_size)
+            }) {
+                entry.animation = None;
             }
             if entry.last_notified != Some(clamped) {
                 entry.last_notified = Some(clamped);
@@ -157,7 +168,8 @@ impl ScrollRegistry {
     /// screen. Returns whether the offset actually changed.
     pub(crate) fn scroll_to(&self, id: &str, x: f32, y: f32) -> bool {
         let Some((offset, version, viewport_size, content_size)) =
-            self.entries.borrow().get(id).map(|entry| {
+            self.entries.borrow_mut().get_mut(id).map(|entry| {
+                entry.animation = None;
                 (
                     Rc::clone(&entry.offset),
                     entry.version.clone(),
@@ -182,6 +194,17 @@ impl ScrollRegistry {
     /// without re-rendering or re-laying-out. `on_scroll` still runs
     /// immediately. Returns whether the offset actually changed.
     pub(crate) fn wheel_scroll_by(&self, id: &str, dx: f32, dy: f32) -> bool {
+        if let Some(entry) = self.entries.borrow_mut().get_mut(id) {
+            entry.animation = None;
+        }
+        let current = self.current_offset(id);
+        self.move_quietly(id, (current.0 + dx, current.1 + dy))
+    }
+
+    /// Moves `id` to `target` (clamped) without dirtying the scope unless a
+    /// render read the offset; `on_scroll` runs immediately. Returns whether
+    /// the offset changed.
+    fn move_quietly(&self, id: &str, target: (f32, f32)) -> bool {
         let Some((offset, version, read_in_render, viewport_size, content_size)) =
             self.entries.borrow().get(id).map(|entry| {
                 (
@@ -195,13 +218,8 @@ impl ScrollRegistry {
         else {
             return false;
         };
-        let current = offset.get();
-        let clamped = clamp_offset(
-            (current.0 + dx, current.1 + dy),
-            viewport_size,
-            content_size,
-        );
-        if clamped == current {
+        let clamped = clamp_offset(target, viewport_size, content_size);
+        if clamped == offset.get() {
             return false;
         }
         offset.set(clamped);
@@ -219,6 +237,99 @@ impl ScrollRegistry {
             bump(&version);
         }
         true
+    }
+
+    /// Seconds on the clock smooth-scroll animations run against.
+    pub(crate) fn now(&self) -> f64 {
+        let epoch = self.epoch.get().unwrap_or_else(|| {
+            let now = std::time::Instant::now();
+            self.epoch.set(Some(now));
+            now
+        });
+        epoch.elapsed().as_secs_f64()
+    }
+
+    /// Smooth-scrolls `id` by `(dx, dy)` from where its current animation is
+    /// headed (or from its offset when idle), so a burst of wheel notches
+    /// accumulates. Returns whether there is now somewhere new to go.
+    pub(crate) fn animate_by(
+        &self,
+        id: &str,
+        dx: f32,
+        dy: f32,
+        now: f64,
+        kind: ScrollKind,
+    ) -> bool {
+        let base = self.animation_target(id);
+        self.animate_to(id, base.0 + dx, base.1 + dy, now, kind)
+    }
+
+    /// Smooth-scrolls `id` to `(x, y)`, clamped. Returns whether the target
+    /// differs from where it is already headed.
+    pub(crate) fn animate_to(&self, id: &str, x: f32, y: f32, now: f64, kind: ScrollKind) -> bool {
+        let mut entries = self.entries.borrow_mut();
+        let Some(entry) = entries.get_mut(id) else {
+            return false;
+        };
+        let current = entry.offset.get();
+        let headed = entry
+            .animation
+            .map_or(current, |animation| animation.target());
+        let target = clamp_offset((x, y), entry.viewport_size, entry.content_size);
+        if target == headed {
+            return false;
+        }
+        match entry.animation.as_mut() {
+            Some(animation) => animation.retarget(target, now),
+            None => entry.animation = Some(ScrollAnimation::new(current, target, now, kind)),
+        }
+        true
+    }
+
+    /// A programmatic smooth scroll. Marks the scope dirty once so the host
+    /// wakes and starts stepping it; the frames themselves do not re-render.
+    fn scroll_smoothly_to(&self, id: &str, x: f32, y: f32) {
+        if self.animate_to(id, x, y, self.now(), ScrollKind::Programmatic)
+            && let Some(version) = self.entries.borrow().get(id).map(|e| e.version.clone())
+        {
+            bump(&version);
+        }
+    }
+
+    fn animation_target(&self, id: &str) -> (f32, f32) {
+        self.entries.borrow().get(id).map_or((0.0, 0.0), |entry| {
+            entry
+                .animation
+                .map_or_else(|| entry.offset.get(), |animation| animation.target())
+        })
+    }
+
+    pub(crate) fn is_animating(&self) -> bool {
+        self.entries
+            .borrow()
+            .values()
+            .any(|entry| entry.animation.is_some())
+    }
+
+    /// Moves every animating entry to where its animation is at `now`.
+    /// Returns whether any is still running.
+    pub(crate) fn advance_animations(&self, now: f64) -> bool {
+        let animating: Vec<(String, (f32, f32), bool)> = self
+            .entries
+            .borrow()
+            .iter()
+            .filter_map(|(id, entry)| {
+                let animation = entry.animation?;
+                Some((id.clone(), animation.offset_at(now), animation.is_done(now)))
+            })
+            .collect();
+        for (id, position, done) in animating {
+            if done && let Some(entry) = self.entries.borrow_mut().get_mut(&id) {
+                entry.animation = None;
+            }
+            self.move_quietly(&id, position);
+        }
+        self.is_animating()
     }
 
     pub(crate) fn current_offset(&self, id: &str) -> (f32, f32) {
@@ -333,6 +444,21 @@ impl ScrollHandle {
     /// way.
     pub fn scroll_by(&self, dx: f32, dy: f32) {
         self.registry.scroll_by(&self.id, dx, dy);
+    }
+
+    /// Like [`Self::scroll_to`], but animated the way a browser's
+    /// `scrollTo({ behavior: "smooth" })` is. CSS `scroll-behavior` is not
+    /// read: Stylo's servo engine does not include the property.
+    pub fn scroll_to_smooth(&self, x: f32, y: f32) {
+        self.registry.scroll_smoothly_to(&self.id, x, y);
+    }
+
+    /// Like [`Self::scroll_by`], animated; repeated calls accumulate from
+    /// where the running animation is headed.
+    pub fn scroll_by_smooth(&self, dx: f32, dy: f32) {
+        let headed = self.registry.animation_target(&self.id);
+        self.registry
+            .scroll_smoothly_to(&self.id, headed.0 + dx, headed.1 + dy);
     }
 }
 
@@ -544,5 +670,96 @@ mod tests {
         assert!(registry.wheel_scroll_by("box", 0.0, 1000.0));
         assert_eq!(registry.current_offset("box"), (0.0, 150.0));
         assert!(!registry.wheel_scroll_by("box", 0.0, 10.0));
+    }
+
+    #[test]
+    fn a_smooth_scroll_moves_gradually_to_its_target_without_dirtying_the_scope() {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let runtime = scroll_box_runtime(false, Rc::clone(&log));
+        let registry = runtime.scroll_registry();
+
+        assert!(registry.animate_by("box", 0.0, 100.0, 0.0, ScrollKind::Wheel));
+        assert!(registry.is_animating());
+        assert_eq!(registry.current_offset("box"), (0.0, 0.0));
+
+        let mut last = 0.0;
+        for step in 1..=5 {
+            registry.advance_animations(f64::from(step) * 0.02);
+            let y = registry.current_offset("box").1;
+            assert!(y >= last, "never moves backwards");
+            last = y;
+        }
+        assert!(last > 0.0 && last < 100.0, "partway at 0.1s: {last}");
+        assert!(
+            !runtime.is_dirty(),
+            "frames do not re-render a plain scroll box"
+        );
+
+        assert!(!registry.advance_animations(1.0));
+        assert_eq!(registry.current_offset("box"), (0.0, 100.0));
+        assert!(!registry.is_animating());
+        assert!(log.borrow().len() > 3, "on_scroll follows every frame");
+        assert_eq!(log.borrow().last(), Some(&(0.0, 100.0)));
+    }
+
+    #[test]
+    fn repeated_notches_accumulate_from_where_the_animation_is_headed() {
+        let runtime = scroll_box_runtime(false, Rc::new(RefCell::new(Vec::new())));
+        let registry = runtime.scroll_registry();
+
+        registry.animate_by("box", 0.0, 100.0, 0.0, ScrollKind::Wheel);
+        registry.advance_animations(0.03);
+        registry.animate_by("box", 0.0, 100.0, 0.03, ScrollKind::Wheel);
+        registry.advance_animations(5.0);
+
+        assert_eq!(
+            registry.current_offset("box"),
+            (0.0, 150.0),
+            "two notches add up, clamped to the real maximum (200 - 50)"
+        );
+    }
+
+    #[test]
+    fn an_instant_scroll_cancels_a_running_smooth_one() {
+        let runtime = scroll_box_runtime(false, Rc::new(RefCell::new(Vec::new())));
+        let registry = runtime.scroll_registry();
+        registry.animate_by("box", 0.0, 100.0, 0.0, ScrollKind::Wheel);
+
+        registry.scroll_to("box", 0.0, 20.0);
+
+        assert!(!registry.is_animating());
+        registry.advance_animations(5.0);
+        assert_eq!(registry.current_offset("box"), (0.0, 20.0));
+    }
+
+    #[test]
+    fn a_smooth_scroll_dirties_the_scope_each_frame_when_a_render_read_the_offset() {
+        let runtime = scroll_box_runtime(true, Rc::new(RefCell::new(Vec::new())));
+        let registry = runtime.scroll_registry();
+        registry.animate_by("box", 0.0, 100.0, 0.0, ScrollKind::Wheel);
+        assert!(
+            !runtime.is_dirty(),
+            "starting a wheel animation moves nothing yet"
+        );
+
+        registry.advance_animations(0.05);
+
+        assert!(
+            runtime.is_dirty(),
+            "the rendered output depends on the offset"
+        );
+    }
+
+    #[test]
+    fn a_programmatic_smooth_scroll_wakes_the_host_once_and_then_animates() {
+        let runtime = scroll_box_runtime(false, Rc::new(RefCell::new(Vec::new())));
+        let registry = runtime.scroll_registry();
+
+        registry.scroll_smoothly_to("box", 0.0, 120.0);
+
+        assert!(runtime.is_dirty(), "the host is woken to start stepping it");
+        assert!(registry.is_animating());
+        registry.advance_animations(registry.now() + 10.0);
+        assert_eq!(registry.current_offset("box"), (0.0, 120.0));
     }
 }
