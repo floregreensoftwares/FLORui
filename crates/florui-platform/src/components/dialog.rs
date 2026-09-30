@@ -12,12 +12,10 @@
 //! bubbles, so a click on the dialog's own content can't trigger a
 //! backdrop handler placed on an ancestor).
 //!
-//! Single-modal-at-a-time is this slice's own deliberate scope limit —
-//! see [`crate::focus::modal_root`]'s own doc for the tie-break if a
-//! second `Dialog` is ever open at once (not a real stacking contract
-//! yet). Deferred, not silently dropped: anchor-tracked non-modal
-//! popovers/menus (viewport collision, click-outside dismissal, and
-//! explicitly no focus trap) are a separate, later feature.
+//! Dialogs stack: the innermost open one owns focus and Escape, and
+//! closing it returns focus to whatever opened it, one level at a time.
+//! Anchor-tracked non-modal popovers and menus (viewport collision,
+//! click-outside dismissal, no focus trap) are [`crate::Popover`].
 
 use florui::{Children, Element, Event, Handler, component};
 
