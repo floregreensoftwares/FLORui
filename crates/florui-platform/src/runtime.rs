@@ -15,7 +15,7 @@ use std::sync::Arc;
 use florui::{Element, Event};
 use florui_layout::BoxLayout;
 use florui_reactive::executor::{Executor, LocalExecutor};
-use florui_reactive::{ComponentScope, DirtyFlag, provide_context};
+use florui_reactive::{ComponentScope, DirtyFlag, FocusHost, provide_context};
 use florui_style::{
     AnimationTimeline, Arena, ComputedStyle, FocusPath, InteractionState, NodeId, Rule, StyleError,
 };
@@ -440,6 +440,7 @@ impl UiRuntime {
             provide_context(Rc::clone(&position_observers));
             provide_context(Rc::clone(&focus_observers));
             provide_context(Rc::clone(&focus_controller));
+            provide_context(Rc::clone(&focus_controller) as Rc<dyn FocusHost>);
             provide_context(Rc::clone(&scroll_registry));
             provide_context(ViewportSize {
                 width: resolved_viewport.width,
@@ -1267,6 +1268,10 @@ impl UiRuntime {
     /// that assembles it, so setting one doesn't silently clobber the
     /// others the way replacing it wholesale would.
     fn rebuild_interaction(&mut self) {
+        self.focus_controller.set_focused_id(
+            self.focused_node
+                .and_then(|node| self.arena.id_attr(node).map(str::to_owned)),
+        );
         let mut state = InteractionState::new().with_visited(&self.visited_links.snapshot());
         if let Some(id) = self.hovered {
             state = state.with_hovered(id);
