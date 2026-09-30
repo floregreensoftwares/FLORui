@@ -120,7 +120,7 @@ use style::stylesheets::Origin;
 use crate::stylesheet_parse::{Rule, parse_stylesheet_with_origin};
 
 const CSS: &str = "
-    div, p, h1, h2, h3, h4, h5, h6, img, icon {
+    div, p, h1, h2, h3, h4, h5, h6, img, icon, form, fieldset, legend {
         display: block;
     }
 
@@ -139,6 +139,16 @@ const CSS: &str = "
 
     a:visited {
         color: #551a8b;
+    }
+
+    fieldset {
+        margin: 0px 2px;
+        border: 2px groove #f0f0f0;
+        padding: 0.35em 0.75em 0.625em;
+    }
+
+    legend {
+        padding: 0px 2px;
     }
 
     button {

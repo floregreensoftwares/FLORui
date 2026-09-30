@@ -7,7 +7,7 @@
 
 use florui_reactive::Binding;
 
-use crate::{Handler, SelectionHandler, ValueHandler};
+use crate::{Handler, SelectionHandler, SubmitHandler, ValueHandler};
 
 /// A node produced by `view!`: a tagged element, a text run, or a fragment
 /// (a sequence of siblings with no wrapping box of their own).
@@ -47,6 +47,8 @@ pub struct ElementNode {
     /// `onselectionchange` on `<select multiple>` -- reports the control's
     /// own computed new selection set. See [`SelectionHandler`]'s own doc.
     pub selection_handlers: Vec<(String, SelectionHandler)>,
+    /// `onsubmit` on `<form>` -- see [`SubmitHandler`].
+    pub submit_handlers: Vec<(String, SubmitHandler)>,
     pub children: Vec<Element>,
 }
 
@@ -110,8 +112,18 @@ impl Element {
             bindings,
             value_handlers,
             selection_handlers,
+            submit_handlers: Vec::new(),
             children,
         })
+    }
+
+    /// Attaches `onsubmit` handlers to an element built by one of the
+    /// constructors above. A no-op for anything but a node.
+    pub fn with_submit_handlers(mut self, handlers: Vec<(String, SubmitHandler)>) -> Self {
+        if let Element::Node(node) = &mut self {
+            node.submit_handlers = handlers;
+        }
+        self
     }
 
     pub fn text(text: impl Into<String>) -> Self {

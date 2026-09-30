@@ -137,6 +137,7 @@ fn primitive_element(
     let mut binding_pairs = Vec::new();
     let mut value_handler_pairs = Vec::new();
     let mut selection_handler_pairs = Vec::new();
+    let mut submit_handler_pairs = Vec::new();
 
     for (name, value) in attrs {
         if is_scope_attr(name) {
@@ -151,6 +152,17 @@ fn primitive_element(
                 AttrValue::Lit(lit) => {
                     let message = "`oninput` needs a Rust expression in braces, e.g. \
                                     `oninput={move |value: String| ...}`, not a string literal";
+                    quote_spanned! { lit.span() => compile_error!(#message) }
+                }
+            });
+        } else if name_str == "onsubmit" {
+            submit_handler_pairs.push(match value {
+                AttrValue::Expr(expr) => {
+                    quote! { ("submit".to_string(), ::florui::SubmitHandler::new(#expr)) }
+                }
+                AttrValue::Lit(lit) => {
+                    let message = "`onsubmit` needs a Rust expression in braces, e.g. \
+                                    `onsubmit={move |data: FormData| ...}`, not a string literal";
                     quote_spanned! { lit.span() => compile_error!(#message) }
                 }
             });
@@ -218,7 +230,7 @@ fn primitive_element(
     }
     let children = children_vec(children, effective_scope);
 
-    if !selection_handler_pairs.is_empty() {
+    let element = if !selection_handler_pairs.is_empty() {
         quote! {
             ::florui::Element::node_with_selection_handlers(
                 #tag_str,
@@ -263,6 +275,14 @@ fn primitive_element(
                 ::std::vec![ #(#handler_pairs),* ],
                 #children,
             )
+        }
+    };
+
+    if submit_handler_pairs.is_empty() {
+        element
+    } else {
+        quote! {
+            (#element).with_submit_handlers(::std::vec![ #(#submit_handler_pairs),* ])
         }
     }
 }

@@ -4,6 +4,7 @@
 
 mod children;
 mod element;
+mod form;
 mod handler;
 mod into_nodes;
 mod stylesheets;
@@ -30,6 +31,7 @@ pub use element::{Element, ElementNode};
 pub use florui_macros::component;
 pub use florui_macros::{stylesheet, stylesheet_scoped, view};
 pub use florui_reactive as reactive;
+pub use form::{FormData, SubmitHandler};
 pub use handler::{BoolHandler, Event, FloatHandler, Handler, SelectionHandler, ValueHandler};
 pub use into_nodes::IntoNodes;
 pub use stylesheets::{
@@ -45,7 +47,8 @@ pub mod prelude {
         use_context, use_effect, use_error_boundary, use_memo, use_ref, use_resource, use_signal,
     };
     pub use crate::{
-        BoolHandler, Children, Element, Event, FloatHandler, Handler, IntoNodes, SelectionHandler,
-        StyleScope, ValueHandler, component, stylesheet, stylesheet_scoped, view,
+        BoolHandler, Children, Element, Event, FloatHandler, FormData, Handler, IntoNodes,
+        SelectionHandler, StyleScope, SubmitHandler, ValueHandler, component, stylesheet,
+        stylesheet_scoped, view,
     };
 }

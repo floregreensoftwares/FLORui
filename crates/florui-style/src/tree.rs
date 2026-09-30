@@ -5,7 +5,7 @@
 //! that view once, up front, rather than threading parent references
 //! through `Element` itself.
 
-use florui::{Element, Handler, SelectionHandler, ValueHandler};
+use florui::{Element, Handler, SelectionHandler, SubmitHandler, ValueHandler};
 use florui_reactive::Binding;
 
 pub type NodeId = usize;
@@ -54,6 +54,10 @@ struct ArenaNode {
     /// [`crate::InteractionState`] (see `stylo.rs`'s own `StyloTree::new`
     /// for why).
     disabled: bool,
+    /// Whether an enclosing `<fieldset disabled>` disables this node —
+    /// its first `<legend>`'s descendants are exempt from that fieldset
+    /// only. Folded into [`Arena::is_disabled`].
+    in_disabled_fieldset: bool,
     /// Whether the `checked` attribute is present and `"true"` — markup
     /// state for `<input type="checkbox">`/`type="radio"`, read the same
     /// way `disabled` is. See [`Arena::is_checked`].
@@ -103,6 +107,8 @@ struct ArenaNode {
     /// `onselectionchange` on `<select multiple>` — see
     /// [`Arena::selection_handler`].
     selection_handlers: Vec<(String, SelectionHandler)>,
+    /// `onsubmit` on `<form>` -- see [`Arena::submit_handler`].
+    submit_handlers: Vec<(String, SubmitHandler)>,
     /// The raw, unparsed `style="..."` attribute text, if declared — see
     /// [`Arena::style_attr`].
     style: Option<String>,
@@ -243,6 +249,21 @@ impl Arena {
         }
     }
 
+    /// Whether a child with tag `child_tag` under `parent` is disabled by
+    /// `parent`'s own `<fieldset disabled>`, or by one already disabling
+    /// `parent` itself.
+    fn disabled_by_fieldset(&self, parent: NodeId, child_tag: &str) -> bool {
+        let p = &self.nodes[parent];
+        if p.tag != "fieldset" || !p.disabled {
+            return p.in_disabled_fieldset;
+        }
+        let first_legend = child_tag == "legend"
+            && p.children
+                .iter()
+                .all(|&sibling| self.nodes[sibling].tag != "legend");
+        p.in_disabled_fieldset || !first_legend
+    }
+
     /// Iterative pre-order walk: an explicit stack instead of one call
     /// frame per tree level, so a deep tree can't overflow the stack.
     /// A [`Element::Portal`] contributes nothing at its own position
@@ -278,6 +299,8 @@ impl Arena {
                         classes: class_list(&node.attrs),
                         id: attr_value(&node.attrs, "id"),
                         disabled: attr_bool(&node.attrs, "disabled"),
+                        in_disabled_fieldset: parent
+                            .is_some_and(|p| self.disabled_by_fieldset(p, node.tag)),
                         checked: attr_bool(&node.attrs, "checked"),
                         indeterminate: attr_bool(&node.attrs, "indeterminate"),
                         range_min,
@@ -290,6 +313,7 @@ impl Arena {
                         group_label: attr_value(&node.attrs, "label"),
                         multiple: attr_bool(&node.attrs, "multiple"),
                         selection_handlers: node.selection_handlers.clone(),
+                        submit_handlers: node.submit_handlers.clone(),
                         style: attr_value(&node.attrs, "style"),
                         value: attr_value(&node.attrs, "value"),
                         input_type: attr_value(&node.attrs, "type"),
@@ -396,7 +420,23 @@ impl Arena {
     /// `<button disabled>` isn't parseable `view!` syntax, so only an
     /// explicit `"true"`/`"false"` is ever seen in practice.
     pub fn is_disabled(&self, id: NodeId) -> bool {
-        self.nodes[id].disabled
+        self.nodes[id].disabled || self.nodes[id].in_disabled_fieldset
+    }
+
+    /// The raw value of attribute `name` exactly as authored, for
+    /// attributes with no typed accessor of their own.
+    pub fn attr(&self, id: NodeId, name: &str) -> Option<&str> {
+        self.nodes[id]
+            .attrs
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    /// Whether attribute `name` is present and `"true"` — the same
+    /// contract as [`Self::is_disabled`]'s own attribute.
+    pub fn attr_flag(&self, id: NodeId, name: &str) -> bool {
+        self.attr(id, name) == Some("true")
     }
 
     /// Whether this node's `checked` attribute is present and `"true"` —
@@ -474,6 +514,11 @@ impl Arena {
     /// — for `<select>`. See [`ArenaNode::multiple`].
     pub fn is_multiple(&self, id: NodeId) -> bool {
         self.nodes[id].multiple
+    }
+
+    /// The [`SubmitHandler`] `<form onsubmit>` declared, if any.
+    pub fn submit_handler(&self, id: NodeId) -> Option<&SubmitHandler> {
+        self.nodes[id].submit_handlers.first().map(|(_, h)| h)
     }
 
     /// The [`SelectionHandler`] this node declared for `attr` (today,
