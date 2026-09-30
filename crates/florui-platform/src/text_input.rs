@@ -86,6 +86,9 @@ struct TextInputState {
     /// A `readonly` field can be focused, selected and copied but never
     /// edited.
     read_only: bool,
+    /// `maxlength` in UTF-16 units, for the fields that enforce it while the
+    /// user types.
+    max_length: Option<usize>,
     /// How far the text is scrolled, in logical pixels.
     scroll: (f32, f32),
     /// The content box in logical pixels, what the text scrolls inside.
@@ -138,6 +141,47 @@ impl TextInputState {
     }
 }
 
+/// `maxlength` for a text field that enforces it as the user types (every
+/// text-like input and a textarea, but not a number field).
+fn max_length(arena: &Arena, node: NodeId) -> Option<usize> {
+    let enforced = arena.tag(node) == "textarea"
+        || matches!(
+            arena.input_type(node),
+            None | Some("text") | Some("password") | Some("email")
+        );
+    enforced
+        .then(|| arena.attr(node, "maxlength"))
+        .flatten()
+        .and_then(|raw| raw.trim().parse::<usize>().ok())
+}
+
+/// `op` cut to what still fits under `maxlength`: typing past the limit is
+/// blocked and pasted text is cut to fit (measured in Edge, where a line
+/// break counts as one). `None` when nothing of an insertion fits.
+fn limit_insertion(state: &TextInputState, op: TextEditOp) -> Option<TextEditOp> {
+    let (Some(max), TextEditOp::InsertOrReplace(text)) = (state.max_length, &op) else {
+        return Some(op);
+    };
+    let units = |s: &str| s.encode_utf16().count();
+    let current = units(&state.editor.text());
+    let selected = state.editor.selected_text().map_or(0, units);
+    let room = max.saturating_sub(current - selected);
+    let mut kept = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let width = c.len_utf16();
+        if used + width > room {
+            break;
+        }
+        kept.push(c);
+        used += width;
+    }
+    if kept.is_empty() && !text.is_empty() {
+        return None;
+    }
+    Some(TextEditOp::InsertOrReplace(kept))
+}
+
 /// Whether `op` would change the text, as opposed to only moving the caret
 /// or the selection.
 fn changes_text(op: &TextEditOp) -> bool {
@@ -153,7 +197,6 @@ fn changes_text(op: &TextEditOp) -> bool {
 }
 
 /// The content box of a node (its layout box less border and padding) in
-/// Whether `op` would change the text (as opposed to only moving the caret/// or the selection).fn changes_text(op: &TextEditOp) -> bool {    matches!(        op,        TextEditOp::InsertOrReplace(_)            | TextEditOp::Delete            | TextEditOp::Backdelete            | TextEditOp::DeleteWord            | TextEditOp::BackdeleteWord            | TextEditOp::SetCompose(..)    )}
 /// logical pixels.
 fn content_box(
     style: Option<&ComputedStyle>,
@@ -235,6 +278,7 @@ impl TextInputRegistry {
                 state.font_weight = font_weight;
                 state.kind = value_kind(arena, node);
                 state.read_only = arena.attr_flag(node, "readonly");
+                state.max_length = max_length(arena, node);
                 let mut needs_relayout = state.viewport != viewport;
                 state.viewport = viewport;
                 if state.last_committed_text != value {
@@ -260,9 +304,15 @@ impl TextInputRegistry {
                 let font_size = style.map_or(16.0, |s| s.font_size);
                 let mut editor = TextEditor::new(font_size);
                 editor.set_text(value);
+                // A textarea starts with its caret at the start (measured in
+                // Edge); a single-line field's is at the end.
                 font.apply_text_edit(
                     &mut editor,
-                    TextEditOp::MoveTextEnd,
+                    if multiline {
+                        TextEditOp::MoveTextStart
+                    } else {
+                        TextEditOp::MoveTextEnd
+                    },
                     font_family,
                     font_weight,
                 );
@@ -278,6 +328,7 @@ impl TextInputRegistry {
                     coalescing_insert: false,
                     multiline,
                     read_only: arena.attr_flag(node, "readonly"),
+                    max_length: max_length(arena, node),
                     scroll: (0.0, 0.0),
                     viewport,
                 };
@@ -308,6 +359,7 @@ impl TextInputRegistry {
         if state.read_only && changes_text(&op) {
             return None;
         }
+        let op = limit_insertion(state, op)?;
 
         let is_coalescable_insert = matches!(&op, TextEditOp::InsertOrReplace(text) if text.chars().count() == 1)
             && state.editor.selection().is_collapsed();

@@ -1593,6 +1593,26 @@ impl WindowState {
     /// `winit`'s own `drag_window` takes over the mouse for the rest of a
     /// single-click drag gesture, so there is no matching press to
     /// remember here.
+    /// Tabbing into a single-line text field selects everything in it, as
+    /// Edge does (measured); a textarea keeps its caret, and a click never
+    /// selects all.
+    fn select_all_on_tab_focus(&mut self, node: Option<NodeId>) {
+        let Some(node) = node else {
+            return;
+        };
+        let Some(id) = ({
+            let (arena, ..) = self.runtime.geometry();
+            (arena.tag(node) == "input")
+                .then(|| arena.id_attr(node).map(str::to_owned))
+                .flatten()
+        }) else {
+            return;
+        };
+        let registry = self.runtime.text_input_registry();
+        let (_, _, _, font) = self.runtime.geometry_and_font_mut();
+        registry.apply(&id, TextEditOp::SelectAll, font);
+    }
+
     /// A press dismisses the validation bubble, except one that only moves
     /// the caret inside the very field the bubble hangs from (measured in
     /// Edge: clicking empty page area dismisses it).
@@ -2111,6 +2131,7 @@ impl WindowState {
                     }
                     self.window
                         .set_ime_allowed(now_focused.is_some_and(|node| self.allows_ime(node)));
+                    self.select_all_on_tab_focus(now_focused);
                     self.update_and_request_redraw();
                 }
             }
