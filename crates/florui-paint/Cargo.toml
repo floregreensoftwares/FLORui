@@ -25,3 +25,7 @@ criterion = "0.5"
 [[bench]]
 name = "paint"
 harness = false
+
+[[bench]]
+name = "effects"
+harness = false
