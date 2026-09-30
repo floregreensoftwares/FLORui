@@ -7,7 +7,7 @@
 use std::rc::Rc;
 
 use florui_reactive::executor::{Executor, LocalBoxFuture};
-use florui_reactive::{Ref, ScrollAnchor, Signal};
+use florui_reactive::{FocusHost, Ref, ScrollAnchor, Signal};
 
 use crate::routable::Routable;
 
@@ -65,6 +65,10 @@ pub type Guard<R> = Rc<dyn Fn(&R, &R, NavKind) -> GuardDecision>;
 pub struct HistoryEntry<R> {
     pub route: R,
     pub scroll_anchor: Option<ScrollAnchor>,
+    /// The `id` of the element that had focus when this entry was left,
+    /// recorded automatically when the host provides a [`FocusHost`]; see
+    /// [`crate::use_route_focus`], which gives it back on return.
+    pub focus_id: Option<String>,
 }
 
 /// A validated external navigation request -- see
@@ -99,6 +103,9 @@ pub struct Router<R: Routable> {
     /// [`crate::use_route_transition`] watches.
     transition_generation: Signal<u64>,
     last_transition_kind: Ref<NavKind>,
+    /// The host's focus access, when it provides one: each entry records the
+    /// element that had focus as it is left.
+    focus_host: Option<Rc<dyn FocusHost>>,
 }
 
 impl<R: Routable> Clone for Router<R> {
@@ -111,6 +118,7 @@ impl<R: Routable> Clone for Router<R> {
             executor: Rc::clone(&self.executor),
             transition_generation: self.transition_generation.clone(),
             last_transition_kind: self.last_transition_kind.clone(),
+            focus_host: self.focus_host.clone(),
         }
     }
 }
@@ -136,7 +144,14 @@ impl<R: Routable> Router<R> {
             executor,
             transition_generation,
             last_transition_kind,
+            focus_host: None,
         }
+    }
+
+    /// Gives this router the host's [`FocusHost`], if any.
+    pub(crate) fn with_focus_host(mut self, focus_host: Option<Rc<dyn FocusHost>>) -> Self {
+        self.focus_host = focus_host;
+        self
     }
 
     fn clamped_index(&self, entries_len: usize) -> usize {
@@ -285,7 +300,25 @@ impl<R: Routable> Router<R> {
         }));
     }
 
+    /// Records which element has focus against the entry being left, so
+    /// returning to it can give that focus back. A replaced entry is gone,
+    /// so there is nothing to keep.
+    fn record_focus(&self) {
+        let Some(host) = &self.focus_host else {
+            return;
+        };
+        let mut entries = self.entries.get();
+        let index = self.clamped_index(entries.len());
+        if let Some(entry) = entries.get_mut(index) {
+            entry.focus_id = host.focused_id();
+        }
+        self.entries.set(entries);
+    }
+
     fn commit(&self, route: R, kind: NavKind) {
+        if kind != NavKind::Replace {
+            self.record_focus();
+        }
         match kind {
             NavKind::Push => {
                 let mut entries = self.entries.get();
@@ -294,6 +327,7 @@ impl<R: Routable> Router<R> {
                 entries.push(HistoryEntry {
                     route,
                     scroll_anchor: None,
+                    focus_id: None,
                 });
                 let new_index = entries.len() - 1;
                 self.entries.set(entries);
@@ -306,6 +340,7 @@ impl<R: Routable> Router<R> {
                     *entry = HistoryEntry {
                         route,
                         scroll_anchor: None,
+                        focus_id: None,
                     };
                 }
                 self.entries.set(entries);
@@ -379,6 +414,7 @@ mod tests {
                 vec![HistoryEntry {
                     route: initial,
                     scroll_anchor: None,
+                    focus_id: None,
                 }]
             });
             let index = use_signal(|| 0usize);
