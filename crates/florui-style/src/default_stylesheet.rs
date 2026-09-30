@@ -316,6 +316,19 @@ pub(crate) fn rule() -> Rule {
     RULE.clone()
 }
 
+/// Resets `--florui-scroll-behavior` on every element, because the real
+/// property does not inherit and a custom property does. Only registered
+/// when something declares the property: the universal rule costs the
+/// cascade a few percent, which an app that never scrolls smoothly should
+/// not pay.
+pub(crate) fn scroll_behavior_reset_rule() -> Rule {
+    static RULE: LazyLock<Rule> = LazyLock::new(|| {
+        parse_stylesheet_with_origin("* { --florui-scroll-behavior: auto; }", Origin::UserAgent)
+            .expect("a fixed, valid stylesheet")
+    });
+    RULE.clone()
+}
+
 #[cfg(test)]
 mod tests {
     use florui::prelude::*;

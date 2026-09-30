@@ -51,7 +51,7 @@ const DYNAMIC_CACHE_CAPACITY: usize = 8;
 /// this to [`crate::cascade::compute`]. Cloning is cheap and shares the
 /// same underlying state (an [`Arc`]), including the cache below.
 #[derive(Clone)]
-pub struct Rule(Arc<RuleKind>);
+pub struct Rule(Arc<RuleKind>, bool);
 
 enum RuleKind {
     /// The common case: nothing in the authored CSS could possibly be a
@@ -121,6 +121,12 @@ impl Rule {
         }
     }
 
+    /// Whether this rule's CSS declares `scroll-behavior`, which is what
+    /// makes the user-agent reset of its custom property worth applying.
+    pub(crate) fn uses_scroll_behavior(&self) -> bool {
+        self.1
+    }
+
     /// Every `@container` block this rule's own CSS contains, in source
     /// order — the order [`Self::stylesheet`]'s own `container_query_signature`
     /// must align to. Empty for a [`RuleKind::Static`] rule.
@@ -179,20 +185,33 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
     LazyLock::force(&GRID_ENABLED);
     LazyLock::force(&BACKDROP_FILTER_ENABLED);
     LazyLock::force(&CONTAINER_QUERIES_ENABLED);
+    let css = if origin == Origin::Author {
+        crate::scroll_behavior_adapter::rewrite_stylesheet(css)
+    } else {
+        std::borrow::Cow::Borrowed(css)
+    };
+    let uses_scroll_behavior = matches!(css, std::borrow::Cow::Owned(_));
+    let css = css.as_ref();
     let container_blocks = container_query_adapter::extract_container_queries(css);
     let lower_css = css.to_ascii_lowercase();
     if !container_blocks.is_empty()
         || lower_css.contains("height")
         || lower_css.contains("prefers-reduced-motion")
     {
-        return Ok(Rule(Arc::new(RuleKind::Dynamic {
-            css: css.to_string(),
-            origin,
-            container_blocks,
-            cache: Mutex::new(Vec::new()),
-        })));
+        return Ok(Rule(
+            Arc::new(RuleKind::Dynamic {
+                css: css.to_string(),
+                origin,
+                container_blocks,
+                cache: Mutex::new(Vec::new()),
+            }),
+            uses_scroll_behavior,
+        ));
     }
-    Ok(Rule(Arc::new(RuleKind::Static(parse_str(css, origin)))))
+    Ok(Rule(
+        Arc::new(RuleKind::Static(parse_str(css, origin))),
+        uses_scroll_behavior,
+    ))
 }
 
 fn parse_str(css: &str, origin: Origin) -> StyloArc<Stylesheet> {
