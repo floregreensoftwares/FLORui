@@ -123,6 +123,25 @@ fn bench_hit_test(c: &mut Criterion) {
             b.iter(|| black_box(rt.hit_test(100.0, y)))
         });
     }
+    // Same node count per step as a chain instead of a list: shows whether
+    // the per-node cost grows with depth.
+    for &depth in &[50usize, 100, 200] {
+        let rt = UiRuntime::new(
+            CSS,
+            move || {
+                let mut node = row(0);
+                for _ in 0..depth {
+                    node = Element::node("div", vec![("class".into(), "list".into())], vec![node]);
+                }
+                node
+            },
+            VIEWPORT,
+        )
+        .expect("benchmark CSS must be valid");
+        group.bench_function(format!("{depth}_deep"), |b| {
+            b.iter(|| black_box(rt.hit_test(10.0, 10.0)))
+        });
+    }
     group.finish();
 }
 
