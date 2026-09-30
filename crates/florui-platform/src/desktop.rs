@@ -1287,7 +1287,11 @@ impl WindowState {
         self.with_input(|input| input.handle_ime_event(ime));
     }
 
-    fn handle_keyboard_input(&mut self, event: KeyEvent, clipboard: &crate::clipboard::Clipboard) {
+    fn handle_keyboard_input(
+        &mut self,
+        event: KeyEvent,
+        clipboard: &dyn crate::clipboard::ClipboardAccess,
+    ) {
         let input = KeyInput {
             logical_key: event.logical_key,
             physical_key: event.physical_key,
