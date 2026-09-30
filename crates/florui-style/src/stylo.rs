@@ -75,6 +75,7 @@ type BorrowedNamespaceUrl = <SelectorImpl as selectors::parser::SelectorImpl>::B
 struct NodeSlot {
     parent: Option<*const NodeSlot>,
     depth: usize,
+    sibling_index: usize,
     children: Vec<*const NodeSlot>,
     tag: &'static str,
     /// Every attribute exactly as authored — see [`Arena::attrs`] and
@@ -136,6 +137,7 @@ impl StyloTree {
         let mut index_of = HashMap::new();
         let mut slots: Vec<NodeSlot> = Vec::with_capacity(order.len());
         let mut stable_ids: Vec<usize> = Vec::with_capacity(order.len());
+        let mut same_tag_seen: HashMap<(Option<NodeId>, &str), usize> = HashMap::new();
         for (index, &id) in order.iter().enumerate() {
             index_of.insert(id, index);
             let mut node_state = ElementState::empty();
@@ -250,17 +252,22 @@ impl StyloTree {
             let parent_stable = arena
                 .parent(id)
                 .map(|parent_id| stable_ids[index_of[&parent_id]]);
-            let stable_id = timeline.stable_id(
-                parent_stable,
-                arena.tag(id),
-                Self::sibling_ordinal(arena, id),
-            );
+            // Ordinal among same-tag siblings, ignoring class so a class
+            // toggle alone doesn't reassign identity.
+            let stable_id = timeline.stable_id(parent_stable, arena.tag(id), {
+                let seen = same_tag_seen
+                    .entry((arena.parent(id), arena.tag(id)))
+                    .or_insert(0);
+                *seen += 1;
+                *seen - 1
+            });
             stable_ids.push(stable_id);
             slots.push(NodeSlot {
                 parent: None,
                 depth: arena
                     .parent(id)
                     .map_or(0, |p| slots[index_of[&p]].depth + 1),
+                sibling_index: 0,
                 children: Vec::new(),
                 tag: arena.tag(id),
                 attrs: arena.attrs(id).to_vec(),
@@ -290,6 +297,9 @@ impl StyloTree {
                 .collect();
             slots[index].parent = parent_ptr;
             slots[index].children = children_ptrs;
+            for (position, child_id) in arena.children(id).iter().enumerate() {
+                slots[index_of[child_id]].sibling_index = position;
+            }
         }
 
         // Multiple roots (a Fragment) have no single document element for
@@ -314,24 +324,6 @@ impl StyloTree {
             order.push(id);
             stack.extend(arena.children(id).iter().rev());
         }
-    }
-
-    /// How many earlier same-`tag` siblings `id` has — the tie breaker
-    /// [`AnimationTimeline::stable_id`] needs when a parent has several
-    /// same-tag children. Deliberately ignores class, so a class toggle
-    /// alone (the usual way a real transition even triggers) doesn't
-    /// reassign identity — see [`crate::animation`]'s own module doc.
-    fn sibling_ordinal(arena: &Arena, id: NodeId) -> usize {
-        let siblings: &[NodeId] = match arena.parent(id) {
-            Some(parent_id) => arena.children(parent_id),
-            None => arena.roots(),
-        };
-        let tag = arena.tag(id);
-        siblings
-            .iter()
-            .take_while(|&&sibling| sibling != id)
-            .filter(|&&sibling| arena.tag(sibling) == tag)
-            .count()
     }
 
     fn node(&self, id: NodeId) -> StyloNode<'_> {
@@ -363,12 +355,8 @@ impl std::hash::Hash for StyloNode<'_> {
 
 impl<'a> StyloNode<'a> {
     fn index_in_parent_siblings(&self) -> Option<usize> {
-        let parent = self.parent_node()?;
-        parent
-            .0
-            .children
-            .iter()
-            .position(|&child| std::ptr::eq(child, self.0))
+        self.parent_node()?;
+        Some(self.0.sibling_index)
     }
 }
 
