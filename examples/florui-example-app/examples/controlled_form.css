@@ -1,0 +1,124 @@
+.page {
+    display: flex;
+    flex-direction: column;
+    padding-top: 24px;
+    padding-right: 24px;
+    padding-bottom: 24px;
+    padding-left: 24px;
+    background-color: #1e1e22;
+    color: #ffffff;
+}
+
+.instructions {
+    margin-bottom: 20px;
+    font-size: 16px;
+}
+
+.form {
+    display: block;
+}
+
+.field-label {
+    margin-right: 12px;
+    margin-bottom: 6px;
+    font-size: 14px;
+    color: #b0b0b8;
+}
+
+.text-field {
+    margin-bottom: 12px;
+    padding-top: 8px;
+    padding-right: 12px;
+    padding-bottom: 8px;
+    padding-left: 12px;
+    background-color: #26262c;
+    color: #ffffff;
+    border-width: 2px;
+    border-style: solid;
+    border-color: #26262c;
+}
+
+.text-field:focus-visible {
+    border-color: #4c8bf5;
+}
+
+.text-field:user-invalid {
+    border-color: #e5484d;
+}
+
+.select {
+    display: flex;
+    margin-bottom: 12px;
+    padding-top: 6px;
+    padding-right: 10px;
+    padding-bottom: 6px;
+    padding-left: 10px;
+    background-color: #26262c;
+    color: #ffffff;
+    font-size: 15px;
+    border-width: 2px;
+    border-style: solid;
+    border-color: #6b6b73;
+}
+
+.select:focus-visible {
+    border-color: #ffffff;
+}
+
+.row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.checkbox,
+.radio {
+    width: 18px;
+    height: 18px;
+    margin-right: 10px;
+    background-color: #26262c;
+    border-width: 2px;
+    border-style: solid;
+    border-color: #6b6b73;
+}
+
+.radio {
+    border-radius: 50%;
+}
+
+.checkbox:checked,
+.radio:checked {
+    background-color: #4c8bf5;
+    border-color: #4c8bf5;
+}
+
+.radio:checked {
+    box-shadow: inset 0 0 0 3px #26262c;
+}
+
+.checkbox:focus-visible,
+.radio:focus-visible {
+    border-color: #ffffff;
+}
+
+.button {
+    margin-right: 12px;
+    padding-top: 8px;
+    padding-right: 16px;
+    padding-bottom: 8px;
+    padding-left: 16px;
+    background-color: #4c8bf5;
+    color: #ffffff;
+    border-color: #4c8bf5;
+}
+
+.button:focus-visible {
+    border-color: #ffffff;
+}
+
+.status {
+    margin-top: 8px;
+    font-size: 14px;
+    color: #8fbf7f;
+}
