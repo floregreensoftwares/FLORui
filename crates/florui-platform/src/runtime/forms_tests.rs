@@ -1246,3 +1246,100 @@ fn a_number_typed_into_bad_input_reports_a_number_is_needed_even_when_required()
         Some("Please enter a number.")
     );
 }
+
+/// A new textarea's caret starts at the start of its text; a single-line
+/// field's starts at the end (both measured in Edge).
+#[test]
+fn a_new_textarea_starts_with_its_caret_at_the_start_and_an_input_at_the_end() {
+    let rt = runtime("", || {
+        view! {
+            <form>
+                <textarea id="area" value="one\ntwo"></textarea>
+                <input id="line" type="text" value="hello" />
+            </form>
+        }
+    });
+    let registry = rt.text_input_registry();
+    let mut rt = rt;
+    for (id, expected) in [("area", 0), ("line", 5)] {
+        let key = node_id_string(&rt, id);
+        let (_, _, _, font) = rt.geometry_and_font_mut();
+        registry.apply(&key, florui_text::editing::TextEditOp::SelectLineEnd, font);
+        let selected = registry.selected_text(&key).unwrap_or_default();
+        // From the caret to the end of its line: everything for the start,
+        // nothing for the end.
+        assert_eq!(selected.is_empty(), expected != 0, "{id}");
+    }
+}
+
+/// Rows measured in Edge with real key presses and a real paste.
+#[test]
+fn maxlength_blocks_typing_and_cuts_a_paste_to_fit() {
+    use florui_text::editing::TextEditOp;
+    let mut rt = runtime("", || {
+        view! {
+            <form>
+                <input id="typed" type="text" maxlength="5" value="" />
+                <input id="pasted" type="text" maxlength="5" value="ab" />
+                <textarea id="area" maxlength="5" value=""></textarea>
+                <input id="over" type="text" maxlength="3" value="abcdef" />
+                <input id="num" type="number" maxlength="2" value="" />
+                <input id="picked" type="text" maxlength="5" value="abcde" />
+            </form>
+        }
+    });
+    let registry = rt.text_input_registry();
+    let insert = |rt: &mut UiRuntime, id: &str, text: &str| -> Option<String> {
+        let key = node_id_string(rt, id);
+        let (_, _, _, font) = rt.geometry_and_font_mut();
+        registry.apply(&key, TextEditOp::InsertOrReplace(text.to_string()), font)
+    };
+    let mut committed = String::new();
+    for c in "abcdefgh".chars() {
+        if let Some(text) = insert(&mut rt, "typed", &c.to_string()) {
+            committed = text;
+        }
+    }
+    assert_eq!(committed, "abcde", "typing stops at the limit");
+
+    assert_eq!(
+        insert(&mut rt, "pasted", "123456789").as_deref(),
+        Some("ab123"),
+        "a paste is cut to what still fits"
+    );
+
+    let mut area = String::new();
+    for piece in ["a", "\n", "b", "\n", "c", "\n", "d"] {
+        if let Some(text) = insert(&mut rt, "area", piece) {
+            area = text;
+        }
+    }
+    assert_eq!(area, "a\nb\nc", "a line break counts as one character");
+
+    assert_eq!(
+        insert(&mut rt, "over", "X"),
+        None,
+        "a value already over the limit takes nothing more"
+    );
+
+    assert_eq!(
+        insert(&mut rt, "num", "12345").as_deref(),
+        Some("12345"),
+        "a number field ignores maxlength"
+    );
+
+    let key = node_id_string(&rt, "picked");
+    let (_, _, _, font) = rt.geometry_and_font_mut();
+    registry.apply(&key, TextEditOp::SelectAll, font);
+    assert_eq!(
+        registry
+            .apply(
+                &key,
+                TextEditOp::InsertOrReplace("123456".to_string()),
+                font
+            )
+            .as_deref(),
+        Some("12345"),
+        "replacing a selection frees its room"
+    );
+}
