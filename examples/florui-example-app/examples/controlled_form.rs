@@ -30,12 +30,15 @@ fn main() {
 fn app() -> Element {
     let username = use_signal(String::new);
     let password = use_signal(String::new);
+    let email = use_signal(String::new);
+    let qty = use_signal(|| "1".to_string());
     let plan = use_signal(|| "free".to_string());
     let newsletter = use_signal(|| false);
     let contact = use_signal(|| "email".to_string());
     let status = use_signal(|| "Nothing submitted yet.".to_string());
 
     let (username_input, password_input) = (username.clone(), password.clone());
+    let (email_input, qty_input) = (email.clone(), qty.clone());
     let (plan_open, plan_value) = (use_signal(|| false), plan.clone());
     let plan_toggle = plan_open.clone();
     let plan_close = plan_open.clone();
@@ -45,6 +48,8 @@ fn app() -> Element {
     let reset_state = (
         username.clone(),
         password.clone(),
+        email.clone(),
+        qty.clone(),
         plan.clone(),
         newsletter.clone(),
         contact.clone(),
@@ -83,9 +88,12 @@ fn app() -> Element {
                     submit_status.set(format!("Submitted: {}", summary.join(", ")));
                 }}
                 onreset={move || {
-                    let (username, password, plan, newsletter, contact, status) = &reset_state;
+                    let (username, password, email, qty, plan, newsletter, contact, status) =
+                        &reset_state;
                     username.set(String::new());
                     password.set(String::new());
+                    email.set(String::new());
+                    qty.set("1".to_string());
                     plan.set("free".to_string());
                     newsletter.set(false);
                     contact.set("email".to_string());
@@ -115,6 +123,31 @@ fn app() -> Element {
                     value={password.get()}
                     oninput={move |value: String| password_input.set(value)}
                 />
+
+                <label class="field-label" for="email">{"Email"}</label>
+                <input
+                    id="email"
+                    class="text-field"
+                    type="email"
+                    name="email"
+                    required="true"
+                    value={email.get()}
+                    oninput={move |value: String| email_input.set(value)}
+                />
+
+                <label class="field-label" for="qty">{"Seats (1 to 10)"}</label>
+                <input
+                    id="qty"
+                    class="text-field"
+                    type="number"
+                    name="qty"
+                    min="1"
+                    max="10"
+                    value={qty.get()}
+                    oninput={move |value: String| qty_input.set(value)}
+                />
+
+                <input type="hidden" name="source" value="signup" />
 
                 <label class="field-label" for="plan">{"Plan"}</label>
                 <select
