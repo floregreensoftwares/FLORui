@@ -89,6 +89,9 @@ mod host_observer;
 mod input;
 
 #[cfg(feature = "desktop")]
+pub use clipboard::{ClipboardAccess, MemoryClipboard};
+
+#[cfg(feature = "desktop")]
 pub use host_observer::{HostObserver, ObservedFrame, OverlayCanvas};
 
 #[cfg(feature = "desktop")]

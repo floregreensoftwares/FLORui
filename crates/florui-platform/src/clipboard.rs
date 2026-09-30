@@ -9,6 +9,35 @@
 
 use std::cell::RefCell;
 
+/// What text editing needs from a clipboard: the real OS one in the desktop
+/// host, [`MemoryClipboard`] anywhere else.
+pub trait ClipboardAccess {
+    /// The current text, if any; `None` means there is nothing to paste.
+    fn get_text(&self) -> Option<String>;
+    /// Replaces the contents with `text`.
+    fn set_text(&self, text: String);
+}
+
+/// A clipboard held in memory, for tests and hosts with no OS clipboard.
+#[derive(Default)]
+pub struct MemoryClipboard(RefCell<Option<String>>);
+
+impl MemoryClipboard {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl ClipboardAccess for MemoryClipboard {
+    fn get_text(&self) -> Option<String> {
+        self.0.borrow().clone()
+    }
+
+    fn set_text(&self, text: String) {
+        *self.0.borrow_mut() = Some(text);
+    }
+}
+
 /// Wraps a real `arboard::Clipboard`. Construction can fail (no clipboard
 /// service available) — logged once and left unavailable for the rest of
 /// the process, the same "log and continue, don't crash" precedent
@@ -26,20 +55,18 @@ impl Clipboard {
             }
         }
     }
+}
 
-    /// The clipboard's current text, if it holds any and reading it
-    /// succeeds — `None` either way is silently treated as "nothing to
-    /// paste," not an error a caller needs to react to.
-    pub(crate) fn get_text(&self) -> Option<String> {
+impl ClipboardAccess for Clipboard {
+    /// `None` either way (nothing there, or reading failed) is treated as
+    /// "nothing to paste," not an error a caller needs to react to.
+    fn get_text(&self) -> Option<String> {
         self.0.borrow_mut().as_mut()?.get_text().ok()
     }
 
-    /// Writes `text` to the clipboard — a failure (or an unavailable
-    /// clipboard) is logged, not surfaced: a copy/cut a real OS clipboard
-    /// silently swallows is a real, sharp-edged case, but not one this
-    /// slice's own caller (a keyboard shortcut with no error-reporting UI
-    /// of its own) has anywhere to report it to.
-    pub(crate) fn set_text(&self, text: String) {
+    /// A failure (or an unavailable clipboard) is logged, not surfaced: a
+    /// keyboard shortcut has no error-reporting UI to report it to.
+    fn set_text(&self, text: String) {
         let mut clipboard = self.0.borrow_mut();
         let Some(clipboard) = clipboard.as_mut() else {
             return;
@@ -47,5 +74,19 @@ impl Clipboard {
         if let Err(error) = clipboard.set_text(text) {
             eprintln!("florui-platform: could not write to the system clipboard: {error}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_in_memory_clipboard_returns_what_was_last_written() {
+        let clipboard = MemoryClipboard::new();
+        assert_eq!(clipboard.get_text(), None, "nothing to paste at first");
+        clipboard.set_text("one".to_string());
+        clipboard.set_text("two".to_string());
+        assert_eq!(clipboard.get_text(), Some("two".to_string()));
     }
 }

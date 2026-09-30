@@ -1209,7 +1209,7 @@ impl<H: InputHost> Input<'_, H> {
     pub(crate) fn handle_keyboard_input(
         &mut self,
         event: KeyInput,
-        clipboard: &crate::clipboard::Clipboard,
+        clipboard: &dyn crate::clipboard::ClipboardAccess,
     ) {
         if event.state != ElementState::Pressed {
             if matches!(event.logical_key, Key::Named(NamedKey::Space)) {
@@ -1629,7 +1629,7 @@ impl<H: InputHost> Input<'_, H> {
         &mut self,
         node: NodeId,
         event: &KeyInput,
-        clipboard: &crate::clipboard::Clipboard,
+        clipboard: &dyn crate::clipboard::ClipboardAccess,
     ) {
         let Some(id) = ({
             let (arena, ..) = self.runtime.geometry();
