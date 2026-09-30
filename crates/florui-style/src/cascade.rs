@@ -327,6 +327,11 @@ pub struct ComputedStyle {
     pub width: Option<f32>,
     /// `None` means `auto`; see [`Self::width`].
     pub height: Option<f32>,
+    /// `None` means `none`, or a value that is not a plain length; see
+    /// [`Self::width`]. Only lengths clamp.
+    pub max_width: Option<f32>,
+    /// See [`Self::max_width`].
+    pub max_height: Option<f32>,
     /// Each edge is `None` for an explicit `auto` (enabling the usual
     /// auto-margin centering behavior), `Some(0.0)` when nothing set it.
     pub margin: Edges<Option<f32>>,
@@ -1395,6 +1400,22 @@ mod tests {
             Some(0.0),
             "unset margin edges default to 0, not auto"
         );
+    }
+
+    #[test]
+    fn max_size_resolves_lengths_and_ignores_none() {
+        let tree: Element = view! { <div class="a" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".a { max-width: 317px; max-height: 40px; }",
+            &InteractionState::new(),
+        );
+        let style = &computed[&arena.roots()[0]];
+        assert_eq!(style.max_width, Some(317.0));
+        assert_eq!(style.max_height, Some(40.0));
+
+        let (arena, computed) = styles(&tree, ".a { max-width: none; }", &InteractionState::new());
+        assert_eq!(computed[&arena.roots()[0]].max_width, None);
     }
 
     #[test]

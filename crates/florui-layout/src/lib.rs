@@ -1323,6 +1323,10 @@ fn to_taffy_style(style: Option<&ComputedStyle>) -> taffy::Style {
             width: to_dimension(style.width),
             height: to_dimension(style.height),
         },
+        max_size: Size {
+            width: to_length_percentage_auto(style.max_width),
+            height: to_length_percentage_auto(style.max_height),
+        },
         margin: Rect {
             left: to_length_percentage_auto(style.margin.left),
             right: to_length_percentage_auto(style.margin.right),
