@@ -782,6 +782,9 @@ impl UiRuntime {
         }
         if node != self.focused_node {
             self.dismiss_validation_bubble();
+            if let Some(id) = self.focused_node.and_then(|n| self.arena.id_attr(n)) {
+                self.text_input_registry.reset_scroll_on_blur(id);
+            }
         }
         if node != self.focused_node
             && let Some(previous) = self.focused_path.take()

@@ -213,6 +213,7 @@ impl StyloTree {
                     (form.default, ElementState::DEFAULT),
                     (form.in_range, ElementState::INRANGE),
                     (form.out_of_range, ElementState::OUTOFRANGE),
+                    (form.placeholder_shown, ElementState::PLACEHOLDER_SHOWN),
                 ] {
                     if on {
                         node_state |= flag;

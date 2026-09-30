@@ -1343,3 +1343,85 @@ fn maxlength_blocks_typing_and_cuts_a_paste_to_fit() {
         "replacing a selection frees its room"
     );
 }
+
+/// Every row measured in Edge (`:placeholder-shown`).
+#[test]
+fn placeholder_shown_matches_what_edge_measured() {
+    let rt = runtime("", || {
+        view! {
+            <form>
+                <input id="a" type="text" placeholder="Type here" />
+                <input id="b" type="password" placeholder="Secret" />
+                <input id="c" type="number" placeholder="1-10" />
+                <input id="d" type="email" placeholder="me@x.com" />
+                <textarea id="e" placeholder="Write a note"></textarea>
+                <input id="f" type="text" placeholder="filled" value="x" />
+                <input id="g" type="text" placeholder="" />
+                <input id="h" type="text" />
+                <input id="i" type="checkbox" placeholder="x" />
+                <input id="j" type="range" placeholder="x" />
+                <input id="k" type="text" placeholder="ro" readonly="true" />
+                <input id="l" type="text" placeholder="dis" disabled="true" />
+            </form>
+        }
+    });
+    for (id, expected) in [
+        ("a", true),
+        ("b", true),
+        ("c", true),
+        ("d", true),
+        ("e", true),
+        ("f", false),
+        ("g", false),
+        ("h", false),
+        ("i", false),
+        ("j", false),
+        ("k", true),
+        ("l", true),
+    ] {
+        let state = rt.form_state_of(node(&rt, id)).unwrap();
+        assert_eq!(state.placeholder_shown, expected, "field {id}");
+    }
+}
+
+#[test]
+fn a_single_line_field_scrolls_sideways_to_its_caret_and_so_does_a_password() {
+    use florui_text::editing::TextEditOp;
+    let mut rt = runtime("", || {
+        view! {
+            <form>
+                <input id="plain" type="text" style="width: 60px;" value="" />
+                <input id="secret" type="password" style="width: 60px;" value="" />
+            </form>
+        }
+    });
+    let registry = rt.text_input_registry();
+    for id in ["plain", "secret"] {
+        let key = node_id_string(&rt, id);
+        let (_, _, _, font) = rt.geometry_and_font_mut();
+        registry.apply(
+            &key,
+            TextEditOp::InsertOrReplace("a very long line of text".to_string()),
+            font,
+        );
+    }
+    let plain = registry.scroll_offset(&node_id_string(&rt, "plain")).0;
+    let secret = registry.scroll_offset(&node_id_string(&rt, "secret")).0;
+    assert!(plain > 0.0, "the text scrolled so the caret stays visible");
+    assert!(
+        secret > 0.0,
+        "a password scrolls by its bullets, measured in Edge"
+    );
+    let key = node_id_string(&rt, "plain");
+    let (_, _, _, font) = rt.geometry_and_font_mut();
+    registry.apply(&key, TextEditOp::MoveTextStart, font);
+    assert_eq!(registry.scroll_offset(&key).0, 0.0, "back at the start");
+    let secret_key = node_id_string(&rt, "secret");
+    let (_, _, _, font) = rt.geometry_and_font_mut();
+    registry.apply(&secret_key, TextEditOp::MoveTextStart, font);
+    assert_eq!(
+        registry.scroll_offset(&secret_key).0,
+        0.0,
+        "password back at the start"
+    );
+}

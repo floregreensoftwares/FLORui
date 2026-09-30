@@ -153,6 +153,7 @@ pub(crate) fn form_state(
         default: is_default(arena, node),
         in_range,
         out_of_range,
+        placeholder_shown: shows_placeholder(arena, node, spec.text_field),
     })
 }
 
@@ -224,4 +225,15 @@ fn range_state(ctx: &FormContext, node: NodeId, candidate: bool) -> (bool, bool)
         }
         _ => (false, false),
     }
+}
+
+/// Whether a text control shows its placeholder: it has a non-empty
+/// `placeholder` and no value (measured in Edge, for every text-like input
+/// and a textarea alike, read-only and disabled ones too).
+pub(crate) fn shows_placeholder(arena: &Arena, node: NodeId, text_field: bool) -> bool {
+    text_field
+        && arena
+            .attr(node, "placeholder")
+            .is_some_and(|p| !p.is_empty())
+        && arena.value_attr(node).is_none_or(str::is_empty)
 }
