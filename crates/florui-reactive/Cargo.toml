@@ -10,3 +10,10 @@ name = "florui_reactive"
 
 [dependencies]
 futures = "0.3.34"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "reactive"
+harness = false
