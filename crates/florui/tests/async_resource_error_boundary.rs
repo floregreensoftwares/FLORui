@@ -1,9 +1,8 @@
 //! `use_resource` and `error_boundary` composed together through the real
 //! `#[component]`/`view!` macro surface: an async failure explicitly
 //! reported to the nearest boundary, the fallback it renders, cleanup of
-//! the failed subtree, and a reset that restarts the resource fresh. See
-//! async-and-errors.md's "Route event or async failures explicitly" and
-//! "On failure, dispose the replaced subtree once... mount the fallback."
+//! the failed subtree, and a reset that restarts the resource fresh: route event or async failures explicitly, and
+//! "on failure, dispose the replaced subtree once... mount the fallback."
 
 use std::cell::RefCell;
 use std::rc::Rc;

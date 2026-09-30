@@ -1996,7 +1996,7 @@ mod tests {
         );
     }
 
-    /// loading-boundaries.md's own acceptance requirement: "an externally
+    /// the loading contract's own acceptance requirement: "an externally
     /// completed future reveals content without a manual update, click,
     /// or resize." Same shape as the resource-only version above, with a
     /// `loading_boundary` deciding between a fallback and the real

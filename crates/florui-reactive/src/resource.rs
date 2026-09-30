@@ -1,5 +1,5 @@
 //! [`use_resource`]: component-owned async work with typed idle/pending/
-//! ready/failed states — see async-and-errors.md.
+//! ready/failed states.
 //!
 //! Every fetch is tied to an internal generation counter: starting a new
 //! one (because the key changed, or [`ResourceHandle::retry`] was called)
@@ -60,7 +60,7 @@ impl<T, E> Resource<T, E> {
 }
 
 /// What [`use_resource`] returns: the current [`Resource`] state plus the
-/// explicit actions async-and-errors.md requires alongside it — retry and
+/// explicit actions it comes with — retry and
 /// cancellation are never automatic.
 pub struct ResourceHandle<T, E> {
     state: Signal<Resource<T, E>>,

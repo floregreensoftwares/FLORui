@@ -1,5 +1,5 @@
 //! Keyed measurement and scroll-anchor contracts for a future virtualized
-//! collection — see virtualization.md's own "design identities and
+//! collection: "design identities and
 //! measurement hooks early; deliver after layout, scrolling, and focus
 //! are functional." This module is exactly that early design: real,
 //! tested types a virtualized list will build on, not a virtualized list
@@ -7,8 +7,7 @@
 //! render resources, and the actual scrolling/focus/accessibility policy
 //! all remain later work.
 //!
-//! [`Key`] is reused as-is for item identity — virtualization.md's own
-//! "item identity is a data key, never a recycled row index" is already
+//! [`Key`] is reused as-is for item identity: "item identity is a data key, never a recycled row index" is already
 //! exactly what [`use_child_scope_keyed`](crate::use_child_scope_keyed)
 //! enforces for keyed children; a virtualized list is only a stricter
 //! consumer of the same identity, not a reason for a second one.
@@ -41,7 +40,7 @@ impl Extent {
 /// Per-key extents for a virtualized collection: every key starts at a
 /// shared default estimate and is refined in place once something
 /// actually measures it — "refine measurements without repeatedly
-/// relaying out the entire dataset" (virtualization.md). A key never
+/// relaying out the entire dataset". A key never
 /// measured keeps costing nothing beyond that one estimate lookup.
 #[derive(Debug, Clone)]
 pub struct KeyedExtents {
@@ -51,8 +50,8 @@ pub struct KeyedExtents {
 
 impl KeyedExtents {
     /// `default_estimate` is what an unmeasured key reports — typically a
-    /// representative row height picked up front, per virtualization.md's
-    /// "estimated extents for unmeasured items."
+    /// representative row height picked up front ("estimated
+    /// extents for unmeasured items").
     pub fn new(default_estimate: f32) -> Self {
         Self {
             measured: HashMap::new(),
@@ -93,7 +92,7 @@ impl KeyedExtents {
 }
 
 /// Preserves a visual anchor across a height correction, insertion,
-/// removal, or font change (virtualization.md's own list): "preserve a
+/// removal, or font change: "preserve a
 /// keyed scroll anchor and intra-item offset during height corrections."
 /// A raw scroll pixel offset alone can't survive any of those, since
 /// every extent above the anchor may have just changed — resolving
@@ -118,7 +117,7 @@ impl ScrollAnchor {
     /// viewport position, given `keys` in their current display order
     /// and `extents`'s now-current measurements. `None` when the
     /// anchor's key is no longer present — a deleted anchor
-    /// (virtualization.md's own named test case) has nothing left to
+    /// has nothing left to
     /// resolve against; the caller decides the fallback (e.g. the
     /// nearest surviving key), this contract does not guess one.
     pub fn resolve(&self, keys: &[Key], extents: &KeyedExtents) -> Option<f32> {

@@ -1,7 +1,7 @@
 //! [`UpdateTrace`]: which component a reactive write came from, without
 //! recording the value written — see reactivity.md's "Expose state update
 //! provenance to the development trace without unnecessarily recording
-//! user-entered values" and async-and-errors.md's "Verify traces identify
+//! user-entered values" and "verify traces identify
 //! the initiating component without logging sensitive payloads."
 //!
 //! `#[component]` wraps every component's body in [`with_component`]
@@ -15,8 +15,8 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 
-/// How many recent traces [`recent`] keeps — bounded, per
-/// testing-and-profiling.md's "Bound trace retention," not a log that
+/// How many recent traces [`recent`] keeps — bounded (trace retention is
+/// capped), not a log that
 /// grows for as long as the app runs.
 const RETAINED: usize = 256;
 

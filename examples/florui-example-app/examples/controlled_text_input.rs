@@ -3,8 +3,8 @@
 //! real OS clipboard, and Ctrl+Z/Ctrl+Shift+Z undo/redo.
 //!
 //! Four fields. "Name" and "Nickname" are the two authoring contracts
-//! slots-and-bindings.md's "Optional convenience and explicit control"
-//! both require: "Name" carries a real `Binding<String>` that rejects
+//! the optional-convenience and explicit-control
+//! contracts both require: "Name" carries a real `Binding<String>` that rejects
 //! anything over 12 characters (so a real "the owner rejected this"
 //! resync is visibly exercised, not just accepted edits); "Nickname"
 //! carries a plain value plus `oninput` instead, with no `Binding`

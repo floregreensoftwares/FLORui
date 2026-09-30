@@ -1,5 +1,5 @@
 //! [`use_committed_size`]: the first real capability plugged into
-//! [`florui_reactive::use_attachment`] — see attachments.md. A component
+//! [`florui_reactive::use_attachment`]. A component
 //! subscribes to an `id`'d element's *committed* box (after real layout,
 //! not the value it rendered with); [`UiRuntime::update`] notifies every
 //! subscriber whose box actually changed once layout for that render is

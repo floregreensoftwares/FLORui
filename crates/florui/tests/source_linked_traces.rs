@@ -3,8 +3,8 @@
 //! component's name, a nested component's own write is attributed to
 //! itself rather than its parent, and an async resource's eventual
 //! completion is still attributed to the component that started it even
-//! though it commits outside any render — see async-and-errors.md's
-//! "Verify traces identify the initiating component."
+//! though it commits outside any render (traces identify
+//! the initiating component).
 
 use std::cell::RefCell;
 use std::rc::Rc;

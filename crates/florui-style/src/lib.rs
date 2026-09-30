@@ -68,7 +68,7 @@ mod integration_tests {
 
     use super::*;
 
-    /// The stylesheets.md flagship example, styled for real: a class
+    /// The flagship stylesheet example, styled for real: a class
     /// selector matching a view!-built button, with a real :hover cascade
     /// on top of it — end to end through this crate's public API only.
     #[test]

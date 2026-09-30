@@ -1,5 +1,5 @@
 //! [`manual_future`]: a future a test resolves explicitly, instead of one
-//! driven by real I/O or timers — async-and-errors.md requires tests to
+//! driven by real I/O or timers: async tests are to
 //! "use controlled futures and a deterministic scheduler rather than real
 //! network timing," and this is that control point for [`crate::use_resource`]
 //! tests specifically.

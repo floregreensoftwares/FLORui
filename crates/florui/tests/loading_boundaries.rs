@@ -1,6 +1,5 @@
 //! `loading_boundary` through the real `#[component]`/`view!` macro
-//! surface — see `florui_reactive::loading_boundary` and
-//! loading-boundaries.md.
+//! surface — see `florui_reactive::loading_boundary`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
