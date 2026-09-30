@@ -758,9 +758,15 @@ impl UiRuntime {
     }
 
     /// The topmost node under `(x, y)`, against the last computed
-    /// geometry — does not render again.
+    /// geometry and the current scroll offsets, where things are drawn —
+    /// does not render again.
     pub fn hit_test(&self, x: f32, y: f32) -> Option<NodeId> {
-        florui_layout::hit_test(&self.arena, &self.layouts, &self.styles, x, y)
+        let offsets = self.scroll_registry.offsets_by_node(&self.arena);
+        if offsets.values().all(|&offset| offset == (0.0, 0.0)) {
+            return florui_layout::hit_test(&self.arena, &self.layouts, &self.styles, x, y);
+        }
+        let scrolled = florui_layout::apply_scroll_offsets(&self.arena, &self.layouts, &offsets);
+        florui_layout::hit_test(&self.arena, &scrolled, &self.styles, x, y)
     }
 
     /// The currently `:hover`ed node, against the last computed geometry —
@@ -3296,5 +3302,55 @@ mod tests {
         open.set(false);
         runtime.update(viewport());
         assert_eq!(runtime.focused(), None);
+    }
+
+    fn rows_runtime() -> UiRuntime {
+        let root = || {
+            crate::use_scroll_offset("box", |_, _| {});
+            view! {
+                <div id="box" class="box">
+                    <div id="a" class="row" />
+                    <div id="b" class="row" />
+                    <div id="c" class="row" />
+                </div>
+            }
+        };
+        let rules = florui_style::parse_stylesheet(
+            ".box { width: 50px; height: 50px; overflow-y: auto; } .row { height: 40px; }",
+        )
+        .unwrap();
+        UiRuntime::with_rules(rules, root, viewport())
+    }
+
+    fn hit_id(runtime: &UiRuntime, x: f32, y: f32) -> Option<String> {
+        let node = runtime.hit_test(x, y)?;
+        let (arena, ..) = runtime.geometry();
+        arena.id_attr(node).map(str::to_owned)
+    }
+
+    #[test]
+    fn hit_testing_follows_the_scrolled_content_not_its_unscrolled_layout() {
+        let runtime = rows_runtime();
+        assert_eq!(hit_id(&runtime, 5.0, 5.0).as_deref(), Some("a"));
+
+        // 45px of scroll puts row "b" (unscrolled y 40..80) under y = 5.
+        runtime.scroll_registry().scroll_to("box", 0.0, 45.0);
+
+        assert_eq!(hit_id(&runtime, 5.0, 5.0).as_deref(), Some("b"));
+        // "b" now spans y -5..35 and "c" 35..75.
+        assert_eq!(hit_id(&runtime, 5.0, 34.0).as_deref(), Some("b"));
+        assert_eq!(hit_id(&runtime, 5.0, 36.0).as_deref(), Some("c"));
+    }
+
+    #[test]
+    fn scrolled_content_is_still_clipped_to_its_container_when_hit_testing() {
+        let runtime = rows_runtime();
+        runtime.scroll_registry().scroll_to("box", 0.0, 45.0);
+
+        assert_eq!(
+            hit_id(&runtime, 5.0, 60.0),
+            None,
+            "below the 50px box nothing is hit, even though scrolled content reaches there"
+        );
     }
 }
