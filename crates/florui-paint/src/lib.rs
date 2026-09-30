@@ -1764,6 +1764,21 @@ fn paint_node(
                 scale_factor,
                 clip,
             );
+            // A select's label is its own text; a checkbox has none.
+            if arena.tag(node) == "select" {
+                paint_node_text(
+                    buffer,
+                    font,
+                    arena,
+                    node,
+                    style,
+                    color,
+                    (content_x, content_y),
+                    wrap_width,
+                    scale_factor,
+                    clip,
+                );
+            }
         } else if arena.tag(node) == "input" {
             if let Some(paint) = text_inputs.and_then(|inputs| inputs.get(&node)) {
                 // `caret_rect`/`selection_rects` come from the same
@@ -1929,32 +1944,60 @@ fn paint_node(
                 }
             }
         } else {
-            let text = arena.text_content(node);
-            if !text.is_empty() {
-                let font_size = style.map_or(16.0, |s| s.font_size);
-                let font_weight = style.map_or(400.0, |s| s.font_weight);
-                let font_family = style.map_or(florui_text::FontFamily::SansSerif, |s| {
-                    to_text_font_family(s.font_family)
-                });
-                paint_text(
-                    buffer,
-                    font,
-                    TextPaint {
-                        text,
-                        font_size,
-                        font_weight,
-                        font_family,
-                        color,
-                        x: content_x,
-                        y: content_y,
-                        wrap_width,
-                        scale_factor,
-                        clip,
-                    },
-                );
-            }
+            paint_node_text(
+                buffer,
+                font,
+                arena,
+                node,
+                style,
+                color,
+                (content_x, content_y),
+                wrap_width,
+                scale_factor,
+                clip,
+            );
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_node_text(
+    buffer: &mut Surface,
+    font: &mut Font,
+    arena: &Arena,
+    node: NodeId,
+    style: Option<&ComputedStyle>,
+    color: Rgba,
+    (x, y): (f32, f32),
+    wrap_width: f32,
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
+    let text = arena.text_content(node);
+    if text.is_empty() {
+        return;
+    }
+    let font_size = style.map_or(16.0, |s| s.font_size);
+    let font_weight = style.map_or(400.0, |s| s.font_weight);
+    let font_family = style.map_or(florui_text::FontFamily::SansSerif, |s| {
+        to_text_font_family(s.font_family)
+    });
+    paint_text(
+        buffer,
+        font,
+        TextPaint {
+            text,
+            font_size,
+            font_weight,
+            font_family,
+            color,
+            x,
+            y,
+            wrap_width,
+            scale_factor,
+            clip,
+        },
+    );
 }
 
 /// Blits `image`'s own decoded pixels into `rect` (already resolved
@@ -3363,6 +3406,27 @@ mod tests {
         // Far left, where a select's own label text sits -- must stay
         // the plain canvas background, not painted over by the chevron.
         assert_eq!(pixel_rgb(&buffer, 10, 10), [0, 0, 0], "left of the chevron");
+    }
+
+    #[test]
+    fn a_selects_label_still_paints_beside_its_chevron() {
+        let tree: Element = view! { <select class="sel">{"Medium"}</select> };
+        let buffer = paint_control_icon(
+            tree,
+            ".sel { width: 100px; height: 20px; border: none; padding: 0px; \
+             background-color: transparent; color: #ffffff; }",
+            100,
+            20,
+        );
+        assert_eq!(pixel_rgb(&buffer, 90, 10), [0, 255, 0], "the chevron");
+        let label_ink = (0..80)
+            .flat_map(|x| (0..20).map(move |y| (x, y)))
+            .filter(|&(x, y)| pixel_rgb(&buffer, x, y) != [0, 0, 0])
+            .count();
+        assert!(
+            label_ink > 0,
+            "the label text must paint left of the chevron"
+        );
     }
 
     #[test]
