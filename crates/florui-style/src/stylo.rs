@@ -1526,6 +1526,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         aspect_ratio: to_aspect_ratio(&position.aspect_ratio),
         appearance: to_appearance(values),
         resize: to_resize(values),
+        placeholder_color: to_placeholder_color(values),
     }
 }
 
@@ -1583,6 +1584,89 @@ fn to_resize(values: &ComputedValues) -> FlorResize {
         "horizontal" => FlorResize::Horizontal,
         _ => FlorResize::Both,
     }
+}
+
+/// Reads `--florui-placeholder-color` the way [`to_appearance`] reads its
+/// property, then parses the color: hex, `rgb()`/`rgba()` and named colors.
+fn to_placeholder_color(values: &ComputedValues) -> Option<Rgba> {
+    use style::properties_and_values::registry::PropertyRegistrationData;
+    use style_traits::ToCss;
+
+    let name = Atom::from("florui-placeholder-color");
+    let value = values
+        .custom_properties()
+        .get(PropertyRegistrationData::unregistered(), &name)?;
+    let mut css = String::new();
+    value.to_css(&mut CssWriter::new(&mut css)).ok()?;
+    parse_color(css.trim())
+}
+
+fn parse_color(css: &str) -> Option<Rgba> {
+    use cssparser::{Parser, ParserInput, Token};
+
+    if let Some(hex) = css.strip_prefix('#') {
+        let (r, g, b, a) = cssparser::color::parse_hash_color(hex.as_bytes()).ok()?;
+        return Some(Rgba {
+            r,
+            g,
+            b,
+            a: (a * 255.0).round() as u8,
+        });
+    }
+    if css.eq_ignore_ascii_case("transparent") {
+        return Some(Rgba::TRANSPARENT);
+    }
+    if let Ok((r, g, b)) = cssparser::color::parse_named_color(css) {
+        return Some(Rgba::opaque(r, g, b));
+    }
+    let mut input = ParserInput::new(css);
+    let mut parser = Parser::new(&mut input);
+    let function = parser.expect_function().ok()?.to_ascii_lowercase();
+    if function != "rgb" && function != "rgba" {
+        return None;
+    }
+    parser
+        .parse_nested_block(|args| {
+            let channel = |args: &mut Parser<'_, '_>| -> Option<u8> {
+                match args.next().ok()? {
+                    Token::Number { value, .. } => Some(value.clamp(0.0, 255.0).round() as u8),
+                    Token::Percentage { unit_value, .. } => {
+                        Some((unit_value.clamp(0.0, 1.0) * 255.0).round() as u8)
+                    }
+                    _ => None,
+                }
+            };
+            let separator = |args: &mut Parser<'_, '_>| {
+                let _ = args.try_parse(|p| p.expect_comma());
+            };
+            let r = channel(args);
+            separator(args);
+            let g = channel(args);
+            separator(args);
+            let b = channel(args);
+            let alpha = if args.try_parse(|p| p.expect_comma()).is_ok()
+                || args.try_parse(|p| p.expect_delim('/')).is_ok()
+            {
+                match args.next().ok() {
+                    Some(Token::Number { value, .. }) => value.clamp(0.0, 1.0),
+                    Some(Token::Percentage { unit_value, .. }) => unit_value.clamp(0.0, 1.0),
+                    _ => 1.0,
+                }
+            } else {
+                1.0
+            };
+            Ok::<_, cssparser::ParseError<'_, ()>>(match (r, g, b) {
+                (Some(r), Some(g), Some(b)) => Some(Rgba {
+                    r,
+                    g,
+                    b,
+                    a: (alpha * 255.0).round() as u8,
+                }),
+                _ => None,
+            })
+        })
+        .ok()
+        .flatten()
 }
 
 /// `object-fit`'s variant set matches real CSS's own 1:1 (`Fill`/
@@ -2263,5 +2347,39 @@ mod attr_selector_tests {
             computed[&options[1]].color,
             crate::color::Rgba::opaque(0x00, 0xff, 0x00)
         );
+    }
+}
+
+#[cfg(test)]
+mod placeholder_color_tests {
+    use super::parse_color;
+    use crate::color::Rgba;
+
+    #[test]
+    fn hex_rgb_and_named_colors_parse_and_junk_does_not() {
+        assert_eq!(parse_color("#ff0000"), Some(Rgba::opaque(255, 0, 0)));
+        assert_eq!(parse_color("#f00"), Some(Rgba::opaque(255, 0, 0)));
+        assert_eq!(
+            parse_color("rgb(10, 20, 30)"),
+            Some(Rgba::opaque(10, 20, 30))
+        );
+        assert_eq!(parse_color("rgb(10 20 30)"), Some(Rgba::opaque(10, 20, 30)));
+        assert_eq!(
+            parse_color("rgba(0, 0, 255, 0.5)"),
+            Some(Rgba {
+                r: 0,
+                g: 0,
+                b: 255,
+                a: 128
+            })
+        );
+        assert_eq!(parse_color("rgb(0 0 255 / 50%)").map(|c| c.a), Some(128));
+        assert_eq!(
+            parse_color("rebeccapurple"),
+            Some(Rgba::opaque(102, 51, 153))
+        );
+        assert_eq!(parse_color("transparent"), Some(Rgba::TRANSPARENT));
+        assert_eq!(parse_color("not-a-color"), None);
+        assert_eq!(parse_color("rgb(1, 2)"), None);
     }
 }
