@@ -63,7 +63,7 @@ use std::rc::Rc;
 use florui_layout::{BoxLayout, absolute_position};
 use florui_style::{
     Arena, ComputedStyle, Display, FilterFunction, LengthPercentage, NodeId, ObjectFit, Position,
-    Rgba, RoundedRect, TransformFunction,
+    Rgba, RoundedRect,
 };
 use florui_text::Font;
 use rounded::RoundedRectPath;
@@ -1568,33 +1568,12 @@ fn paint_group(
     );
 }
 
-/// The real 2D affine matrix `style`'s own `transform` describes, pivoted
-/// around its own `transform_origin` — [`Transform::identity()`] (a cheap
-/// no-op composite, taken by [`paint_nodes`]'s own fast path) when
-/// `transform` is empty, real CSS's own `none`.
-///
-/// `x`/`y` are `style`'s node's own absolute border-box position in the
-/// canvas's own (possibly HiDPI-scaled) physical pixels — the same
-/// position [`paint_node`] paints that box at. `scale_factor` converts a
-/// `transform` value's own CSS-authored lengths (`translate(10px)`,
-/// `matrix()`'s `e`/`f`) from the logical pixels they're specified in up
-/// to the canvas's physical ones, exactly the split [`paint_shaped_runs`]
-/// already needs for text and for the same reason: `layout` (and this
-/// whole crate's coordinate space) already accounts for HiDPI, but a raw
-/// CSS length read off [`ComputedStyle`] hasn't yet. A `<percentage>`
-/// component needs no such correction — it's already relative to
-/// `layout`'s own (already-scaled) box, so the same ratio holds
-/// regardless of DPR.
-///
-/// Each function in [`ComputedStyle::transform`]'s own list folds into
-/// one running matrix via [`Transform::pre_concat`], in authored order —
-/// real CSS's own composition rule: `transform: A B` maps a point as
-/// `A(B(point))`, so the *last*-listed function acts on the original
-/// point first and the *first*-listed one acts last, in the coordinate
-/// system every earlier function already established. `pre_concat`
-/// builds exactly that: starting from the identity, concatenating `A`
-/// then `B` leaves `A * B`, which maps a point as `A(B(point))` — the
-/// same left-to-right accumulation, not the other order.
+/// `style`'s `transform` about its `transform-origin` as a canvas matrix —
+/// the identity (a cheap no-op composite, taken by [`paint_nodes`]'s own
+/// fast path) for `none`. `x`/`y` are the node's absolute border-box position
+/// in the canvas's physical pixels and `scale_factor` converts authored
+/// lengths to them. The math is [`florui_layout::resolve_transform`], shared
+/// with hit testing so a node is hit where it is drawn.
 fn resolve_transform(
     style: &ComputedStyle,
     layout: &BoxLayout,
@@ -1602,31 +1581,8 @@ fn resolve_transform(
     y: f32,
     scale_factor: f32,
 ) -> Transform {
-    if style.transform.is_empty() {
-        return Transform::identity();
-    }
-    let mut list = Transform::identity();
-    for function in &style.transform {
-        let next = match *function {
-            TransformFunction::Translate(tx, ty) => Transform::from_translate(
-                tx.length * scale_factor + tx.percentage * layout.width,
-                ty.length * scale_factor + ty.percentage * layout.height,
-            ),
-            TransformFunction::Scale(sx, sy) => Transform::from_scale(sx, sy),
-            TransformFunction::Rotate(degrees) => Transform::from_rotate(degrees),
-            TransformFunction::Matrix { a, b, c, d, e, f } => {
-                Transform::from_row(a, b, c, d, e * scale_factor, f * scale_factor)
-            }
-        };
-        list = list.pre_concat(next);
-    }
-
-    let (origin_x_lp, origin_y_lp) = style.transform_origin;
-    let origin_x = x + origin_x_lp.length * scale_factor + origin_x_lp.percentage * layout.width;
-    let origin_y = y + origin_y_lp.length * scale_factor + origin_y_lp.percentage * layout.height;
-    Transform::from_translate(origin_x, origin_y)
-        .pre_concat(list)
-        .pre_concat(Transform::from_translate(-origin_x, -origin_y))
+    let m = florui_layout::resolve_transform(style, layout, x, y, scale_factor);
+    Transform::from_row(m.a, m.b, m.c, m.d, m.e, m.f)
 }
 
 /// `node`'s own border box at `(x, y, width, height)`, after applying
