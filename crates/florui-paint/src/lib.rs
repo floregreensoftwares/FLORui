@@ -346,6 +346,9 @@ pub fn paint_to_png(
 /// exactly like any other text run, no `<input>`-specific rasterization
 /// path needed.
 pub struct TextInputPaint {
+    /// `Some` while a number input shows its spinner (hovered or focused),
+    /// with which arrow the pointer is over.
+    pub spinner: Option<SpinnerHover>,
     pub runs: Vec<florui_text::ShapedRun>,
     pub caret_rect: Option<(f32, f32, f32, f32)>,
     pub selection_rects: Vec<(f32, f32, f32, f32)>,
@@ -672,6 +675,92 @@ const TEXT_INPUT_SELECTION_COLOR: Rgba = Rgba {
 /// Logical pixels — matches a common OS caret width; not spec-mandated to
 /// this exact number, the same as `desktop.rs`'s own `WHEEL_LINE_HEIGHT`.
 const TEXT_INPUT_CARET_WIDTH: f32 = 1.0;
+
+/// Where the pointer is over a number input's spinner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpinnerHover {
+    None,
+    Up,
+    Down,
+}
+
+// Spinner geometry, measured in Edge on a 200x30 number input: two 7x5
+// arrows centred 11.5px in from the right edge, the up arrow 3.5px above
+// the input's vertical centre and the down arrow 5.5px below it. The
+// pointer targets are the two halves of a 15x18 box around them (up arrow
+// rows 6..15, down arrow rows 15..24 of the 30px field).
+const SPINNER_RIGHT_INSET: f32 = 4.0;
+const SPINNER_WIDTH: f32 = 15.0;
+const SPINNER_HEIGHT: f32 = 18.0;
+const SPINNER_IDLE: Rgba = Rgba::opaque(139, 139, 139);
+const SPINNER_HOVER: Rgba = Rgba::opaque(99, 99, 99);
+
+/// Which arrow of a number input's spinner the point `(px, py)` is over,
+/// for an input whose border box is `(x, y, width, height)` in the same
+/// space as the point.
+pub fn spinner_half_at(
+    (x, y, width, height): (f32, f32, f32, f32),
+    (px, py): (f32, f32),
+) -> SpinnerHover {
+    let right = x + width - SPINNER_RIGHT_INSET;
+    let mid = y + height / 2.0;
+    let inside = px >= right - SPINNER_WIDTH
+        && px < right
+        && py >= mid - SPINNER_HEIGHT / 2.0
+        && py < mid + SPINNER_HEIGHT / 2.0;
+    match (inside, py < mid) {
+        (false, _) => SpinnerHover::None,
+        (true, true) => SpinnerHover::Up,
+        (true, false) => SpinnerHover::Down,
+    }
+}
+
+fn paint_spinner(
+    buffer: &mut Surface,
+    (x, y, width, height): (f32, f32, f32, f32),
+    hover: SpinnerHover,
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
+    let s = scale_factor;
+    let cx = x + width - (SPINNER_RIGHT_INSET + SPINNER_WIDTH / 2.0) * s;
+    let mid = y + height / 2.0;
+    let arrow = |buffer: &mut Surface, cy: f32, up: bool, color: Rgba| {
+        let (half_w, half_h) = (3.5 * s, 2.5 * s);
+        let (apex_y, base_y) = if up {
+            (cy - half_h, cy + half_h)
+        } else {
+            (cy + half_h, cy - half_h)
+        };
+        let mut path = PathBuilder::new();
+        path.move_to(cx, apex_y);
+        path.line_to(cx - half_w, base_y);
+        path.line_to(cx + half_w, base_y);
+        path.close();
+        let Some(path) = path.finish() else {
+            return;
+        };
+        let mut paint = Paint::default();
+        paint.set_color_rgba8(color.r, color.g, color.b, color.a);
+        paint.anti_alias = true;
+        buffer.pixmap.fill_path(
+            &path,
+            &paint,
+            FillRule::Winding,
+            surface_transform(buffer),
+            clip,
+        );
+    };
+    let color = |own: SpinnerHover| {
+        if hover == own {
+            SPINNER_HOVER
+        } else {
+            SPINNER_IDLE
+        }
+    };
+    arrow(buffer, mid - 3.5 * s, true, color(SpinnerHover::Up));
+    arrow(buffer, mid + 5.5 * s, false, color(SpinnerHover::Down));
+}
 
 /// Total padding `filters`' own combined blur reach needs on every side
 /// — zero for `brightness`/`contrast`/`saturate`, which are pointwise
@@ -1851,6 +1940,15 @@ fn paint_node(
                         (cx1 - cx0).max(TEXT_INPUT_CARET_WIDTH * scale_factor),
                         cy1 - cy0,
                         color,
+                        clip,
+                    );
+                }
+                if let Some(hover) = paint.spinner {
+                    paint_spinner(
+                        buffer,
+                        (x, y, layout.width, layout.height),
+                        hover,
+                        scale_factor,
                         clip,
                     );
                 }
@@ -5130,6 +5228,101 @@ mod tests {
         );
     }
 
+    /// Positions and colors measured in Edge on a 200x30 number input whose
+    /// border box starts at `(0, 0)`: the up arrow occupies rows 8..13 and
+    /// the down arrow rows 17..22 around the column 11.5px in from the
+    /// right edge, `rgb(139)` idle and `rgb(99)` under the pointer.
+    fn paint_number_spinner(hover: SpinnerHover) -> Canvas {
+        let tree: Element = view! { <input type="number" class="n" /> };
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(
+            ".n { width: 200px; height: 30px; border: none; padding: 0px; \
+             background-color: #ffffff; }",
+        )
+        .unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let node = arena.roots()[0];
+        let mut text_inputs = HashMap::new();
+        text_inputs.insert(
+            node,
+            TextInputPaint {
+                runs: Vec::new(),
+                caret_rect: None,
+                selection_rects: Vec::new(),
+                compose_rect: None,
+                show_caret: false,
+                spinner: Some(hover),
+            },
+        );
+        paint_to_buffer_with_desktop_extras(
+            &mut font,
+            200,
+            30,
+            Rgba::opaque(255, 255, 255),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+            Some(&text_inputs),
+            None,
+        )
+    }
+
+    #[test]
+    fn a_number_inputs_spinner_paints_two_arrows_where_edge_does() {
+        let buffer = paint_number_spinner(SpinnerHover::None);
+        // Column 11.5px in from the right edge is x = 188; up arrow centre
+        // ~3.5px above the middle (y = 11), down arrow ~5.5px below (y = 20).
+        assert_eq!(pixel_rgb(&buffer, 188, 11), [139, 139, 139], "up arrow");
+        assert_eq!(pixel_rgb(&buffer, 188, 20), [139, 139, 139], "down arrow");
+        assert_eq!(
+            pixel_rgb(&buffer, 150, 15),
+            [255, 255, 255],
+            "the field body"
+        );
+        assert_eq!(
+            pixel_rgb(&buffer, 188, 15),
+            [255, 255, 255],
+            "between the arrows"
+        );
+    }
+
+    #[test]
+    fn only_the_arrow_under_the_pointer_darkens() {
+        let up = paint_number_spinner(SpinnerHover::Up);
+        assert_eq!(pixel_rgb(&up, 188, 11), [99, 99, 99]);
+        assert_eq!(pixel_rgb(&up, 188, 20), [139, 139, 139]);
+        let down = paint_number_spinner(SpinnerHover::Down);
+        assert_eq!(pixel_rgb(&down, 188, 11), [139, 139, 139]);
+        assert_eq!(pixel_rgb(&down, 188, 20), [99, 99, 99]);
+    }
+
+    #[test]
+    fn the_spinner_halves_split_a_box_around_the_arrows() {
+        // Measured in Edge on a 200x30 field: the up arrow darkens for
+        // rows 6..14, the down arrow for rows 15..23, columns 181..195.
+        let field = (0.0, 0.0, 200.0, 30.0);
+        assert_eq!(spinner_half_at(field, (188.0, 6.0)), SpinnerHover::Up);
+        assert_eq!(spinner_half_at(field, (188.0, 14.9)), SpinnerHover::Up);
+        assert_eq!(spinner_half_at(field, (188.0, 15.0)), SpinnerHover::Down);
+        assert_eq!(spinner_half_at(field, (188.0, 23.9)), SpinnerHover::Down);
+        assert_eq!(spinner_half_at(field, (188.0, 5.9)), SpinnerHover::None);
+        assert_eq!(spinner_half_at(field, (188.0, 24.0)), SpinnerHover::None);
+        assert_eq!(spinner_half_at(field, (181.0, 10.0)), SpinnerHover::Up);
+        assert_eq!(spinner_half_at(field, (180.9, 10.0)), SpinnerHover::None);
+        assert_eq!(spinner_half_at(field, (195.9, 10.0)), SpinnerHover::Up);
+        assert_eq!(spinner_half_at(field, (196.0, 10.0)), SpinnerHover::None);
+    }
+
     #[test]
     fn a_text_input_paints_its_caret_in_its_own_declared_color() {
         let tree: Element = view! { <input type="text" value="Hi" style="color: #ff0000;" /> };
@@ -5167,6 +5360,7 @@ mod tests {
                 selection_rects: Vec::new(),
                 compose_rect: None,
                 show_caret: true,
+                spinner: None,
             },
         );
 
