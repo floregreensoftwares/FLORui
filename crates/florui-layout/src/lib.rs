@@ -1423,6 +1423,7 @@ fn to_display(value: StyleDisplay) -> Display {
         StyleDisplay::Block => Display::Block,
         StyleDisplay::Flex => Display::Flex,
         StyleDisplay::Grid => Display::Grid,
+        StyleDisplay::None => Display::None,
         // Reached only for a node that did *not* qualify for
         // `needs_inline_layout` (e.g. it sits at the tree root, where real
         // CSS also blockifies `display: inline` — see `florui_style`'s own
@@ -1719,7 +1720,10 @@ pub fn compute_size_causes(
                     }
                 }
             }
-            StyleDisplay::Block | StyleDisplay::Inline | StyleDisplay::InlineBlock => {}
+            StyleDisplay::Block
+            | StyleDisplay::Inline
+            | StyleDisplay::InlineBlock
+            | StyleDisplay::None => {}
         }
     }
 
@@ -4123,5 +4127,25 @@ mod tests {
             assert_eq!(layouts[&node].width, 123.0);
             assert_eq!(layouts[&node].height, 45.0);
         }
+    }
+
+    #[test]
+    fn display_none_takes_no_space_and_leaves_no_flex_gap() {
+        let tree: Element = view! {
+            <div class="row">
+                <div class="box" id="a"></div>
+                <div class="box gone" id="b"></div>
+                <div class="box" id="c"></div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".row { display: flex; gap: 10px; } .box { width: 20px; height: 20px; } \
+             .gone { display: none; }",
+        );
+        let node = |id: &str| arena.find(|a, n| a.id_attr(n) == Some(id)).unwrap();
+        assert_eq!(layouts[&node("c")].x, 30.0, "one gap, not two");
+        assert_eq!(layouts[&node("b")].width, 0.0);
+        assert_eq!(layouts[&node("b")].height, 0.0);
     }
 }

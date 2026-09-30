@@ -110,6 +110,7 @@ fn display_name(display: Display) -> &'static str {
         Display::Inline => "inline",
         Display::InlineBlock => "inline-block",
         Display::Grid => "grid",
+        Display::None => "none",
     }
 }
 

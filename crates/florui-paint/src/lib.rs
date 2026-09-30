@@ -513,6 +513,12 @@ fn paint_nodes(
         .map(|id| (id, clip.clone()))
         .collect();
     while let Some((node, node_clip)) = stack.pop() {
+        if styles
+            .get(&node)
+            .is_some_and(|s| s.display == florui_style::Display::None)
+        {
+            continue;
+        }
         let opacity = styles.get(&node).map_or(1.0, |s| s.opacity);
         if opacity <= 0.0 {
             // Real CSS: a fully transparent subtree still occupies its
@@ -3406,6 +3412,43 @@ mod tests {
         // Far left, where a select's own label text sits -- must stay
         // the plain canvas background, not painted over by the chevron.
         assert_eq!(pixel_rgb(&buffer, 10, 10), [0, 0, 0], "left of the chevron");
+    }
+
+    #[test]
+    fn display_none_paints_nothing_for_the_node_or_its_text_or_children() {
+        let tree: Element =
+            view! { <div class="gone">{"Hello"}<div class="inner">{"World"}</div></div> };
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(
+            ".gone { display: none; background-color: #ffffff; color: #ffffff; } \
+             .inner { background-color: #ffffff; color: #ffffff; }",
+        )
+        .unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let buffer = paint_to_buffer(
+            &mut font,
+            60,
+            40,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        );
+        let lit = (0..60)
+            .flat_map(|x| (0..40).map(move |y| (x, y)))
+            .filter(|&(x, y)| pixel_rgb(&buffer, x, y) != [0, 0, 0])
+            .count();
+        assert_eq!(lit, 0);
     }
 
     #[test]

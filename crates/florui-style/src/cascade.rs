@@ -76,6 +76,9 @@ pub enum Display {
     /// box would be), not fragmented across lines.
     InlineBlock,
     Grid,
+    /// `display: none` — generates no box: no layout space, no painting, no
+    /// hit-testing, for the node and its whole subtree.
+    None,
 }
 
 /// `position` — `Fixed`/`Sticky` aren't supported yet, see

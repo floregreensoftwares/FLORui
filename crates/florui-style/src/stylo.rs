@@ -1902,6 +1902,7 @@ fn to_grid_placement(line: &style::values::computed::GridLine) -> crate::cascade
 fn to_display(display: style::values::computed::Display) -> FlorDisplay {
     use style::values::specified::box_::{DisplayInside, DisplayOutside};
     match (display.outside(), display.inside()) {
+        (DisplayOutside::None, _) => FlorDisplay::None,
         (DisplayOutside::Inline, DisplayInside::FlowRoot) => FlorDisplay::InlineBlock,
         (DisplayOutside::Inline, _) => FlorDisplay::Inline,
         (_, DisplayInside::Flex) => FlorDisplay::Flex,
