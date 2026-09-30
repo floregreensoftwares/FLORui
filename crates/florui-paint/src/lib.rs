@@ -2200,7 +2200,9 @@ fn paint_node(
                         placeholder,
                         content_x,
                         content_y,
-                        PLACEHOLDER_COLOR,
+                        style
+                            .and_then(|s| s.placeholder_color)
+                            .unwrap_or(PLACEHOLDER_COLOR),
                         scale_factor,
                         clip,
                     );
@@ -5595,13 +5597,21 @@ mod tests {
         runs: Vec<florui_text::ShapedRun>,
         placeholder: Option<Vec<florui_text::ShapedRun>>,
     ) -> Canvas {
+        paint_text_field_styled(runs, placeholder, "")
+    }
+
+    fn paint_text_field_styled(
+        runs: Vec<florui_text::ShapedRun>,
+        placeholder: Option<Vec<florui_text::ShapedRun>>,
+        extra_css: &str,
+    ) -> Canvas {
         let tree: Element = view! { <input type="text" class="f" /> };
         let arena = Arena::build(&tree);
-        let rules = florui_style::parse_stylesheet(
-            ".f { width: 60px; height: 20px; border: none; padding: 0px; \
-             background-color: #ffffff; color: #000000; }",
-        )
-        .unwrap();
+        let css = format!(
+            ".f {{ width: 60px; height: 20px; border: none; padding: 0px; \
+             background-color: #ffffff; color: #000000; {extra_css} }}"
+        );
+        let rules = florui_style::parse_stylesheet(&css).unwrap();
         let styles = florui_style::compute(
             &arena,
             &rules,
@@ -5675,6 +5685,26 @@ mod tests {
         assert_eq!(outside, 0, "nothing is painted past the 60px field");
     }
 
+    #[test]
+    fn the_placeholder_color_property_recolors_the_placeholder() {
+        let mut font = Font::load_embedded();
+        let runs = font
+            .shape(florui_text::FontFamily::SansSerif, "Hint", 16.0, 400.0)
+            .runs;
+        let buffer = paint_text_field_styled(
+            Vec::new(),
+            Some(runs),
+            "--florui-placeholder-color: #ff0000;",
+        );
+        let reddest = (0..60)
+            .flat_map(|x| (0..20).map(move |y| (x, y)))
+            .map(|(x, y)| pixel_rgb(&buffer, x, y))
+            .filter(|[r, g, ..]| r > g)
+            .map(|[r, g, b, ..]| (r, g, b))
+            .max_by_key(|&(r, g, _)| r as i32 - g as i32)
+            .expect("some red glyph pixel");
+        assert_eq!(reddest, (255, 0, 0));
+    }
     #[test]
     fn typed_text_longer_than_its_input_is_cut_at_the_edge() {
         let mut font = Font::load_embedded();

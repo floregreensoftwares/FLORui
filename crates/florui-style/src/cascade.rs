@@ -527,6 +527,11 @@ pub struct ComputedStyle {
     /// read from `--florui-resize` (real `resize` is not in the servo
     /// build of the style engine, the same reason as `appearance`).
     pub resize: Resize,
+    /// The color of a text field's placeholder, read from
+    /// `--florui-placeholder-color` (real `::placeholder` only parses in a
+    /// user-agent sheet in the servo build of the style engine); `None`
+    /// keeps the browser default.
+    pub placeholder_color: Option<Rgba>,
 }
 
 /// The values of `resize`, spelled through `--florui-resize`. Only a
