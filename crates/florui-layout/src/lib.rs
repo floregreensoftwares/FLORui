@@ -1624,20 +1624,43 @@ pub fn hit_test(
     x: f32,
     y: f32,
 ) -> Option<NodeId> {
+    /// A node still to visit, with what its parent worked out for it.
+    struct Visit {
+        node: NodeId,
+        /// The pointer in the parent's frame.
+        parent_point: (f32, f32),
+        /// Whether every clipping ancestor admits the pointer here.
+        admitted: bool,
+        /// The parent's absolute origin, carried down so no node walks its
+        /// ancestors to find its own.
+        parent_origin: (f32, f32),
+    }
+
     let mut hit = None;
-    // Each entry: the node, the pointer in its parent's frame, and whether
-    // every clipping ancestor admits it.
-    let mut stack: Vec<(NodeId, (f32, f32), bool)> = arena
+    let mut stack: Vec<Visit> = arena
         .roots()
         .iter()
         .rev()
-        .map(|&root| (root, (x, y), true))
+        .map(|&root| Visit {
+            node: root,
+            parent_point: (x, y),
+            admitted: true,
+            parent_origin: (0.0, 0.0),
+        })
         .collect();
-    while let Some((node, parent_point, admitted)) = stack.pop() {
+    while let Some(Visit {
+        node,
+        parent_point,
+        admitted,
+        parent_origin,
+    }) = stack.pop()
+    {
         let mut point = parent_point;
         let mut admits_children = admitted;
+        let mut origin = parent_origin;
         if let Some(&layout) = layouts.get(&node) {
-            let (ax, ay) = absolute_position(arena, layouts, node);
+            origin = (parent_origin.0 + layout.x, parent_origin.1 + layout.y);
+            let (ax, ay) = origin;
             let style = styles.get(&node);
             if let Some(style) = style {
                 let transform = resolve_transform(style, &layout, ax, ay, 1.0);
@@ -1666,8 +1689,18 @@ pub fn hit_test(
                 admits_children = admitted && padding_box.contains(point.0, point.1);
             }
         }
+        // Nothing under a node a clipping ancestor rejects can be hit, so its
+        // subtree is not visited.
+        if !admits_children {
+            continue;
+        }
         for &child in arena.children(node).iter().rev() {
-            stack.push((child, point, admits_children));
+            stack.push(Visit {
+                node: child,
+                parent_point: point,
+                admitted: admits_children,
+                parent_origin: origin,
+            });
         }
     }
     hit
@@ -1954,6 +1987,149 @@ mod tests {
         y: f32,
     ) -> Option<NodeId> {
         super::hit_test(arena, layouts, &HashMap::new(), x, y)
+    }
+
+    /// The walk [`super::hit_test`] replaced: every node found its own
+    /// origin by summing its ancestors, and clipped-out subtrees were still
+    /// visited. Kept as the oracle the faster walk must agree with.
+    fn reference_hit_test(
+        arena: &Arena,
+        layouts: &HashMap<NodeId, BoxLayout>,
+        styles: &HashMap<NodeId, ComputedStyle>,
+        x: f32,
+        y: f32,
+    ) -> Option<NodeId> {
+        let mut hit = None;
+        let mut stack: Vec<(NodeId, (f32, f32), bool)> = arena
+            .roots()
+            .iter()
+            .rev()
+            .map(|&root| (root, (x, y), true))
+            .collect();
+        while let Some((node, parent_point, admitted)) = stack.pop() {
+            let mut point = parent_point;
+            let mut admits_children = admitted;
+            if let Some(&layout) = layouts.get(&node) {
+                let (ax, ay) = absolute_position(arena, layouts, node);
+                let style = styles.get(&node);
+                if let Some(style) = style {
+                    let transform = resolve_transform(style, &layout, ax, ay, 1.0);
+                    if !transform.is_identity() {
+                        let Some(inverse) = transform.invert() else {
+                            continue;
+                        };
+                        point = inverse.map_point(point);
+                    }
+                }
+                let outline = border_box_outline(styles, node, ax, ay, layout);
+                let pointer_events_none = style.is_some_and(|s| s.pointer_events_none);
+                if admitted && !pointer_events_none && outline.contains(point.0, point.1) {
+                    hit = Some(node);
+                }
+                if let Some(style) = style
+                    && style.overflow_clips
+                {
+                    let border = style.border;
+                    let padding_box = outline.inset(
+                        border.top.width,
+                        border.right.width,
+                        border.bottom.width,
+                        border.left.width,
+                    );
+                    admits_children = admitted && padding_box.contains(point.0, point.1);
+                }
+            }
+            for &child in arena.children(node).iter().rev() {
+                stack.push((child, point, admits_children));
+            }
+        }
+        hit
+    }
+
+    /// A deterministic tree of nested boxes covering what `hit_test` looks at:
+    /// clipping, rounded corners, transforms, `pointer-events: none`, and
+    /// absolutely placed children.
+    fn random_tree(seed: u32) -> Element {
+        fn next(state: &mut u32) -> u32 {
+            *state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *state >> 8
+        }
+        fn node(state: &mut u32, depth: u32) -> Element {
+            let class = format!("c{}", next(state) % 7);
+            let children = if depth >= 5 {
+                Vec::new()
+            } else {
+                (0..next(state) % 4)
+                    .map(|_| node(state, depth + 1))
+                    .collect()
+            };
+            Element::node("div", vec![("class".into(), class)], children)
+        }
+        let mut state = seed.wrapping_mul(2_654_435_761).wrapping_add(7);
+        let children = (0..3).map(|_| node(&mut state, 1)).collect();
+        Element::node("div", vec![("class".into(), "root".into())], children)
+    }
+
+    const RANDOM_TREE_CSS: &str = ".root { display: flex; flex-wrap: wrap; width: 300px; \
+         position: relative; } \
+         .c0 { width: 60px; height: 40px; } \
+         .c1 { width: 80px; height: 50px; overflow: hidden; } \
+         .c2 { width: 50px; height: 50px; border-radius: 12px; overflow: hidden; } \
+         .c3 { width: 40px; height: 40px; transform: rotate(15deg); } \
+         .c4 { width: 70px; height: 30px; pointer-events: none; } \
+         .c5 { position: absolute; left: 30px; top: 20px; width: 50px; height: 50px; } \
+         .c6 { width: 30px; height: 30px; margin-left: 7.5px; \
+               transform: translate(5px, 3px) scale(1.2); }";
+
+    #[test]
+    fn the_faster_hit_test_agrees_with_the_walk_it_replaced_on_random_trees() {
+        let mut compared = 0;
+        let mut hits = 0;
+        for seed in 0..40u32 {
+            let (arena, styles, layouts) = layout_with_styles(&random_tree(seed), RANDOM_TREE_CSS);
+            let mut state = seed.wrapping_mul(97).wrapping_add(13);
+            for _ in 0..300 {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let x = (state >> 8) % 3400;
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let y = (state >> 8) % 3400;
+                let (x, y) = (x as f32 / 10.0 - 10.0, y as f32 / 10.0 - 10.0);
+                let fast = super::hit_test(&arena, &layouts, &styles, x, y);
+                let slow = reference_hit_test(&arena, &layouts, &styles, x, y);
+                assert_eq!(fast, slow, "seed {seed} at ({x}, {y})");
+                compared += 1;
+                hits += usize::from(fast.is_some());
+            }
+        }
+        assert_eq!(compared, 12_000);
+        assert!(
+            hits > 1_000,
+            "the comparison must include real hits: {hits}"
+        );
+    }
+
+    #[test]
+    fn hit_testing_a_clipped_out_subtree_finds_nothing_inside_it() {
+        let tree: Element = view! {
+            <div class="clip">
+                <div class="inner"></div>
+            </div>
+        };
+        let css = ".clip { width: 20px; height: 20px; overflow: hidden; } \
+                   .inner { width: 100px; height: 100px; }";
+        let (arena, styles, layouts) = layout_with_styles(&tree, css);
+        let clip = arena.roots()[0];
+        let inner = arena.children(clip)[0];
+
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 10.0, 10.0),
+            Some(inner)
+        );
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 50.0, 50.0),
+            None,
+            "inside the child's box but outside the clip"
+        );
     }
 
     fn layout_for(tree: &Element, css: &str) -> (Arena, HashMap<NodeId, BoxLayout>) {
