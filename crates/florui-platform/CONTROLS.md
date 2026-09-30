@@ -22,7 +22,7 @@ coverage was checked through the UI Automation tree, not with a screen reader.
 | `<form>`, `<fieldset disabled>` | none | Enter in a field clicks the default submit button | A disabled fieldset disables its controls (the first legend is exempt) | Validation on submit with the message bubble, `novalidate`, `formnovalidate`, the `form` attribute | Form landmark when named |
 | `Dialog` | Clicks outside the content are the app's to handle | Focus moves in and stays in (Tab wraps), Escape closes, focus returns to the opener; dialogs stack | n/a | none | Dialog, modal |
 | `Popover` with `role="menu"` | Click outside dismisses | Focus enters the first item; Up/Down wrap, Home/End, Right opens a submenu, Left closes it, Escape and Tab close it and focus returns to the trigger | Not focusable items | none | Menu, MenuItem, trigger reports expanded |
-| Virtualized list | Wheel and scrollbar | The focused row stays mounted; `focus_item` brings any item into view | n/a | none | List, ListItem with position in the whole collection |
+| Virtualized list | Wheel and scrollbar | With focus on a row or a control in it: Up/Down move one row, Page Up/Down a viewport of rows, Home/End to the ends, clamped, repeating with a held key, scrolling only as far as needed; a select or radio in a row keeps the arrows; the focused row stays mounted; `focus_item` brings any item into view | n/a | none | List, ListItem with position in the whole collection |
 
 ## Not supported
 
