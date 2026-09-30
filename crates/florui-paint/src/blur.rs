@@ -51,41 +51,61 @@ pub(crate) fn kernel_radius(sigma_px: f32) -> u32 {
 /// the buffer by at least [`kernel_radius`] beyond whatever real content
 /// it painted into it (see this module's own doc), not merely clamped to
 /// an edge value.
+///
+/// Each output pixel still sums its taps in ascending order, so the result is
+/// bit-identical to the plain per-pixel convolution; only the loop order
+/// differs. Every pass accumulates whole rows tap by tap (`out += src *
+/// weight` over a contiguous range), which needs no per-tap bounds test,
+/// reads memory in order, and lets the compiler vectorize. A source row that
+/// is all zero, common in the padding, contributes nothing and is skipped.
 pub(crate) fn gaussian_blur_in_place(samples: &mut [u8], width: u32, height: u32, sigma_px: f32) {
+    let (w, h) = (width as usize, height as usize);
+    if w == 0 || h == 0 {
+        return;
+    }
     let kernel = gaussian_kernel(sigma_px);
-    let radius = (kernel.len() / 2) as i32;
-    let (w, h) = (width as i32, height as i32);
+    let radius = kernel.len() / 2;
 
-    let source: Vec<f32> = samples.iter().map(|&byte| byte as f32).collect();
+    let mut source: Vec<f32> = samples.iter().map(|&byte| byte as f32).collect();
     let mut horizontal = vec![0.0f32; source.len()];
-    for row in 0..h {
-        for col in 0..w {
-            let mut acc = 0.0f32;
-            for (tap, &weight) in kernel.iter().enumerate() {
-                let sample_col = col + tap as i32 - radius;
-                if sample_col >= 0 && sample_col < w {
-                    acc += source[(row * w + sample_col) as usize] * weight;
-                }
+    for (src, out) in source.chunks_exact(w).zip(horizontal.chunks_exact_mut(w)) {
+        if src.iter().all(|&value| value == 0.0) {
+            continue;
+        }
+        for (tap, &weight) in kernel.iter().enumerate() {
+            let shift = tap as isize - radius as isize;
+            let first = (-shift).max(0) as usize;
+            let end = (w as isize - shift.max(0)).max(first as isize) as usize;
+            if end <= first {
+                continue;
             }
-            horizontal[(row * w + col) as usize] = acc;
+            let src_from = (first as isize + shift) as usize;
+            for (o, &s) in out[first..end].iter_mut().zip(&src[src_from..]) {
+                *o += s * weight;
+            }
         }
     }
 
-    let mut vertical = vec![0.0f32; source.len()];
-    for row in 0..h {
-        for col in 0..w {
-            let mut acc = 0.0f32;
-            for (tap, &weight) in kernel.iter().enumerate() {
-                let sample_row = row + tap as i32 - radius;
-                if sample_row >= 0 && sample_row < h {
-                    acc += horizontal[(sample_row * w + col) as usize] * weight;
-                }
+    let row_has_signal: Vec<bool> = horizontal
+        .chunks_exact(w)
+        .map(|row| row.iter().any(|&value| value != 0.0))
+        .collect();
+    // `source` is no longer needed; reuse it for the vertical result.
+    source.fill(0.0);
+    for (row, out) in source.chunks_exact_mut(w).enumerate() {
+        for (tap, &weight) in kernel.iter().enumerate() {
+            let sample_row = row as isize + tap as isize - radius as isize;
+            if sample_row < 0 || sample_row >= h as isize || !row_has_signal[sample_row as usize] {
+                continue;
             }
-            vertical[(row * w + col) as usize] = acc;
+            let src = &horizontal[sample_row as usize * w..][..w];
+            for (o, &s) in out.iter_mut().zip(src) {
+                *o += s * weight;
+            }
         }
     }
 
-    for (dest, value) in samples.iter_mut().zip(vertical) {
+    for (dest, value) in samples.iter_mut().zip(source) {
         *dest = value.round().clamp(0.0, 255.0) as u8;
     }
 }
@@ -93,6 +113,89 @@ pub(crate) fn gaussian_blur_in_place(samples: &mut [u8], width: u32, height: u32
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The plain per-pixel convolution [`gaussian_blur_in_place`] replaced,
+    /// kept as the oracle its loop reordering must match exactly.
+    fn reference_blur(samples: &mut [u8], width: u32, height: u32, sigma_px: f32) {
+        let kernel = gaussian_kernel(sigma_px);
+        let radius = (kernel.len() / 2) as i32;
+        let (w, h) = (width as i32, height as i32);
+        let source: Vec<f32> = samples.iter().map(|&byte| byte as f32).collect();
+        let mut horizontal = vec![0.0f32; source.len()];
+        for row in 0..h {
+            for col in 0..w {
+                let mut acc = 0.0f32;
+                for (tap, &weight) in kernel.iter().enumerate() {
+                    let sample_col = col + tap as i32 - radius;
+                    if sample_col >= 0 && sample_col < w {
+                        acc += source[(row * w + sample_col) as usize] * weight;
+                    }
+                }
+                horizontal[(row * w + col) as usize] = acc;
+            }
+        }
+        let mut vertical = vec![0.0f32; source.len()];
+        for row in 0..h {
+            for col in 0..w {
+                let mut acc = 0.0f32;
+                for (tap, &weight) in kernel.iter().enumerate() {
+                    let sample_row = row + tap as i32 - radius;
+                    if sample_row >= 0 && sample_row < h {
+                        acc += horizontal[(sample_row * w + col) as usize] * weight;
+                    }
+                }
+                vertical[(row * w + col) as usize] = acc;
+            }
+        }
+        for (dest, value) in samples.iter_mut().zip(vertical) {
+            *dest = value.round().clamp(0.0, 255.0) as u8;
+        }
+    }
+
+    /// Deterministic pseudo-random bytes, with whole rows and columns left
+    /// empty so the zero-row skipping is exercised too.
+    fn noisy(width: u32, height: u32, seed: u32) -> Vec<u8> {
+        let mut state = seed.wrapping_mul(2_654_435_761).wrapping_add(1);
+        let mut samples = Vec::with_capacity((width * height) as usize);
+        for row in 0..height {
+            for col in 0..width {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let empty = row % 7 < 2 || col % 11 == 0;
+                samples.push(if empty { 0 } else { (state >> 24) as u8 });
+            }
+        }
+        samples
+    }
+
+    #[test]
+    fn the_reordered_blur_is_bit_identical_to_the_per_pixel_convolution() {
+        for (width, height, sigma) in [
+            (1u32, 1u32, 2.0f32),
+            (7, 5, 0.5),
+            (40, 40, 2.0),
+            (61, 23, 6.0),
+            (23, 61, 6.0),
+            (120, 80, 16.0),
+            (9, 200, 32.0),
+        ] {
+            let original = noisy(width, height, width * 31 + height);
+            let mut expected = original.clone();
+            let mut actual = original;
+            reference_blur(&mut expected, width, height, sigma);
+            gaussian_blur_in_place(&mut actual, width, height, sigma);
+            assert_eq!(actual, expected, "{width}x{height} sigma {sigma}");
+        }
+    }
+
+    #[test]
+    fn an_all_zero_buffer_and_an_empty_one_stay_as_they_are() {
+        let mut zeros = vec![0u8; 50 * 30];
+        gaussian_blur_in_place(&mut zeros, 50, 30, 8.0);
+        assert!(zeros.iter().all(|&b| b == 0));
+        let mut empty: Vec<u8> = Vec::new();
+        gaussian_blur_in_place(&mut empty, 0, 0, 4.0);
+        assert!(empty.is_empty());
+    }
 
     #[test]
     fn kernel_weights_sum_to_one() {
