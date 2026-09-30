@@ -1177,7 +1177,8 @@ impl WindowState {
         let asset_cache = self.runtime.asset_cache();
         let executor = self.runtime.executor();
         let focused = self.runtime.focused();
-        let (arena, styles, layouts, font) = self.runtime.geometry_and_font_mut();
+        let (arena, styles, layouts, font, interaction) =
+            self.runtime.geometry_font_and_interaction_mut();
         let scroll_offsets = scroll_registry.offsets_by_node(arena);
         let scrolled_layouts = florui_layout::apply_scroll_offsets(arena, layouts, &scroll_offsets);
         let physical_layouts = scale_layouts(&scrolled_layouts, scale_factor as f32);
@@ -1238,7 +1239,8 @@ impl WindowState {
             })
             .collect();
         let (accessibility_update, accessibility_reverse) =
-            self.accessibility_tree.build(arena, focused, &node_bounds);
+            self.accessibility_tree
+                .build(arena, focused, &node_bounds, interaction);
         self.accessibility_reverse = accessibility_reverse;
         self.accessibility_adapter
             .update_if_active(|| accessibility_update);
@@ -1798,7 +1800,18 @@ impl WindowState {
     /// keyboard, an accessibility action) can route through here
     /// uniformly rather than each needing its own opt-in.
     fn activate(&mut self, node: NodeId) {
+        self.activate_with(node, false);
+    }
+
+    /// [`Self::activate`], with whether the activation came from the
+    /// keyboard (a form's first invalid control takes `:focus-visible`
+    /// only then).
+    fn activate_with(&mut self, node: NodeId, via_keyboard: bool) {
         if self.runtime.dispatch_click(node) {
+            return;
+        }
+        if self.runtime.activate_form_button(node, via_keyboard) {
+            self.update_and_request_redraw();
             return;
         }
         // Collected as an owned `String` before the open-URL call below,
@@ -1957,7 +1970,7 @@ impl WindowState {
                     } else {
                         let (arena, ..) = self.runtime.geometry();
                         if crate::focus::activates_on_enter(arena, focused) {
-                            self.activate(focused);
+                            self.activate_with(focused, true);
                         }
                     }
                 }
@@ -2081,7 +2094,7 @@ impl WindowState {
         };
         let (arena, ..) = self.runtime.geometry();
         if florui_style::FocusPath::of(arena, focused) == armed {
-            self.activate(focused);
+            self.activate_with(focused, true);
         }
     }
 
@@ -2174,6 +2187,13 @@ impl WindowState {
         let registry = self.runtime.text_input_registry();
         let ctrl = self.modifiers.control_key();
         let shift = self.modifiers.shift_key();
+
+        if matches!(event.logical_key, Key::Named(NamedKey::Enter)) {
+            if !event.repeat {
+                self.submit_implicitly(node);
+            }
+            return;
+        }
 
         // Clipboard/undo shortcuts key off the *physical* key -- the
         // logical one can vary with layout/locale even while held with
@@ -2290,6 +2310,21 @@ impl WindowState {
         };
         if let Some(op) = op {
             self.commit_text_input_op(&registry, &id, node, op);
+        }
+    }
+
+    /// Enter in a text field: click its form's default submit button, or
+    /// submit directly when it is the form's only text field.
+    fn submit_implicitly(&mut self, field: NodeId) {
+        match self.runtime.implicit_submission(field) {
+            Some(crate::runtime::ImplicitSubmit::Click(button)) => {
+                self.activate_with(button, true);
+            }
+            Some(crate::runtime::ImplicitSubmit::Submit(form)) => {
+                self.runtime.submit_form(form, None, true);
+                self.update_and_request_redraw();
+            }
+            None => {}
         }
     }
 

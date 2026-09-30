@@ -7,7 +7,8 @@
 //! any other platform type; a game or mobile host could drive this the
 //! same way [`crate::run`] does.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -100,6 +101,13 @@ pub struct UiRuntime {
     /// strings, not a [`FocusPath`]: unlike `range_dragging`, nothing
     /// here needs re-resolving against a fresh `Arena`.
     multiselect_anchor: Option<(String, String)>,
+    /// Text controls the user has typed into, by [`FocusPath`] — see
+    /// [`crate::form_control::FormContext::edited`]. Interior-mutable
+    /// because [`Self::commit_value`] records into it through `&self`.
+    edited: RefCell<HashSet<FocusPath>>,
+    /// Controls whose `:user-valid`/`:user-invalid` may match: edited
+    /// and then blurred, or their form was submitted.
+    user_validated: HashSet<FocusPath>,
     /// Carries real `transition`/`@keyframes` state across [`Self::update`]
     /// calls, sampled against a real wall clock captured once at
     /// [`Self::with_rules_and_context`] — see
@@ -268,6 +276,8 @@ impl UiRuntime {
             layouts: HashMap::new(),
             option_summaries: HashMap::new(),
             multiselect_anchor: None,
+            edited: RefCell::new(HashSet::new()),
+            user_validated: HashSet::new(),
             animation_timeline,
             animation_epoch: std::time::Instant::now(),
             font: florui_text::Font::load_embedded(),
@@ -737,6 +747,12 @@ impl UiRuntime {
         if node == self.focused_node && focus_visible == self.focus_visible {
             return false;
         }
+        if node != self.focused_node
+            && let Some(previous) = self.focused_path.take()
+            && self.edited.borrow().contains(&previous)
+        {
+            self.user_validated.insert(previous);
+        }
         self.focused_node = node;
         self.focused_path = node.map(|id| FocusPath::of(&self.arena, id));
         self.focus_visible = focus_visible;
@@ -1139,7 +1155,32 @@ impl UiRuntime {
                 state = state.with_focus_visible(id);
             }
         }
+        for node in self.arena.find_all(crate::form::has_form_state) {
+            if let Some(form_state) = self.form_state_of(node) {
+                state = state.with_form_state(node, form_state);
+            }
+        }
         self.interaction = state;
+    }
+
+    /// [`Self::geometry_and_font_mut`], plus the interaction state — a
+    /// separate borrow can't be taken alongside the `&mut Font`.
+    pub(crate) fn geometry_font_and_interaction_mut(
+        &mut self,
+    ) -> (
+        &Arena,
+        &HashMap<NodeId, ComputedStyle>,
+        &HashMap<NodeId, BoxLayout>,
+        &mut florui_text::Font,
+        &InteractionState,
+    ) {
+        (
+            &self.arena,
+            &self.styles,
+            &self.layouts,
+            &mut self.font,
+            &self.interaction,
+        )
     }
 
     /// Swaps in the real, process-wide [`VisitedLinks`] — see
@@ -1260,6 +1301,11 @@ impl UiRuntime {
     /// string); the caller still owns redrawing afterward, the same way
     /// [`Self::dispatch_click`]'s caller does.
     pub(crate) fn commit_value(&self, node: NodeId, value: String) {
+        if crate::form_control::spec(&self.arena, node).is_some_and(|spec| spec.text_field) {
+            self.edited
+                .borrow_mut()
+                .insert(FocusPath::of(&self.arena, node));
+        }
         if let Some(binding) = self.arena.value_binding(node, "value") {
             binding.request_update(value);
         } else if let Some(handler) = self.arena.value_handler(node, "value") {
@@ -1313,6 +1359,12 @@ fn media_viewport(viewport: Size<AvailableSpace>) -> florui_style::Viewport {
         },
     }
 }
+
+mod forms;
+#[cfg(feature = "desktop")]
+pub(crate) use forms::ImplicitSubmit;
+#[cfg(test)]
+mod forms_tests;
 
 #[cfg(test)]
 mod tests {

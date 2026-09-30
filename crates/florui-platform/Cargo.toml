@@ -25,6 +25,7 @@ florui-paint = { path = "../florui-paint" }
 florui-reactive = { path = "../florui-reactive" }
 florui-style = { path = "../florui-style" }
 florui-text = { path = "../florui-text" }
+regex = "1.13.1"
 # Only the plain `RawIcon` type -- decoding an actual SVG/PNG is the
 # caller's own concern (see `florui_icon`'s own `decode` feature), so its
 # `resvg`/`image` dependencies never enter this crate's graph.
@@ -58,6 +59,7 @@ accesskit_winit = { version = "0.34", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+florui-primitives = { path = "../florui-primitives" }
 # Encoding a real PNG for `image.rs`'s own tests -- version matches
 # `florui-assets`'s own pin, for one resolved version across the
 # workspace.
