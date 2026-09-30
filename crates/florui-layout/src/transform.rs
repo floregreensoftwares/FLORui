@@ -1,9 +1,11 @@
 //! The 2D affine matrix a node's `transform` resolves to. Painting and hit
 //! testing both read it from here, so a node is hit exactly where it is drawn.
 
-use florui_style::{ComputedStyle, TransformFunction};
+use std::collections::HashMap;
 
-use crate::BoxLayout;
+use florui_style::{Arena, ComputedStyle, NodeId, TransformFunction};
+
+use crate::{BoxLayout, absolute_position};
 
 /// `x' = a*x + c*y + e`, `y' = b*x + d*y + f` — CSS `matrix()`'s own order.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -137,6 +139,57 @@ pub fn resolve_transform(
     Affine::translate(origin_x, origin_y)
         .after(list)
         .after(Affine::translate(-origin_x, -origin_y))
+}
+
+/// Every laid-out node's on-screen bounding box `(x, y, width, height)`: its
+/// border box with its own `transform` and every ancestor's applied, the
+/// same place painting puts it and hit testing finds it. `layouts` and
+/// `scale_factor` are the caller's pixels (logical layouts with `1.0`).
+pub fn screen_bounds(
+    arena: &Arena,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    styles: &HashMap<NodeId, ComputedStyle>,
+    scale_factor: f32,
+) -> HashMap<NodeId, (f32, f32, f32, f32)> {
+    let mut bounds = HashMap::with_capacity(layouts.len());
+    let mut stack: Vec<(NodeId, Affine)> = arena
+        .roots()
+        .iter()
+        .rev()
+        .map(|&root| (root, Affine::IDENTITY))
+        .collect();
+    while let Some((node, inherited)) = stack.pop() {
+        let mut transform = inherited;
+        if let Some(&layout) = layouts.get(&node) {
+            let (x, y) = absolute_position(arena, layouts, node);
+            if let Some(style) = styles.get(&node) {
+                transform = inherited.after(resolve_transform(style, &layout, x, y, scale_factor));
+            }
+            let (w, h) = (layout.width, layout.height);
+            let rect = if transform.is_identity() {
+                (x, y, w, h)
+            } else {
+                let corners = [(x, y), (x + w, y), (x, y + h), (x + w, y + h)]
+                    .map(|p| transform.map_point(p));
+                let min_x = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
+                let min_y = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
+                let max_x = corners
+                    .iter()
+                    .map(|c| c.0)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                let max_y = corners
+                    .iter()
+                    .map(|c| c.1)
+                    .fold(f32::NEG_INFINITY, f32::max);
+                (min_x, min_y, max_x - min_x, max_y - min_y)
+            };
+            bounds.insert(node, rect);
+        }
+        for &child in arena.children(node).iter().rev() {
+            stack.push((child, transform));
+        }
+    }
+    bounds
 }
 
 #[cfg(test)]

@@ -1441,14 +1441,8 @@ impl WindowState {
             );
         }
 
-        let node_bounds: HashMap<NodeId, (f32, f32, f32, f32)> = physical_layouts
-            .keys()
-            .map(|&id| {
-                let (x, y) = florui_layout::absolute_position(arena, &physical_layouts, id);
-                let layout = physical_layouts[&id];
-                (id, (x, y, layout.width, layout.height))
-            })
-            .collect();
+        let node_bounds: HashMap<NodeId, (f32, f32, f32, f32)> =
+            florui_layout::screen_bounds(arena, &physical_layouts, styles, scale_factor as f32);
         let (accessibility_update, accessibility_reverse) =
             self.accessibility_tree
                 .build(arena, focused, &node_bounds, interaction);

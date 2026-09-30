@@ -64,7 +64,7 @@ use taffy::{Baselines, compute_leaf_layout};
 
 mod transform;
 
-pub use transform::{Affine, resolve_transform};
+pub use transform::{Affine, resolve_transform, screen_bounds};
 
 /// Checked before Taffy's own recursive layout algorithms run — if less
 /// than this much stack remains, `stacker` allocates a fresh
@@ -2845,6 +2845,52 @@ mod tests {
         (arena, hits)
     }
 
+    #[test]
+    fn screen_bounds_follow_a_nodes_and_its_ancestors_transforms() {
+        let tree: Element = view! {
+            <div class="parent">
+                <div class="child" />
+                <div class="turned" />
+            </div>
+        };
+        let (arena, styles, layouts) = layout_with_styles(
+            &tree,
+            ".parent { width: 100px; height: 100px; transform: translate(200px, 0px); } \
+             .child { width: 10px; height: 10px; } \
+             .turned { width: 40px; height: 10px; transform: rotate(90deg); }",
+        );
+        let bounds = screen_bounds(&arena, &layouts, &styles, 1.0);
+        let parent = arena.roots()[0];
+        let [child, turned] = [arena.children(parent)[0], arena.children(parent)[1]];
+        assert_eq!(bounds[&parent], (200.0, 0.0, 100.0, 100.0));
+        assert_eq!(
+            bounds[&child],
+            (200.0, 0.0, 10.0, 10.0),
+            "moved with its parent"
+        );
+        let (x, y, w, h) = bounds[&turned];
+        // 40x10 at (200, 10) turned about its centre (220, 15): 10x40 at (215, -5).
+        for (got, want) in [(x, 215.0), (y, -5.0), (w, 10.0), (h, 40.0)] {
+            assert!(
+                (got - want).abs() < 1e-3,
+                "{:?} vs {:?}",
+                bounds[&turned],
+                (215.0, -5.0, 10.0, 40.0)
+            );
+        }
+    }
+
+    #[test]
+    fn screen_bounds_of_an_untransformed_tree_are_the_layout_boxes() {
+        let tree: Element = view! { <div class="box" /> };
+        let (arena, styles, layouts) =
+            layout_with_styles(&tree, ".box { width: 30px; height: 20px; }");
+        let node = arena.roots()[0];
+        assert_eq!(
+            screen_bounds(&arena, &layouts, &styles, 1.0)[&node],
+            (0.0, 0.0, 30.0, 20.0)
+        );
+    }
     #[test]
     fn a_translated_box_is_hit_where_it_is_drawn() {
         let tree: Element = view! { <div class="box" /> };
