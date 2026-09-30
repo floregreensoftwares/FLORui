@@ -1,6 +1,6 @@
 //! [`use_committed_position`]: same [`florui_reactive::use_attachment`]
 //! shape as [`crate::use_committed_size`], reporting
-//! [`florui_layout::absolute_position`] instead of box size. Kept as its
+//! [`crate::UiRuntime`]'s drawn position (scroll offsets applied) instead of box size. Kept as its
 //! own registry rather than folded into `SizeObserverRegistry` since a
 //! caller wanting only one shouldn't pay for computing the other.
 
@@ -47,7 +47,12 @@ impl PositionObserverRegistry {
     /// Calls every observer whose position changed since last notified —
     /// same remove/call/reinsert shape as
     /// [`crate::SizeObserverRegistry::notify`].
-    pub(crate) fn notify(&self, arena: &Arena, layouts: &HashMap<NodeId, BoxLayout>) {
+    pub(crate) fn notify(
+        &self,
+        arena: &Arena,
+        layouts: &HashMap<NodeId, BoxLayout>,
+        position_of: &dyn Fn(NodeId) -> (f32, f32),
+    ) {
         let ids: Vec<String> = self.observers.borrow().keys().cloned().collect();
         for id in ids {
             let Some(node) = arena.find(|a, candidate| a.id_attr(candidate) == Some(id.as_str()))
@@ -57,7 +62,7 @@ impl PositionObserverRegistry {
             if !layouts.contains_key(&node) {
                 continue;
             }
-            let position = florui_layout::absolute_position(arena, layouts, node);
+            let position = position_of(node);
 
             let Some(mut observer) = self.observers.borrow_mut().remove(&id) else {
                 continue;
@@ -71,7 +76,7 @@ impl PositionObserverRegistry {
     }
 }
 
-/// Subscribes to the absolute position of the element whose `id`
+/// Subscribes to the drawn position (scroll offsets applied) of the element whose `id`
 /// attribute is `id`: `on_move(x, y)` runs once layout settles on a
 /// position this observer hasn't already reported, including once for
 /// wherever the very first layout places it. Requires a
