@@ -5,7 +5,8 @@ in a form and what it exposes to assistive technology. This is the published
 coverage for the initial release: it does not claim arbitrary HTML control
 equivalence, and a row says "not supported" where that is the case. Behavior
 marked *measured* was compared against Edge with real input; accessibility
-coverage was checked through the UI Automation tree, not with a screen reader.
+coverage was checked through the UI Automation tree and, for the controls listed
+under Verification, by ear with Windows Narrator.
 
 | Control | Pointer | Keyboard | Disabled | In a form | Accessibility role |
 |---|---|---|---|---|---|
@@ -35,5 +36,20 @@ properties (use `--florui-resize` and `--florui-appearance`).
 
 Headless tests drive a `UiRuntime` directly; behavior that needs real windows,
 mouse or keyboard input was checked on Windows through UI Automation, and the
-scripts in `scripts/real-session/` repeat part of it. Nothing here was checked
-with a screen reader.
+scripts in `scripts/real-session/` repeat part of it.
+
+Narrator (Windows 11) was run against the `controlled_form`, `popover` and
+`virtualized_list` examples:
+
+- **Announced as expected**: text, password and email fields with their name and
+  "required"; the spin button with its value and maximum; the combo box
+  expanding and collapsing and reading its chosen option; the checkbox and
+  radio states changing; the form landmark on entering it; the validation
+  message after a failed submit; buttons; menu items, a submenu opening and
+  closing, and focus returning to the trigger on Escape; list rows while
+  moving with the arrows, Home, End and Page Down.
+- **Not confirmed**: a row's position in the whole list ("n of N"), the menu
+  container being announced on open, and whether the submenu item says it is
+  collapsed.
+
+NVDA and JAWS were not tried.
