@@ -217,9 +217,9 @@ impl VirtualListHandle {
         let bottom = top + self.extents.with(|e| e.get(&key).value());
         let (x, y) = self.scroll.offset();
         if top < y {
-            self.scroll.scroll_to(x, top);
+            self.scroll.scroll_to_instant(x, top);
         } else if bottom > y + viewport {
-            self.scroll.scroll_to(x, bottom - viewport);
+            self.scroll.scroll_to_instant(x, bottom - viewport);
         }
     }
 
@@ -351,7 +351,8 @@ pub fn use_virtual_list(
         && let Some(target_y) = extents.with(|e| current_anchor.resolve(&layout.keys, e))
         && (target_y - scroll_top).abs() > f32::EPSILON
     {
-        scroll.scroll_to(scroll_x, target_y);
+        // A layout correction, not a scroll the author asked for.
+        scroll.scroll_to_instant(scroll_x, target_y);
         scroll_top = target_y;
     }
     last_layout.set(Some(Rc::clone(&layout)));

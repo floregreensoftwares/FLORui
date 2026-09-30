@@ -526,7 +526,7 @@ impl UiRuntime {
             });
         self.focus_observers.notify(&self.arena, self.focused_node);
         self.scroll_registry
-            .sync(&self.arena, &self.layouts, &content_extents);
+            .sync(&self.arena, &self.styles, &self.layouts, &content_extents);
         self.text_input_registry
             .sync(&self.arena, &self.styles, &self.layouts, &mut self.font);
     }

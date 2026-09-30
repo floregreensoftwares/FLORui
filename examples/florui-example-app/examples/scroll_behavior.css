@@ -1,0 +1,49 @@
+.page {
+    display: flex;
+    flex-direction: row;
+    gap: 24px;
+    padding: 16px;
+    background-color: #1e1e22;
+    color: #ffffff;
+}
+
+.column {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.status {
+    font-size: 16px;
+}
+
+.buttons {
+    display: flex;
+    flex-direction: row;
+    gap: 6px;
+}
+
+.button {
+    padding: 4px 8px;
+    background-color: #36c;
+    color: #fff;
+    font-size: 13px;
+}
+
+.scroll-box {
+    width: 240px;
+    height: 300px;
+    overflow-y: auto;
+    background-color: #101014;
+}
+
+.smooth {
+    scroll-behavior: smooth;
+}
+
+.row {
+    height: 40px;
+    padding-left: 12px;
+    background-color: #26262c;
+    border-bottom: 1px solid #333;
+}

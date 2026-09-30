@@ -14,13 +14,16 @@ use std::rc::Rc;
 
 use florui_layout::{BoxLayout, ContentExtent};
 use florui_reactive::{Cleanup, Signal, use_attachment, use_context, use_signal};
-use florui_style::{Arena, NodeId};
+use florui_style::{Arena, ComputedStyle, NodeId};
 
 use crate::scroll_animation::{ScrollAnimation, ScrollKind};
 
 struct ScrollEntry {
     offset: Rc<Cell<(f32, f32)>>,
     animation: Option<ScrollAnimation>,
+    /// The element's computed `scroll-behavior: smooth`, as of the last
+    /// render; what a plain [`ScrollHandle::scroll_to`] follows.
+    smooth_by_css: bool,
     /// Bumped to mark the owning scope dirty; the offset itself is a plain
     /// cell so a wheel tick nobody rendered from can skip a re-render.
     version: Signal<u64>,
@@ -85,6 +88,7 @@ impl ScrollRegistry {
             ScrollEntry {
                 offset,
                 animation: None,
+                smooth_by_css: false,
                 version,
                 read_in_render: Cell::new(pending_read),
                 viewport_size: (0.0, 0.0),
@@ -108,6 +112,7 @@ impl ScrollRegistry {
     pub(crate) fn sync(
         &self,
         arena: &Arena,
+        styles: &HashMap<NodeId, ComputedStyle>,
         layouts: &HashMap<NodeId, BoxLayout>,
         content_extents: &HashMap<NodeId, ContentExtent>,
     ) {
@@ -134,6 +139,9 @@ impl ScrollRegistry {
             };
             entry.viewport_size = viewport_size;
             entry.content_size = content_size;
+            entry.smooth_by_css = styles
+                .get(&node)
+                .is_some_and(|style| style.scroll_behavior_smooth);
             let current = entry.offset.get();
             let clamped = clamp_offset(current, viewport_size, content_size);
             if clamped != current {
@@ -296,6 +304,13 @@ impl ScrollRegistry {
         }
     }
 
+    fn smooth_by_css(&self, id: &str) -> bool {
+        self.entries
+            .borrow()
+            .get(id)
+            .is_some_and(|entry| entry.smooth_by_css)
+    }
+
     fn animation_target(&self, id: &str) -> (f32, f32) {
         self.entries.borrow().get(id).map_or((0.0, 0.0), |entry| {
             entry
@@ -433,28 +448,43 @@ impl ScrollHandle {
         self.registry.content_size(&self.id)
     }
 
-    /// Scrolls immediately to `(x, y)`, clamped to the element's
-    /// last-known content/viewport size — e.g. for a future virtualized
-    /// list's scroll-to-item.
+    /// Scrolls to `(x, y)`, clamped to the element's last-known
+    /// content/viewport size, the way `element.scrollTo(x, y)` does: smooth
+    /// when the element's CSS says `scroll-behavior: smooth`, immediate
+    /// otherwise.
     pub fn scroll_to(&self, x: f32, y: f32) {
+        if self.registry.smooth_by_css(&self.id) {
+            self.scroll_to_smooth(x, y);
+        } else {
+            self.scroll_to_instant(x, y);
+        }
+    }
+
+    /// Scrolls by `(dx, dy)` from the current offset (or from where a running
+    /// smooth scroll is headed), clamped the same way and following
+    /// `scroll-behavior` like [`Self::scroll_to`].
+    pub fn scroll_by(&self, dx: f32, dy: f32) {
+        if self.registry.smooth_by_css(&self.id) {
+            self.scroll_by_smooth(dx, dy);
+        } else {
+            self.registry.scroll_by(&self.id, dx, dy);
+        }
+    }
+
+    /// Like [`Self::scroll_to`] with `behavior: "instant"`: jumps whatever
+    /// the CSS says, and cancels a running smooth scroll.
+    pub fn scroll_to_instant(&self, x: f32, y: f32) {
         self.registry.scroll_to(&self.id, x, y);
     }
 
-    /// Scrolls by `(dx, dy)` from the current offset, clamped the same
-    /// way.
-    pub fn scroll_by(&self, dx: f32, dy: f32) {
-        self.registry.scroll_by(&self.id, dx, dy);
-    }
-
-    /// Like [`Self::scroll_to`], but animated the way a browser's
-    /// `scrollTo({ behavior: "smooth" })` is. CSS `scroll-behavior` is not
-    /// read: Stylo's servo engine does not include the property.
+    /// Like [`Self::scroll_to`] with `behavior: "smooth"`, whatever the CSS
+    /// says.
     pub fn scroll_to_smooth(&self, x: f32, y: f32) {
         self.registry.scroll_smoothly_to(&self.id, x, y);
     }
 
-    /// Like [`Self::scroll_by`], animated; repeated calls accumulate from
-    /// where the running animation is headed.
+    /// Like [`Self::scroll_by`] with `behavior: "smooth"`; repeated calls
+    /// accumulate from where the running animation is headed.
     pub fn scroll_by_smooth(&self, dx: f32, dy: f32) {
         let headed = self.registry.animation_target(&self.id);
         self.registry
@@ -747,6 +777,83 @@ mod tests {
         assert!(
             runtime.is_dirty(),
             "the rendered output depends on the offset"
+        );
+    }
+
+    /// An outer and an inner scroll box, each with a handle, under `css`.
+    fn nested_boxes(css: &str) -> (UiRuntime, ScrollHandle, ScrollHandle) {
+        let slots: Rc<RefCell<Vec<ScrollHandle>>> = Rc::default();
+        let captured = Rc::clone(&slots);
+        let root = move || {
+            let outer = use_scroll_offset("outer", |_, _| {});
+            let inner = use_scroll_offset("inner", |_, _| {});
+            *captured.borrow_mut() = vec![outer, inner];
+            view! {
+                <div id="outer" class="outer">
+                    <div id="inner" class="inner">
+                        <div class="content" />
+                    </div>
+                    <div class="content" />
+                </div>
+            }
+        };
+        let css = format!(
+            ".outer {{ width: 60px; height: 60px; overflow-y: auto; }} \
+             .inner {{ width: 50px; height: 50px; overflow-y: auto; }} \
+             .content {{ width: 10px; height: 200px; }} {css}"
+        );
+        let runtime = UiRuntime::with_rules(
+            florui_style::parse_stylesheet(&css).unwrap(),
+            root,
+            viewport(),
+        );
+        let handles = slots.borrow().clone();
+        (runtime, handles[0].clone(), handles[1].clone())
+    }
+
+    #[test]
+    fn css_scroll_behavior_smooth_makes_a_plain_scroll_to_animate() {
+        let (runtime, outer, _) = nested_boxes(".outer { scroll-behavior: smooth; }");
+        let registry = runtime.scroll_registry();
+
+        outer.scroll_to(0.0, 100.0);
+
+        assert!(registry.is_animating());
+        assert_eq!(registry.current_offset("outer"), (0.0, 0.0), "not a jump");
+        registry.advance_animations(registry.now() + 10.0);
+        assert_eq!(registry.current_offset("outer"), (0.0, 100.0));
+    }
+
+    #[test]
+    fn without_the_css_a_plain_scroll_to_still_jumps() {
+        let (runtime, outer, _) = nested_boxes("");
+        outer.scroll_to(0.0, 100.0);
+        assert!(!runtime.scroll_registry().is_animating());
+        assert_eq!(
+            runtime.scroll_registry().current_offset("outer"),
+            (0.0, 100.0)
+        );
+    }
+
+    #[test]
+    fn an_explicit_instant_scroll_ignores_the_css() {
+        let (runtime, outer, _) = nested_boxes(".outer { scroll-behavior: smooth; }");
+        outer.scroll_to_instant(0.0, 100.0);
+        assert!(!runtime.scroll_registry().is_animating());
+        assert_eq!(
+            runtime.scroll_registry().current_offset("outer"),
+            (0.0, 100.0)
+        );
+    }
+
+    #[test]
+    fn a_nested_scroller_under_a_smooth_one_stays_instant_because_the_property_does_not_inherit() {
+        let (runtime, _, inner) = nested_boxes(".outer { scroll-behavior: smooth; }");
+        inner.scroll_to(0.0, 100.0);
+        assert!(!runtime.scroll_registry().is_animating());
+        assert_eq!(
+            runtime.scroll_registry().current_offset("inner"),
+            (0.0, 100.0)
         );
     }
 
