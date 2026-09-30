@@ -1362,6 +1362,8 @@ impl WindowState {
         // render that read the offset (or an `on_scroll` that set state)
         // marks the scope dirty on its own.
         if self.runtime.scroll_registry().wheel_scroll_by(&id, dx, dy) {
+            self.runtime
+                .reposition_for_scroll(layout_viewport(self.viewport_scale()));
             self.window.request_redraw();
             self.refresh_hover_at_cursor();
         }

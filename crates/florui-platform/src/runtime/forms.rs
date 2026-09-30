@@ -172,7 +172,14 @@ impl UiRuntime {
 
     pub(super) fn position_validation_bubble(&mut self, width: f32, height: f32) {
         if let Some(field) = self.validation_bubble_field() {
-            crate::validation_bubble::place(&self.arena, &mut self.layouts, field, (width, height));
+            let field_position = self.drawn_position(field);
+            crate::validation_bubble::place(
+                &self.arena,
+                &mut self.layouts,
+                field,
+                field_position,
+                (width, height),
+            );
         }
     }
 

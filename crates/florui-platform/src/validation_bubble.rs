@@ -82,6 +82,7 @@ pub(crate) fn place(
     arena: &Arena,
     layouts: &mut HashMap<NodeId, BoxLayout>,
     field: NodeId,
+    field_position: (f32, f32),
     viewport: (f32, f32),
 ) {
     let Some(root) = arena.find(|arena, id| arena.id_attr(id) == Some(BUBBLE_ID)) else {
@@ -103,7 +104,7 @@ pub(crate) fn place(
     let (Some(&field_box), Some(&root_box)) = (layouts.get(&field), layouts.get(&root)) else {
         return;
     };
-    let (fx, fy) = florui_layout::absolute_position(arena, layouts, field);
+    let (fx, fy) = field_position;
     let left = (fx + field_box.width / 2.0 - root_box.width / 2.0)
         .min(viewport.0 - root_box.width)
         .max(0.0)

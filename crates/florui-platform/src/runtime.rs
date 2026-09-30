@@ -476,7 +476,7 @@ impl UiRuntime {
                 )
                 .width;
             let wrap_width = self.validation_bubble_field().and_then(|field| {
-                let (left, _) = florui_layout::absolute_position(&self.arena, &self.layouts, field);
+                let (left, _) = self.drawn_position(field);
                 let limit = crate::validation_bubble::max_text_width(left, resolved_viewport.width);
                 (natural > limit).then_some(limit)
             });
@@ -520,7 +520,10 @@ impl UiRuntime {
         // After layout, not before: a committed-size/-position observer
         // must see this render's own real geometry, not the previous one's.
         self.size_observers.notify(&self.arena, &self.layouts);
-        self.position_observers.notify(&self.arena, &self.layouts);
+        self.position_observers
+            .notify(&self.arena, &self.layouts, &|node| {
+                self.drawn_position(node)
+            });
         self.focus_observers.notify(&self.arena, self.focused_node);
         self.scroll_registry
             .sync(&self.arena, &self.layouts, &content_extents);
@@ -686,6 +689,20 @@ impl UiRuntime {
     /// synchronously right after the one layout pass it reads, so the
     /// placeholder position `select::normalize` gives the div is never
     /// actually painted.
+    /// Re-anchors everything placed against another element's drawn
+    /// position after a scroll moved it, without a render: open selects, the
+    /// validation bubble, and position observers (so a popover follows its
+    /// trigger).
+    pub(crate) fn reposition_for_scroll(&mut self, viewport: Size<AvailableSpace>) {
+        let resolved = media_viewport(viewport);
+        self.position_open_selects(resolved.width, resolved.height);
+        self.position_validation_bubble(resolved.width, resolved.height);
+        self.position_observers
+            .notify(&self.arena, &self.layouts, &|node| {
+                self.drawn_position(node)
+            });
+    }
+
     fn position_open_selects(&mut self, viewport_width: f32, viewport_height: f32) {
         let placement = crate::components::popover::Placement::new(
             crate::components::popover::Side::Bottom,
@@ -710,7 +727,7 @@ impl UiRuntime {
             else {
                 continue;
             };
-            let (tx, ty) = florui_layout::absolute_position(&self.arena, &self.layouts, trigger);
+            let (tx, ty) = self.drawn_position(trigger);
             let (x, y) = crate::components::popover::resolve_placement(
                 &placement,
                 (tx, ty, trigger_box.width, trigger_box.height),
@@ -958,7 +975,7 @@ impl UiRuntime {
     }
 
     /// The value a pointer at `cursor_x` (absolute, same space as
-    /// [`florui_layout::absolute_position`]) requests on `node`'s own
+    /// [`Self::drawn_position`]) requests on `node`'s own
     /// track: real HTML's own "click/drag anywhere jumps directly to that
     /// position" behavior — measured against Chrome, no grab-offset is
     /// preserved regardless of where within the thumb the drag started.
@@ -970,7 +987,7 @@ impl UiRuntime {
         if layout.width <= 0.0 {
             return None;
         }
-        let (track_x, _) = florui_layout::absolute_position(&self.arena, &self.layouts, node);
+        let (track_x, _) = self.drawn_position(node);
         let (min, max, step) = (
             self.arena.range_min(node),
             self.arena.range_max(node),
@@ -3390,5 +3407,122 @@ mod tests {
             (0.0, 40.0),
             "the layout itself stays unscrolled"
         );
+    }
+
+    fn overlay_scroll_runtime(
+        positions: Rc<RefCell<Vec<(f32, f32)>>>,
+        select_open: bool,
+    ) -> UiRuntime {
+        let root = move || {
+            crate::use_scroll_offset("box", |_, _| {});
+            let log = Rc::clone(&positions);
+            crate::use_committed_position("anchor", move |x, y| log.borrow_mut().push((x, y)));
+            view! {
+                <div id="box" class="box">
+                    <div class="spacer" />
+                    <div id="anchor" class="anchor" />
+                    <select id="sel" class="sel" open={select_open}>
+                        <option id="o1" value="o1">{"One"}</option>
+                    </select>
+                    <div class="spacer" />
+                    <div class="spacer" />
+                </div>
+            }
+        };
+        let rules = florui_style::parse_stylesheet(
+            ".box { width: 200px; height: 100px; overflow-y: auto; } \
+             .spacer { height: 80px; } .anchor { height: 20px; } .sel { width: 100px; height: 20px; }",
+        )
+        .unwrap();
+        let viewport = Size {
+            width: AvailableSpace::Definite(400.0),
+            height: AvailableSpace::Definite(400.0),
+        };
+        UiRuntime::with_rules(rules, root, viewport)
+    }
+
+    const OVERLAY_VIEWPORT: Size<AvailableSpace> = Size {
+        width: AvailableSpace::Definite(400.0),
+        height: AvailableSpace::Definite(400.0),
+    };
+
+    #[test]
+    fn a_position_observer_follows_its_element_when_a_scroll_moves_it() {
+        let positions = Rc::new(RefCell::new(Vec::new()));
+        let mut runtime = overlay_scroll_runtime(Rc::clone(&positions), false);
+        assert_eq!(positions.borrow().last(), Some(&(0.0, 80.0)));
+
+        runtime.scroll_registry().wheel_scroll_by("box", 0.0, 30.0);
+        runtime.reposition_for_scroll(OVERLAY_VIEWPORT);
+
+        assert_eq!(
+            positions.borrow().last(),
+            Some(&(0.0, 50.0)),
+            "reports where the anchor is drawn, not its unscrolled layout position"
+        );
+    }
+
+    #[test]
+    fn an_open_selects_dropdown_follows_its_trigger_when_a_scroll_moves_it() {
+        let positions = Rc::new(RefCell::new(Vec::new()));
+        let mut runtime = overlay_scroll_runtime(positions, true);
+        let content_top = |runtime: &UiRuntime| {
+            let content = node_id(runtime, "sel-select-content");
+            let (_, _, layouts) = runtime.geometry();
+            layouts[&content].y
+        };
+        let trigger = node_id(&runtime, "sel");
+        let gap_below_trigger =
+            |runtime: &UiRuntime| content_top(runtime) - runtime.drawn_position(trigger).1;
+        let (top_before, gap_before) = (content_top(&runtime), gap_below_trigger(&runtime));
+
+        runtime.scroll_registry().wheel_scroll_by("box", 0.0, 30.0);
+        runtime.reposition_for_scroll(OVERLAY_VIEWPORT);
+
+        assert_eq!(
+            content_top(&runtime),
+            top_before - 30.0,
+            "the dropdown moves with the 30px scroll"
+        );
+        assert_eq!(
+            gap_below_trigger(&runtime),
+            gap_before,
+            "and stays the same distance under the trigger where it is drawn"
+        );
+    }
+
+    #[test]
+    fn a_range_drag_maps_the_pointer_onto_the_track_where_a_horizontal_scroll_drew_it() {
+        let requests: Rc<RefCell<Vec<String>>> = Rc::default();
+        let log = Rc::clone(&requests);
+        let rules = florui_style::parse_stylesheet(
+            ".box { width: 100px; height: 20px; overflow-x: auto; } \
+             .track { display: block; width: 100px; height: 20px; margin-left: 150px; \
+             border-width: 0px; padding-top: 0px; padding-right: 0px; padding-bottom: 0px; \
+             padding-left: 0px; }",
+        )
+        .unwrap();
+        let mut runtime = UiRuntime::with_rules(
+            rules,
+            move || {
+                crate::use_scroll_offset("box", |_, _| {});
+                let log = Rc::clone(&log);
+                view! {
+                    <div id="box" class="box">
+                        <input id="r" class="track" type="range" min="0" max="100" step="1"
+                            value={"0".to_string()}
+                            oninput={move |v: String| log.borrow_mut().push(v)} />
+                    </div>
+                }
+            },
+            viewport(),
+        );
+        let node = node_id(&runtime, "r");
+
+        // Scrolled 100px right, the track is drawn at x 50..150.
+        runtime.scroll_registry().scroll_to("box", 100.0, 0.0);
+        runtime.start_range_drag(node, 100.0);
+
+        assert_eq!(*requests.borrow(), vec!["50".to_string()]);
     }
 }
