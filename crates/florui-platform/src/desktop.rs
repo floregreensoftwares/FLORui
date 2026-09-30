@@ -49,6 +49,7 @@ use crate::gpu::{self, GpuPresenter};
 use crate::host_observer::{HostObserver, SharedObserver};
 use crate::list_keys::ListKey;
 use crate::menu_keys::{self, MenuKey, MenuMove};
+use crate::scroll_animation::ScrollKind;
 use crate::single_instance::{self, HandoffOutcome, InstanceRole};
 use crate::window_controls::{InputMode, ScreenRect, WindowControls, resize_direction_at};
 use crate::window_state::{self, WindowPersistence};
@@ -1102,6 +1103,8 @@ struct WindowState {
     /// recent [`Self::redraw`] left here — no separate cross-thread
     /// signal needed to drive continuous repaints.
     next_animation_wake: Option<std::time::Instant>,
+    /// When the running smooth scrolls next step; `None` when idle.
+    scroll_frame_due: Option<std::time::Instant>,
     /// The spinner arrow currently held down, repeating until release.
     spinner_hold: Option<SpinnerHold>,
     scroll_hold: Option<ScrollHold>,
@@ -1267,6 +1270,10 @@ const WINDOW_STATE_SAVE_DEBOUNCE: std::time::Duration = std::time::Duration::fro
 /// range for the same conversion.
 const WHEEL_LINE_HEIGHT: f32 = 40.0;
 
+/// Logical pixels one wheel notch scrolls, measured in Edge at the default
+/// of three lines per notch. The OS lines-per-notch setting is not read.
+const WHEEL_NOTCH_PIXELS: f32 = 100.0;
+
 impl WindowState {
     fn viewport_scale(&self) -> ViewportScale {
         dpi::viewport_scale(self.window.inner_size(), self.window.scale_factor())
@@ -1305,12 +1312,21 @@ impl WindowState {
     /// right/down by *increasing* the offset, not moving the content
     /// itself right/down. Scrolling down (revealing lower content) must
     /// increase `offset.1`, not decrease it.
-    fn to_logical_scroll_delta(&self, delta: MouseScrollDelta) -> (f32, f32) {
+    ///
+    /// The flag is whether the delta is a wheel notch, which scrolls
+    /// smoothly; a trackpad's pixel deltas already carry the OS's own
+    /// momentum and apply as they arrive.
+    fn to_logical_scroll_delta(&self, delta: MouseScrollDelta) -> ((f32, f32), bool) {
         match delta {
-            MouseScrollDelta::LineDelta(x, y) => (-x * WHEEL_LINE_HEIGHT, -y * WHEEL_LINE_HEIGHT),
+            MouseScrollDelta::LineDelta(x, y) => {
+                ((-x * WHEEL_NOTCH_PIXELS, -y * WHEEL_NOTCH_PIXELS), true)
+            }
             MouseScrollDelta::PixelDelta(position) => {
                 let factor = self.viewport_scale().scale_factor;
-                ((-position.x / factor) as f32, (-position.y / factor) as f32)
+                (
+                    ((-position.x / factor) as f32, (-position.y / factor) as f32),
+                    false,
+                )
             }
         }
     }
@@ -1364,7 +1380,7 @@ impl WindowState {
     /// model exists anywhere in this crate yet for a keyboard event to
     /// resolve *which* element it should even move.
     fn handle_mouse_wheel(&mut self, delta: MouseScrollDelta) {
-        let (dx, dy) = self.to_logical_scroll_delta(delta);
+        let ((dx, dy), animated) = self.to_logical_scroll_delta(delta);
         let (x, y) = self.to_logical_cursor(self.last_cursor.0, self.last_cursor.1);
         let Some(hit) = self.runtime.hit_test(x, y) else {
             return;
@@ -1383,12 +1399,43 @@ impl WindowState {
         // No `update`: `redraw` already applies the registry's offsets, and a
         // render that read the offset (or an `on_scroll` that set state)
         // marks the scope dirty on its own.
-        if self.runtime.scroll_registry().wheel_scroll_by(&id, dx, dy) {
-            self.runtime
-                .reposition_for_scroll(layout_viewport(self.viewport_scale()));
-            self.window.request_redraw();
-            self.refresh_hover_at_cursor();
+        let registry = self.runtime.scroll_registry();
+        if animated {
+            // `advance_scroll_animations` moves it frame by frame.
+            if registry.animate_by(&id, dx, dy, registry.now(), ScrollKind::Wheel) {
+                self.window.request_redraw();
+            }
+        } else if registry.wheel_scroll_by(&id, dx, dy) {
+            self.after_scroll_moved();
         }
+    }
+
+    /// Everything that depends on where scrolled content is drawn, for a
+    /// scroll that just moved without a render.
+    fn after_scroll_moved(&mut self) {
+        self.runtime
+            .reposition_for_scroll(layout_viewport(self.viewport_scale()));
+        self.window.request_redraw();
+        self.refresh_hover_at_cursor();
+    }
+
+    /// Steps running smooth scrolls to the current instant. Returns when to
+    /// come back, or `None` once nothing is animating.
+    fn advance_scroll_animations(&mut self, now: std::time::Instant) -> Option<std::time::Instant> {
+        let registry = self.runtime.scroll_registry();
+        if !registry.is_animating() {
+            self.scroll_frame_due = None;
+            return None;
+        }
+        if let Some(due) = self.scroll_frame_due
+            && now < due
+        {
+            return Some(due);
+        }
+        let running = registry.advance_animations(registry.now());
+        self.after_scroll_moved();
+        self.scroll_frame_due = running.then(|| now + std::time::Duration::from_millis(16));
+        self.scroll_frame_due
     }
 
     /// Re-resolves `:hover` and the content cursor for a pointer that hasn't
@@ -3609,6 +3656,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 presenter,
                 gpu_losses: 0,
                 next_animation_wake: None,
+                scroll_frame_due: None,
                 spinner_hold: None,
                 scroll_hold: None,
                 scroll_drag: None,
@@ -3673,6 +3721,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             for deadline in [
                 state.repeat_spinner_if_due(now),
                 state.repeat_scroll_if_due(now),
+                state.advance_scroll_animations(now),
             ]
             .into_iter()
             .flatten()

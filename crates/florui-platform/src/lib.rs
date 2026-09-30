@@ -34,6 +34,7 @@ mod menu_keys;
 mod position_observer;
 mod runtime;
 mod scroll;
+mod scroll_animation;
 mod select;
 mod size_observer;
 #[cfg(all(test, feature = "desktop", target_os = "windows"))]
