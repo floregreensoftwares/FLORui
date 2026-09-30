@@ -17,7 +17,7 @@ use florui_style::{Arena, NodeId};
 /// same gate [`is_focusable`] and [`crate::text_input::TextInputRegistry`]
 /// both check.
 pub(crate) fn is_editable_input_type(input_type: Option<&str>) -> bool {
-    matches!(input_type, Some("text") | Some("password"))
+    matches!(input_type, None | Some("text") | Some("password"))
 }
 
 /// Whether `input_type` carries a `checked` state — the same gate
@@ -83,15 +83,13 @@ pub(crate) fn focus_order(arena: &Arena) -> Vec<NodeId> {
 }
 
 /// The focusable radios that share `id`'s `name`, in document order. A
-/// radio with no (or an empty) `name` is a group of one. Group scope is
-/// the whole document, not a `<form>` — there is no form element yet.
+/// radio with no (or an empty) `name` is a group of one. A group never
+/// spans two forms.
 fn radio_group(arena: &Arena, id: NodeId) -> Vec<NodeId> {
-    match arena.name(id).filter(|name| !name.is_empty()) {
-        Some(name) => arena.find_all(|arena, other| {
-            is_radio(arena, other) && is_focusable(arena, other) && arena.name(other) == Some(name)
-        }),
-        None => vec![id],
-    }
+    crate::form::radio_group(arena, id)
+        .into_iter()
+        .filter(|&other| is_focusable(arena, other))
+        .collect()
 }
 
 /// `candidates` narrowed to real Tab stops: a radio group contributes

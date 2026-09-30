@@ -9,8 +9,11 @@
 //! wants [`UiRuntime`] alone, without pulling in `winit`/`softbuffer`/
 //! `notify` at all, can disable it (`default-features = false`).
 
+mod auto_id;
 mod components;
 mod focus;
+mod form;
+mod form_control;
 mod icon;
 mod image;
 mod position_observer;

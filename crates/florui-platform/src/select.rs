@@ -48,6 +48,7 @@ pub(crate) struct OptionSummary {
 /// Every select's options, keyed by the select's own `id`. Rewrites every
 /// `<select>` in `tree` in place, however deeply nested.
 pub(crate) fn normalize(tree: &mut Element) -> HashMap<String, Vec<OptionSummary>> {
+    crate::auto_id::assign_missing_ids(tree);
     let mut summaries = HashMap::new();
     walk(tree, &mut summaries);
     summaries

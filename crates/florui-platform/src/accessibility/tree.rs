@@ -29,7 +29,7 @@ use std::collections::{HashMap, HashSet};
 use accesskit::{
     Action, Node, NodeId as AccessKitId, Rect, Role, Toggled, TreeId, TreeInfo, TreeUpdate,
 };
-use florui_style::{AccessibleRole, Arena, FocusPath, NodeId};
+use florui_style::{AccessibleRole, Arena, FocusPath, InteractionState, NodeId};
 
 use crate::focus::is_focusable;
 
@@ -74,6 +74,7 @@ impl AccessibilityTree {
         arena: &Arena,
         focused: Option<NodeId>,
         bounds: &NodeBounds,
+        interaction: &InteractionState,
     ) -> (TreeUpdate, HashMap<AccessKitId, NodeId>) {
         // `for="some-id"` can point forward (a label written before its
         // control) or backward -- resolved against every `id`-attributed
@@ -106,6 +107,7 @@ impl AccessibilityTree {
                     arena,
                     child,
                     bounds,
+                    interaction,
                     &id_index,
                     &mut nodes,
                     &mut reverse,
@@ -160,6 +162,7 @@ impl AccessibilityTree {
         arena: &Arena,
         id: NodeId,
         bounds: &NodeBounds,
+        interaction: &InteractionState,
         id_index: &HashMap<&str, NodeId>,
         nodes: &mut Vec<(AccessKitId, Node)>,
         reverse: &mut HashMap<AccessKitId, NodeId>,
@@ -357,6 +360,21 @@ impl AccessibilityTree {
                     label_targets.push((ak_id, *target));
                 }
             }
+            // A form is a landmark only when it has a name, as in a
+            // browser.
+            "form" if arena.accessible_label(id).is_some() => {
+                node.set_role(Role::Form);
+                if let Some(label) = arena.accessible_label(id) {
+                    node.set_label(label);
+                }
+            }
+            "fieldset" => {
+                node.set_role(Role::Group);
+                if let Some(&legend) = children.iter().find(|&&child| arena.tag(child) == "legend")
+                {
+                    node.set_label(arena.text_content(legend));
+                }
+            }
             _ if children.is_empty() => {
                 let text = arena.text_content(id);
                 if !text.is_empty() {
@@ -369,6 +387,14 @@ impl AccessibilityTree {
 
         if arena.is_disabled(id) {
             node.set_disabled();
+        }
+        if let Some(state) = interaction.form_state(id) {
+            if state.required && arena.tag(id) != "form" {
+                node.set_required();
+            }
+            if state.user_invalid {
+                node.set_invalid(accesskit::Invalid::True);
+            }
         }
 
         if let Some(&(x, y, width, height)) = bounds.get(&id) {
@@ -388,6 +414,7 @@ impl AccessibilityTree {
                     arena,
                     child,
                     bounds,
+                    interaction,
                     id_index,
                     nodes,
                     reverse,
@@ -420,7 +447,7 @@ mod tests {
         let arena = Arena::build(tree);
         let mut ak_tree = AccessibilityTree::new();
         let bounds = NodeBounds::new();
-        let (update, reverse) = ak_tree.build(&arena, focused, &bounds);
+        let (update, reverse) = ak_tree.build(&arena, focused, &bounds, &InteractionState::new());
         (update, reverse, arena)
     }
 
@@ -622,6 +649,68 @@ mod tests {
         assert_eq!(role_of(&update, ak_id), Role::ListBoxOption);
         let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
         assert_eq!(node.is_selected(), Some(true));
+    }
+
+    #[test]
+    fn a_named_form_is_a_landmark_and_an_unnamed_one_is_not() {
+        let tree: Element = view! {
+            <div>
+                <form id="named" accessible_label="Sign up"></form>
+                <form id="plain"></form>
+            </div>
+        };
+        let (update, reverse, arena) = build(&tree, None);
+        let role = |dom_id: &str| {
+            let node = arena.find(|a, id| a.id_attr(id) == Some(dom_id)).unwrap();
+            let ak_id = *reverse.iter().find(|&(_, &n)| n == node).unwrap().0;
+            role_of(&update, ak_id)
+        };
+        assert_eq!(role("named"), Role::Form);
+        assert_ne!(role("plain"), Role::Form);
+    }
+
+    #[test]
+    fn a_fieldset_is_a_group_named_by_its_legend() {
+        let tree: Element = view! {
+            <fieldset id="fs"><legend>{"Contact"}</legend></fieldset>
+        };
+        let (update, reverse, arena) = build(&tree, None);
+        let fieldset = arena.find(|a, id| a.tag(id) == "fieldset").unwrap();
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == fieldset).unwrap().0;
+        assert_eq!(role_of(&update, ak_id), Role::Group);
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert_eq!(node.label(), Some("Contact"));
+    }
+
+    #[test]
+    fn a_required_control_is_marked_required_and_a_user_invalid_one_invalid() {
+        let tree: Element = view! {
+            <form>
+                <input id="req" type="text" required="true" />
+                <input id="opt" type="text" />
+            </form>
+        };
+        let arena = Arena::build(&tree);
+        let req = arena.find(|a, id| a.id_attr(id) == Some("req")).unwrap();
+        let interaction = InteractionState::new().with_form_state(
+            req,
+            florui_style::FormState {
+                required: true,
+                invalid: true,
+                user_invalid: true,
+                ..Default::default()
+            },
+        );
+        let mut ak_tree = AccessibilityTree::new();
+        let (update, reverse) = ak_tree.build(&arena, None, &NodeBounds::new(), &interaction);
+        let flags = |dom_id: &str| {
+            let node = arena.find(|a, id| a.id_attr(id) == Some(dom_id)).unwrap();
+            let ak_id = *reverse.iter().find(|&(_, &n)| n == node).unwrap().0;
+            let n = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+            (n.is_required(), n.invalid().is_some())
+        };
+        assert_eq!(flags("req"), (true, true));
+        assert_eq!(flags("opt"), (false, false));
     }
 
     #[test]
@@ -864,7 +953,8 @@ mod tests {
         let button = arena.roots()[0];
         let mut ak_tree = AccessibilityTree::new();
         let bounds = NodeBounds::new();
-        let (update, reverse) = ak_tree.build(&arena, Some(button), &bounds);
+        let (update, reverse) =
+            ak_tree.build(&arena, Some(button), &bounds, &InteractionState::new());
         let focused_id = *reverse.iter().find(|&(_, &n)| n == button).unwrap().0;
         assert_eq!(update.focus, focused_id);
     }
@@ -882,12 +972,12 @@ mod tests {
 
         let arena1 = Arena::build(&tree);
         let second1 = arena1.find_all(|a, id| a.tag(id) == "button")[1];
-        let (_, reverse1) = ak_tree.build(&arena1, None, &bounds);
+        let (_, reverse1) = ak_tree.build(&arena1, None, &bounds, &InteractionState::new());
         let id1 = *reverse1.iter().find(|&(_, &n)| n == second1).unwrap().0;
 
         let arena2 = Arena::build(&tree);
         let second2 = arena2.find_all(|a, id| a.tag(id) == "button")[1];
-        let (_, reverse2) = ak_tree.build(&arena2, None, &bounds);
+        let (_, reverse2) = ak_tree.build(&arena2, None, &bounds, &InteractionState::new());
         let id2 = *reverse2.iter().find(|&(_, &n)| n == second2).unwrap().0;
 
         assert_eq!(id1, id2);
@@ -898,11 +988,21 @@ mod tests {
         let with_button: Element = view! { <button>{"Go"}</button> };
         let mut ak_tree = AccessibilityTree::new();
         let bounds = NodeBounds::new();
-        ak_tree.build(&Arena::build(&with_button), None, &bounds);
+        ak_tree.build(
+            &Arena::build(&with_button),
+            None,
+            &bounds,
+            &InteractionState::new(),
+        );
         assert_eq!(ak_tree.interner.len(), 1);
 
         let empty: Element = view! { <div /> };
-        ak_tree.build(&Arena::build(&empty), None, &bounds);
+        ak_tree.build(
+            &Arena::build(&empty),
+            None,
+            &bounds,
+            &InteractionState::new(),
+        );
         assert_eq!(
             ak_tree.interner.len(),
             1,

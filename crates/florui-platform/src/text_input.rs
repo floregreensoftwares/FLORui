@@ -8,9 +8,10 @@
 //! walking the freshly-built [`Arena`] once per [`crate::UiRuntime::update`]
 //! the same way [`crate::focus`]'s own resolution already does, rather
 //! than registered by a component call the way [`crate::size_observer`]'s
-//! registry is. Requires an explicit `id` attribute to key its own state
-//! by — an editable input with none gets no caret/selection/undo/focus
-//! story, logged once, not per render (see [`TextInputRegistry::sync`]).
+//! registry is. Keyed by the input's `id`; [`crate::auto_id`] gives one to
+//! any input that has none, so a tree that skipped it (a test building an
+//! [`Arena`] directly) is the only way to reach the once-only warning in
+//! [`TextInputRegistry::sync`].
 //!
 //! IME composition ([`TextInputRegistry::set_compose`]/[`TextInputRegistry::clear_compose`])
 //! deliberately bypasses `undo_stack`/`redo_stack`/`last_committed_text`
