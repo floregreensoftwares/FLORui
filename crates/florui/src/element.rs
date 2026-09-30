@@ -35,8 +35,8 @@ pub struct ElementNode {
     /// paint) keeps reading `attrs` unchanged; only a write path (a real
     /// text-editing widget) needs this to request an update back to the
     /// owner. Mutually exclusive with `value_handlers` for the same
-    /// attribute -- see slots-and-bindings.md's "Optional convenience and
-    /// explicit control."
+    /// attribute (optional convenience versus
+    /// explicit control).
     pub bindings: Vec<(String, Binding<String>)>,
     /// The explicit (non-`Binding`) controlled-value channel -- `oninput`
     /// reports a new value directly rather than through a typed

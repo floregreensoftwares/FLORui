@@ -483,7 +483,7 @@ fn project_checks_at(
         // Everything else -- an ambiguous/unresolvable root, or `cargo
         // metadata` itself failing because no Cargo.toml exists anywhere
         // above `cwd` -- is the same "not inside a resolvable Cargo
-        // project" case doctor.md documents: report environment checks and
+        // project" case the doctor documents: report environment checks and
         // mark project checks not applicable, not a failure.
         Err(_) => {
             return vec![Check {

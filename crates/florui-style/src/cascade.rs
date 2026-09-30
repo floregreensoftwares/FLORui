@@ -168,7 +168,7 @@ pub enum ItemAlignment {
 }
 
 /// One side's resolved border — solid-only, the minimum needed for a
-/// visible default control outline (`stylesheets.md`'s own scope for this
+/// visible default control outline (the scope set for this
 /// property). Real CSS's other border styles (`dashed`, `dotted`, `double`,
 /// …) still parse and cascade correctly through Stylo; this crate paints
 /// every non-`none`/`hidden` style as a plain solid line, the same

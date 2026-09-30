@@ -1,6 +1,5 @@
 //! [`Binding`]: a typed, read/write value exchange for editable component
-//! values, kept separate from ordinary read-only props — see
-//! slots-and-bindings.md's "Explicit bindings." Receiving a plain `T`
+//! values, kept separate from ordinary read-only props. Receiving a plain `T`
 //! never grants mutation rights; only a `Binding<T>` does, and even then
 //! the owner decides whether to actually accept a requested update.
 //!

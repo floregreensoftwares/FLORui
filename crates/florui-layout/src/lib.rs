@@ -1692,8 +1692,8 @@ fn border_box_outline(
 
 /// An explanation for why a flex or grid item's final size doesn't match
 /// what plain flex-grow/flex-shrink math (or, for grid, the track's own
-/// sizing) alone would produce — see `developer-tools.md`'s
-/// causal-diagnostics section. Percentage/containing-block causes and
+/// sizing) alone would produce — the inspector's
+/// causal-diagnostics report. Percentage/containing-block causes and
 /// which stylesheet rule supplied a value are not covered yet: the
 /// former needs percentage-vs-auto to survive cascade resolution (today
 /// both collapse to `None` in [`ComputedStyle`]), the latter needs

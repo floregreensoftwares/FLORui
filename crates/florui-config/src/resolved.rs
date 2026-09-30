@@ -90,7 +90,7 @@ impl LocalesConfig {
     /// a language-only ("pt" matching a declared "pt-BR") or CLDR-style
     /// fallback; the contract this crate implements is deliberately just
     /// "requested, else default_locale, else the base identity," per
-    /// `application-config.md`'s own text.
+    /// the locale fallback contract.
     fn find(&self, tag: &str) -> Option<&LocaleConfig> {
         self.locales
             .iter()

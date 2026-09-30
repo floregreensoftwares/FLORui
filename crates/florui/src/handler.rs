@@ -1,8 +1,8 @@
 //! A stored callback for a declarative event-handler attribute
 //! (`onclick={move || ...}`) on an [`crate::ElementNode`]. Also
 //! [`ValueHandler`]: the same idea for the explicit (non-`Binding`)
-//! controlled-value contract — see slots-and-bindings.md's "Optional
-//! convenience and explicit control."
+//! controlled-value contract (optional
+//! convenience versus explicit control).
 
 use std::cell::Cell;
 use std::fmt;

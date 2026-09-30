@@ -1,6 +1,5 @@
 //! [`loading_boundary`]: coordinates an explicit set of required
-//! [`ResourceHandle`]s' readiness against a fallback — see
-//! loading-boundaries.md. This is coordination over the existing resource
+//! [`ResourceHandle`]s' readiness against a fallback. This is coordination over the existing resource
 //! system, not a second executor: it never starts, cancels, or retries a
 //! read itself, only decides which of two subtrees to mount based on
 //! state those reads already expose.

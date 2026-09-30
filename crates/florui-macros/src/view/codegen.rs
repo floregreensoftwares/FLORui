@@ -120,8 +120,8 @@ fn primitive_element(
     let effective_scope = own_scope.as_ref().or(inherited_scope);
 
     // `oninput`'s presence decides which contract `value` uses below --
-    // see slots-and-bindings.md's "Optional convenience and explicit
-    // control": a bare `value={expr}` is the `Binding<String>` contract,
+    // the optional-convenience versus explicit-control contracts: a bare
+    // `value={expr}` is the `Binding<String>` contract,
     // `value={expr}` alongside `oninput={...}` is the explicit
     // value/callback contract instead. The macro has no type information
     // to tell a `Binding<String>` apart from a plain string expression,

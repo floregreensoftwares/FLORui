@@ -1,5 +1,5 @@
-//! The framework's own default element stylesheet — `stylesheets.md`'s
-//! cascade-ordering step 1 ("Apply the framework's default element
+//! The framework's own default element stylesheet, the first step of the
+//! cascade ordering ("Apply the framework's default element
 //! stylesheet at its documented default-style precedence"), which nothing
 //! previously registered. Parsed once, as real CSS through the same
 //! [`crate::stylesheet_parse`] path an application's own stylesheets go
@@ -12,7 +12,7 @@
 //! Values below are Chromium's own well-established defaults (its `html.css`
 //! / the WHATWG HTML "suggested rendering" defaults both browsers converge
 //! on), not invented — `h1`–`h6`'s font-size/margin scale and `p`'s margin
-//! are exact matches. Scoped to the tags `product.md` already names as
+//! are exact matches. Scoped to the tags the product scope already names as
 //! having "contracts defined by Florui" (`div`, `span`, `h2`, `button`),
 //! extended to the rest of `h1`–`h6` and `p` for a coherent element set,
 //! rather than attempting every HTML element up front.

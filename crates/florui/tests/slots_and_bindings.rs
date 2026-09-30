@@ -1,5 +1,5 @@
 //! Named/optional slots, scoped slots, and bindings through the real
-//! `#[component]`/`view!` macro surface — see slots-and-bindings.md.
+//! `#[component]`/`view!` macro surface.
 //!
 //! Required-slot compile-time enforcement isn't tested here (a
 //! `compile_fail` case belongs in a doctest, not a runtime test) — see

@@ -19,8 +19,8 @@ pub(crate) struct ComponentScopeInner {
     pub(crate) pending_effects: RefCell<Vec<PendingEffect>>,
     /// Queued the same way `pending_effects` is, but kept separate so
     /// [`crate::attachment`] can dispose its own slots in the reverse of
-    /// their declaration order on unmount — attachments.md's "clean up in
-    /// reverse order" — without changing plain effects' own (forward)
+    /// their declaration order on unmount (attachments clean up in
+    /// reverse order), without changing plain effects' own (forward)
     /// disposal order.
     pub(crate) pending_attachments: RefCell<Vec<PendingAttachment>>,
     /// Child scopes addressed by [`Key`] instead of call position — see

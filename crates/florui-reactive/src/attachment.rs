@@ -1,6 +1,6 @@
 //! [`use_attachment`]: associates reusable, typed setup/cleanup behavior
 //! with whatever capability handle this call site owns, without inserting
-//! a wrapper — see attachments.md. This crate has no notion of a mounted
+//! a wrapper. This crate has no notion of a mounted
 //! native element yet (refs and layout snapshots arrive in a later
 //! stage), so `handle` is whatever typed capability the caller already
 //! has; the first real capability (a size observer) plugs into this same
@@ -112,7 +112,7 @@ pub(crate) fn run_pending(scope: &ComponentScopeInner) {
 
 /// Runs every remaining attachment's cleanup in the *reverse* of slot
 /// order — called when a scope is dropped: removing an identity disposes
-/// its hooks, and attachments.md requires attachments specifically to
+/// its hooks, and attachments are required specifically to
 /// unwind in the opposite order they were set up in, unlike plain
 /// effects.
 pub(crate) fn dispose(scope: &ComponentScopeInner) {

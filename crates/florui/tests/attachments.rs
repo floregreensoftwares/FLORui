@@ -1,5 +1,5 @@
 //! `use_attachment` through the real `#[component]`/`view!` macro
-//! surface — see `florui_reactive::use_attachment` and attachments.md.
+//! surface — see `florui_reactive::use_attachment`.
 
 use std::cell::RefCell;
 use std::rc::Rc;
