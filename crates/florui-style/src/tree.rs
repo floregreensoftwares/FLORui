@@ -58,6 +58,9 @@ pub enum InlineItem {
 
 struct ArenaNode {
     tag: &'static str,
+    /// Where the element was written, if `view!` recorded it. See
+    /// [`Arena::source`].
+    source: florui::Provenance,
     /// Every attribute exactly as authored, kept alongside the specific
     /// typed fields below (`disabled`, `checked`, ...) — those exist so a
     /// consumer doesn't have to re-parse a known attribute by name every
@@ -318,6 +321,7 @@ impl Arena {
                     let range_max = attr_f32(&node.attrs, "max", 100.0);
                     self.nodes.push(ArenaNode {
                         tag: node.tag,
+                        source: node.source,
                         attrs: node.attrs.clone(),
                         classes: class_list(&node.attrs),
                         id: attr_value(&node.attrs, "id"),
@@ -422,6 +426,12 @@ impl Arena {
 
     pub fn tag(&self, id: NodeId) -> &'static str {
         self.nodes[id].tag
+    }
+
+    /// Where `id`'s element was written, when `view!` recorded it (a debug
+    /// build, or the `source-locations` feature of `florui`).
+    pub fn source(&self, id: NodeId) -> Option<florui::SourceLocation> {
+        self.nodes[id].source.location()
     }
 
     pub fn classes(&self, id: NodeId) -> &[String] {
@@ -1438,5 +1448,48 @@ mod tests {
             depth_from_leaf += 1;
         }
         assert_eq!(depth_from_leaf, depth);
+    }
+
+    #[test]
+    fn a_node_reports_where_its_element_was_written() {
+        let marker = line!();
+        let tree = view! {
+            <div class="outer">
+                <p class="inner">{"x"}</p>
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let find = |class: &str| {
+            arena
+                .find(|a, id| a.classes(id).iter().any(|c| c == class))
+                .unwrap()
+        };
+        let outer = arena.source(find("outer")).expect("view! records it");
+        let inner = arena.source(find("inner")).expect("view! records it");
+        assert_eq!((outer.line, outer.path), (marker + 2, "div"));
+        assert_eq!((inner.line, inner.path), (marker + 3, "div > p"));
+        assert!(outer.file.ends_with("tree.rs"));
+    }
+
+    #[test]
+    fn an_element_built_by_hand_has_no_location() {
+        let tree = Element::node("div", vec![], vec![]);
+        let arena = Arena::build(&tree);
+        assert_eq!(arena.source(0), None);
+    }
+
+    #[test]
+    fn overlay_content_keeps_its_location() {
+        let marker = line!();
+        let content = view! {
+            <span class="overlay">{"o"}</span>
+        };
+        let tree = Element::node("div", vec![], vec![Element::Portal(vec![content])]);
+        let arena = Arena::build(&tree);
+        let overlay = arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == "overlay"))
+            .expect("the portal's content becomes a root of its own");
+        let at = arena.source(overlay).expect("view! records it");
+        assert_eq!(at.line, marker + 2);
     }
 }
