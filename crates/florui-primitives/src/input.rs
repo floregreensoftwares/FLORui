@@ -4,8 +4,9 @@
 /// `type` values `<input>` accepts for now. Starting narrow and explicit;
 /// expand deliberately as each type gets real behavior, not to match the
 /// full HTML list up front.
-pub const INITIAL_INPUT_TYPES: &[&str] =
-    &["text", "password", "checkbox", "radio", "range", "hidden"];
+pub const INITIAL_INPUT_TYPES: &[&str] = &[
+    "text", "password", "checkbox", "radio", "range", "hidden", "email",
+];
 
 pub fn is_supported_input_type(value: &str) -> bool {
     INITIAL_INPUT_TYPES.contains(&value)

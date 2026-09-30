@@ -17,7 +17,10 @@ use florui_style::{Arena, NodeId};
 /// same gate [`is_focusable`] and [`crate::text_input::TextInputRegistry`]
 /// both check.
 pub(crate) fn is_editable_input_type(input_type: Option<&str>) -> bool {
-    matches!(input_type, None | Some("text") | Some("password"))
+    matches!(
+        input_type,
+        None | Some("text") | Some("password") | Some("email")
+    )
 }
 
 /// Whether `input_type` carries a `checked` state — the same gate
