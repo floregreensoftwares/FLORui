@@ -28,12 +28,18 @@ use crate::components::portal::{Portal, PortalProps};
 /// its own child instead).
 pub const MODAL_ROOT_CLASS: &str = "florui-modal-root";
 
-/// Renders `children` as a real modal overlay — see the module doc.
+/// Renders `children` as a real modal overlay — see the module doc. `label`
+/// is the dialog's accessible name.
 #[component]
-pub fn Dialog(children: Children, onclose: Handler) -> Element {
+pub fn Dialog(children: Children, onclose: Handler, label: String) -> Element {
     florui::view! {
         <Portal>
-            <div class={MODAL_ROOT_CLASS} onclose={move || onclose.call(&Event::new())}>
+            <div
+                class={MODAL_ROOT_CLASS}
+                role="dialog"
+                accessible_label={label}
+                onclose={move || onclose.call(&Event::new())}
+            >
                 {children}
             </div>
         </Portal>

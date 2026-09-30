@@ -2945,7 +2945,7 @@ mod tests {
             move || {
                 let dialog = if open.get() {
                     view! {
-                        <Dialog onclose={Handler::new(|| {})}>
+                        <Dialog label={"Test dialog".to_string()} onclose={Handler::new(|| {})}>
                             <button id="first-inside">{"First inside"}</button>
                             <button id="second-inside">{"Second inside"}</button>
                         </Dialog>

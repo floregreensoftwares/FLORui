@@ -41,6 +41,20 @@ const ROOT_ID: AccessKitId = AccessKitId(0);
 /// knowledge of its own.
 pub(crate) type NodeBounds = HashMap<NodeId, (f32, f32, f32, f32)>;
 
+/// The AccessKit role of an overlay `role` attribute; `switch` is handled on
+/// its checkbox.
+fn overlay_role(role: AccessibleRole) -> Option<Role> {
+    match role {
+        AccessibleRole::Switch => None,
+        AccessibleRole::Dialog => Some(Role::Dialog),
+        AccessibleRole::AlertDialog => Some(Role::AlertDialog),
+        AccessibleRole::Menu => Some(Role::Menu),
+        AccessibleRole::MenuBar => Some(Role::MenuBar),
+        AccessibleRole::MenuItem => Some(Role::MenuItem),
+        AccessibleRole::Tooltip => Some(Role::Tooltip),
+    }
+}
+
 pub(crate) struct AccessibilityTree {
     interner: HashMap<FocusPath, u64>,
     next_id: u64,
@@ -138,6 +152,14 @@ impl AccessibilityTree {
                 && let Some(&select_index) = index_by_ak_id.get(&select_ak_id)
             {
                 nodes[select_index].1.set_active_descendant(active_ak_id);
+            }
+        }
+
+        for (control, open) in crate::components::popover::trigger_controls(arena) {
+            if let Some(&ak_id) = forward.get(&control)
+                && let Some(&index) = index_by_ak_id.get(&ak_id)
+            {
+                nodes[index].1.set_expanded(open);
             }
         }
 
@@ -433,6 +455,19 @@ impl AccessibilityTree {
             node.set_role(Role::Alert);
             node.set_live(accesskit::Live::Assertive);
         }
+        if let Some(role) = arena.role(id).and_then(overlay_role) {
+            node.set_role(role);
+            if let Some(label) = arena.accessible_label(id) {
+                node.set_label(label);
+            }
+        }
+        if arena
+            .classes(id)
+            .iter()
+            .any(|class| class == crate::components::dialog::MODAL_ROOT_CLASS)
+        {
+            node.set_modal();
+        }
         if arena.is_disabled(id) {
             node.set_disabled();
         }
@@ -714,6 +749,79 @@ mod tests {
         assert!(node.supports_action(Action::Focus));
     }
 
+    fn node_with<'a>(
+        update: &'a TreeUpdate,
+        reverse: &HashMap<AccessKitId, NodeId>,
+        id: NodeId,
+    ) -> &'a Node {
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == id).unwrap().0;
+        &update.nodes.iter().find(|(ak, _)| *ak == ak_id).unwrap().1
+    }
+
+    #[test]
+    fn a_modal_dialog_is_a_named_modal_dialog() {
+        let tree: Element = view! {
+            <div class="florui-modal-root" role="dialog" accessible_label="Settings">
+                <button>{"Close"}</button>
+            </div>
+        };
+        let (update, reverse, arena) = build(&tree, None);
+        let node = node_with(&update, &reverse, arena.roots()[0]);
+        assert_eq!(node.role(), Role::Dialog);
+        assert_eq!(node.label(), Some("Settings"));
+        assert!(node.is_modal());
+    }
+
+    #[test]
+    fn a_menu_and_its_items_get_the_menu_roles_and_keep_their_actions() {
+        let tree: Element = view! {
+            <div role="menu" accessible_label="File">
+                <button role="menuitem">{"Open"}</button>
+            </div>
+        };
+        let (update, reverse, arena) = build(&tree, None);
+        let menu = node_with(&update, &reverse, arena.roots()[0]);
+        assert_eq!(menu.role(), Role::Menu);
+        assert_eq!(menu.label(), Some("File"));
+        let item = arena.find(|a, id| a.tag(id) == "button").unwrap();
+        let item = node_with(&update, &reverse, item);
+        assert_eq!(item.role(), Role::MenuItem);
+        assert_eq!(item.label(), Some("Open"));
+        assert!(item.supports_action(Action::Click) && item.supports_action(Action::Focus));
+    }
+
+    #[test]
+    fn a_tooltip_gets_the_tooltip_role() {
+        let tree: Element = view! { <div role="tooltip">{"Saves the file"}</div> };
+        let (update, reverse, arena) = build(&tree, None);
+        assert_eq!(
+            node_with(&update, &reverse, arena.roots()[0]).role(),
+            Role::Tooltip
+        );
+    }
+
+    #[test]
+    fn a_popover_trigger_reports_whether_its_popover_is_open() {
+        let closed: Element = view! {
+            <div id="menu" class="florui-popover-trigger"><button>{"Open"}</button></div>
+        };
+        let open: Element = view! {
+            <div>
+                <div id="menu" class="florui-popover-trigger"><button>{"Open"}</button></div>
+                {Element::Portal(vec![view! {
+                    <div id="menu-popover-root" class="florui-popover-root"><p>{"x"}</p></div>
+                }])}
+            </div>
+        };
+        for (tree, expected) in [(&closed, false), (&open, true)] {
+            let (update, reverse, arena) = build(tree, None);
+            let button = arena.find(|a, id| a.tag(id) == "button").unwrap();
+            assert_eq!(
+                node_with(&update, &reverse, button).is_expanded(),
+                Some(expected)
+            );
+        }
+    }
     #[test]
     fn the_validation_bubble_is_an_assertive_alert_carrying_its_text_once() {
         let tree: Element = view! {
