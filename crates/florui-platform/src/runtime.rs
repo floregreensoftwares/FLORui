@@ -22,6 +22,7 @@ use florui_style::{
 use taffy::prelude::*;
 
 use crate::focus;
+use crate::focus_observer::{FocusController, FocusObserverRegistry};
 use crate::menu_keys;
 use crate::position_observer::PositionObserverRegistry;
 use crate::scroll::ScrollRegistry;
@@ -149,6 +150,11 @@ pub struct UiRuntime {
     /// Reachable by [`crate::use_committed_position`] via context, same
     /// as `size_observers` — notified right alongside it.
     position_observers: Rc<PositionObserverRegistry>,
+    /// Reachable by [`crate::use_focus_within`] and
+    /// [`crate::use_focus_controller`] via context; observers are notified
+    /// after layout, requests consumed by [`Self::resolve_focus`].
+    focus_observers: Rc<FocusObserverRegistry>,
+    focus_controller: Rc<FocusController>,
     /// Reachable by [`crate::use_scroll_offset`] via context, the same way
     /// `size_observers` is — synced right after it, once this render's own
     /// real layout and content extents exist.
@@ -296,6 +302,8 @@ impl UiRuntime {
             executor: Rc::new(LocalExecutor::new()),
             size_observers: Rc::new(SizeObserverRegistry::new()),
             position_observers: Rc::new(PositionObserverRegistry::new()),
+            focus_observers: Rc::new(FocusObserverRegistry::new()),
+            focus_controller: Rc::new(FocusController::new()),
             scroll_registry: Rc::new(ScrollRegistry::new()),
             text_input_registry: Rc::new(TextInputRegistry::new()),
             image_registry: Rc::new(crate::image::ImageRegistry::new()),
@@ -421,6 +429,8 @@ impl UiRuntime {
         let executor = Rc::clone(&self.executor);
         let size_observers = Rc::clone(&self.size_observers);
         let position_observers = Rc::clone(&self.position_observers);
+        let focus_observers = Rc::clone(&self.focus_observers);
+        let focus_controller = Rc::clone(&self.focus_controller);
         let scroll_registry = Rc::clone(&self.scroll_registry);
         // Resolved once so use_viewport_size sees the same value layout uses.
         let resolved_viewport = media_viewport(viewport);
@@ -428,6 +438,8 @@ impl UiRuntime {
             provide_context(Rc::clone(&executor) as Rc<dyn Executor>);
             provide_context(Rc::clone(&size_observers));
             provide_context(Rc::clone(&position_observers));
+            provide_context(Rc::clone(&focus_observers));
+            provide_context(Rc::clone(&focus_controller));
             provide_context(Rc::clone(&scroll_registry));
             provide_context(ViewportSize {
                 width: resolved_viewport.width,
@@ -500,6 +512,7 @@ impl UiRuntime {
         // must see this render's own real geometry, not the previous one's.
         self.size_observers.notify(&self.arena, &self.layouts);
         self.position_observers.notify(&self.arena, &self.layouts);
+        self.focus_observers.notify(&self.arena, self.focused_node);
         self.scroll_registry
             .sync(&self.arena, &self.layouts, &content_extents);
         self.text_input_registry
@@ -1186,7 +1199,35 @@ impl UiRuntime {
             self.resolve_against(&candidates);
         }
         self.resolve_menu_focus();
+        self.resolve_focus_request();
         self.rebuild_interaction();
+    }
+
+    /// Serves a component's [`FocusController::request_focus`]: focuses the
+    /// element with the requested `id` (or its first focusable descendant)
+    /// if it is mounted and reachable, else waits for it a couple of renders.
+    fn resolve_focus_request(&mut self) {
+        let Some(id) = self.focus_controller.pending_id() else {
+            return;
+        };
+        let candidates = focus::focus_candidates(&self.arena);
+        let target = self
+            .arena
+            .find(|arena, node| arena.id_attr(node) == Some(id.as_str()))
+            .and_then(|node| {
+                focus::focusable_within(&self.arena, node)
+                    .into_iter()
+                    .find(|focusable| candidates.contains(focusable))
+            });
+        match target {
+            Some(node) => {
+                self.focused_path = Some(FocusPath::of(&self.arena, node));
+                self.focused_node = Some(node);
+                self.focus_visible = true;
+                self.focus_controller.fulfil();
+            }
+            None => self.focus_controller.wait_a_render(),
+        }
     }
 
     /// Focus on the menu popovers ([`crate::menu_keys`]): a menu that just
