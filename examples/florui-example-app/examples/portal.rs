@@ -8,6 +8,9 @@
 //! targets exactly the hit-tested node, no bubbling); closing it by any
 //! of these restores focus to "Open dialog".
 //!
+//! "Open another dialog" inside it stacks a second dialog: the inner one
+//! owns focus and Escape, and closing it returns focus to that button.
+//!
 //! `cargo run --example portal -p florui-example-app`
 
 use florui::prelude::*;
@@ -34,12 +37,19 @@ fn app() -> Element {
     let close_from_backdrop = open.clone();
     let close_from_button = open.clone();
 
+    let inner_open = use_signal(|| false);
+    let inner_trigger = inner_open.clone();
+    let inner_escape = inner_open.clone();
+    let inner_backdrop = inner_open.clone();
+    let inner_button = inner_open.clone();
+
     view! {
         <div class="page">
             <p class="instructions">
                 {"Open the dialog: focus moves inside automatically, Tab/Shift+Tab cycle only \
                   within it, Escape or the backdrop closes it (the dialog box itself does not), \
-                  and closing it returns focus to this button."}
+                  and closing it returns focus to this button. Inside it, \"Open another \
+                  dialog\" stacks a second one."}
             </p>
             <p class="status">
                 {if open.get() { "Dialog is open" } else { "Dialog is closed" }}
@@ -60,12 +70,36 @@ fn app() -> Element {
                             </p>
                             <button
                                 class="action"
+                                onclick={move || inner_trigger.set(true)}
+                            >
+                                {"Open another dialog"}
+                            </button>
+                            <button
+                                class="action"
                                 onclick={move || close_from_button.set(false)}
                             >
                                 {"Close"}
                             </button>
                         </div>
                     </div>
+                    {inner_open.get().then(move || view! {
+                        <Dialog
+                            label={"Nested dialog".to_string()}
+                            onclose={Handler::new(move || inner_escape.set(false))}
+                        >
+                            <div class="backdrop" onclick={move || inner_backdrop.set(false)}>
+                                <div class="dialog">
+                                    <p class="dialog-title">{"Nested dialog"}</p>
+                                    <button
+                                        class="action"
+                                        onclick={move || inner_button.set(false)}
+                                    >
+                                        {"Close nested"}
+                                    </button>
+                                </div>
+                            </div>
+                        </Dialog>
+                    })}
                 </Dialog>
             })}
         </div>
