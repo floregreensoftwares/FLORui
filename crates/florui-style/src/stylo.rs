@@ -27,7 +27,7 @@ use style::context::{
     CascadeInputs, QuirksMode, RegisteredSpeculativePainter, RegisteredSpeculativePainters,
     SharedStyleContext, StyleContext, ThreadLocalStyleContext,
 };
-use style::data::ElementData;
+use style::data::{ElementData, ElementStyles};
 use style::dom::{LayoutIterator, NodeInfo, OpaqueNode, TDocument, TElement, TNode, TShadowRoot};
 use style::font_metrics::FontMetrics;
 use style::global_style_data::GLOBAL_STYLE_DATA;
@@ -43,7 +43,6 @@ use style::style_resolver::{PseudoElementResolution, StyleResolverForElement};
 use style::stylesheets::DocumentStyleSheet;
 use style::stylesheets::layer_rule::LayerOrder;
 use style::stylist::{CascadeData, RuleInclusion, Stylist};
-use style::traversal::{UndisplayedStyleCache, resolve_style};
 use style::traversal_flags::TraversalFlags;
 use style::values::AtomIdent;
 use style::values::computed::font::GenericFontFamily;
@@ -75,6 +74,7 @@ type BorrowedNamespaceUrl = <SelectorImpl as selectors::parser::SelectorImpl>::B
 /// instead hold a `NodeId` plus a back-reference to a shared tree.
 struct NodeSlot {
     parent: Option<*const NodeSlot>,
+    depth: usize,
     children: Vec<*const NodeSlot>,
     tag: &'static str,
     /// Every attribute exactly as authored — see [`Arena::attrs`] and
@@ -113,9 +113,8 @@ struct StyloTree {
     index_of: HashMap<NodeId, usize>,
     /// Pre-order (parent before children), the same order [`Self::slots`]
     /// was built in — [`compute_in_layout_state`] resolves in this order
-    /// rather than `index_of`'s arbitrary `HashMap` iteration order, so an
-    /// ancestor is always cached before any of its descendants ask
-    /// [`resolve_style`] to resolve it.
+    /// rather than `index_of's arbitrary `HashMap` iteration order, so an
+    /// ancestor is always styled before any of its descendants.
     order: Vec<NodeId>,
 }
 
@@ -135,7 +134,7 @@ impl StyloTree {
         }
 
         let mut index_of = HashMap::new();
-        let mut slots = Vec::with_capacity(order.len());
+        let mut slots: Vec<NodeSlot> = Vec::with_capacity(order.len());
         let mut stable_ids: Vec<usize> = Vec::with_capacity(order.len());
         for (index, &id) in order.iter().enumerate() {
             index_of.insert(id, index);
@@ -259,6 +258,9 @@ impl StyloTree {
             stable_ids.push(stable_id);
             slots.push(NodeSlot {
                 parent: None,
+                depth: arena
+                    .parent(id)
+                    .map_or(0, |p| slots[index_of[&p]].depth + 1),
                 children: Vec::new(),
                 tag: arena.tag(id),
                 attrs: arena.attrs(id).to_vec(),
@@ -767,7 +769,7 @@ impl<'a> TElement for StyloNode<'a> {
 
     fn store_children_to_process(&self, _n: isize) {
         unimplemented!(
-            "this bridge drives resolve_style directly, never the parallel/postorder \
+            "this bridge drives StyleResolverForElement directly, never the parallel/postorder \
              traversal driver that needs this"
         )
     }
@@ -972,7 +974,7 @@ fn device(viewport: FlorViewport, prefers_color_scheme: PrefersColorScheme) -> D
 }
 
 /// Computes real Stylo styles for every node in `arena`, driving Stylo's
-/// own selector matching, cascade, and inheritance via [`resolve_style`]
+/// own selector matching, cascade, and inheritance via [`StyleResolverForElement`]
 /// — this crate reimplements none of them. `viewport` is what `@media`'s
 /// own size features resolve against. `container_query_signature` is the
 /// flattened, in-order truth value of every `@container` block across
@@ -1091,48 +1093,27 @@ fn compute_in_layout_state(
         registered_speculative_painters: &NoPainters,
     };
 
-    // `resolve_style` is Stylo's point-query API: each call walks up to
-    // the nearest cached ancestor, recomputes down to the target, then
-    // discards the ancestors' styles again — called once per node with no
-    // cache, a depth-`d` chain resolves `d·(d+1)/2` times instead of `d`.
-    // One `UndisplayedStyleCache` reused across every call fixes that, but
-    // only works resolving in pre-order (`tree.order`, not `index_of`'s
-    // arbitrary `HashMap` order): a descendant needs its ancestor already
-    // cached.
-    let mut undisplayed_style_cache = UndisplayedStyleCache::default();
+    // Pre-order (`tree.order`), so an ancestor's style is already committed
+    // to its `ElementData` when a descendant resolves. One bloom filter is
+    // kept across the whole walk instead of `resolve_style`'s per-call
+    // `rebuild`, which re-hashes every ancestor and made deep chains
+    // quadratic.
+    let mut thread_local = ThreadLocalStyleContext::<StyloNode<'_>>::new();
     for &id in &tree.order {
-        let mut thread_local = ThreadLocalStyleContext::<StyloNode<'_>>::new();
         let mut context = StyleContext {
             shared: &shared,
             thread_local: &mut thread_local,
         };
         let target = tree.node(id);
-        let styles = resolve_style(
-            &mut context,
-            target,
-            RuleInclusion::All,
-            None,
-            Some(&mut undisplayed_style_cache),
-        );
+        let styles = resolve_in_preorder(&mut context, target);
 
-        // `resolve_style` (Stylo's point-query API this bridge drives
-        // instead of the normal parallel traversal) never itself starts or
-        // samples a transition/animation — real Servo does that in a
-        // separate step the traversal driver runs after cascading
-        // (`servo/matching.rs`'s own `process_animations`, private to
-        // Stylo), so this replicates that step by hand for the one node
-        // `resolve_style` just cascaded.
+        // Nothing here starts or samples a transition/animation; real Servo
+        // does that in a step its traversal driver runs after cascading
+        // (private to Stylo), so it is replicated by hand for this node.
         let stable_id = target.0.stable_id;
         let primary = styles.primary().clone();
-        // Resolving one `@keyframes` step's own declarations needs to
-        // cascade them against this element's real parent style for
-        // inheritance (`StyleResolverForElement`'s `with_default_parent_styles`),
-        // which reads it from here rather than from `undisplayed_style_cache`
-        // (this bridge's own point-query cache `resolve_style` already
-        // populated, invisible to Stylo's own internals) — unpopulated,
-        // that lookup panics rather than returning `None`, since real
-        // Servo's traversal always commits a style here before any
-        // per-element animation processing runs.
+        // Keyframe resolution reads the parent style from `ElementData` and
+        // panics if it is unpopulated, so commit it before animating.
         if let Some(mut data) = target.mutate_data() {
             data.styles.primary = Some(primary.clone());
         }
@@ -1170,6 +1151,40 @@ fn compute_in_layout_state(
     timeline.sweep();
 
     result
+}
+
+/// Stylo's `resolve_style` body for a node whose ancestors already have a committed
+/// primary style, keeping `context`'s bloom filter across calls.
+fn resolve_in_preorder<'a>(
+    context: &mut StyleContext<'_, StyloNode<'a>>,
+    element: StyloNode<'a>,
+) -> ElementStyles {
+    context
+        .thread_local
+        .bloom_filter
+        .insert_parents_recovering(element, element.0.depth);
+
+    let parent: Option<StyloNode<'a>> = TElement::traversal_parent(&element);
+    let parent_style = parent.and_then(|p| p.borrow_data().map(|d| d.styles.primary().clone()));
+    let mut layout_parent = parent;
+    let mut layout_parent_style = parent_style.clone();
+    while let Some(style) = &layout_parent_style {
+        if !style.is_display_contents() {
+            break;
+        }
+        layout_parent = layout_parent.and_then(|p| TElement::traversal_parent(&p));
+        layout_parent_style =
+            layout_parent.and_then(|p| p.borrow_data().map(|d| d.styles.primary().clone()));
+    }
+
+    StyleResolverForElement::new(
+        element,
+        context,
+        RuleInclusion::All,
+        PseudoElementResolution::Force,
+    )
+    .resolve_style(parent_style.as_deref(), layout_parent_style.as_deref())
+    .into()
 }
 
 /// Starts, updates, and samples `target`'s transitions/`@keyframes`
