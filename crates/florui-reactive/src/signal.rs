@@ -80,6 +80,7 @@ pub fn use_signal<T: 'static>(init: impl FnOnce() -> T) -> Signal<T> {
             value: Rc::new(RefCell::new(init())),
             dirty: scope.dirty.clone(),
         };
+        crate::live::signal_created(&signal.value);
         slots.push(Box::new(signal.clone()));
         signal
     } else {

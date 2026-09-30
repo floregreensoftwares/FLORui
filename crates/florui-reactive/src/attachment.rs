@@ -99,10 +99,14 @@ pub(crate) fn run_pending(scope: &ComponentScopeInner) {
             .cleanup
             .take();
         if let Some(cleanup) = old_cleanup {
+            crate::live::attachment_cleanup_ran();
             cleanup();
         }
 
         let new_cleanup = (pending.run)();
+        if new_cleanup.is_some() {
+            crate::live::attachment_cleanup_set();
+        }
         scope.slots.borrow_mut()[pending.index]
             .downcast_mut::<AttachmentSlot>()
             .expect("attachment slots are only ever populated as AttachmentSlot")
@@ -120,6 +124,7 @@ pub(crate) fn dispose(scope: &ComponentScopeInner) {
         if let Some(attachment) = slot.downcast_mut::<AttachmentSlot>()
             && let Some(cleanup) = attachment.cleanup.take()
         {
+            crate::live::attachment_cleanup_ran();
             cleanup();
         }
     }

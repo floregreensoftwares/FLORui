@@ -8,6 +8,10 @@ publish = false
 [lib]
 name = "florui_reactive"
 
+[features]
+# Counts live scopes, signals, refs and cleanups for test harnesses; see `live`.
+live-counts = []
+
 [dependencies]
 futures = "0.3.34"
 
