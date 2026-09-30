@@ -64,21 +64,24 @@
 //! confirm an actually see-through *application* window end to end — the
 //! next real thing to verify, not yet done.
 //!
-//! A lost/reset GPU device is handled defensively —
 //! [`GpuPresenter::present`] reconfigures and retries once on a real
 //! `Outdated` surface (confirmed live: resizing the window down to
 //! near-zero and back through `DesktopHost` recovers cleanly, no panic,
-//! no stuck stale-frame state) and treats anything else non-successful
-//! as "skip this frame," not a panic — but this crate does not yet
-//! exercise an actual induced device-loss (e.g. a driver reset, which
-//! would need a brand-new `Surface`/`Instance` this presenter has no
-//! access to today) as a real test; that remains an open, tracked gap,
-//! not a silent assumption. Memory footprint was not measured against an
+//! no stuck stale-frame state) and skips a frame that cannot be shown
+//! (timeout, occluded window). A lost device or surface is reported as
+//! [`PresentOutcome::Lost`]; the desktop host then builds a new presenter,
+//! the hardware once more and, if that is lost too, `wgpu`'s software
+//! adapter. `softbuffer` is only the last resort: on Windows a window made
+//! for transparent composition (no redirection bitmap) shows nothing drawn
+//! with it, measured by forcing it at startup. A test destroys a real device
+//! to cover the presenter side; the host side was run the same way by hand,
+//! with the device destroyed twice under a running window. Memory footprint was not measured against an
 //! automated budget; color/alpha fidelity was checked by eye against
 //! real screenshots (this module's own probe and the `counter` run
 //! above), not an automated reference image.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use wgpu::{
     CompositeAlphaMode, Extent3d, PresentMode, TexelCopyBufferLayout, TexelCopyTextureInfo,
@@ -124,6 +127,20 @@ pub struct GpuPresenter {
     capability: PresentationCapability,
     upload_texture: wgpu::Texture,
     upload_size: (u32, u32),
+    /// Set by wgpu when the device is lost or destroyed.
+    device_lost: Arc<AtomicBool>,
+}
+
+/// What [`GpuPresenter::present`] did with a frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresentOutcome {
+    Presented,
+    /// Nothing was shown this time (timeout, occluded window, stale surface
+    /// that did not recover); the next frame may work.
+    Skipped,
+    /// The device or surface is gone for good: this presenter never shows
+    /// another frame and the caller must build a new one.
+    Lost,
 }
 
 impl GpuPresenter {
@@ -158,17 +175,27 @@ impl GpuPresenter {
         {
             return Some(presenter);
         }
-        Self::try_default_opaque(window)
+        Self::try_default_opaque(window.clone(), false).or_else(|| Self::try_new_software(window))
+    }
+
+    /// Only `wgpu`'s software adapter, opaque. Used after a hardware device
+    /// was lost twice, and as the last resort in [`Self::try_new`]. It stays
+    /// on `wgpu` because a window made for transparent composition shows
+    /// nothing drawn with `softbuffer`.
+    pub fn try_new_software(window: Arc<Window>) -> Option<Self> {
+        Self::try_default_opaque(window, true)
     }
 
     /// Whatever backend `wgpu` picks by default, opaque only — the
     /// second-tier fallback: still GPU-rendered, just without real
-    /// per-pixel alpha compositing.
-    fn try_default_opaque(window: Arc<Window>) -> Option<Self> {
+    /// per-pixel alpha compositing. `software` restricts it to the software
+    /// adapter.
+    fn try_default_opaque(window: Arc<Window>, software: bool) -> Option<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let surface = instance.create_surface(window.clone()).ok()?;
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             compatible_surface: Some(&surface),
+            force_fallback_adapter: software,
             ..Default::default()
         }))
         .ok()?;
@@ -222,6 +249,9 @@ impl GpuPresenter {
         };
         surface.configure(&device, &config);
         let upload_texture = create_upload_texture(&device, format, width, height);
+        let device_lost = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&device_lost);
+        device.set_device_lost_callback(move |_, _| flag.store(true, Ordering::SeqCst));
 
         Some(Self {
             device,
@@ -231,7 +261,15 @@ impl GpuPresenter {
             capability,
             upload_texture,
             upload_size: (width, height),
+            device_lost,
         })
+    }
+
+    /// `true` once wgpu reported the device lost or destroyed. wgpu only
+    /// runs that callback when the device is polled, so this polls first.
+    pub fn is_lost(&self) -> bool {
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        self.device_lost.load(Ordering::SeqCst)
     }
 
     /// Reconfigures the surface (and its upload texture) for a new
@@ -239,6 +277,10 @@ impl GpuPresenter {
     /// called from the same resize/scale-factor-changed handling
     /// `crate::desktop::DesktopHost` already had.
     pub fn resize(&mut self, width: u32, height: u32) {
+        // Every call on a lost device is a validation error, which panics.
+        if self.is_lost() {
+            return;
+        }
         let width = width.max(1);
         let height = height.max(1);
         if (width, height) == (self.config.width, self.config.height) {
@@ -261,12 +303,14 @@ impl GpuPresenter {
     /// condition, so this asserts rather than silently corrupting the
     /// frame.
     ///
-    /// An `Outdated` surface reconfigures and retries once (a real
-    /// recovery, not just a skip); a lost/timed-out/occluded/invalid
-    /// surface, or a retry that still doesn't succeed, skips this frame
-    /// instead of panicking — see this module's own doc for what's and
-    /// isn't exercised here around real device loss.
-    pub fn present(&mut self, rgba: &[u8]) {
+    /// An `Outdated` surface reconfigures and retries once; a timed-out,
+    /// occluded or invalid surface, or a retry that still fails, skips this
+    /// frame. A lost device or surface reports [`PresentOutcome::Lost`] so the
+    /// caller can build a new presenter.
+    pub fn present(&mut self, rgba: &[u8]) -> PresentOutcome {
+        if self.is_lost() {
+            return PresentOutcome::Lost;
+        }
         let (width, height) = self.upload_size;
         assert_eq!(
             rgba.len(),
@@ -304,19 +348,19 @@ impl GpuPresenter {
             // call would wrongly no-op here on an unchanged `(width,
             // height)` (its own guard is for the ordinary resize-event
             // path, not this one), so this reconfigures unconditionally
-            // instead. `Lost` needs a brand-new `Surface` from a real
-            // `Instance` this presenter has no access to (see this
-            // module's own doc) and stays a skipped frame, same as
-            // `Timeout`/`Occluded`/`Validation`.
+            // instead.
             wgpu::CurrentSurfaceTexture::Outdated => {
                 self.surface.configure(&self.device, &self.config);
                 match self.surface.get_current_texture() {
                     wgpu::CurrentSurfaceTexture::Success(texture)
                     | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
-                    _ => return,
+                    wgpu::CurrentSurfaceTexture::Lost => return PresentOutcome::Lost,
+                    _ => return PresentOutcome::Skipped,
                 }
             }
-            _ => return,
+            // A new `Surface` is needed, which only the caller can make.
+            wgpu::CurrentSurfaceTexture::Lost => return PresentOutcome::Lost,
+            _ => return PresentOutcome::Skipped,
         };
 
         let mut encoder = self
@@ -345,6 +389,13 @@ impl GpuPresenter {
         );
         self.queue.submit(Some(encoder.finish()));
         frame.present();
+        PresentOutcome::Presented
+    }
+
+    /// Destroys the device, as a driver reset would lose it.
+    #[cfg(test)]
+    pub(crate) fn lose_device(&self) {
+        self.device.destroy();
     }
 }
 
@@ -415,4 +466,80 @@ fn create_upload_texture(
         usage: TextureUsages::COPY_SRC | TextureUsages::COPY_DST,
         view_formats: &[],
     })
+}
+
+#[cfg(all(test, feature = "desktop", target_os = "windows"))]
+mod tests {
+    use std::time::Duration;
+
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::platform::pump_events::EventLoopExtPumpEvents;
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    use winit::window::{Window, WindowId};
+
+    use super::*;
+
+    #[derive(Default)]
+    struct App {
+        window: Option<Arc<Window>>,
+    }
+
+    impl ApplicationHandler for App {
+        fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+            let attributes =
+                Window::default_attributes().with_inner_size(winit::dpi::PhysicalSize::new(64, 64));
+            self.window = event_loop.create_window(attributes).ok().map(Arc::new);
+        }
+
+        fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+    }
+
+    fn frame(presenter: &mut GpuPresenter) -> PresentOutcome {
+        let (width, height) = presenter.upload_size;
+        presenter.present(&vec![0x40; (width * height * 4) as usize])
+    }
+
+    #[test]
+    #[ignore = "needs a real Windows session: cargo test -p florui-platform -- --ignored"]
+    fn a_lost_device_is_reported_and_a_new_presenter_works() {
+        let mut event_loop = EventLoop::builder()
+            .with_any_thread(true)
+            .build()
+            .expect("an event loop needs a desktop session");
+        let mut app = App::default();
+        event_loop.pump_app_events(Some(Duration::ZERO), &mut app);
+        let window = app.window.clone().expect("the window opens");
+
+        let Some(mut presenter) = GpuPresenter::try_new(window.clone()) else {
+            eprintln!("no GPU adapter on this machine; nothing to lose");
+            return;
+        };
+        assert_ne!(frame(&mut presenter), PresentOutcome::Lost);
+
+        presenter.lose_device();
+        assert!(presenter.is_lost(), "wgpu reports the destroyed device");
+        assert_eq!(frame(&mut presenter), PresentOutcome::Lost);
+        presenter.resize(128, 128);
+        assert_eq!(
+            frame(&mut presenter),
+            PresentOutcome::Lost,
+            "a lost presenter stays lost and never panics"
+        );
+
+        drop(presenter);
+        let mut rebuilt = GpuPresenter::try_new(window.clone()).expect("a new presenter comes up");
+        assert!(!rebuilt.is_lost());
+        assert_ne!(frame(&mut rebuilt), PresentOutcome::Lost);
+
+        // The software adapter is the next level down after a second loss.
+        drop(rebuilt);
+        if let Some(mut software) = GpuPresenter::try_new_software(window) {
+            assert!(!software.is_lost());
+            assert_ne!(frame(&mut software), PresentOutcome::Lost);
+        } else {
+            eprintln!("no software adapter on this machine");
+        }
+    }
 }
