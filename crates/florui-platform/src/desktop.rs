@@ -2608,17 +2608,23 @@ impl WindowState {
                     let (arena, ..) = self.runtime.geometry();
                     crate::focus::modal_root(arena)
                 };
-                if let Some(root) = modal_root {
-                    self.runtime.dispatch_event(root, "close");
-                }
-                // Independent of the modal check above -- both can be
-                // open at once.
                 let popover_root = {
                     let (arena, ..) = self.runtime.geometry();
                     popover::dismissed_by_escape(arena)
                 };
-                if let Some(root) = popover_root {
-                    self.runtime.dispatch_event(root, "dismiss");
+                // Both can be open at once; Escape closes only the later
+                // (innermost) one.
+                match (modal_root, popover_root) {
+                    (Some(modal), Some(popover)) if popover > modal => {
+                        self.runtime.dispatch_event(popover, "dismiss");
+                    }
+                    (Some(modal), _) => {
+                        self.runtime.dispatch_event(modal, "close");
+                    }
+                    (None, Some(popover)) => {
+                        self.runtime.dispatch_event(popover, "dismiss");
+                    }
+                    (None, None) => {}
                 }
             }
             _ => {}

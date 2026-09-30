@@ -71,19 +71,13 @@ pub struct UiRuntime {
     /// Whether the current focus is keyboard-driven (`:focus-visible`
     /// should match) rather than a mouse click.
     focus_visible: bool,
-    /// Where to restore focus once the currently open modal
-    /// [`crate::components::dialog::Dialog`] closes — captured the render it opens,
-    /// consumed the render it closes. See [`Self::resolve_focus`]'s own
-    /// doc for the full open/steady/close transition this drives.
-    modal_return_path: Option<FocusPath>,
-    /// Whether a modal was open as of the *previous* render — the
-    /// authoritative "did a modal just open/close this render" signal.
-    /// Deliberately not derived from `modal_return_path.is_some()`: a
-    /// modal opening while nothing was previously focused would save
-    /// `None` into it, indistinguishable from "no modal has ever been
-    /// open," and silently re-trigger auto-focus-on-open every
-    /// subsequent render.
-    had_modal_last_render: bool,
+    /// Where to restore focus as each open modal
+    /// [`crate::components::dialog::Dialog`] closes, outermost first — one
+    /// entry captured the render a modal opens (`None` if nothing was
+    /// focused) and consumed the render it closes. Its length is also how
+    /// many modals were open as of the previous render, the authoritative
+    /// "did one just open/close" signal. See [`Self::resolve_focus`].
+    modal_return_paths: Vec<Option<FocusPath>>,
     /// The range input a pointer drag is currently moving, if any — a
     /// [`FocusPath`], not a plain [`NodeId`], because an accepted drag
     /// value re-renders (a fresh [`Self::arena`]) *while the drag is still
@@ -281,8 +275,7 @@ impl UiRuntime {
             focused_path: None,
             focused_node: None,
             focus_visible: false,
-            modal_return_path: None,
-            had_modal_last_render: false,
+            modal_return_paths: Vec::new(),
             range_dragging: None,
             arena: Arena::build(&Element::Fragment(Vec::new())),
             styles: HashMap::new(),
@@ -1134,58 +1127,59 @@ impl UiRuntime {
     /// [`Self::arena`], and drives the modal [`crate::components::dialog::Dialog`]
     /// open/close transition:
     ///
-    /// - **just opened** (a modal wasn't present last render, is now):
-    ///   saves wherever focus currently is into [`Self::modal_return_path`]
-    ///   (`None` if nothing was focused), then traps focus onto the
+    /// - **just opened** (more modals than last render): saves wherever
+    ///   focus currently is onto [`Self::modal_return_paths`] (`None` if
+    ///   nothing was focused), then traps focus onto the innermost
     ///   modal's own first focusable descendant, if any — a real
     ///   `:focus-visible` trap, matching expected modal UX.
     /// - **steady-state open**: resolves the existing focus against the
-    ///   modal's own content only ([`focus::focusable_within`]), never
-    ///   the whole document — the actual focus-containment behavior.
-    /// - **just closed**: restores focus to [`Self::modal_return_path`]
-    ///   (taken, so a later close doesn't reuse a stale path), resolved
-    ///   against the *whole* document again since the modal is gone —
-    ///   falling back to the document's first focusable node if that
-    ///   original trigger was itself removed while the modal was open.
-    /// - **no modal, no transition**: unchanged from before this modal
-    ///   support existed.
+    ///   innermost modal's content only ([`focus::focusable_within`]),
+    ///   never the whole document.
+    /// - **just closed** (fewer modals): restores focus to the path saved
+    ///   when that modal opened, resolved against what is now innermost
+    ///   (the next modal down, or the whole document) — falling back to
+    ///   its first focusable node if the original trigger was removed.
+    /// - **no modal, no transition**: plain resolution against the
+    ///   whole document.
     fn resolve_focus(&mut self) {
-        match (focus::modal_root(&self.arena), self.had_modal_last_render) {
-            (Some(root), false) => {
-                self.modal_return_path = self.focused_path.clone();
-                let first = focus::focusable_within(&self.arena, root)
-                    .into_iter()
-                    .next();
-                self.focused_path = first.map(|id| FocusPath::of(&self.arena, id));
-                self.focused_node = first;
-                self.focus_visible = first.is_some();
-                self.had_modal_last_render = true;
+        let modals = focus::modal_roots(&self.arena);
+        let before = self.modal_return_paths.len();
+        let innermost = modals.last().copied();
+        let within_innermost = |runtime: &Self| match innermost {
+            Some(root) => focus::focusable_within(&runtime.arena, root),
+            None => focus::focus_order(&runtime.arena),
+        };
+        if modals.len() > before {
+            for _ in before..modals.len() {
+                self.modal_return_paths.push(self.focused_path.clone());
             }
-            (Some(root), true) => {
-                let candidates = focus::focusable_within(&self.arena, root);
-                self.resolve_against(&candidates);
+            let first = within_innermost(self).into_iter().next();
+            self.focused_path = first.map(|id| FocusPath::of(&self.arena, id));
+            self.focused_node = first;
+            self.focus_visible = first.is_some();
+        } else if modals.len() < before {
+            let restore = self
+                .modal_return_paths
+                .drain(modals.len()..)
+                .next()
+                .flatten();
+            let had_return = restore.is_some();
+            self.focused_path = restore;
+            let candidates = within_innermost(self);
+            self.resolve_against(&candidates);
+            // A removed trigger falls back to the start of the document.
+            if self.focused_node.is_none() && had_return {
+                self.focused_node = candidates.first().copied();
+                self.focused_path = self
+                    .focused_node
+                    .map(|node| FocusPath::of(&self.arena, node));
             }
-            (None, true) => {
-                self.had_modal_last_render = false;
-                let had_return = self.modal_return_path.is_some();
-                self.focused_path = self.modal_return_path.take();
-                let candidates = focus::focus_order(&self.arena);
-                self.resolve_against(&candidates);
-                // A removed trigger falls back to the start of the document.
-                if self.focused_node.is_none() && had_return {
-                    self.focused_node = candidates.first().copied();
-                    self.focused_path = self
-                        .focused_node
-                        .map(|node| FocusPath::of(&self.arena, node));
-                }
-                if self.focused_node.is_some() {
-                    self.focus_visible = true;
-                }
+            if self.focused_node.is_some() {
+                self.focus_visible = true;
             }
-            (None, false) => {
-                let candidates = focus::focus_order(&self.arena);
-                self.resolve_against(&candidates);
-            }
+        } else {
+            let candidates = within_innermost(self);
+            self.resolve_against(&candidates);
         }
         self.rebuild_interaction();
     }
@@ -3123,6 +3117,80 @@ mod tests {
         assert_eq!(runtime.focused(), Some(node_id(&runtime, "first")));
     }
 
+    fn nested_dialog_runtime(outer: Rc<Cell<bool>>, inner: Rc<Cell<bool>>) -> UiRuntime {
+        UiRuntime::with_rules(
+            Vec::new(),
+            move || {
+                let inner_dialog = if inner.get() {
+                    view! {
+                        <Dialog label={"Inner".to_string()} onclose={Handler::new(|| {})}>
+                            <button id="inner-button">{"Inner"}</button>
+                        </Dialog>
+                    }
+                } else {
+                    view! { <div /> }
+                };
+                let outer_dialog = if outer.get() {
+                    view! {
+                        <Dialog label={"Outer".to_string()} onclose={Handler::new(|| {})}>
+                            <button id="outer-button">{"Outer"}</button>
+                            {inner_dialog}
+                        </Dialog>
+                    }
+                } else {
+                    view! { <div /> }
+                };
+                view! {
+                    <div>
+                        <button id="page-button">{"Page"}</button>
+                        {outer_dialog}
+                    </div>
+                }
+            },
+            viewport(),
+        )
+    }
+
+    #[test]
+    fn a_dialog_opened_inside_a_dialog_owns_focus_and_hands_it_back_in_order() {
+        let (outer, inner) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
+        let mut runtime = nested_dialog_runtime(Rc::clone(&outer), Rc::clone(&inner));
+        runtime.set_focused(Some(node_id(&runtime, "page-button")), true);
+
+        outer.set(true);
+        runtime.update(viewport());
+        assert_eq!(runtime.focused(), Some(node_id(&runtime, "outer-button")));
+
+        inner.set(true);
+        runtime.update(viewport());
+        assert_eq!(
+            runtime.focused(),
+            Some(node_id(&runtime, "inner-button")),
+            "the innermost dialog takes focus"
+        );
+        runtime.focus_next();
+        assert_eq!(
+            runtime.focused(),
+            Some(node_id(&runtime, "inner-button")),
+            "Tab stays inside the innermost dialog"
+        );
+
+        inner.set(false);
+        runtime.update(viewport());
+        assert_eq!(
+            runtime.focused(),
+            Some(node_id(&runtime, "outer-button")),
+            "closing the inner dialog returns to the outer one"
+        );
+
+        outer.set(false);
+        runtime.update(viewport());
+        assert_eq!(
+            runtime.focused(),
+            Some(node_id(&runtime, "page-button")),
+            "closing the outer dialog returns to the page"
+        );
+    }
     #[test]
     fn closing_a_modal_opened_with_nothing_focused_leaves_nothing_focused() {
         let open = Rc::new(Cell::new(false));

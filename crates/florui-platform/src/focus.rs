@@ -13,7 +13,7 @@
 
 use florui_style::{Arena, NodeId};
 
-/// `<input>` types this slice gives real text-editing behavior — the
+/// `<input>` types with real text-editing behavior — the
 /// same gate [`is_focusable`] and [`crate::text_input::TextInputRegistry`]
 /// both check.
 pub(crate) fn is_editable_input_type(input_type: Option<&str>) -> bool {
@@ -153,19 +153,21 @@ pub(crate) fn radio_sibling(arena: &Arena, from: NodeId, direction: isize) -> Op
     Some(group[next])
 }
 
-/// The currently open modal [`crate::components::dialog::Dialog`]'s own root, if
-/// any — the first node (document order) carrying
-/// [`crate::components::dialog::MODAL_ROOT_CLASS`]. Single-modal-at-a-time is this
-/// slice's own deliberate scope limit; a second, nested `Dialog` would
-/// silently lose to whichever is found first here, not a real stacking
-/// contract yet.
-pub(crate) fn modal_root(arena: &Arena) -> Option<NodeId> {
-    arena.find(|arena, id| {
+/// Every open modal [`crate::components::dialog::Dialog`]'s own root, outermost
+/// first: overlay roots are built in the order they open, so a dialog opened
+/// from inside another comes later.
+pub(crate) fn modal_roots(arena: &Arena) -> Vec<NodeId> {
+    arena.find_all(|arena, id| {
         arena
             .classes(id)
             .iter()
             .any(|class| class == crate::components::dialog::MODAL_ROOT_CLASS)
     })
+}
+
+/// The innermost open modal's root: the one that owns focus and Escape.
+pub(crate) fn modal_root(arena: &Arena) -> Option<NodeId> {
+    modal_roots(arena).pop()
 }
 
 /// Every focusable descendant of `root`, in document order — same shape
@@ -431,6 +433,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_innermost_modal_is_the_one_that_owns_focus() {
+        let tree: Element = view! {
+            <div>
+                <button>{"Page"}</button>
+                <div id="outer" class={crate::components::dialog::MODAL_ROOT_CLASS}>
+                    <button>{"Outer"}</button>
+                    {Element::Portal(vec![view! {
+                        <div id="inner" class={crate::components::dialog::MODAL_ROOT_CLASS}>
+                            <button>{"Inner"}</button>
+                        </div>
+                    }])}
+                </div>
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let roots = modal_roots(&arena);
+        assert_eq!(roots.len(), 2);
+        assert_eq!(arena.id_attr(roots[0]), Some("outer"));
+        assert_eq!(arena.id_attr(modal_root(&arena).unwrap()), Some("inner"));
+        let candidates = focus_candidates(&arena);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(arena.text_content(candidates[0]), "Inner");
+    }
     #[test]
     fn modal_root_is_none_without_the_marker_class() {
         let tree: Element = view! { <div><button>{"Go"}</button></div> };
