@@ -210,7 +210,12 @@ fn max_length(arena: &Arena, node: NodeId) -> Option<usize> {
     let enforced = arena.tag(node) == "textarea"
         || matches!(
             arena.input_type(node),
-            None | Some("text") | Some("password") | Some("email")
+            None | Some("text")
+                | Some("password")
+                | Some("email")
+                | Some("url")
+                | Some("tel")
+                | Some("search")
         );
     enforced
         .then(|| arena.attr(node, "maxlength"))
