@@ -1,0 +1,161 @@
+//! Baseline for the window-independent frame pipeline: `UiRuntime::update`
+//! (render, cascade, layout) on lists of rows, the same call after a
+//! signal write, a scroll box's per-update cost, hit testing, and a full
+//! update-plus-paint frame. Trees are ordinary rows of text and a button,
+//! not synthetic empty boxes. No pass/fail budget.
+
+use std::cell::RefCell;
+use std::hint::black_box;
+use std::rc::Rc;
+
+use criterion::{Criterion, criterion_group, criterion_main};
+use florui::Element;
+use florui_platform::UiRuntime;
+use florui_reactive::{Signal, use_signal};
+use florui_style::Rgba;
+use taffy::prelude::*;
+
+const CSS: &str = "
+    .list { display: flex; flex-direction: column; width: 800px; }
+    .scroll { height: 600px; overflow: auto; display: flex; flex-direction: column; }
+    .row { display: flex; flex-direction: row; gap: 8px; padding: 4px 8px;
+           border-bottom: 1px solid #ddd; background-color: #fff; }
+    .row:hover { background-color: #eef; }
+    .label { flex-grow: 1; color: #222; font-size: 14px; }
+    .action { padding: 2px 8px; background-color: #36c; color: #fff; }
+";
+
+const VIEWPORT: Size<AvailableSpace> = Size {
+    width: AvailableSpace::Definite(800.0),
+    height: AvailableSpace::Definite(600.0),
+};
+
+fn row(i: usize) -> Element {
+    Element::node(
+        "div",
+        vec![("class".into(), "row".into())],
+        vec![
+            Element::node(
+                "span",
+                vec![("class".into(), "label".into())],
+                vec![Element::text(format!("Item number {i}"))],
+            ),
+            Element::node(
+                "button",
+                vec![("class".into(), "action".into())],
+                vec![Element::text("Open")],
+            ),
+        ],
+    )
+}
+
+fn list(class: &'static str, n: usize) -> Element {
+    Element::node(
+        "div",
+        vec![("class".into(), class.into())],
+        (0..n).map(row).collect(),
+    )
+}
+
+fn runtime(class: &'static str, n: usize) -> UiRuntime {
+    UiRuntime::new(CSS, move || list(class, n), VIEWPORT).expect("benchmark CSS must be valid")
+}
+
+fn bench_update(c: &mut Criterion) {
+    let mut group = c.benchmark_group("platform/update");
+    group.sample_size(20);
+    for &n in &[100usize, 1000] {
+        let mut rt = runtime("list", n);
+        group.bench_function(format!("{n}_rows"), |b| b.iter(|| rt.update(VIEWPORT)));
+    }
+    // Every wheel tick pays this today: a full update over a scroll box.
+    for &n in &[100usize, 1000] {
+        let mut rt = runtime("scroll", n);
+        group.bench_function(format!("{n}_rows_in_scroll_box"), |b| {
+            b.iter(|| rt.update(VIEWPORT))
+        });
+    }
+    group.finish();
+}
+
+fn bench_update_after_signal(c: &mut Criterion) {
+    let mut group = c.benchmark_group("platform/update_after_signal");
+    group.sample_size(20);
+    for &n in &[100usize, 1000] {
+        let handle: Rc<RefCell<Option<Signal<u32>>>> = Rc::new(RefCell::new(None));
+        let sink = Rc::clone(&handle);
+        let mut rt = UiRuntime::new(
+            CSS,
+            move || {
+                let count = use_signal(|| 0u32);
+                *sink.borrow_mut() = Some(count.clone());
+                Element::node(
+                    "div",
+                    vec![("class".into(), "list".into())],
+                    std::iter::once(Element::text(format!("Count {}", count.get())))
+                        .chain((0..n).map(row))
+                        .collect(),
+                )
+            },
+            VIEWPORT,
+        )
+        .expect("benchmark CSS must be valid");
+        let signal = handle.borrow().clone().expect("root renders once in new");
+        let mut value = 0u32;
+        group.bench_function(format!("{n}_rows"), |b| {
+            b.iter(|| {
+                value += 1;
+                signal.set(value);
+                rt.update(VIEWPORT);
+            })
+        });
+    }
+    group.finish();
+}
+
+fn bench_hit_test(c: &mut Criterion) {
+    let mut group = c.benchmark_group("platform/hit_test");
+    for &n in &[100usize, 1000] {
+        let rt = runtime("list", n);
+        // A point deep in the list, so the walk has to pass many siblings.
+        let y = (n as f32) * 12.0;
+        group.bench_function(format!("{n}_rows"), |b| {
+            b.iter(|| black_box(rt.hit_test(100.0, y)))
+        });
+    }
+    group.finish();
+}
+
+fn bench_frame(c: &mut Criterion) {
+    let mut group = c.benchmark_group("platform/frame");
+    group.sample_size(10);
+    for &n in &[100usize, 1000] {
+        let mut rt = runtime("list", n);
+        group.bench_function(format!("{n}_rows_update_and_paint"), |b| {
+            b.iter(|| {
+                rt.update(VIEWPORT);
+                let (arena, styles, layouts, font) = rt.geometry_and_font_mut();
+                black_box(florui_paint::paint_to_buffer(
+                    font,
+                    800,
+                    600,
+                    Rgba::opaque(255, 255, 255),
+                    arena,
+                    styles,
+                    layouts,
+                    1.0,
+                ))
+            })
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_update,
+    bench_update_after_signal,
+    bench_hit_test,
+    bench_frame,
+);
+criterion_main!(benches);

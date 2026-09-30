@@ -58,6 +58,7 @@ accesskit = { version = "0.25", optional = true }
 accesskit_winit = { version = "0.34", optional = true }
 
 [dev-dependencies]
+criterion = "0.5"
 tempfile = "3"
 florui-primitives = { path = "../florui-primitives" }
 # Encoding a real PNG for `image.rs`'s own tests -- version matches
@@ -126,3 +127,7 @@ windows = { version = "0.62", optional = true, features = [
 # `windows::core` is merely a re-export, not the crate itself at the
 # extern prelude. Pinned to the exact same version as `windows` above.
 windows-core = { version = "0.62.2", optional = true }
+
+[[bench]]
+name = "runtime"
+harness = false
