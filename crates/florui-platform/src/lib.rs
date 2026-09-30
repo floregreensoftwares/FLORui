@@ -12,6 +12,7 @@
 mod auto_id;
 mod components;
 mod focus;
+mod focus_observer;
 mod form;
 mod form_control;
 mod icon;
@@ -41,6 +42,9 @@ pub use components::slider::{
 };
 pub use components::switch::{
     SWITCH_CLASS, SWITCH_INPUT_CLASS, SWITCH_THUMB_CLASS, Switch, SwitchProps, SwitchValue,
+};
+pub use focus_observer::{
+    FocusController, FocusObserverRegistry, use_focus_controller, use_focus_within,
 };
 pub use position_observer::{PositionObserverRegistry, use_committed_position};
 pub use runtime::UiRuntime;
