@@ -1962,6 +1962,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "florui-test"
+version = "0.1.0"
+dependencies = [
+ "florui",
+ "florui-platform",
+ "florui-reactive",
+ "florui-style",
+ "image",
+]
+
+[[package]]
 name = "florui-text"
 version = "0.1.0"
 dependencies = [

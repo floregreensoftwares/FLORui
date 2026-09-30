@@ -18,6 +18,7 @@ members = [
     "crates/florui-text",
     "crates/florui-paint",
     "crates/florui-platform",
+    "crates/florui-test",
     "crates/florui-reactive",
     "crates/florui-routing",
     "examples/florui-example-app",
