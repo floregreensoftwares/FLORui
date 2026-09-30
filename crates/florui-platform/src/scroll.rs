@@ -221,7 +221,7 @@ impl ScrollRegistry {
         true
     }
 
-    fn current_offset(&self, id: &str) -> (f32, f32) {
+    pub(crate) fn current_offset(&self, id: &str) -> (f32, f32) {
         self.entries
             .borrow()
             .get(id)

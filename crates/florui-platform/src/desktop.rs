@@ -543,12 +543,11 @@ fn layout_viewport(scale: ViewportScale) -> Size<AvailableSpace> {
 /// [`WindowState::text_input_content_origin`]'s own doc for the full
 /// rationale; that method just delegates here.
 fn text_input_content_origin(
-    arena: &florui_style::Arena,
+    position: (f32, f32),
     styles: &HashMap<NodeId, ComputedStyle>,
-    layouts: &HashMap<NodeId, BoxLayout>,
     node: NodeId,
 ) -> (f32, f32) {
-    let (x, y) = florui_layout::absolute_position(arena, layouts, node);
+    let (x, y) = position;
     let style = styles.get(&node);
     let border = style.map_or(0.0, |s| s.border.left.width);
     let border_top = style.map_or(0.0, |s| s.border.top.width);
@@ -1396,7 +1395,7 @@ impl WindowState {
                 return None;
             }
             let layout = layouts.get(&node)?;
-            let (x, y) = florui_layout::absolute_position(arena, layouts, node);
+            let (x, y) = florui_layout::absolute_position(arena, &scrolled_layouts, node);
             Some(if is_hovered {
                 florui_paint::spinner_half_at((x, y, layout.width, layout.height), cursor)
             } else {
@@ -1408,7 +1407,7 @@ impl WindowState {
             TextInputPaintContext {
                 arena,
                 styles,
-                layouts,
+                layouts: &scrolled_layouts,
                 registry: &text_input_registry,
                 focused,
                 hovered,
@@ -1453,7 +1452,11 @@ impl WindowState {
             // window's own scale factor internally, so no manual
             // `scale_factor` multiplication belongs here (unlike
             // `physical_layouts`, which painting needs pre-scaled).
-            let (origin_x, origin_y) = text_input_content_origin(arena, styles, layouts, node);
+            let (origin_x, origin_y) = text_input_content_origin(
+                florui_layout::absolute_position(arena, &scrolled_layouts, node),
+                styles,
+                node,
+            );
             window.set_ime_cursor_area(
                 winit::dpi::LogicalPosition::new(origin_x + x0, origin_y + y0),
                 winit::dpi::LogicalSize::new((x1 - x0).max(1.0), (y1 - y0).max(1.0)),
@@ -1813,7 +1816,7 @@ impl WindowState {
             );
             (
                 id,
-                florui_layout::absolute_position(arena, layouts, node),
+                self.runtime.drawn_position(node),
                 (layout.width, layout.height),
                 border,
                 chrome,
@@ -2139,7 +2142,7 @@ impl WindowState {
             return None;
         }
         let layout = layouts.get(&node)?;
-        let (bx, by) = florui_layout::absolute_position(arena, layouts, node);
+        let (bx, by) = self.runtime.drawn_position(node);
         match florui_paint::spinner_half_at((bx, by, layout.width, layout.height), (x, y)) {
             florui_paint::SpinnerHover::Up => Some(1),
             florui_paint::SpinnerHover::Down => Some(-1),
@@ -2212,8 +2215,8 @@ impl WindowState {
     /// computation exactly, so a click lands on the same glyph it visibly
     /// painted over.
     fn text_input_content_origin(&self, node: NodeId) -> (f32, f32) {
-        let (arena, styles, layouts) = self.runtime.geometry();
-        text_input_content_origin(arena, styles, layouts, node)
+        let (_, styles, _) = self.runtime.geometry();
+        text_input_content_origin(self.runtime.drawn_position(node), styles, node)
     }
 
     /// The pointer position `(x, y)` in the editor's own space: relative to
