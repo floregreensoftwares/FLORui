@@ -21,6 +21,8 @@ pub(crate) struct FormContext<'a> {
     /// Text controls the user has typed into. Only a user
     /// edit can trip `minlength`/`maxlength`, as in a browser.
     pub edited: &'a HashSet<FocusPath>,
+    /// What each text field was typed with, for `badInput`.
+    pub text_inputs: &'a crate::text_input::TextInputRegistry,
 }
 
 /// Which constraints a control currently violates.
@@ -31,6 +33,10 @@ pub(crate) struct Validity {
     pub too_long: bool,
     pub pattern_mismatch: bool,
     pub type_mismatch: bool,
+    pub bad_input: bool,
+    pub range_underflow: bool,
+    pub range_overflow: bool,
+    pub step_mismatch: bool,
     pub custom_error: bool,
 }
 
@@ -118,6 +124,15 @@ pub(crate) static CONTROLS: &[ControlSpec] = &[
         text_field: true,
         entries: email_entries,
         constraints: email_constraints,
+    },
+    ControlSpec {
+        tag: "input",
+        input_type: Some("number"),
+        submittable: true,
+        validatable: true,
+        text_field: true,
+        entries: number_entries,
+        constraints: number_constraints,
     },
     ControlSpec {
         tag: "input",
@@ -244,6 +259,10 @@ fn text_constraints(ctx: &FormContext, node: NodeId) -> Validity {
                 .attr(node, "pattern")
                 .is_some_and(|pattern| !matches_pattern(pattern, value)),
         type_mismatch: false,
+        bad_input: false,
+        range_underflow: false,
+        range_overflow: false,
+        step_mismatch: false,
         custom_error: false,
     }
 }
@@ -340,10 +359,12 @@ fn select_constraints(ctx: &FormContext, node: NodeId) -> Validity {
 pub(crate) enum ValueKind {
     Plain,
     Email { multiple: bool },
+    Number,
 }
 
 pub(crate) fn value_kind(arena: &Arena, node: NodeId) -> ValueKind {
     match (arena.tag(node), arena.input_type(node)) {
+        ("input", Some("number")) => ValueKind::Number,
         ("input", Some("email")) => ValueKind::Email {
             multiple: arena.attr_flag(node, "multiple"),
         },
@@ -357,6 +378,7 @@ pub(crate) fn value_kind(arena: &Arena, node: NodeId) -> ValueKind {
 pub(crate) fn sanitize_value(kind: ValueKind, raw: &str) -> String {
     match kind {
         ValueKind::Plain => raw.to_string(),
+        ValueKind::Number => parse_number(raw).map_or_else(String::new, |_| raw.to_string()),
         ValueKind::Email { multiple } => {
             let flat: String = raw.chars().filter(|c| !matches!(c, '\r' | '\n')).collect();
             if multiple {
@@ -409,6 +431,130 @@ fn email_constraints(ctx: &FormContext, node: NodeId) -> Validity {
         type_mismatch: !is_valid_email(&value, multiple),
         ..text_constraints(ctx, node)
     }
+}
+
+/// Characters a `type=number` field lets through when typed or pasted
+/// (measured in Edge: letters and commas are dropped, `e`/`E`, sign and
+/// point are kept even where they make the text invalid).
+pub(crate) fn filter_typed_text(kind: ValueKind, text: &str) -> String {
+    match kind {
+        ValueKind::Number => text
+            .chars()
+            .filter(|c| c.is_ascii_digit() || matches!(c, '+' | '-' | '.' | 'e' | 'E'))
+            .collect(),
+        _ => text.to_string(),
+    }
+}
+
+static FLOAT: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"^-?(?:[0-9]+|[0-9]*\.[0-9]+)(?:[eE][-+]?[0-9]+)?$")
+        .expect("the float pattern is a constant, valid regex")
+});
+
+/// `raw` as a number if it is a valid HTML floating-point number (no
+/// leading `+`, no surrounding whitespace, `.5` fine, `5.` not).
+fn parse_number(raw: &str) -> Option<f64> {
+    FLOAT
+        .is_match(raw)
+        .then(|| raw.parse::<f64>().ok())
+        .flatten()
+        .filter(|n| n.is_finite())
+}
+
+fn number_attr(arena: &Arena, node: NodeId, name: &str) -> Option<f64> {
+    arena
+        .attr(node, name)
+        .and_then(|raw| parse_number(raw.trim()))
+}
+
+/// `step="any"` disables stepping; otherwise a positive `step`, else 1.
+fn number_step(arena: &Arena, node: NodeId) -> Option<f64> {
+    match arena.attr(node, "step").map(str::trim) {
+        Some("any") => None,
+        Some(raw) => Some(parse_number(raw).filter(|s| *s > 0.0).unwrap_or(1.0)),
+        None => Some(1.0),
+    }
+}
+
+fn number_value(ctx: &FormContext, node: NodeId) -> String {
+    sanitize_value(ValueKind::Number, text_value(ctx, node))
+}
+
+fn number_entries(ctx: &FormContext, node: NodeId) -> Vec<String> {
+    vec![number_value(ctx, node)]
+}
+
+/// Whether `value` sits on the step grid anchored at `base`.
+fn on_step_grid(value: f64, base: f64, step: f64) -> bool {
+    let ratio = (value - base) / step;
+    (ratio - ratio.round()).abs() <= 1e-9 * ratio.abs().max(1.0)
+}
+
+fn number_constraints(ctx: &FormContext, node: NodeId) -> Validity {
+    let arena = ctx.arena;
+    let value = number_value(ctx, node);
+    let bad_input = arena
+        .id_attr(node)
+        .is_some_and(|id| ctx.text_inputs.is_bad_input(id));
+    let mut result = Validity {
+        value_missing: is_required(arena, node) && value.is_empty(),
+        bad_input,
+        ..Validity::default()
+    };
+    let Some(number) = parse_number(&value) else {
+        return result;
+    };
+    let (min, max) = (
+        number_attr(arena, node, "min"),
+        number_attr(arena, node, "max"),
+    );
+    result.range_underflow = min.is_some_and(|min| number < min);
+    result.range_overflow = max.is_some_and(|max| number > max);
+    if let Some(step) = number_step(arena, node) {
+        result.step_mismatch = !on_step_grid(number, min.unwrap_or(0.0), step);
+    }
+    result
+}
+
+/// The value one arrow-key step from `current` (empty counts as 0) in
+/// `direction` (`1` up, `-1` down), clamped to `min`/`max`; `None` when
+/// the field is at its limit already. Measured in Edge: an off-grid value
+/// snaps to the next grid point in that direction (2.5 up gives 3), and a
+/// step past a limit holds at the limit's nearest grid value.
+pub(crate) fn stepped_number(
+    arena: &Arena,
+    node: NodeId,
+    current: &str,
+    direction: i32,
+) -> Option<String> {
+    let step = number_step(arena, node).unwrap_or(1.0);
+    let (min, max) = (
+        number_attr(arena, node, "min"),
+        number_attr(arena, node, "max"),
+    );
+    let base = min.unwrap_or(0.0);
+    let start = parse_number(current).unwrap_or(0.0);
+    let position = (start - base) / step;
+    let eps = 1e-9 * position.abs().max(1.0);
+    let index = if direction >= 0 {
+        (position + eps).floor() + 1.0
+    } else {
+        (position - eps).ceil() - 1.0
+    };
+    let mut next = base + index * step;
+    if let Some(max) = max
+        && next > max
+    {
+        next = base + ((max - base) / step + eps).floor() * step;
+    }
+    if let Some(min) = min
+        && next < min
+    {
+        next = min;
+    }
+    let next = (next * 1e9).round() / 1e9;
+    let as_text = next.to_string();
+    (parse_number(current) != Some(next)).then_some(as_text)
 }
 
 #[cfg(test)]
@@ -474,6 +620,65 @@ mod tests {
         assert_eq!(sanitize_value(one, "  a@b.c \n"), "a@b.c");
         assert_eq!(sanitize_value(many, "a@b.c,  d@e.f "), "a@b.c,d@e.f");
         assert_eq!(sanitize_value(ValueKind::Plain, "  keep  "), "  keep  ");
+    }
+
+    /// Rows measured in Edge for `type=number`.
+    #[test]
+    fn number_sanitizing_keeps_only_valid_floats() {
+        for keep in ["", "1", "1.5", "-2", "1e3", ".5", "1e5"] {
+            assert_eq!(sanitize_value(ValueKind::Number, keep), keep, "{keep:?}");
+        }
+        for drop in ["abc", "1e", "+1", "1,5", " 4 ", "-", ".", "5."] {
+            assert_eq!(sanitize_value(ValueKind::Number, drop), "", "{drop:?}");
+        }
+    }
+
+    #[test]
+    fn number_typing_keeps_digits_sign_point_and_exponent_only() {
+        let filter = |t: &str| filter_typed_text(ValueKind::Number, t);
+        assert_eq!(filter("12abc"), "12");
+        assert_eq!(filter("1,5"), "15");
+        assert_eq!(filter("-e.+3"), "-e.+3");
+        assert_eq!(filter_typed_text(ValueKind::Plain, "12abc"), "12abc");
+    }
+
+    fn number_arena(attrs: &str) -> (florui_style::Arena, NodeId) {
+        let tree: florui::Element = match attrs {
+            "min1max5step2" => florui::prelude::view! {
+                <input type="number" min="1" max="5" step="2" />
+            },
+            "min0.5" => florui::prelude::view! { <input type="number" min="0.5" step="1" /> },
+            _ => florui::prelude::view! { <input type="number" /> },
+        };
+        let arena = florui_style::Arena::build(&tree);
+        let node = arena.roots()[0];
+        (arena, node)
+    }
+
+    #[test]
+    fn number_arrow_steps_match_what_edge_measured() {
+        let (arena, node) = number_arena("default");
+        let up = |from: &str| stepped_number(&arena, node, from, 1);
+        let down = |from: &str| stepped_number(&arena, node, from, -1);
+        assert_eq!(up("").as_deref(), Some("1"));
+        assert_eq!(down("2").as_deref(), Some("1"));
+        assert_eq!(down("0").as_deref(), Some("-1"));
+        assert_eq!(up("2.5").as_deref(), Some("3"));
+        assert_eq!(up("5").as_deref(), Some("6"));
+
+        let (arena, node) = number_arena("min1max5step2");
+        let up = |from: &str| stepped_number(&arena, node, from, 1);
+        let down = |from: &str| stepped_number(&arena, node, from, -1);
+        assert_eq!(up("3").as_deref(), Some("5"));
+        assert_eq!(up("5"), None, "already at the maximum");
+        assert_eq!(down("5").as_deref(), Some("3"));
+        assert_eq!(down("3").as_deref(), Some("1"));
+        assert_eq!(down("1"), None, "already at the minimum");
+        assert_eq!(
+            down("").as_deref(),
+            Some("1"),
+            "empty steps down to the minimum"
+        );
     }
 
     #[test]

@@ -25,12 +25,13 @@ pub(crate) enum SubmitOutcome {
 }
 
 impl UiRuntime {
-    fn with_form_context<R>(&self, f: impl FnOnce(&FormContext) -> R) -> R {
+    pub(super) fn with_form_context<R>(&self, f: impl FnOnce(&FormContext) -> R) -> R {
         let edited = self.edited.borrow();
         f(&FormContext {
             arena: &self.arena,
             options: &self.option_summaries,
             edited: &edited,
+            text_inputs: &self.text_input_registry,
         })
     }
 
@@ -73,6 +74,32 @@ impl UiRuntime {
             florui_reactive::batch(|| handler.call(data));
         }
         SubmitOutcome::Submitted
+    }
+
+    /// `text` as the field at `node` accepts it typed or pasted: a
+    /// `type=number` field drops everything but digits, sign, point and
+    /// exponent letters.
+    pub(crate) fn filter_typed(&self, node: NodeId, text: &str) -> String {
+        crate::form_control::filter_typed_text(
+            crate::form_control::value_kind(&self.arena, node),
+            text,
+        )
+    }
+
+    /// The value one arrow-key step from the number field at `node`, or
+    /// `None` when `node` isn't an editable number field or is already at
+    /// its limit.
+    pub(crate) fn step_number_value(&self, node: NodeId, direction: i32) -> Option<String> {
+        let arena = &self.arena;
+        if arena.tag(node) != "input"
+            || arena.input_type(node) != Some("number")
+            || arena.is_disabled(node)
+            || arena.attr_flag(node, "readonly")
+        {
+            return None;
+        }
+        let current = arena.value_attr(node).unwrap_or("");
+        crate::form_control::stepped_number(arena, node, current, direction)
     }
 
     /// The window lost focus: like a browser, the focused control blurs, so

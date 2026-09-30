@@ -2232,7 +2232,9 @@ impl WindowState {
                 }
                 Some(KeyCode::KeyV) => {
                     if let Some(pasted) = clipboard.get_text() {
-                        let pasted = strip_disallowed_input_chars(&pasted);
+                        let pasted = self
+                            .runtime
+                            .filter_typed(node, &strip_disallowed_input_chars(&pasted));
                         self.commit_text_input_op(
                             &registry,
                             &id,
@@ -2297,7 +2299,9 @@ impl WindowState {
             // combinations other than the shortcuts already handled above
             // carry no text-insertion meaning here.
             Key::Character(text) if !ctrl => {
-                let text = strip_disallowed_input_chars(text);
+                let text = self
+                    .runtime
+                    .filter_typed(node, &strip_disallowed_input_chars(text));
                 (!text.is_empty()).then_some(TextEditOp::InsertOrReplace(text))
             }
             // Unlike every other printable character, winit reports the
@@ -2308,6 +2312,18 @@ impl WindowState {
             // space did nothing.
             Key::Named(NamedKey::Space) if !ctrl => {
                 Some(TextEditOp::InsertOrReplace(" ".to_string()))
+            }
+            // A number field steps with Up/Down instead of moving a caret.
+            Key::Named(key @ (NamedKey::ArrowUp | NamedKey::ArrowDown)) if !ctrl => {
+                let direction = if matches!(key, NamedKey::ArrowUp) {
+                    1
+                } else {
+                    -1
+                };
+                if let Some(next) = self.runtime.step_number_value(node, direction) {
+                    self.commit_text_input_value(node, next);
+                }
+                None
             }
             _ => None,
         };
@@ -2365,7 +2381,9 @@ impl WindowState {
                 self.update_and_request_redraw();
             }
             Ime::Commit(text) => {
-                let text = strip_disallowed_input_chars(&text);
+                let text = self
+                    .runtime
+                    .filter_typed(node, &strip_disallowed_input_chars(&text));
                 self.commit_text_input_op(&registry, &id, node, TextEditOp::InsertOrReplace(text));
             }
             // `Enabled` needs no action (this window already allowed IME
@@ -3024,7 +3042,9 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                                 }) else {
                                     return;
                                 };
-                                let value = strip_disallowed_input_chars(&value);
+                                let value = state
+                                    .runtime
+                                    .filter_typed(node, &strip_disallowed_input_chars(&value));
                                 let registry = state.runtime.text_input_registry();
                                 if action == accesskit::Action::SetValue {
                                     state.commit_text_input_op(
@@ -3046,7 +3066,15 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                             // arrow key already does.
                             action @ (accesskit::Action::Increment
                             | accesskit::Action::Decrement) => {
-                                let step = if action == accesskit::Action::Increment {
+                                let increment = action == accesskit::Action::Increment;
+                                if let Some(next) = state
+                                    .runtime
+                                    .step_number_value(node, if increment { 1 } else { -1 })
+                                {
+                                    state.commit_text_input_value(node, next);
+                                    return;
+                                }
+                                let step = if increment {
                                     crate::runtime::RangeStep::SmallIncrement
                                 } else {
                                     crate::runtime::RangeStep::SmallDecrement

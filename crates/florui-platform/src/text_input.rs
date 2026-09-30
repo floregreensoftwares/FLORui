@@ -65,6 +65,9 @@ struct TextInputState {
     /// How typed text becomes the value handed to the owner: the buffer
     /// keeps what was typed, the owner gets the sanitized form.
     kind: ValueKind,
+    /// Typed text that is not a number at all (`1e`, `-`): the value is empty
+    /// but the field is not, which is what `badInput` reports.
+    bad_input: bool,
     /// Refreshed every [`TextInputRegistry::sync`] from the current
     /// render's own `ComputedStyle` — [`TextInputRegistry::apply`]/
     /// `undo`/`redo` all reshape with whatever this input's real font
@@ -137,6 +140,7 @@ impl TextInputRegistry {
                 state.kind = value_kind(arena, node);
                 if state.last_committed_text != value {
                     state.editor.set_text(value);
+                    state.bad_input = false;
                     font.apply_text_edit(
                         &mut state.editor,
                         TextEditOp::MoveTextEnd,
@@ -164,6 +168,7 @@ impl TextInputRegistry {
                         editor,
                         last_committed_text: value.to_string(),
                         kind: value_kind(arena, node),
+                        bad_input: false,
                         font_family,
                         font_weight,
                         undo_stack: Vec::new(),
@@ -215,7 +220,9 @@ impl TextInputRegistry {
         state.coalescing_insert = is_coalescable_insert;
         state.redo_stack.clear();
 
-        let new_text = sanitize_value(state.kind, &state.editor.text());
+        let raw = state.editor.text();
+        let new_text = sanitize_value(state.kind, &raw);
+        state.bad_input = !raw.is_empty() && new_text.is_empty() && state.kind == ValueKind::Number;
         state.last_committed_text = new_text.clone();
         Some(new_text)
     }
@@ -262,9 +269,19 @@ impl TextInputRegistry {
             state.font_weight,
         );
         state.coalescing_insert = false;
-        let new_text = sanitize_value(state.kind, &state.editor.text());
+        let raw = state.editor.text();
+        let new_text = sanitize_value(state.kind, &raw);
+        state.bad_input = !raw.is_empty() && new_text.is_empty() && state.kind == ValueKind::Number;
         state.last_committed_text = new_text.clone();
         Some(new_text)
+    }
+
+    /// Whether `id`'s typed text is not a number, for `badInput`.
+    pub(crate) fn is_bad_input(&self, id: &str) -> bool {
+        self.states
+            .borrow()
+            .get(id)
+            .is_some_and(|state| state.bad_input)
     }
 
     /// The currently selected text for `id`, if any — `None` both for a

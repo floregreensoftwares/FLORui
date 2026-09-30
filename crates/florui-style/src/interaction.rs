@@ -26,6 +26,7 @@ pub struct FormState {
     pub read_write: bool,
     pub default: bool,
     pub in_range: bool,
+    pub out_of_range: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

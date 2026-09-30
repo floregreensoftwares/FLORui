@@ -19,7 +19,7 @@ use florui_style::{Arena, NodeId};
 pub(crate) fn is_editable_input_type(input_type: Option<&str>) -> bool {
     matches!(
         input_type,
-        None | Some("text") | Some("password") | Some("email")
+        None | Some("text") | Some("password") | Some("email") | Some("number")
     )
 }
 

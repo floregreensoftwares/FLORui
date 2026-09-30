@@ -5,7 +5,7 @@
 /// expand deliberately as each type gets real behavior, not to match the
 /// full HTML list up front.
 pub const INITIAL_INPUT_TYPES: &[&str] = &[
-    "text", "password", "checkbox", "radio", "range", "hidden", "email",
+    "text", "password", "checkbox", "radio", "range", "hidden", "email", "number",
 ];
 
 pub fn is_supported_input_type(value: &str) -> bool {

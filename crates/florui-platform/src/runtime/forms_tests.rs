@@ -626,3 +626,151 @@ fn typing_into_an_email_field_hands_the_owner_the_trimmed_value_but_keeps_the_ty
     registry.apply(&id, florui_text::editing::TextEditOp::SelectAll, &mut font);
     assert_eq!(registry.selected_text(&id).as_deref(), Some("  a@b.c "));
 }
+
+/// Every row measured in Edge (`validity` on `type=number`): which of
+/// range underflow, range overflow and step mismatch each value trips.
+#[test]
+fn number_range_and_step_validity_matches_what_edge_measured() {
+    let violations = |min: &'static str, max: &'static str, step: &'static str, value: &str| {
+        let value = value.to_string();
+        let rt = runtime("", move || {
+            let value = value.clone();
+            view! {
+                <form>
+                    <input id="n" type="number" min={min} max={max} step={step}
+                        value={value} oninput={move |_v: String| {}} />
+                </form>
+            }
+        });
+        let invalid = rt.form_state_of(node(&rt, "n")).unwrap().invalid;
+        let field = node(&rt, "n");
+        let ctx_violations = rt.with_form_context(|ctx| crate::form_control::validity(ctx, field));
+        (
+            invalid,
+            ctx_violations.range_underflow,
+            ctx_violations.range_overflow,
+            ctx_violations.step_mismatch,
+        )
+    };
+    // (invalid, underflow, overflow, step) for min=1 max=5 step=2.
+    for (value, expected) in [
+        ("0", (true, true, false, true)),
+        ("1", (false, false, false, false)),
+        ("2", (true, false, false, true)),
+        ("3", (false, false, false, false)),
+        ("5", (false, false, false, false)),
+        ("6", (true, false, true, true)),
+        ("4", (true, false, false, true)),
+        ("1.5", (true, false, false, true)),
+    ] {
+        assert_eq!(
+            violations("1", "5", "2", value),
+            expected,
+            "min1 max5 step2, {value}"
+        );
+    }
+    // min=0.5 step=1 has no maximum; the grid is anchored at the minimum.
+    for (value, expected) in [
+        ("0.3", (true, true, false, true)),
+        ("2.5", (false, false, false, false)),
+        ("7", (true, false, false, true)),
+        ("0.5", (false, false, false, false)),
+        ("1.5", (false, false, false, false)),
+    ] {
+        assert_eq!(
+            violations("0.5", "", "1", value),
+            expected,
+            "min0.5 step1, {value}"
+        );
+    }
+    assert_eq!(
+        violations("", "", "any", "7.77"),
+        (false, false, false, false),
+        "step=any"
+    );
+}
+
+#[test]
+fn a_number_field_typed_into_a_bad_input_blocks_submission_until_it_is_a_number() {
+    let (log, on_submit) = submitted();
+    let mut rt = runtime("", move || {
+        let on_submit = on_submit.clone();
+        view! {
+            <form id="f" onsubmit={move |data: FormData| on_submit(data)}>
+                <input id="qty" type="number" name="qty" value="" oninput={move |_v: String| {}} />
+            </form>
+        }
+    });
+    let (arena, ..) = rt.geometry();
+    let field = arena.find(|a, id| a.tag(id) == "input").unwrap();
+    let id = arena.id_attr(field).unwrap().to_string();
+    let registry = rt.text_input_registry();
+    let mut font = florui_text::Font::load_embedded();
+    let insert =
+        |registry: &crate::text_input::TextInputRegistry, font: &mut florui_text::Font, t: &str| {
+            registry.apply(
+                &id,
+                florui_text::editing::TextEditOp::InsertOrReplace(t.to_string()),
+                font,
+            )
+        };
+    assert_eq!(
+        insert(&registry, &mut font, "1e").as_deref(),
+        Some(""),
+        "value stays empty"
+    );
+    assert!(registry.is_bad_input(&id));
+    assert!(rt.form_state_of(node(&rt, "qty")).unwrap().invalid);
+    let form = node(&rt, "f");
+    assert_eq!(rt.submit_form(form, None, false), SubmitOutcome::Blocked);
+
+    assert_eq!(insert(&registry, &mut font, "5").as_deref(), Some("1e5"));
+    assert!(!registry.is_bad_input(&id));
+    assert!(
+        log.borrow().is_empty(),
+        "nothing was reported while it was invalid"
+    );
+    assert!(!rt.form_state_of(node(&rt, "qty")).unwrap().invalid);
+}
+
+/// Rows measured in Edge for `:in-range`/`:out-of-range`.
+#[test]
+fn number_in_range_and_out_of_range_match_what_edge_measured() {
+    let rt = runtime("", || {
+        view! {
+            <form>
+                <input id="a" type="number" />
+                <input id="b" type="number" value="3" oninput={move |_v: String| {}} />
+                <input id="c" type="number" min="1" max="5" value="3" oninput={move |_v: String| {}} />
+                <input id="d" type="number" min="1" max="5" value="9" oninput={move |_v: String| {}} />
+                <input id="e" type="number" min="1" value="0" oninput={move |_v: String| {}} />
+                <input id="f" type="number" max="5" value="6" oninput={move |_v: String| {}} />
+                <input id="g" type="number" min="1" max="5" />
+                <input id="h" type="number" min="1" max="5" value="3" disabled="true" />
+                <input id="i" type="number" min="1" max="5" value="3" readonly="true" />
+                <input id="j" type="range" />
+                <input id="k" type="text" />
+            </form>
+        }
+    });
+    let ranges = |id: &str| {
+        let s = rt.form_state_of(node(&rt, id)).unwrap();
+        (s.in_range, s.out_of_range)
+    };
+    let (yes, no, out) = ((true, false), (false, false), (false, true));
+    for (id, expected) in [
+        ("a", yes),
+        ("b", no),
+        ("c", yes),
+        ("d", out),
+        ("e", out),
+        ("f", out),
+        ("g", yes),
+        ("h", no),
+        ("i", no),
+        ("j", yes),
+        ("k", no),
+    ] {
+        assert_eq!(ranges(id), expected, "input {id}");
+    }
+}

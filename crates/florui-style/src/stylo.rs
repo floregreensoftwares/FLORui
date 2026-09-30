@@ -212,6 +212,7 @@ impl StyloTree {
                     (form.read_write, ElementState::READWRITE),
                     (form.default, ElementState::DEFAULT),
                     (form.in_range, ElementState::INRANGE),
+                    (form.out_of_range, ElementState::OUTOFRANGE),
                 ] {
                     if on {
                         node_state |= flag;
