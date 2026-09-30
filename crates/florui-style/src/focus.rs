@@ -11,9 +11,14 @@
 
 use crate::tree::{Arena, NodeId};
 
+/// One step of a [`FocusPath`]: an element with an `id` is identified by it,
+/// so it survives siblings appearing or disappearing around it (a scrolled
+/// virtual list); one without is identified by its place among same-tag
+/// siblings.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct PathSegment {
     tag: &'static str,
+    id: Option<String>,
     ordinal: usize,
 }
 
@@ -32,9 +37,15 @@ impl FocusPath {
         let mut segments = Vec::new();
         let mut current = Some(id);
         while let Some(node) = current {
+            let element_id = arena.id_attr(node).map(str::to_owned);
             segments.push(PathSegment {
                 tag: arena.tag(node),
-                ordinal: Self::sibling_ordinal(arena, node),
+                ordinal: if element_id.is_some() {
+                    0
+                } else {
+                    Self::sibling_ordinal(arena, node)
+                },
+                id: element_id,
             });
             current = arena.parent(node);
         }
@@ -94,6 +105,48 @@ mod tests {
         assert_eq!(rebuilt.text_content(resolved), "Second");
     }
 
+    #[test]
+    fn an_element_with_an_id_is_followed_through_its_siblings_shifting() {
+        let before: Element = view! {
+            <div>
+                <button id="a">{"A"}</button>
+                <button id="b">{"B"}</button>
+            </div>
+        };
+        let after: Element = view! {
+            <div>
+                <button id="z">{"Z"}</button>
+                <button id="a">{"A"}</button>
+                <button id="b">{"B"}</button>
+            </div>
+        };
+        let arena = Arena::build(&before);
+        let b = arena.find(|a, id| a.id_attr(id) == Some("b")).unwrap();
+        let path = FocusPath::of(&arena, b);
+
+        let shifted = Arena::build(&after);
+        let candidates = shifted.find_all(|a, id| a.tag(id) == "button");
+        let resolved = path.resolve(&shifted, &candidates).unwrap();
+        assert_eq!(
+            shifted.text_content(resolved),
+            "B",
+            "not the button now in B's old place"
+        );
+    }
+
+    #[test]
+    fn an_element_without_an_id_is_still_found_by_its_place() {
+        let before: Element = view! { <div><button>{"One"}</button><button>{"Two"}</button></div> };
+        let after: Element =
+            view! { <div><button>{"Other"}</button><button>{"Moved"}</button></div> };
+        let arena = Arena::build(&before);
+        let second = arena.find_all(|a, id| a.tag(id) == "button")[1];
+        let path = FocusPath::of(&arena, second);
+        let rebuilt = Arena::build(&after);
+        let candidates = rebuilt.find_all(|a, id| a.tag(id) == "button");
+        let resolved = path.resolve(&rebuilt, &candidates).unwrap();
+        assert_eq!(rebuilt.text_content(resolved), "Moved");
+    }
     #[test]
     fn resolve_returns_none_once_the_element_is_gone() {
         let tree: Element = view! {
