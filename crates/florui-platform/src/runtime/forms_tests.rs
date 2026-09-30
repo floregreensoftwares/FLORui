@@ -1147,6 +1147,10 @@ fn validation_messages_match_what_edge_reported() {
                 <select id="sel" required="true"><option value="">{"--"}</option><option>{"x"}</option></select>
                 <textarea id="ta" required="true"></textarea>
                 <input id="mail" type="email" required="true" />
+                <input id="url-bad" type="url" value="foo" />
+                <input id="url-ok" type="url" value="a:b" />
+                <input id="tel" type="tel" value="not digits" />
+                <input id="find" type="search" required="true" />
                 <input id="pat" type="text" pattern="[a-z]+" value="A1" />
                 <input id="custom" type="text" required="true" custom_validity="Taken!" />
                 <input id="ok" type="text" value="fine" />
@@ -1170,6 +1174,8 @@ fn validation_messages_match_what_edge_reported() {
         ("sel", "Please select an item in the list."),
         ("ta", "Please fill out this field."),
         ("mail", "Please fill out this field."),
+        ("url-bad", "Please enter a URL."),
+        ("find", "Please fill out this field."),
         ("pat", "Please match the requested format."),
         ("custom", "Taken!"),
         ("n-under", "Value must be greater than or equal to 1."),
@@ -1187,7 +1193,9 @@ fn validation_messages_match_what_edge_reported() {
     for (id, message) in expected {
         assert_eq!(message_of(&rt, id).as_deref(), Some(message), "{id}");
     }
-    assert_eq!(message_of(&rt, "ok"), None, "a valid field has no message");
+    for id in ["ok", "url-ok", "tel"] {
+        assert_eq!(message_of(&rt, id), None, "{id} is valid");
+    }
 }
 
 #[test]

@@ -5,8 +5,8 @@
 use florui_style::NodeId;
 
 use crate::form_control::{
-    FormContext, Validity, is_valid_email, number_grid, number_limits, sanitize_value, validity,
-    value_kind,
+    FormContext, Validity, ValueKind, is_valid_email, number_grid, number_limits, sanitize_value,
+    validity, value_kind,
 };
 
 /// The first failing constraint's message, or `None` for a valid control.
@@ -29,6 +29,9 @@ pub(crate) fn validation_message(ctx: &FormContext, node: NodeId) -> Option<Stri
     }
     if result.type_mismatch {
         let kind = value_kind(arena, node);
+        if kind == ValueKind::Url {
+            return Some("Please enter a URL.".to_string());
+        }
         let value = sanitize_value(kind, arena.value_attr(node).unwrap_or(""));
         return Some(email_message(&value, arena.attr_flag(node, "multiple")));
     }

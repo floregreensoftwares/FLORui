@@ -122,8 +122,35 @@ pub(crate) static CONTROLS: &[ControlSpec] = &[
         submittable: true,
         validatable: true,
         text_field: true,
-        entries: email_entries,
+        entries: sanitized_entries,
         constraints: email_constraints,
+    },
+    ControlSpec {
+        tag: "input",
+        input_type: Some("url"),
+        submittable: true,
+        validatable: true,
+        text_field: true,
+        entries: sanitized_entries,
+        constraints: url_constraints,
+    },
+    ControlSpec {
+        tag: "input",
+        input_type: Some("tel"),
+        submittable: true,
+        validatable: true,
+        text_field: true,
+        entries: text_entries,
+        constraints: text_constraints,
+    },
+    ControlSpec {
+        tag: "input",
+        input_type: Some("search"),
+        submittable: true,
+        validatable: true,
+        text_field: true,
+        entries: text_entries,
+        constraints: text_constraints,
     },
     ControlSpec {
         tag: "input",
@@ -363,12 +390,14 @@ fn select_constraints(ctx: &FormContext, node: NodeId) -> Validity {
 pub(crate) enum ValueKind {
     Plain,
     Email { multiple: bool },
+    Url,
     Number,
 }
 
 pub(crate) fn value_kind(arena: &Arena, node: NodeId) -> ValueKind {
     match (arena.tag(node), arena.input_type(node)) {
         ("input", Some("number")) => ValueKind::Number,
+        ("input", Some("url")) => ValueKind::Url,
         ("input", Some("email")) => ValueKind::Email {
             multiple: arena.attr_flag(node, "multiple"),
         },
@@ -383,6 +412,12 @@ pub(crate) fn sanitize_value(kind: ValueKind, raw: &str) -> String {
     match kind {
         ValueKind::Plain => raw.to_string(),
         ValueKind::Number => parse_number(raw).map_or_else(String::new, |_| raw.to_string()),
+        ValueKind::Url => raw
+            .chars()
+            .filter(|c| !matches!(c, '\r' | '\n'))
+            .collect::<String>()
+            .trim_matches(|c: char| c.is_ascii_whitespace())
+            .to_string(),
         ValueKind::Email { multiple } => {
             let flat: String = raw.chars().filter(|c| !matches!(c, '\r' | '\n')).collect();
             if multiple {
@@ -419,20 +454,60 @@ pub(crate) fn is_valid_email(value: &str, multiple: bool) -> bool {
     }
 }
 
-fn email_value(ctx: &FormContext, node: NodeId) -> String {
+fn sanitized_value(ctx: &FormContext, node: NodeId) -> String {
     sanitize_value(value_kind(ctx.arena, node), text_value(ctx, node))
 }
 
-fn email_entries(ctx: &FormContext, node: NodeId) -> Vec<String> {
-    vec![email_value(ctx, node)]
+fn sanitized_entries(ctx: &FormContext, node: NodeId) -> Vec<String> {
+    vec![sanitized_value(ctx, node)]
 }
 
 fn email_constraints(ctx: &FormContext, node: NodeId) -> Validity {
-    let value = email_value(ctx, node);
+    let value = sanitized_value(ctx, node);
     let multiple = ctx.arena.attr_flag(node, "multiple");
     Validity {
         value_missing: is_required(ctx.arena, node) && value.is_empty(),
         type_mismatch: !is_valid_email(&value, multiple),
+        ..text_constraints(ctx, node)
+    }
+}
+
+/// Whether a sanitized `type=url` value parses as an absolute URL, as
+/// measured in Edge: a scheme (a letter, then letters, digits, `+`, `-` or
+/// `.`) and a colon, and for `http`, `https`, `ftp`, `ws` and `wss` a
+/// non-empty host after the slashes. An empty value is never a mismatch.
+pub(crate) fn is_valid_url(value: &str) -> bool {
+    if value.is_empty() {
+        return true;
+    }
+    let Some((scheme, rest)) = value.split_once(':') else {
+        return false;
+    };
+    let mut chars = scheme.chars();
+    let valid_scheme = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    if !valid_scheme {
+        return false;
+    }
+    let special = ["http", "https", "ftp", "ws", "wss"]
+        .iter()
+        .any(|s| scheme.eq_ignore_ascii_case(s));
+    if !special {
+        return true;
+    }
+    let after_slashes = rest.trim_start_matches(['/', '\\']);
+    let host = after_slashes
+        .split(['/', '\\', '?', '#'])
+        .next()
+        .unwrap_or("");
+    !host.is_empty()
+}
+
+fn url_constraints(ctx: &FormContext, node: NodeId) -> Validity {
+    let value = sanitized_value(ctx, node);
+    Validity {
+        value_missing: is_required(ctx.arena, node) && value.is_empty(),
+        type_mismatch: !is_valid_url(&value),
         ..text_constraints(ctx, node)
     }
 }
@@ -656,6 +731,42 @@ mod tests {
     }
 
     /// Rows measured in Edge for `type=number`.
+
+    #[test]
+    fn urls_are_valid_or_not_as_edge_measured() {
+        for valid in [
+            "",
+            "http://a",
+            "https://example.com/path?q=1",
+            "a:b",
+            "http:/x",
+            "ftp://x",
+            "mailto:me@x.com",
+            "javascript:1",
+            "HTTP://A.COM",
+            "file:///c:/x",
+            "data:text/plain,hi",
+            "http://[::1]",
+            "http://a..b",
+            "http://-a.com",
+            "http://exa mple.com",
+        ] {
+            assert!(is_valid_url(valid), "{valid:?} is a valid URL");
+        }
+        for invalid in [
+            "foo", "//x.com", "http://", "://x", "1:2", "x y:z", "h@st:1",
+        ] {
+            assert!(!is_valid_url(invalid), "{invalid:?} is not a URL");
+        }
+    }
+
+    #[test]
+    fn url_sanitizing_trims_and_drops_line_breaks() {
+        assert_eq!(
+            sanitize_value(ValueKind::Url, "  http://a.com \r\n"),
+            "http://a.com"
+        );
+    }
     #[test]
     fn number_sanitizing_keeps_only_valid_floats() {
         for keep in ["", "1", "1.5", "-2", "1e3", ".5", "1e5"] {
