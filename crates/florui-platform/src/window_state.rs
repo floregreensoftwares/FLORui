@@ -462,6 +462,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs a real Windows session: cargo test -p florui-platform -- --ignored"]
     fn probe_persistence_capability_writes_and_cleans_up_after_itself() {
         let identifier = "florui-platform-test-probe";
         assert!(probe_persistence_capability(identifier));

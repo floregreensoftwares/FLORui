@@ -32,6 +32,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
       - run: cargo test --workspace --doc
+      - name: Real-session tests (single-instance mutex, application-data folder)
+        run: cargo test -p florui-platform -- --ignored
 
   conformance:
     runs-on: windows-latest
