@@ -245,6 +245,7 @@ impl App {
             },
             size_cause: None,
             diagnostics: Vec::new(),
+            source: None,
         };
         InspectorModel {
             nodes: vec![node],
