@@ -1414,6 +1414,8 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         color,
         width: to_optional_length(&position.width),
         height: to_optional_length(&position.height),
+        max_width: to_max_length(&position.max_width),
+        max_height: to_max_length(&position.max_height),
         margin: Edges {
             top: to_optional_margin(&margin.margin_top),
             right: to_optional_margin(&margin.margin_right),
@@ -2082,6 +2084,20 @@ fn to_absolute_rgba(color: &style::color::AbsoluteColor) -> Rgba {
 
 fn to_channel(component: f32) -> u8 {
     (component.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+/// The pixel length of a `max-width`/`max-height`; `none` and anything
+/// unresolvable (a percentage, a `calc()`) impose no limit.
+fn to_max_length(
+    value: &style::values::generics::length::GenericMaxSize<
+        style::values::generics::NonNegative<style::values::computed::LengthPercentage>,
+    >,
+) -> Option<f32> {
+    use style::values::generics::length::GenericMaxSize;
+    match value {
+        GenericMaxSize::LengthPercentage(lp) => lp.0.to_length().map(|length| length.px()),
+        _ => None,
+    }
 }
 
 /// `None` for anything without a single resolved pixel length — `auto`,
