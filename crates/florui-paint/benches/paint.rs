@@ -209,11 +209,109 @@ fn bench_animated_groups(c: &mut Criterion) {
     group.finish();
 }
 
+/// Text that stays as `n` separate leaves: block-level `div`s and
+/// `inline-block` spans don't merge into one inline run the way plain
+/// `<span>`s do in [`bench_text`], so this isolates per-leaf glyph cost.
+fn separate_text_leaves(n: usize, tag: &'static str, class: &'static str) -> Element {
+    let children = (0..n)
+        .map(|i| {
+            Element::node(
+                tag,
+                vec![("class".into(), class.into())],
+                vec![Element::text(format!("item number {i}"))],
+            )
+        })
+        .collect();
+    Element::node("div", vec![("class".into(), "col".into())], children)
+}
+
+fn bench_text_separate_leaves(c: &mut Criterion) {
+    let mut group = c.benchmark_group("paint/text_separate_leaves");
+    group.sample_size(20);
+    // Wrapped into a grid so every leaf lands on the 2000x2000 canvas; in a
+    // single column 1,000 leaves overflow it and most are never painted.
+    let css = ".col { display: flex; flex-direction: row; flex-wrap: wrap; } \
+               .block { display: block; width: 120px; } \
+               .ib { display: inline-block; width: 120px; }";
+    for &n in &[1usize, 10, 100, 1000] {
+        for (name, tag, class) in [("block", "div", "block"), ("inline_block", "span", "ib")] {
+            let tree = separate_text_leaves(n, tag, class);
+            let (arena, styles, layouts) = arena_styles_layouts(&tree, css);
+            let mut font = Font::load_embedded();
+            group.bench_function(format!("{n}_{name}"), |b| {
+                b.iter(|| {
+                    paint_to_buffer(
+                        &mut font,
+                        2000,
+                        2000,
+                        Rgba::opaque(0, 0, 0),
+                        &arena,
+                        &styles,
+                        &layouts,
+                        1.0,
+                    )
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
+/// Isolates the whole-canvas clear from per-rectangle cost: an empty tree
+/// at each canvas size is essentially the clear alone, and a fixed 100
+/// rectangles across the same sizes shows whether total time tracks canvas
+/// area or rectangle count.
+fn bench_canvas_size(c: &mut Criterion) {
+    let mut group = c.benchmark_group("paint/canvas_size");
+    group.sample_size(20);
+    let empty = Element::node("div", Vec::new(), Vec::new());
+    let (empty_arena, empty_styles, empty_layouts) = arena_styles_layouts(&empty, "");
+    let rects = wide_tree(100);
+    let (arena, styles, layouts) = arena_styles_layouts(
+        &rects,
+        ".item { width: 10px; height: 10px; background-color: #335577; }",
+    );
+    let mut font = Font::load_embedded();
+    for &side in &[500u32, 1000, 2000] {
+        group.bench_function(format!("{side}px_empty"), |b| {
+            b.iter(|| {
+                paint_to_buffer(
+                    &mut font,
+                    side,
+                    side,
+                    Rgba::opaque(0, 0, 0),
+                    &empty_arena,
+                    &empty_styles,
+                    &empty_layouts,
+                    1.0,
+                )
+            });
+        });
+        group.bench_function(format!("{side}px_100_rects"), |b| {
+            b.iter(|| {
+                paint_to_buffer(
+                    &mut font,
+                    side,
+                    side,
+                    Rgba::opaque(0, 0, 0),
+                    &arena,
+                    &styles,
+                    &layouts,
+                    1.0,
+                )
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_deep_tree,
     bench_wide_tree,
     bench_text,
-    bench_animated_groups
+    bench_animated_groups,
+    bench_text_separate_leaves,
+    bench_canvas_size,
 );
 criterion_main!(benches);
