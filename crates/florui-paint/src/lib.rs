@@ -55,6 +55,7 @@
 
 mod blur;
 mod rounded;
+mod shadow_cache;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -2964,7 +2965,7 @@ struct BlurredShape {
     origin_y: i32,
     width: u32,
     height: u32,
-    coverage: Vec<u8>,
+    coverage: Rc<Vec<u8>>,
 }
 
 /// Stamps a `shape_width x shape_height` rect (at `shape_x`/`shape_y`,
@@ -3007,24 +3008,30 @@ fn rasterize_and_blur(
     let width = (region_width + 2.0 * pad).ceil().max(1.0) as u32;
     let height = (region_height + 2.0 * pad).ceil().max(1.0) as u32;
 
-    let mut coverage = vec![0u8; (width as usize) * (height as usize)];
+    // The mask depends only on the buffer size, sigma and the shape relative
+    // to the buffer, not on where the buffer lands on the canvas, so equal
+    // shadows at whole-pixel offsets share one (see `shadow_cache`).
     let local = shape.translated(-(origin_x as f32), -(origin_y as f32));
-    if local.is_square() {
-        stamp_rect(
-            &mut coverage,
-            width,
-            height,
-            local.x,
-            local.y,
-            local.width,
-            local.height,
-            255,
-        );
-    } else {
-        stamp_rounded(&mut coverage, width, height, &local);
-    }
-
-    blur::gaussian_blur_in_place(&mut coverage, width, height, sigma);
+    let key = shadow_cache::ShadowKey::new(width, height, sigma, &local);
+    let coverage = shadow_cache::coverage(key, || {
+        let mut coverage = vec![0u8; (width as usize) * (height as usize)];
+        if local.is_square() {
+            stamp_rect(
+                &mut coverage,
+                width,
+                height,
+                local.x,
+                local.y,
+                local.width,
+                local.height,
+                255,
+            );
+        } else {
+            stamp_rounded(&mut coverage, width, height, &local);
+        }
+        blur::gaussian_blur_in_place(&mut coverage, width, height, sigma);
+        coverage
+    });
 
     Some(BlurredShape {
         origin_x,
@@ -3224,6 +3231,14 @@ fn composite_blurred_shadow(
     for local_y in 0..blurred.height {
         let canvas_y = blurred.origin_y as i64 + local_y as i64;
         for local_x in 0..blurred.width {
+            // Checked first: most of a mask is zero, and `allowed` (a
+            // rounded-outline test) is by far the dearest part of a pixel.
+            let raw = blurred.coverage[(local_y * blurred.width + local_x) as usize];
+            let coverage = if invert { 255 - raw } else { raw };
+            if coverage == 0 {
+                continue;
+            }
+
             let canvas_x = blurred.origin_x as i64 + local_x as i64;
             if !allowed(canvas_x as f32, canvas_y as f32) {
                 continue;
@@ -3236,12 +3251,6 @@ fn composite_blurred_shadow(
                 || buffer_y < 0
                 || buffer_y >= surface_height
             {
-                continue;
-            }
-
-            let raw = blurred.coverage[(local_y * blurred.width + local_x) as usize];
-            let coverage = if invert { 255 - raw } else { raw };
-            if coverage == 0 {
                 continue;
             }
 
@@ -6939,6 +6948,122 @@ mod tests {
             [0x40, 0x40, 0x40],
             "mid-gray (0x80) faded to half opacity against black"
         );
+    }
+
+    /// A white page with one 20x20 rounded, blur-shadowed card at each of
+    /// `positions`, laid out by hand.
+    fn shadowed_cards(positions: &[(f32, f32)]) -> Canvas {
+        let cards = positions
+            .iter()
+            .map(|_| view! { <div class="card"></div> })
+            .collect::<Vec<_>>();
+        let tree = Element::node("div", vec![("class".into(), "page".into())], cards);
+        let css = ".page { background-color: #ffffff; } \
+                   .card { background-color: #3366cc; border-radius: 6px; \
+                   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5); }";
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let page = arena.roots()[0];
+        let mut layouts = HashMap::new();
+        layouts.insert(
+            page,
+            BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 120.0,
+            },
+        );
+        for (&card, &(x, y)) in arena.children(page).iter().zip(positions) {
+            layouts.insert(
+                card,
+                BoxLayout {
+                    x,
+                    y,
+                    width: 20.0,
+                    height: 20.0,
+                },
+            );
+        }
+        let mut font = Font::load_embedded();
+        paint_to_buffer(
+            &mut font,
+            200,
+            120,
+            Rgba::opaque(255, 255, 255),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        )
+    }
+
+    #[test]
+    fn equal_shadows_at_whole_pixel_offsets_share_one_blurred_mask() {
+        shadow_cache::clear_on_this_thread();
+        let before = shadow_cache::computed_on_this_thread();
+        let positions: Vec<(f32, f32)> = (0..6)
+            .flat_map(|row| {
+                (0..6).map(move |col| (20.0 + col as f32 * 30.0, 15.0 + row as f32 * 10.0))
+            })
+            .collect();
+
+        shadowed_cards(&positions);
+
+        assert_eq!(
+            shadow_cache::computed_on_this_thread() - before,
+            1,
+            "36 identical cards blur one mask"
+        );
+    }
+
+    #[test]
+    fn a_shadow_painted_from_the_cache_is_identical_to_a_cold_one() {
+        let positions = [(20.0, 20.0), (60.5, 20.25), (100.0, 50.0), (20.0, 70.0)];
+        shadow_cache::clear_on_this_thread();
+        let cold = shadowed_cards(&positions);
+        let warm = shadowed_cards(&positions);
+        shadow_cache::clear_on_this_thread();
+        let cold_again = shadowed_cards(&positions);
+
+        assert_eq!(
+            cold.data(),
+            warm.data(),
+            "a hit paints what computing paints"
+        );
+        assert_eq!(cold.data(), cold_again.data());
+    }
+
+    #[test]
+    fn a_fractional_offset_gets_its_own_mask() {
+        shadow_cache::clear_on_this_thread();
+        let before = shadow_cache::computed_on_this_thread();
+
+        shadowed_cards(&[(20.0, 20.0), (60.0, 20.0), (100.5, 20.0), (140.5, 20.0)]);
+
+        assert_eq!(
+            shadow_cache::computed_on_this_thread() - before,
+            2,
+            "whole-pixel and half-pixel placements are different masks, each shared"
+        );
+    }
+
+    #[test]
+    fn a_repeated_paint_computes_nothing_new() {
+        shadow_cache::clear_on_this_thread();
+        shadowed_cards(&[(20.0, 20.0), (70.0, 40.0)]);
+        let after_first = shadow_cache::computed_on_this_thread();
+
+        shadowed_cards(&[(20.0, 20.0), (70.0, 40.0)]);
+
+        assert_eq!(shadow_cache::computed_on_this_thread(), after_first);
     }
 
     fn backdrop_over_red_buffer(backdrop_css: &str) -> Canvas {
