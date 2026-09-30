@@ -6,6 +6,10 @@
 //! Toggle "mark form dirty" on Home, then try navigating away -- the
 //! guard denies it until you clear the flag again.
 //!
+//! Focus follows the history: go to a settings page with its nav button and
+//! focus lands on that page's own control; press Back and focus returns to
+//! the nav button you left from.
+//!
 //! ```text
 //! cargo run --example routing -p florui-example-app
 //! ```
@@ -18,7 +22,7 @@ use florui_reactive::executor::{Executor, LocalExecutor};
 use florui_reactive::{provide_context, use_ref, use_signal};
 use florui_routing::{
     ExternalNavigation, Guard, GuardDecision, Routable, RouteError, link, provide_router,
-    route_outlet, use_route, use_router,
+    route_outlet, use_route, use_route_focus, use_router,
 };
 use florui_style::Rgba;
 
@@ -163,11 +167,26 @@ fn root() -> Element {
             move || dirty.set(!dirty.get())
         };
 
+        // Focus follows the history: Back and Forward return to the control
+        // the user left each page on (the nav button they pressed, found by
+        // its id), and a fresh navigation lands on the page's own first
+        // control.
+        use_route_focus::<AppRoute>(|route| {
+            Some(
+                match route {
+                    AppRoute::Home => "page-home",
+                    AppRoute::Settings(SettingsRoute::General) => "page-general",
+                    AppRoute::Settings(SettingsRoute::Profile) => "page-profile",
+                }
+                .to_owned(),
+            )
+        });
+
         let page = route_outlet(&current, |route| match route {
             AppRoute::Home => view! {
-                <div class="page-content">
+                <div id="page-home" class="page-content">
                     <p class="label">{"Home"}</p>
-                    <button class="button" onclick={toggle_dirty}>
+                    <button id="dirty-toggle" class="button" onclick={toggle_dirty}>
                         {if dirty.get() { "Form is dirty (click to clear)" } else { "Mark form dirty" }}
                     </button>
                     {link(&AppRoute::Settings(SettingsRoute::Profile), || {
@@ -177,13 +196,15 @@ fn root() -> Element {
             },
             AppRoute::Settings(sub) => route_outlet(sub, |sub| match sub {
                 SettingsRoute::General => view! {
-                    <div class="page-content">
+                    <div id="page-general" class="page-content">
                         <p class="label">{"Settings / General"}</p>
+                        <button id="general-action" class="button">{"General action"}</button>
                     </div>
                 },
                 SettingsRoute::Profile => view! {
-                    <div class="page-content">
+                    <div id="page-profile" class="page-content">
                         <p class="label">{"Settings / Profile"}</p>
+                        <button id="profile-action" class="button">{"Profile action"}</button>
                     </div>
                 },
             }),
@@ -192,11 +213,15 @@ fn root() -> Element {
         view! {
             <div class="page">
                 <div class="nav">
-                    <button class="button" onclick={go_home}>{"Home"}</button>
-                    <button class="button" onclick={go_general}>{"Settings: General"}</button>
-                    <button class="button" onclick={go_profile}>{"Settings: Profile"}</button>
-                    <button class="button" onclick={go_back}>{"Back"}</button>
-                    <button class="button" onclick={go_forward}>{"Forward"}</button>
+                    <button id="nav-home" class="button" onclick={go_home}>{"Home"}</button>
+                    <button id="nav-general" class="button" onclick={go_general}>
+                        {"Settings: General"}
+                    </button>
+                    <button id="nav-profile" class="button" onclick={go_profile}>
+                        {"Settings: Profile"}
+                    </button>
+                    <button id="nav-back" class="button" onclick={go_back}>{"Back"}</button>
+                    <button id="nav-forward" class="button" onclick={go_forward}>{"Forward"}</button>
                 </div>
                 <p class="hint">{format!("Current route: {}", current.format())}</p>
                 <p class="hint">{format!("Last navigation outcome: {}", last_outcome.get())}</p>
