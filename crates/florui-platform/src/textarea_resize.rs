@@ -1,8 +1,6 @@
-//! A `<textarea>` the user has resized by dragging its corner keeps that
-//! size, as a browser does by writing an inline `width`/`height` on it. The
-//! runtime remembers the content-box size per textarea `id` and this stamps
-//! it onto the tree before it is built, after the author's own `style`, so
-//! it wins over whatever size the app gave.
+//! Keeps a resized `<textarea>`'s size, as a browser's inline `width`/
+//! `height` does: the runtime remembers the content-box size per `id` and
+//! this stamps it after the author's own `style`, so it wins.
 
 use std::collections::HashMap;
 

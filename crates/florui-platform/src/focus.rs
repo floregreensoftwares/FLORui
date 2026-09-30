@@ -41,8 +41,6 @@ pub(crate) fn is_range_input_type(input_type: Option<&str>) -> bool {
     input_type == Some("range")
 }
 
-/// Whether a `<label>` can hand its click to `id`: an `<input>`, a
-/// `<button>`, or a `<select>`.
 /// Whether `id` is a text-editing control: a `<textarea>`, or an `<input>`
 /// of an editable type.
 pub(crate) fn is_text_control(arena: &Arena, id: NodeId) -> bool {
@@ -50,6 +48,8 @@ pub(crate) fn is_text_control(arena: &Arena, id: NodeId) -> bool {
         || (arena.tag(id) == "input" && is_editable_input_type(arena.input_type(id)))
 }
 
+/// Whether a `<label>` can hand its click to `id`: an `<input>`, a
+/// `<button>`, a `<select>` or a `<textarea>`.
 pub(crate) fn is_labelable(arena: &Arena, id: NodeId) -> bool {
     matches!(arena.tag(id), "input" | "button" | "select" | "textarea")
 }

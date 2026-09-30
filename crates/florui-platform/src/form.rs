@@ -100,10 +100,9 @@ pub(crate) fn default_button(arena: &Arena, form: NodeId) -> Option<NodeId> {
         .find(|&node| button_kind(arena, node) == Some(ButtonKind::Submit))
 }
 
-/// Whether Enter in `field` submits its form when the form has no submit
-/// button: only when it is the sole field that blocks implicit submission.
-/// Measured in Edge: single-line text fields (text, password, email,
-/// number) block it; a `<textarea>` and a hidden input do not.
+/// Whether Enter in `field` submits a form with no submit button: only when
+/// it is the sole single-line text field (a `<textarea>` and a hidden input
+/// don't count; measured in Edge).
 pub(crate) fn is_only_text_field(arena: &Arena, form: NodeId, field: NodeId) -> bool {
     controls(arena, form)
         .into_iter()
@@ -119,12 +118,10 @@ pub(crate) fn has_form_state(arena: &Arena, node: NodeId) -> bool {
     spec(arena, node).is_some() || matches!(arena.tag(node), "form" | "fieldset")
 }
 
-/// The pseudo-class state of `node`, or `None` for anything that has no
-/// form state. `user_validated` is whether `:user-valid`/`:user-invalid`
-/// may match yet. Matches what Chromium reports: barred controls
-/// (disabled, read-only, a reset button) are neither `:valid` nor
-/// `:invalid`, and a `<form>`/`<fieldset>` is `:invalid` while any of its
-/// controls is.
+/// The pseudo-class state of `node`, `None` if it has none. Barred controls
+/// (disabled, read-only, a reset button) are neither `:valid` nor `:invalid`;
+/// a `<form>`/`<fieldset>` is `:invalid` while any control is.
+/// `user_validated` says whether `:user-valid`/`:user-invalid` may match.
 pub(crate) fn form_state(
     ctx: &FormContext,
     node: NodeId,
@@ -204,11 +201,10 @@ fn is_default(arena: &Arena, node: NodeId) -> bool {
     }
 }
 
-/// `(:in-range, :out-of-range)` for `node`. Measured in Edge: a `range`
-/// input is always in range; a `number` input is out of range when it
-/// violates `min`/`max`, and in range when empty or when it has a limit it
-/// respects (a limitless number with a value matches neither); anything
-/// else, or a control that is not a validation candidate, matches neither.
+/// `(:in-range, :out-of-range)` for `node`, as measured in Edge: `range` is
+/// always in range; `number` is out of range past `min`/`max`, in range when
+/// empty or when it has a limit it respects, else neither (as is anything
+/// that isn't a validation candidate).
 fn range_state(ctx: &FormContext, node: NodeId, candidate: bool) -> (bool, bool) {
     let arena = ctx.arena;
     if !candidate {
