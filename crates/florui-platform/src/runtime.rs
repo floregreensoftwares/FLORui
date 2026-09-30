@@ -22,6 +22,7 @@ use florui_style::{
 use taffy::prelude::*;
 
 use crate::focus;
+use crate::menu_keys;
 use crate::position_observer::PositionObserverRegistry;
 use crate::scroll::ScrollRegistry;
 use crate::size_observer::SizeObserverRegistry;
@@ -78,6 +79,8 @@ pub struct UiRuntime {
     /// many modals were open as of the previous render, the authoritative
     /// "did one just open/close" signal. See [`Self::resolve_focus`].
     modal_return_paths: Vec<Option<FocusPath>>,
+    /// The same for open menu popovers, see [`Self::resolve_menu_focus`].
+    menu_return_paths: Vec<Option<FocusPath>>,
     /// The range input a pointer drag is currently moving, if any — a
     /// [`FocusPath`], not a plain [`NodeId`], because an accepted drag
     /// value re-renders (a fresh [`Self::arena`]) *while the drag is still
@@ -276,6 +279,7 @@ impl UiRuntime {
             focused_node: None,
             focus_visible: false,
             modal_return_paths: Vec::new(),
+            menu_return_paths: Vec::new(),
             range_dragging: None,
             arena: Arena::build(&Element::Fragment(Vec::new())),
             styles: HashMap::new(),
@@ -1181,7 +1185,40 @@ impl UiRuntime {
             let candidates = within_innermost(self);
             self.resolve_against(&candidates);
         }
+        self.resolve_menu_focus();
         self.rebuild_interaction();
+    }
+
+    /// Focus on the menu popovers ([`crate::menu_keys`]): a menu that just
+    /// opened takes focus on its first item, remembering what held it; one
+    /// that just closed gives focus back to that control, unless the user
+    /// already moved focus elsewhere (a click outside keeps its target).
+    fn resolve_menu_focus(&mut self) {
+        let menus = menu_keys::open_menus(&self.arena);
+        let before = self.menu_return_paths.len();
+        if menus.len() > before {
+            for _ in before..menus.len() {
+                self.menu_return_paths.push(self.focused_path.clone());
+            }
+            let first = menus
+                .last()
+                .and_then(|&(_, menu)| menu_keys::items(&self.arena, menu).first().copied());
+            if let Some(first) = first {
+                self.focused_path = Some(FocusPath::of(&self.arena, first));
+                self.focused_node = Some(first);
+                self.focus_visible = true;
+            }
+        } else if menus.len() < before {
+            let restore = self.menu_return_paths.drain(menus.len()..).next().flatten();
+            if self.focused_node.is_none()
+                && let Some(path) = restore
+            {
+                let candidates = focus::focus_candidates(&self.arena);
+                self.focused_path = Some(path);
+                self.resolve_against(&candidates);
+                self.focus_visible = self.focused_node.is_some();
+            }
+        }
     }
 
     /// Rebuilds `self.interaction` from whatever's currently live

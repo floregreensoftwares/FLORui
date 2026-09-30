@@ -30,8 +30,10 @@
 //! lands later in `arena.overlay_roots()` — "last" is the innermost/
 //! most-recently-opened one.
 //!
-//! Not done here: focus-on-open, placements beyond flip/shift (no
-//! `autoPlacement`, arrow element, or `size` middleware).
+//! A popover whose content holds a `role="menu"` element is a menu and gets
+//! the keyboard model of [`crate::menu_keys`]; any other popover takes no
+//! focus. Not done here: placements beyond flip/shift (no `autoPlacement`,
+//! arrow element, or `size` middleware).
 
 use florui::{Children, Element, Event, Handler, component};
 use florui_reactive::use_signal;

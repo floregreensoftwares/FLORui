@@ -16,6 +16,7 @@ mod form;
 mod form_control;
 mod icon;
 mod image;
+mod menu_keys;
 mod position_observer;
 mod runtime;
 mod scroll;

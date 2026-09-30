@@ -46,6 +46,7 @@ use crate::dpi::{self, ViewportScale};
 use crate::drag_drop::{self, DragDropRegistration};
 use crate::file_dialog::{OpenFileDialogOutcome, SaveFileDialogOutcome};
 use crate::gpu::{self, GpuPresenter};
+use crate::menu_keys::{self, MenuKey, MenuMove};
 use crate::single_instance::{self, HandoffOutcome, InstanceRole};
 use crate::window_controls::{InputMode, ScreenRect, WindowControls, resize_direction_at};
 use crate::window_state::{self, WindowPersistence};
@@ -2505,11 +2506,29 @@ impl WindowState {
                 return;
             }
         }
+        // Menu navigation repeats with a held key, like a native menu.
+        if let Key::Named(key) = event.logical_key {
+            let menu_key = match key {
+                NamedKey::ArrowDown => Some(MenuKey::Next),
+                NamedKey::ArrowUp => Some(MenuKey::Previous),
+                NamedKey::Home => Some(MenuKey::First),
+                NamedKey::End => Some(MenuKey::Last),
+                NamedKey::ArrowRight => Some(MenuKey::Open),
+                NamedKey::ArrowLeft => Some(MenuKey::Close),
+                _ => None,
+            };
+            if let Some(menu_key) = menu_key
+                && self.handle_menu_key(menu_key)
+            {
+                return;
+            }
+        }
         if event.repeat {
             return;
         }
         match event.logical_key {
             Key::Named(NamedKey::Tab) => {
+                self.close_menus_for_tab();
                 let previous = self.focused_text_input();
                 let moved = if self.modifiers.shift_key() {
                     self.runtime.focus_previous()
@@ -2629,6 +2648,57 @@ impl WindowState {
             }
             _ => {}
         }
+    }
+
+    /// A menu key with focus inside an open menu (see [`crate::menu_keys`]);
+    /// `true` if it was consumed. Inside a menu the arrows never fall through
+    /// to radio groups or selects.
+    fn handle_menu_key(&mut self, key: MenuKey) -> bool {
+        let Some(focused) = self.runtime.focused() else {
+            return false;
+        };
+        let (in_menu, action) = {
+            let (arena, ..) = self.runtime.geometry();
+            (
+                menu_keys::focus_in_menu(arena, focused),
+                menu_keys::menu_move(arena, focused, key),
+            )
+        };
+        match action {
+            Some(MenuMove::Focus(node)) => {
+                self.runtime.set_focused(Some(node), true);
+                self.update_and_request_redraw();
+            }
+            Some(MenuMove::Activate(node)) => self.activate_with(node, true),
+            Some(MenuMove::Dismiss(root)) => {
+                self.runtime.dispatch_event(root, "dismiss");
+            }
+            None => {}
+        }
+        in_menu
+    }
+
+    /// Tab leaves a menu: every open menu closes, focus returns to the
+    /// control that opened the outermost one, and Tab continues from there.
+    fn close_menus_for_tab(&mut self) {
+        let Some(focused) = self.runtime.focused() else {
+            return;
+        };
+        let roots = {
+            let (arena, ..) = self.runtime.geometry();
+            if menu_keys::focus_in_menu(arena, focused) {
+                menu_keys::menu_roots(arena)
+            } else {
+                Vec::new()
+            }
+        };
+        if roots.is_empty() {
+            return;
+        }
+        for root in roots.into_iter().rev() {
+            self.runtime.dispatch_event(root, "dismiss");
+        }
+        self.update_and_request_redraw();
     }
 
     /// Dismisses whichever popover-shaped overlay root contains `node` —
@@ -2759,11 +2829,9 @@ impl WindowState {
     /// [`florui_text::editing::TextEditOp`] (or an undo/redo/clipboard
     /// action), applies it through [`UiRuntime::text_input_registry`],
     /// and commits an accepted text change back through whichever of the
-    /// node's own `Binding`/`ValueHandler` it carries — see
-    /// slots-and-bindings.md's "Optional convenience and explicit
-    /// control" for why exactly one of those two is ever present, never
-    /// both. Silently does nothing for a key this slice doesn't map to a
-    /// text-editing action (arrows/Home/End/Backspace/Delete/typed
+    /// node's own `Binding`/`ValueHandler` it carries (exactly one of
+    /// those two is ever present, never both). Silently does nothing for
+    /// a key that isn't mapped to a text-editing action (arrows/Home/End/Backspace/Delete/typed
     /// characters, their Ctrl/Shift variants, Ctrl+A, Ctrl+Z/Shift+Z/Y,
     /// Ctrl+C/X/V) or for a node missing its own `id` attribute (see
     /// `crate::text_input`'s own module doc).
