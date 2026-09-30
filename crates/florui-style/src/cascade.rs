@@ -523,6 +523,22 @@ pub struct ComputedStyle {
     /// crate can actually act on (see [`Appearance`]'s own doc for why
     /// it isn't the real property).
     pub appearance: Appearance,
+    /// Which way a `<textarea>` can be resized by dragging its corner,
+    /// read from `--florui-resize` (real `resize` is not in the servo
+    /// build of the style engine, the same reason as `appearance`).
+    pub resize: Resize,
+}
+
+/// The values of `resize`, spelled through `--florui-resize`. Only a
+/// `<textarea>` acts on it; anything unset or unrecognized is `Both`, which
+/// is what a textarea has by default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Resize {
+    #[default]
+    Both,
+    Vertical,
+    Horizontal,
+    None,
 }
 
 /// A narrow stand-in for real CSS's `appearance` property: whether a

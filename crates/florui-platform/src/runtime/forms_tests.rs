@@ -1425,3 +1425,81 @@ fn a_single_line_field_scrolls_sideways_to_its_caret_and_so_does_a_password() {
         "password back at the start"
     );
 }
+
+#[test]
+fn scroll_metrics_exist_only_while_the_text_overflows_and_scroll_to_clamps() {
+    let mut rt = textarea_runtime("2");
+    let id = textarea_id(&rt);
+    let registry = rt.text_input_registry();
+    let (_, _, _, font) = rt.geometry_and_font_mut();
+    assert_eq!(
+        registry.scroll_metrics(&id, font),
+        None,
+        "empty: nothing to scroll"
+    );
+    type_into(&mut rt, &id, "1\n2\n3\n4\n5\n6\n7\n8");
+    let (_, _, _, font) = rt.geometry_and_font_mut();
+    let (scroll, max) = registry.scroll_metrics(&id, font).expect("overflowing");
+    assert!(max > 0.0 && scroll <= max);
+    assert!(registry.scroll_to(&id, 0.0, font));
+    assert_eq!(registry.scroll_offset(&id).1, 0.0);
+    assert!(registry.scroll_to(&id, 9999.0, font));
+    assert!(
+        (registry.scroll_offset(&id).1 - max).abs() < 0.01,
+        "clamped to the end"
+    );
+}
+
+#[test]
+fn a_resized_textarea_keeps_its_size_across_renders_and_shows_the_corner_by_default() {
+    let mut rt = textarea_runtime("2");
+    let field = node(&rt, "ta");
+    let before = rt.geometry().2[&field].height;
+    rt.set_resized(&textarea_id(&rt), (150.0, before + 40.0));
+    rt.update(viewport());
+    let field = node(&rt, "ta");
+    let (_, styles, layouts) = rt.geometry();
+    assert_eq!(
+        layouts[&field].width,
+        150.0 + 6.0,
+        "the dragged width plus border and padding"
+    );
+    assert!(layouts[&field].height > before, "taller than before");
+    assert_eq!(
+        styles[&field].resize,
+        florui_style::Resize::Both,
+        "resizable by default"
+    );
+    rt.update(viewport());
+    let field = node(&rt, "ta");
+    assert_eq!(rt.geometry().2[&field].width, 156.0, "it stays that size");
+}
+
+#[test]
+fn florui_resize_none_turns_the_corner_off_and_vertical_only_allows_height() {
+    let rt = runtime(
+        ".fixed { --florui-resize: none; } .tall { --florui-resize: vertical; }",
+        || {
+            view! {
+                <form>
+                    <textarea id="fixed" class="fixed"></textarea>
+                    <textarea id="tall" class="tall"></textarea>
+                    <textarea id="plain"></textarea>
+                </form>
+            }
+        },
+    );
+    let (_, styles, _) = rt.geometry();
+    assert_eq!(
+        styles[&node(&rt, "fixed")].resize,
+        florui_style::Resize::None
+    );
+    assert_eq!(
+        styles[&node(&rt, "tall")].resize,
+        florui_style::Resize::Vertical
+    );
+    assert_eq!(
+        styles[&node(&rt, "plain")].resize,
+        florui_style::Resize::Both
+    );
+}

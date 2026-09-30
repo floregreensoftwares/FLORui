@@ -50,7 +50,7 @@ pub use animation::AnimationTimeline;
 pub use cascade::{
     Appearance, AspectRatio, BorderSide, BoxShadow, ComputedStyle, ContainerType, ContentAlignment,
     Corners, Display, Edges, FilterFunction, FlexDirection, FlexWrap, FontFamily, GridPlacement,
-    GridTrackSize, ItemAlignment, LengthPercentage, ObjectFit, Position, TransformFunction,
+    GridTrackSize, ItemAlignment, LengthPercentage, ObjectFit, Position, Resize, TransformFunction,
     Viewport, compute, compute_with_container_query_signature,
 };
 pub use color::{ColorParseError, Rgba, parse_hex_color};

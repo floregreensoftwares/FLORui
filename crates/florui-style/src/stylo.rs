@@ -59,7 +59,7 @@ use crate::cascade::{
     BoxShadow as FlorBoxShadow, ComputedStyle, ContainerType as FlorContainerType,
     ContentAlignment, Corners, Display as FlorDisplay, Edges, FilterFunction as FlorFilterFunction,
     FlexDirection, FlexWrap, FontFamily as FlorFontFamily, ItemAlignment,
-    LengthPercentage as FlorLengthPercentage, ObjectFit as FlorObjectFit,
+    LengthPercentage as FlorLengthPercentage, ObjectFit as FlorObjectFit, Resize as FlorResize,
     TransformFunction as FlorTransformFunction, Viewport as FlorViewport,
 };
 use crate::color::Rgba;
@@ -1525,6 +1525,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         object_position: to_object_position(&position.object_position),
         aspect_ratio: to_aspect_ratio(&position.aspect_ratio),
         appearance: to_appearance(values),
+        resize: to_resize(values),
     }
 }
 
@@ -1557,6 +1558,30 @@ fn to_appearance(values: &ComputedValues) -> FlorAppearance {
         FlorAppearance::None
     } else {
         FlorAppearance::Auto
+    }
+}
+
+/// Reads `--florui-resize` the way [`to_appearance`] reads its property.
+fn to_resize(values: &ComputedValues) -> FlorResize {
+    use style::properties_and_values::registry::PropertyRegistrationData;
+    use style_traits::ToCss;
+
+    let name = Atom::from("florui-resize");
+    let Some(value) = values
+        .custom_properties()
+        .get(PropertyRegistrationData::unregistered(), &name)
+    else {
+        return FlorResize::Both;
+    };
+    let mut css = String::new();
+    if value.to_css(&mut CssWriter::new(&mut css)).is_err() {
+        return FlorResize::Both;
+    }
+    match css.trim() {
+        "none" => FlorResize::None,
+        "vertical" => FlorResize::Vertical,
+        "horizontal" => FlorResize::Horizontal,
+        _ => FlorResize::Both,
     }
 }
 

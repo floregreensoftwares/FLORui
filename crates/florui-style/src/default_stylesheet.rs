@@ -243,6 +243,11 @@ const CSS: &str = "
         transform: rotate(45deg);
     }
 
+    input:not([type=\"checkbox\"]):not([type=\"radio\"]):not([type=\"range\"]):not([type=\"hidden\"]):enabled:hover,
+    textarea:enabled:hover {
+        border-color: #4f4f4f;
+    }
+
     textarea {
         display: inline-block;
         border: 1px solid #767676;
@@ -709,5 +714,62 @@ mod tests {
         );
         let style = &computed[&arena.roots()[0]];
         assert_close(style.font_size, 40.0, "author-overridden font-size");
+    }
+
+    /// Measured in Edge: a text control's border goes from `#767676` to
+    /// `#4f4f4f` under the pointer; a checkbox, a disabled field, and an
+    /// author-styled border are left alone.
+    #[test]
+    fn a_hovered_text_control_darkens_its_border_but_nothing_else_does() {
+        let tree: Element = view! {
+            <div>
+                <input id="t" type="text" />
+                <textarea id="a"></textarea>
+                <input id="c" type="checkbox" />
+                <input id="d" type="text" disabled="true" />
+                <input id="m" type="text" style="border: 1px solid #ff0000;" />
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let rules = parse_stylesheet("").unwrap();
+        let border_of = |id: &str, hovered: bool| {
+            let node = arena.find(|a, n| a.id_attr(n) == Some(id)).unwrap();
+            let state = if hovered {
+                InteractionState::new().with_hovered(node)
+            } else {
+                InteractionState::new()
+            };
+            let computed = compute(
+                &arena,
+                &rules,
+                &state,
+                Viewport::default(),
+                &mut crate::AnimationTimeline::default(),
+            );
+            computed[&node].border.top.color
+        };
+        let (idle, hover) = (
+            crate::Rgba::opaque(118, 118, 118),
+            crate::Rgba::opaque(79, 79, 79),
+        );
+        for id in ["t", "a"] {
+            assert_eq!(border_of(id, false), idle, "{id} idle");
+            assert_eq!(border_of(id, true), hover, "{id} hovered");
+        }
+        assert_eq!(
+            border_of("c", true),
+            border_of("c", false),
+            "a checkbox is untouched"
+        );
+        assert_eq!(
+            border_of("d", true),
+            border_of("d", false),
+            "a disabled field is untouched"
+        );
+        assert_eq!(
+            border_of("m", true),
+            crate::Rgba::opaque(255, 0, 0),
+            "an author border wins"
+        );
     }
 }

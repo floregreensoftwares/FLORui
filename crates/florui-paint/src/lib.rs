@@ -354,6 +354,10 @@ pub struct TextInputPaint {
     /// The placeholder text shaped for painting, `Some` while the field is
     /// empty and has one.
     pub placeholder: Option<Vec<florui_text::ShapedRun>>,
+    /// A textarea's vertical scrollbar, `Some` while its text overflows.
+    pub scrollbar: Option<ScrollbarPaint>,
+    /// Whether a textarea shows its resize corner.
+    pub resizer: bool,
     pub runs: Vec<florui_text::ShapedRun>,
     pub caret_rect: Option<(f32, f32, f32, f32)>,
     pub selection_rects: Vec<(f32, f32, f32, f32)>,
@@ -728,6 +732,133 @@ const SPINNER_HOVER: Rgba = Rgba::opaque(99, 99, 99);
 /// field's own text color is.
 const PLACEHOLDER_COLOR: Rgba = Rgba::opaque(117, 117, 117);
 
+/// Width of a textarea's vertical scrollbar, and of the resize corner
+/// that shortens it.
+pub const SCROLLBAR_WIDTH: f32 = 15.0;
+const SCROLLBAR_BUTTON: f32 = 18.0;
+const SCROLLBAR_MIN_THUMB: f32 = 17.0;
+const SCROLLBAR_THUMB_WIDTH: f32 = 9.0;
+const SCROLLBAR_TRACK: Rgba = Rgba::opaque(252, 252, 252);
+const SCROLLBAR_IDLE: Rgba = Rgba::opaque(139, 139, 139);
+const SCROLLBAR_ACTIVE: Rgba = Rgba::opaque(99, 99, 99);
+const RESIZER_COLOR: Rgba = Rgba::opaque(101, 101, 101);
+
+/// The part of a textarea's scrollbar a point is over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollbarPart {
+    None,
+    ButtonUp,
+    ButtonDown,
+    Thumb,
+    TrackBefore,
+    TrackAfter,
+}
+
+/// A textarea's scrollbar as painted: how far it is scrolled and how far it
+/// can go, the visible height, and the part to draw in its active color
+/// (under the pointer, or being dragged).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollbarPaint {
+    pub scroll: f32,
+    pub max_scroll: f32,
+    pub viewport: f32,
+    pub active: ScrollbarPart,
+}
+
+/// Where a textarea's scrollbar parts are, in logical pixels relative to
+/// its border box, measured in Edge: 15px wide against the right border,
+/// two 18px buttons, and a thumb 9px wide, at least 17px long, riding the
+/// track between them. A resize corner takes the last 15px of height.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScrollbarGeometry {
+    pub up: (f32, f32, f32, f32),
+    pub down: (f32, f32, f32, f32),
+    pub thumb: (f32, f32, f32, f32),
+    pub track_top: f32,
+    pub track_bottom: f32,
+    pub bar_x: f32,
+}
+
+pub fn scrollbar_geometry(
+    (width, height): (f32, f32),
+    border: (f32, f32, f32, f32),
+    resizer: bool,
+    scrollbar: ScrollbarPaint,
+) -> ScrollbarGeometry {
+    let (border_left, border_top, border_right, border_bottom) = border;
+    let _ = border_left;
+    let x = width - border_right - SCROLLBAR_WIDTH;
+    let bar_height =
+        height - border_top - border_bottom - if resizer { SCROLLBAR_WIDTH } else { 0.0 };
+    let top = border_top;
+    let track_top = top + SCROLLBAR_BUTTON;
+    let track_bottom = top + bar_height - SCROLLBAR_BUTTON;
+    let track_len = (track_bottom - track_top).max(0.0);
+    let total = (scrollbar.viewport + scrollbar.max_scroll).max(1.0);
+    let thumb_len = (track_len * scrollbar.viewport / total)
+        .max(SCROLLBAR_MIN_THUMB)
+        .min(track_len);
+    let fraction = if scrollbar.max_scroll > 0.0 {
+        (scrollbar.scroll / scrollbar.max_scroll).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let thumb_top = track_top + ((track_len - thumb_len) * fraction).round();
+    ScrollbarGeometry {
+        up: (x, top, SCROLLBAR_WIDTH, SCROLLBAR_BUTTON),
+        down: (x, track_bottom, SCROLLBAR_WIDTH, SCROLLBAR_BUTTON),
+        thumb: (
+            x + (SCROLLBAR_WIDTH - SCROLLBAR_THUMB_WIDTH) / 2.0,
+            thumb_top,
+            SCROLLBAR_THUMB_WIDTH,
+            thumb_len,
+        ),
+        track_top,
+        track_bottom,
+        bar_x: x,
+    }
+}
+
+/// The scrollbar part under `point` (relative to the border box), or
+/// [`ScrollbarPart::None`] outside it.
+pub fn scrollbar_part_at(geometry: &ScrollbarGeometry, point: (f32, f32)) -> ScrollbarPart {
+    let inside = |(x, y, w, h): (f32, f32, f32, f32)| {
+        point.0 >= x && point.0 < x + w && point.1 >= y && point.1 < y + h
+    };
+    if inside(geometry.up) {
+        ScrollbarPart::ButtonUp
+    } else if inside(geometry.down) {
+        ScrollbarPart::ButtonDown
+    } else if point.0 >= geometry.bar_x
+        && point.0 < geometry.bar_x + SCROLLBAR_WIDTH
+        && point.1 >= geometry.track_top
+        && point.1 < geometry.track_bottom
+    {
+        let (_, thumb_top, _, thumb_len) = geometry.thumb;
+        if point.1 < thumb_top {
+            ScrollbarPart::TrackBefore
+        } else if point.1 >= thumb_top + thumb_len {
+            ScrollbarPart::TrackAfter
+        } else {
+            ScrollbarPart::Thumb
+        }
+    } else {
+        ScrollbarPart::None
+    }
+}
+
+/// Whether `point` (relative to the border box) is over the resize corner.
+pub fn is_over_resizer(
+    (width, height): (f32, f32),
+    border: (f32, f32, f32, f32),
+    point: (f32, f32),
+) -> bool {
+    let (_, _, border_right, border_bottom) = border;
+    point.0 >= width - border_right - SCROLLBAR_WIDTH
+        && point.0 < width - border_right
+        && point.1 >= height - border_bottom - SCROLLBAR_WIDTH
+        && point.1 < height - border_bottom
+}
 /// Which arrow of a number input's spinner the point `(px, py)` is over,
 /// for an input whose border box is `(x, y, width, height)` in the same
 /// space as the point.
@@ -745,6 +876,112 @@ pub fn spinner_half_at(
         (false, _) => SpinnerHover::None,
         (true, true) => SpinnerHover::Up,
         (true, false) => SpinnerHover::Down,
+    }
+}
+
+/// Fills the triangle `points` (absolute canvas pixels) in `color`.
+fn fill_triangle(buffer: &mut Surface, points: [(f32, f32); 3], color: Rgba, clip: Option<&Mask>) {
+    let mut path = PathBuilder::new();
+    path.move_to(points[0].0, points[0].1);
+    path.line_to(points[1].0, points[1].1);
+    path.line_to(points[2].0, points[2].1);
+    path.close();
+    let Some(path) = path.finish() else {
+        return;
+    };
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(color.r, color.g, color.b, color.a);
+    paint.anti_alias = true;
+    buffer.pixmap.fill_path(
+        &path,
+        &paint,
+        FillRule::Winding,
+        surface_transform(buffer),
+        clip,
+    );
+}
+
+/// Paints a textarea's scrollbar against `border_box` (absolute canvas
+/// pixels), and its resize corner if `resizer`.
+#[allow(clippy::too_many_arguments)]
+fn paint_scrollbar_and_resizer(
+    buffer: &mut Surface,
+    (bx, by, bw, bh): (f32, f32, f32, f32),
+    border: (f32, f32, f32, f32),
+    scrollbar: Option<ScrollbarPaint>,
+    resizer: bool,
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
+    let s = scale_factor;
+    let logical = (bw / s, bh / s);
+    let border = (border.0 / s, border.1 / s, border.2 / s, border.3 / s);
+    if let Some(scrollbar) = scrollbar {
+        let g = scrollbar_geometry(logical, border, resizer, scrollbar);
+        let bar_height = g.down.1 + g.down.3 - g.up.1;
+        fill_rect(
+            buffer,
+            bx + g.bar_x * s,
+            by + g.up.1 * s,
+            SCROLLBAR_WIDTH * s,
+            bar_height * s,
+            SCROLLBAR_TRACK,
+            clip,
+        );
+        let color = |part: ScrollbarPart| {
+            if scrollbar.active == part {
+                SCROLLBAR_ACTIVE
+            } else {
+                SCROLLBAR_IDLE
+            }
+        };
+        let (tx, ty, tw, th) = g.thumb;
+        fill_rect(
+            buffer,
+            bx + tx * s,
+            by + ty * s,
+            tw * s,
+            th * s,
+            color(ScrollbarPart::Thumb),
+            clip,
+        );
+        let cx = bx + (g.bar_x + SCROLLBAR_WIDTH / 2.0) * s;
+        let up_top = by + (g.up.1 + 6.0) * s;
+        fill_triangle(
+            buffer,
+            [
+                (cx, up_top),
+                (cx - 3.5 * s, up_top + 6.0 * s),
+                (cx + 3.5 * s, up_top + 6.0 * s),
+            ],
+            color(ScrollbarPart::ButtonUp),
+            clip,
+        );
+        let down_top = by + (g.down.1 + 6.0) * s;
+        fill_triangle(
+            buffer,
+            [
+                (cx - 3.5 * s, down_top),
+                (cx + 3.5 * s, down_top),
+                (cx, down_top + 6.0 * s),
+            ],
+            color(ScrollbarPart::ButtonDown),
+            clip,
+        );
+    }
+    if resizer {
+        // Two diagonals against the bottom-right corner, measured in Edge:
+        // 7px long starting 10px from the right and 4px from the bottom,
+        // and a shorter 3px one beside it.
+        let right = bx + bw;
+        let bottom = by + bh;
+        for (offset, length) in [(10.0, 7), (6.0, 3)] {
+            for i in 0..length {
+                let x = right - (offset - i as f32) * s;
+                let y = bottom - (4.0 + i as f32) * s;
+                fill_rect(buffer, x, y, s, s, RESIZER_COLOR, clip);
+            }
+        }
     }
 }
 
@@ -1995,6 +2232,22 @@ fn paint_node(
                         (cx1 - cx0).max(TEXT_INPUT_CARET_WIDTH * scale_factor),
                         cy1 - cy0,
                         color,
+                        clip,
+                    );
+                }
+                if paint.scrollbar.is_some() || paint.resizer {
+                    paint_scrollbar_and_resizer(
+                        buffer,
+                        (x, y, layout.width, layout.height),
+                        (
+                            border.left.width,
+                            border.top.width,
+                            border.right.width,
+                            border.bottom.width,
+                        ),
+                        paint.scrollbar,
+                        paint.resizer,
+                        scale_factor,
                         clip,
                     );
                 }
@@ -5318,6 +5571,8 @@ mod tests {
                 spinner: Some(hover),
                 scroll: (0.0, 0.0),
                 placeholder: None,
+                scrollbar: None,
+                resizer: false,
             },
         );
         paint_to_buffer_with_desktop_extras(
@@ -5370,6 +5625,8 @@ mod tests {
                 spinner: None,
                 scroll: (0.0, 0.0),
                 placeholder,
+                scrollbar: None,
+                resizer: false,
             },
         );
         paint_to_buffer_with_desktop_extras(
@@ -5435,6 +5692,175 @@ mod tests {
             .filter(|&(x, y)| pixel_rgb(&buffer, x, y) != [255, 255, 255])
             .count();
         assert_eq!(outside, 0);
+    }
+
+    fn bar(scroll: f32, active: ScrollbarPart) -> ScrollbarPaint {
+        // A 200x80 textarea (78 tall inside its border) whose text is 344
+        // tall, as measured in Edge.
+        ScrollbarPaint {
+            scroll,
+            max_scroll: 266.0,
+            viewport: 78.0,
+            active,
+        }
+    }
+
+    /// Measured in Edge on a 200x80 textarea at (40, 40): the scrollbar sits
+    /// at x=224..238, buttons at y=41..58 and 86..103, and the thumb runs
+    /// 59..75 at the top, 63..79 at scrollTop 111, and ends near 85 at the end.
+    #[test]
+    fn the_scrollbar_geometry_matches_what_edge_measured() {
+        let border = (1.0, 1.0, 1.0, 1.0);
+        let g = |scroll| {
+            scrollbar_geometry(
+                (200.0, 80.0),
+                border,
+                true,
+                bar(scroll, ScrollbarPart::None),
+            )
+        };
+        let (top, mid, end) = (g(0.0), g(111.0), g(266.0));
+        assert_eq!(top.bar_x, 184.0, "x=224 in the page");
+        assert_eq!(top.up, (184.0, 1.0, 15.0, 18.0), "buttons 18px tall");
+        assert_eq!(top.down.1, 46.0, "the lower button starts at y=86");
+        assert_eq!(
+            top.thumb,
+            (187.0, 19.0, 9.0, 17.0),
+            "thumb at y=59, 9 wide, 17 long"
+        );
+        assert_eq!(mid.thumb.1, 23.0, "y=63 at scrollTop 111");
+        assert_eq!(
+            end.thumb.1 + end.thumb.3,
+            46.0,
+            "ends against the lower button"
+        );
+    }
+
+    #[test]
+    fn the_part_under_the_pointer_is_found_from_the_same_geometry() {
+        let border = (1.0, 1.0, 1.0, 1.0);
+        let g = scrollbar_geometry((200.0, 80.0), border, true, bar(0.0, ScrollbarPart::None));
+        let at = |x, y| scrollbar_part_at(&g, (x, y));
+        assert_eq!(at(190.0, 10.0), ScrollbarPart::ButtonUp);
+        assert_eq!(at(190.0, 60.0), ScrollbarPart::ButtonDown);
+        assert_eq!(at(190.0, 25.0), ScrollbarPart::Thumb);
+        assert_eq!(at(190.0, 40.0), ScrollbarPart::TrackAfter);
+        let scrolled =
+            scrollbar_geometry((200.0, 80.0), border, true, bar(266.0, ScrollbarPart::None));
+        assert_eq!(
+            scrollbar_part_at(&scrolled, (190.0, 22.0)),
+            ScrollbarPart::TrackBefore
+        );
+        assert_eq!(at(100.0, 25.0), ScrollbarPart::None, "the text area itself");
+        assert!(is_over_resizer((200.0, 80.0), border, (190.0, 70.0)));
+        assert!(!is_over_resizer((200.0, 80.0), border, (190.0, 50.0)));
+    }
+
+    fn paint_textarea_chrome(scrollbar: Option<ScrollbarPaint>, resizer: bool) -> Canvas {
+        let tree: Element = view! { <textarea class="t"></textarea> };
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(
+            ".t { width: 198px; height: 78px; border: 1px solid #767676; padding: 0px; \
+             background-color: #ffffff; }",
+        )
+        .unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let node = arena.roots()[0];
+        let mut text_inputs = HashMap::new();
+        text_inputs.insert(
+            node,
+            TextInputPaint {
+                runs: Vec::new(),
+                caret_rect: None,
+                selection_rects: Vec::new(),
+                compose_rect: None,
+                show_caret: false,
+                spinner: None,
+                scroll: (0.0, 0.0),
+                placeholder: None,
+                scrollbar,
+                resizer,
+            },
+        );
+        paint_to_buffer_with_desktop_extras(
+            &mut font,
+            200,
+            80,
+            Rgba::opaque(255, 255, 255),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+            Some(&text_inputs),
+            None,
+        )
+    }
+
+    #[test]
+    fn the_scrollbar_paints_its_track_thumb_and_arrows_in_edges_colors() {
+        let idle = paint_textarea_chrome(Some(bar(0.0, ScrollbarPart::None)), true);
+        assert_eq!(pixel_rgb(&idle, 186, 30), [252, 252, 252], "the track");
+        assert_eq!(
+            pixel_rgb(&idle, 190, 25),
+            [139, 139, 139],
+            "the thumb, idle"
+        );
+        assert_eq!(
+            pixel_rgb(&idle, 191, 10),
+            [139, 139, 139],
+            "the up arrow, idle"
+        );
+        assert_eq!(
+            pixel_rgb(&idle, 191, 55),
+            [139, 139, 139],
+            "the down arrow, idle"
+        );
+        assert_eq!(
+            pixel_rgb(&idle, 150, 40),
+            [255, 255, 255],
+            "text area untouched"
+        );
+        let hover_thumb = paint_textarea_chrome(Some(bar(0.0, ScrollbarPart::Thumb)), true);
+        assert_eq!(pixel_rgb(&hover_thumb, 190, 25), [99, 99, 99]);
+        assert_eq!(
+            pixel_rgb(&hover_thumb, 191, 10),
+            [139, 139, 139],
+            "only the thumb"
+        );
+        let hover_down = paint_textarea_chrome(Some(bar(0.0, ScrollbarPart::ButtonDown)), true);
+        assert_eq!(pixel_rgb(&hover_down, 191, 55), [99, 99, 99]);
+    }
+
+    #[test]
+    fn the_resize_corner_paints_two_diagonals_where_edge_does() {
+        let canvas = paint_textarea_chrome(None, true);
+        // Relative to the bottom-right corner (200, 80): the long line runs
+        // from (190, 76) up to (196, 70), the short one from (194, 76) to (196, 74).
+        assert_eq!(pixel_rgb(&canvas, 190, 76), [101, 101, 101]);
+        assert_eq!(pixel_rgb(&canvas, 193, 73), [101, 101, 101]);
+        assert_eq!(pixel_rgb(&canvas, 196, 70), [101, 101, 101]);
+        assert_eq!(pixel_rgb(&canvas, 194, 76), [101, 101, 101]);
+        assert_eq!(pixel_rgb(&canvas, 196, 74), [101, 101, 101]);
+        assert_eq!(
+            pixel_rgb(&canvas, 192, 70),
+            [255, 255, 255],
+            "off the lines"
+        );
+        let without = paint_textarea_chrome(None, false);
+        assert_eq!(
+            pixel_rgb(&without, 193, 73),
+            [255, 255, 255],
+            "no resize, no corner"
+        );
     }
 
     #[test]
@@ -5524,6 +5950,8 @@ mod tests {
                 spinner: None,
                 scroll: (0.0, 0.0),
                 placeholder: None,
+                scrollbar: None,
+                resizer: false,
             },
         );
 

@@ -381,19 +381,15 @@ impl WindowControls {
         }
     }
 
-    /// Applies the real OS pointer/default cursor for whatever's under
-    /// the mouse right now (`cursor: pointer`, e.g. a focusable `<a>`) --
+    /// Applies the real OS cursor for whatever's under the mouse right now
+    /// (`cursor: pointer` on a focusable `<a>`, an I-beam over text, ...) --
     /// called on every cursor move that isn't already claimed by
     /// [`Self::set_resize_cursor`] (a resize edge always wins). Unlike
     /// that method, this isn't gated to
     /// [`crate::appearance::DecorationMode::Custom`]: a system-decorated
     /// window has no cursor logic of its own to conflict with.
-    pub(crate) fn set_content_cursor(&self, pointer: bool) {
-        self.window.set_cursor(if pointer {
-            winit::window::CursorIcon::Pointer
-        } else {
-            winit::window::CursorIcon::Default
-        });
+    pub(crate) fn set_content_cursor(&self, icon: winit::window::CursorIcon) {
+        self.window.set_cursor(icon);
     }
 
     /// Shows a real native context menu at the current cursor position,

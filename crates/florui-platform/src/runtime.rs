@@ -118,6 +118,9 @@ pub struct UiRuntime {
     /// [`crate::validation_bubble`]. Interior-mutable because an edit to
     /// its control ([`Self::commit_value`]) dismisses it through `&self`.
     validation_bubble: RefCell<Option<ValidationBubble>>,
+    /// The content-box size the user dragged each textarea to, by its `id`;
+    /// see [`crate::textarea_resize`].
+    resized: RefCell<HashMap<String, (f32, f32)>>,
     /// Carries real `transition`/`@keyframes` state across [`Self::update`]
     /// calls, sampled against a real wall clock captured once at
     /// [`Self::with_rules_and_context`] — see
@@ -289,6 +292,7 @@ impl UiRuntime {
             edited: RefCell::new(HashSet::new()),
             user_validated: HashSet::new(),
             validation_bubble: RefCell::new(None),
+            resized: RefCell::new(HashMap::new()),
             animation_timeline,
             animation_epoch: std::time::Instant::now(),
             font: florui_text::Font::load_embedded(),
@@ -442,6 +446,7 @@ impl UiRuntime {
         self.executor.run_until_stalled();
         let mut tree = tree;
         self.option_summaries = crate::select::normalize(&mut tree);
+        crate::textarea_resize::apply(&mut tree, &self.resized.borrow());
         if let Some(bubble) = self.validation_bubble.borrow().as_ref() {
             let natural = self
                 .font
