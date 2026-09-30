@@ -145,6 +145,16 @@ fn visible_range(
     }
 }
 
+/// The index of the item at the top of the viewport, `None` for an empty
+/// list.
+fn first_visible(layout: &ListLayout, scroll_top: f32) -> Option<usize> {
+    let item_count = layout.keys.len();
+    (item_count > 0).then(|| {
+        layout.cumulative[..item_count]
+            .partition_point(|&c| c <= scroll_top)
+            .saturating_sub(1)
+    })
+}
 /// A mounted virtualized list's live offset and imperative controls —
 /// returned by [`use_virtual_list`] alongside the [`Element`] it actually
 /// renders.
@@ -267,7 +277,12 @@ pub fn use_virtual_list(
     // a real, in-progress scroll instead of only correcting real drift.
     let last_layout = use_ref(|| None::<Rc<ListLayout>>);
     let anchor = use_ref(|| None::<ScrollAnchor>);
+    // Where the list was scrolled when `anchor` was taken: if it has moved
+    // since, the user scrolled (or `scroll_to_item` ran) and the anchor is
+    // stale, so it must not drag the list back.
+    let anchored_at = use_ref(|| 0.0f32);
     if let (Some(previous), Some(current_anchor)) = (last_layout.get(), anchor.get())
+        && (scroll_top - anchored_at.get()).abs() < 0.5
         && !Rc::ptr_eq(&previous, &layout)
         && let Some(target_y) = extents.with(|e| current_anchor.resolve(&layout.keys, e))
         && (target_y - scroll_top).abs() > f32::EPSILON
@@ -293,12 +308,16 @@ pub fn use_virtual_list(
     let viewport_height = viewport_height_signal.get();
     let range = visible_range(&layout, scroll_top, viewport_height, &overscan);
 
-    anchor.set(range.clone().next().map(|first| {
+    // Anchored on the first *visible* item, not the first mounted one: rows
+    // mounted above the viewport as overscan correct their heights too, and
+    // it is what the user sees that must not move.
+    anchor.set(first_visible(&layout, scroll_top).map(|first| {
         ScrollAnchor::new(
             layout.keys[first].clone(),
             scroll_top - layout.cumulative[first],
         )
     }));
+    anchored_at.set(scroll_top);
 
     let before = layout.cumulative.get(range.start).copied().unwrap_or(0.0);
     let after = layout.total()
@@ -1030,6 +1049,84 @@ mod tests {
         );
     }
 
+    /// A variable-height list whose real rows are `real_height` tall against
+    /// a 20px estimate, `overscan` rows mounted past the viewport either way.
+    fn variable_runtime(
+        real_height: f32,
+        overscan: usize,
+    ) -> (
+        UiRuntime,
+        std::rc::Rc<std::cell::RefCell<Option<VirtualListHandle>>>,
+    ) {
+        let slot: std::rc::Rc<std::cell::RefCell<Option<VirtualListHandle>>> = Default::default();
+        let slot_in = std::rc::Rc::clone(&slot);
+        let root = move || {
+            let (content, handle) = use_virtual_list(
+                "list",
+                200,
+                (),
+                ItemHeight::Variable { estimate: 20.0 },
+                Overscan::Items(overscan),
+                Key::from,
+                row,
+            );
+            *slot_in.borrow_mut() = Some(handle);
+            Element::node(
+                "div",
+                vec![
+                    ("id".to_string(), "list".to_string()),
+                    ("class".to_string(), "viewport".to_string()),
+                ],
+                vec![content],
+            )
+        };
+        let css = format!(
+            ".viewport {{ width: 100px; height: 100px; overflow-y: auto; }} \
+             .row {{ height: {real_height}px; }}"
+        );
+        let mut runtime = UiRuntime::new(&css, root, viewport()).expect("valid CSS");
+        runtime.update(viewport());
+        (runtime, slot)
+    }
+
+    #[test]
+    fn rows_above_the_viewport_correcting_their_height_do_not_move_what_is_visible() {
+        // Rows 48 and 49 mount as overscan above item 50 at their 20px
+        // estimate and measure 40px: the visible top item must stay 50, so the
+        // offset follows its new place: 48 estimated rows plus the 2 measured.
+        let (mut runtime, handle) = variable_runtime(40.0, 2);
+        runtime.scroll_registry().scroll_to("list", 0.0, 1000.0);
+        settle(&mut runtime);
+        let offset = handle.borrow().as_ref().unwrap().offset().1;
+        assert_eq!(
+            offset,
+            48.0 * 20.0 + 2.0 * 40.0,
+            "item 50 still starts at the top of the viewport"
+        );
+    }
+
+    #[test]
+    fn a_font_change_resizing_every_mounted_row_keeps_the_topmost_item_in_place() {
+        let (mut runtime, handle) = variable_runtime(20.0, 0);
+        runtime.scroll_registry().scroll_to("list", 0.0, 1000.0);
+        settle(&mut runtime);
+        assert_eq!(handle.borrow().as_ref().unwrap().offset().1, 1000.0);
+
+        // A larger font: every row is now 30px. The mounted rows re-measure;
+        // the top item (50) must not slide, so the offset stays at its start.
+        let rules = florui_style::parse_stylesheet(
+            ".viewport { width: 100px; height: 100px; overflow-y: auto; } \
+             .row { height: 30px; }",
+        )
+        .unwrap();
+        runtime.set_rules(rules);
+        settle(&mut runtime);
+        assert_eq!(handle.borrow().as_ref().unwrap().offset().1, 1000.0);
+        assert_eq!(
+            mounted_row_texts(&runtime).first().map(String::as_str),
+            Some("50")
+        );
+    }
     #[test]
     fn rapid_scrolling_always_mounts_exactly_the_current_window_plus_overscan() {
         let item_height = 20.0;
