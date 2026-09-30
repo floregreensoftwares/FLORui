@@ -309,6 +309,21 @@ impl AccessibilityTree {
                     node.add_action(Action::Decrement);
                 }
             }
+            "textarea" => {
+                node.set_role(Role::MultilineTextInput);
+                node.set_value(arena.value_attr(id).unwrap_or_default());
+                if let Some(label) = arena.accessible_label(id) {
+                    node.set_label(label);
+                }
+                if arena.attr_flag(id, "readonly") {
+                    node.set_read_only();
+                }
+                if is_focusable(arena, id) {
+                    node.add_action(Action::Focus);
+                    node.add_action(Action::SetValue);
+                    node.add_action(Action::ReplaceSelectedText);
+                }
+            }
             "input" if arena.input_type(id) == Some("hidden") => node.set_hidden(),
             "input" => {
                 let role = match arena.input_type(id) {
@@ -678,6 +693,21 @@ mod tests {
         assert_eq!(role_of(&update, ak_id), Role::ListBoxOption);
         let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
         assert_eq!(node.is_selected(), Some(true));
+    }
+
+    #[test]
+    fn a_textarea_is_a_multiline_text_input_with_its_value_and_edit_actions() {
+        let tree: Element =
+            view! { <textarea id="ta" readonly="true" value="one\ntwo"></textarea> };
+        let (update, reverse, arena) = build(&tree, None);
+        let area = arena.find(|a, id| a.id_attr(id) == Some("ta")).unwrap();
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == area).unwrap().0;
+        assert_eq!(role_of(&update, ak_id), Role::MultilineTextInput);
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert_eq!(node.value(), Some("one\ntwo"));
+        assert!(node.is_read_only());
+        assert!(node.supports_action(Action::SetValue));
+        assert!(node.supports_action(Action::Focus));
     }
 
     #[test]

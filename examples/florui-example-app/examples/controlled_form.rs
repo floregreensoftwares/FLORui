@@ -32,6 +32,7 @@ fn app() -> Element {
     let password = use_signal(String::new);
     let email = use_signal(String::new);
     let qty = use_signal(|| "1".to_string());
+    let notes = use_signal(String::new);
     let plan = use_signal(|| "free".to_string());
     let newsletter = use_signal(|| false);
     let contact = use_signal(|| "email".to_string());
@@ -39,6 +40,7 @@ fn app() -> Element {
 
     let (username_input, password_input) = (username.clone(), password.clone());
     let (email_input, qty_input) = (email.clone(), qty.clone());
+    let notes_input = notes.clone();
     let (plan_open, plan_value) = (use_signal(|| false), plan.clone());
     let plan_toggle = plan_open.clone();
     let plan_close = plan_open.clone();
@@ -50,6 +52,7 @@ fn app() -> Element {
         password.clone(),
         email.clone(),
         qty.clone(),
+        notes.clone(),
         plan.clone(),
         newsletter.clone(),
         contact.clone(),
@@ -88,12 +91,13 @@ fn app() -> Element {
                     submit_status.set(format!("Submitted: {}", summary.join(", ")));
                 }}
                 onreset={move || {
-                    let (username, password, email, qty, plan, newsletter, contact, status) =
+                    let (username, password, email, qty, notes, plan, newsletter, contact, status) =
                         &reset_state;
                     username.set(String::new());
                     password.set(String::new());
                     email.set(String::new());
                     qty.set("1".to_string());
+                    notes.set(String::new());
                     plan.set("free".to_string());
                     newsletter.set(false);
                     contact.set("email".to_string());
@@ -146,6 +150,17 @@ fn app() -> Element {
                     value={qty.get()}
                     oninput={move |value: String| qty_input.set(value)}
                 />
+
+                <label class="field-label" for="notes">{"Notes"}</label>
+                <textarea
+                    id="notes"
+                    class="text-field"
+                    name="notes"
+                    rows="3"
+                    cols="40"
+                    value={notes.get()}
+                    oninput={move |value: String| notes_input.set(value)}
+                ></textarea>
 
                 <input type="hidden" name="source" value="signup" />
 

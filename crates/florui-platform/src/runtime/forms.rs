@@ -76,6 +76,21 @@ impl UiRuntime {
         SubmitOutcome::Submitted
     }
 
+    /// `text` as the field at `node` accepts it typed, pasted or set by an
+    /// assistive technology. A `<textarea>` keeps line breaks (a lone `\r`
+    /// or `\r\n` becomes `\n`); every single-line field drops `\n`, `\r`
+    /// and `\t`, as browsers do, before its own type filter runs.
+    pub(crate) fn clean_typed(&self, node: NodeId, text: &str) -> String {
+        if self.arena.tag(node) == "textarea" {
+            return text.replace("\r\n", "\n").replace('\r', "\n");
+        }
+        let single_line: String = text
+            .chars()
+            .filter(|c| !matches!(c, '\n' | '\r' | '\t'))
+            .collect();
+        self.filter_typed(node, &single_line)
+    }
+
     /// `text` as the field at `node` accepts it typed or pasted: a
     /// `type=number` field drops everything but digits, sign, point and
     /// exponent letters.

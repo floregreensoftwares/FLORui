@@ -349,6 +349,8 @@ pub struct TextInputPaint {
     /// `Some` while a number input shows its spinner (hovered or focused),
     /// with which arrow the pointer is over.
     pub spinner: Option<SpinnerHover>,
+    /// How far the text is scrolled inside the field, in logical pixels.
+    pub scroll: (f32, f32),
     pub runs: Vec<florui_text::ShapedRun>,
     pub caret_rect: Option<(f32, f32, f32, f32)>,
     pub selection_rects: Vec<(f32, f32, f32, f32)>,
@@ -587,6 +589,30 @@ fn paint_nodes(
                 .map(|id| (id, child_clip.clone())),
         );
     }
+}
+
+/// A mask of `node`'s padding box (its border box less the border),
+/// combined with an `incoming` mask, or `None` when nothing is left to
+/// paint.
+fn padding_box_mask(
+    buffer: &Surface,
+    (x, y, width, height): (f32, f32, f32, f32),
+    border: florui_style::Edges<florui_style::BorderSide>,
+    incoming: Option<&Mask>,
+) -> Option<Mask> {
+    let mut mask = ClipRect::from_xywh(
+        x + border.left.width,
+        y + border.top.width,
+        (width - border.left.width - border.right.width).max(0.0),
+        (height - border.top.width - border.bottom.width).max(0.0),
+    )
+    .to_mask(buffer)?;
+    if let Some(incoming) = incoming {
+        for (own, outer) in mask.data_mut().iter_mut().zip(incoming.data()) {
+            *own = ((*own as u16 * *outer as u16) / 255) as u8;
+        }
+    }
+    Some(mask)
 }
 
 /// The clip a node's own children paint under: `incoming` unchanged
@@ -1874,8 +1900,20 @@ fn paint_node(
                     clip,
                 );
             }
-        } else if arena.tag(node) == "input" {
+        } else if matches!(arena.tag(node), "input" | "textarea") {
             if let Some(paint) = text_inputs.and_then(|inputs| inputs.get(&node)) {
+                // A textarea scrolls its own text, so that text is cut at
+                // its own padding box (an ancestor's clip still applies).
+                let own_clip = (arena.tag(node) == "textarea").then(|| {
+                    padding_box_mask(buffer, (x, y, layout.width, layout.height), border, clip)
+                });
+                if own_clip.as_ref().is_some_and(Option::is_none) {
+                    return;
+                }
+                let own_clip = own_clip.flatten();
+                let clip = own_clip.as_ref().or(clip);
+                let content_x = content_x - paint.scroll.0 * scale_factor;
+                let content_y = content_y - paint.scroll.1 * scale_factor;
                 // `caret_rect`/`selection_rects` come from the same
                 // logical-space editor layout `paint.runs`' own glyph
                 // positions do -- scaled up here exactly like
@@ -5261,6 +5299,7 @@ mod tests {
                 compose_rect: None,
                 show_caret: false,
                 spinner: Some(hover),
+                scroll: (0.0, 0.0),
             },
         );
         paint_to_buffer_with_desktop_extras(
@@ -5361,6 +5400,7 @@ mod tests {
                 compose_rect: None,
                 show_caret: true,
                 spinner: None,
+                scroll: (0.0, 0.0),
             },
         );
 

@@ -152,15 +152,13 @@ pub(crate) static CONTROLS: &[ControlSpec] = &[
         entries: select_entries,
         constraints: select_constraints,
     },
-    // No editing behavior yet, so it only takes part in the tree; its
-    // registry entry is what a real implementation builds on.
     ControlSpec {
         tag: "textarea",
         input_type: None,
         submittable: true,
         validatable: true,
         text_field: true,
-        entries: text_entries,
+        entries: textarea_entries,
         constraints: text_constraints,
     },
     ControlSpec {
@@ -238,6 +236,12 @@ fn text_value<'a>(ctx: &'a FormContext, node: NodeId) -> &'a str {
 
 fn text_entries(ctx: &FormContext, node: NodeId) -> Vec<String> {
     vec![text_value(ctx, node).to_string()]
+}
+
+/// A textarea's value with every line break as a single `\n`.
+fn textarea_entries(ctx: &FormContext, node: NodeId) -> Vec<String> {
+    let value = text_value(ctx, node);
+    vec![value.replace("\r\n", "\n").replace('\r', "\n")]
 }
 
 fn text_constraints(ctx: &FormContext, node: NodeId) -> Validity {

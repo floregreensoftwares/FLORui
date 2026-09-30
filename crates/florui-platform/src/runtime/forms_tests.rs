@@ -774,3 +774,228 @@ fn number_in_range_and_out_of_range_match_what_edge_measured() {
         assert_eq!(ranges(id), expected, "input {id}");
     }
 }
+
+/// Rows measured in Edge with a real Enter key: which forms submit on Enter
+/// in a single-line field when they have no submit button.
+#[test]
+fn a_textarea_does_not_block_implicit_submission_but_number_and_email_do() {
+    let rt = runtime("", || {
+        view! {
+            <div>
+                <form id="with-textarea"><input id="a" type="text" /><textarea></textarea></form>
+                <form id="two-and-textarea">
+                    <input id="b" type="text" /><input type="text" /><textarea></textarea>
+                </form>
+                <form id="with-number"><input id="c" type="text" /><input type="number" /></form>
+                <form id="with-email"><input id="d" type="text" /><input type="email" /></form>
+                <form id="with-hidden"><input id="e" type="text" /><input type="hidden" /></form>
+            </div>
+        }
+    });
+    let submits = |id: &str| {
+        matches!(
+            rt.implicit_submission(node(&rt, id)),
+            Some(ImplicitSubmit::Submit(_))
+        )
+    };
+    assert!(submits("a"), "input + textarea submits");
+    assert!(!submits("b"), "two inputs still block");
+    assert!(!submits("c"), "a number field blocks");
+    assert!(!submits("d"), "an email field blocks");
+    assert!(submits("e"), "a hidden input does not count");
+}
+
+#[test]
+fn a_textarea_submits_its_value_with_line_breaks_normalized() {
+    let (log, on_submit) = submitted();
+    let mut rt = runtime("", move || {
+        let on_submit = on_submit.clone();
+        view! {
+            <form id="f" onsubmit={move |data: FormData| on_submit(data)}>
+                <textarea name="note" value="one\r\ntwo\rthree"
+                    oninput={move |_v: String| {}}></textarea>
+            </form>
+        }
+    });
+    let form = node(&rt, "f");
+    assert_eq!(rt.submit_form(form, None, false), SubmitOutcome::Submitted);
+    assert_eq!(pairs(&log.borrow()[0]), [entry("note", "one\ntwo\nthree")]);
+}
+
+#[test]
+fn a_textarea_keeps_line_breaks_when_typed_and_a_single_line_field_drops_them() {
+    let rt = runtime("", || {
+        view! {
+            <form>
+                <textarea id="ta" name="a"></textarea>
+                <input id="one" type="text" name="b" />
+            </form>
+        }
+    });
+    let (area, line) = (node(&rt, "ta"), node(&rt, "one"));
+    assert_eq!(rt.clean_typed(area, "a\r\nb\rc\n"), "a\nb\nc\n");
+    assert_eq!(rt.clean_typed(line, "a\r\nb\tc"), "abc");
+}
+
+fn textarea_runtime(rows: &'static str) -> UiRuntime {
+    runtime("", move || {
+        view! {
+            <form>
+                <textarea id="ta" name="note" rows={rows} cols="20" value=""
+                    oninput={move |_v: String| {}}></textarea>
+            </form>
+        }
+    })
+}
+
+fn textarea_id(rt: &UiRuntime) -> String {
+    let (arena, ..) = rt.geometry();
+    let field = arena.find(|a, id| a.tag(id) == "textarea").unwrap();
+    arena.id_attr(field).unwrap().to_string()
+}
+
+fn type_into(rt: &mut UiRuntime, id: &str, text: &str) {
+    let registry = rt.text_input_registry();
+    let (_, _, _, font) = rt.geometry_and_font_mut();
+    registry.apply(
+        id,
+        florui_text::editing::TextEditOp::InsertOrReplace(text.to_string()),
+        font,
+    );
+}
+
+#[test]
+fn typing_past_the_last_visible_row_scrolls_the_caret_into_view() {
+    let mut rt = textarea_runtime("2");
+    let id = textarea_id(&rt);
+    let registry = rt.text_input_registry();
+    assert_eq!(registry.scroll_offset(&id), (0.0, 0.0));
+    type_into(&mut rt, &id, "1\n2\n3\n4\n5\n6");
+    let (_, y) = registry.scroll_offset(&id);
+    assert!(y > 0.0, "six lines do not fit in two rows, so it scrolled");
+    let (_, _, _, font) = rt.geometry_and_font_mut();
+    let (_, top, _, bottom) = registry.paint_data(&id, font).unwrap().1.unwrap();
+    let viewport_height = {
+        let (arena, styles, layouts) = rt.geometry();
+        let node = arena.find(|a, n| a.tag(n) == "textarea").unwrap();
+        layouts[&node].height
+            - styles[&node].border.top.width * 2.0
+            - styles[&node].padding.top * 2.0
+    };
+    assert!(
+        top >= y - 0.5 && bottom <= y + viewport_height + 0.5,
+        "the caret row is visible"
+    );
+}
+
+#[test]
+fn the_wheel_scrolls_a_textarea_until_a_limit_then_lets_go() {
+    let mut rt = textarea_runtime("2");
+    let id = textarea_id(&rt);
+    type_into(&mut rt, &id, "1\n2\n3\n4\n5\n6\n7\n8");
+    let registry = rt.text_input_registry();
+    let (_, _, _, font) = rt.geometry_and_font_mut();
+    assert!(
+        registry.scroll_by(&id, -1000.0, font),
+        "scrolls up from the caret's position"
+    );
+    assert_eq!(registry.scroll_offset(&id).1, 0.0, "clamped at the top");
+    assert!(
+        !registry.scroll_by(&id, -10.0, font),
+        "already at the top: pass it on"
+    );
+    assert!(registry.scroll_by(&id, 1000.0, font));
+    let bottom = registry.scroll_offset(&id).1;
+    assert!(bottom > 0.0);
+    assert!(
+        !registry.scroll_by(&id, 10.0, font),
+        "at the bottom: pass it on"
+    );
+}
+
+#[test]
+fn page_down_moves_the_caret_by_the_field_height_less_one_line() {
+    let mut rt = textarea_runtime("4");
+    let id = textarea_id(&rt);
+    let lines: Vec<String> = (1..=14).map(|n| format!("L{n:02}")).collect();
+    type_into(&mut rt, &id, &lines.join("\n"));
+    let registry = rt.text_input_registry();
+    let (_, _, _, font) = rt.geometry_and_font_mut();
+    registry.apply(&id, florui_text::editing::TextEditOp::MoveTextStart, font);
+    registry.page(&id, 1, false, font);
+    registry.apply(&id, florui_text::editing::TextEditOp::SelectLineEnd, font);
+    assert_eq!(
+        registry.selected_text(&id).as_deref(),
+        Some("L04"),
+        "three rows down in a four-row field, as Edge does"
+    );
+}
+
+#[test]
+fn a_long_line_wraps_at_the_content_width_instead_of_running_past_the_box() {
+    let mut rt = textarea_runtime("2");
+    let id = textarea_id(&rt);
+    let registry = rt.text_input_registry();
+    type_into(&mut rt, &id, &"word ".repeat(30));
+    let (_, _, _, font) = rt.geometry_and_font_mut();
+    let (runs, ..) = registry.paint_data(&id, font).unwrap();
+    let widest = runs
+        .iter()
+        .flat_map(|run| run.glyphs.iter().map(|g| g.x))
+        .fold(0.0_f32, f32::max);
+    let (arena, styles, layouts) = rt.geometry();
+    let node = arena.find(|a, n| a.tag(n) == "textarea").unwrap();
+    let content_width = layouts[&node].width - styles[&node].padding.left * 2.0 - 2.0;
+    assert!(
+        widest <= content_width,
+        "glyphs stay inside the box ({widest} <= {content_width})"
+    );
+    let ys: std::collections::BTreeSet<i32> = runs
+        .iter()
+        .flat_map(|run| run.glyphs.iter().map(|g| g.y as i32))
+        .collect();
+    assert!(ys.len() > 2, "the text wrapped onto several rows");
+}
+
+/// A read-only field can be focused, selected and copied but never edited,
+/// whether typed into, cut, deleted, undone or composed into.
+#[test]
+fn a_readonly_field_selects_but_never_edits() {
+    use florui_text::editing::TextEditOp;
+    let mut rt = runtime("", || {
+        view! {
+            <form>
+                <input id="one" type="text" name="a" readonly="true" value="fixed" />
+                <textarea id="many" name="b" readonly="true" value="fixed"></textarea>
+            </form>
+        }
+    });
+    let registry = rt.text_input_registry();
+    for id in ["one", "many"] {
+        let id = {
+            let (arena, ..) = rt.geometry();
+            let node = arena.find(|a, n| a.id_attr(n) == Some(id)).unwrap();
+            arena.id_attr(node).unwrap().to_string()
+        };
+        let (_, _, _, font) = rt.geometry_and_font_mut();
+        registry.apply(&id, TextEditOp::SelectAll, font);
+        assert_eq!(registry.selected_text(&id).as_deref(), Some("fixed"));
+        for op in [
+            TextEditOp::InsertOrReplace("x".to_string()),
+            TextEditOp::InsertOrReplace(String::new()),
+            TextEditOp::Delete,
+            TextEditOp::Backdelete,
+            TextEditOp::DeleteWord,
+            TextEditOp::BackdeleteWord,
+        ] {
+            assert_eq!(registry.apply(&id, op, font), None, "{id} refuses edits");
+        }
+        registry.set_compose(&id, "ime", None, font);
+        assert_eq!(registry.undo(&id, font), None);
+        assert_eq!(
+            registry.selected_text(&id).as_deref(),
+            Some("fixed"),
+            "{id} kept its text"
+        );
+    }
+}

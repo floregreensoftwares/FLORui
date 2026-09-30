@@ -101,12 +101,15 @@ pub(crate) fn default_button(arena: &Arena, form: NodeId) -> Option<NodeId> {
 }
 
 /// Whether Enter in `field` submits its form when the form has no submit
-/// button: only when it is the sole field that blocks implicit submission
-/// (any text-like field does).
+/// button: only when it is the sole field that blocks implicit submission.
+/// Measured in Edge: single-line text fields (text, password, email,
+/// number) block it; a `<textarea>` and a hidden input do not.
 pub(crate) fn is_only_text_field(arena: &Arena, form: NodeId, field: NodeId) -> bool {
     controls(arena, form)
         .into_iter()
-        .filter(|&node| spec(arena, node).is_some_and(|spec| spec.text_field))
+        .filter(|&node| {
+            spec(arena, node).is_some_and(|spec| spec.text_field && spec.tag != "textarea")
+        })
         .eq(std::iter::once(field))
 }
 

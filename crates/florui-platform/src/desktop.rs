@@ -594,9 +594,7 @@ fn build_text_input_paint(
     spinner_for: &dyn Fn(NodeId) -> Option<florui_paint::SpinnerHover>,
 ) -> HashMap<NodeId, florui_paint::TextInputPaint> {
     let mut result = HashMap::new();
-    let editable_inputs = arena.find_all(|arena, id| {
-        arena.tag(id) == "input" && crate::focus::is_editable_input_type(arena.input_type(id))
-    });
+    let editable_inputs = arena.find_all(crate::focus::is_text_control);
     for node in editable_inputs {
         let Some(id) = arena.id_attr(node) else {
             continue;
@@ -658,6 +656,7 @@ fn build_text_input_paint(
                 compose_rect: is_focused.then_some(compose_rect).flatten(),
                 show_caret: is_focused,
                 spinner: spinner_for(node),
+                scroll: registry.scroll_offset(id),
             },
         );
     }
@@ -1022,7 +1021,7 @@ struct WindowState {
     /// instead of just moving the caret there, the same distinction a
     /// real double-click makes. No existing double-click detection exists
     /// anywhere else in this file to reuse.
-    last_text_input_click: Option<(NodeId, std::time::Instant)>,
+    last_text_input_click: Option<(NodeId, std::time::Instant, u8)>,
     /// The instant of the last real left-button press on
     /// [`crate::WINDOW_DRAG_REGION_ID`] — a second press within
     /// [`DOUBLE_CLICK_INTERVAL`] toggles maximize instead of starting
@@ -1160,12 +1159,29 @@ impl WindowState {
     /// keys, Page Up/Down, Home/End) is a real, documented gap: no focus
     /// model exists anywhere in this crate yet for a keyboard event to
     /// resolve *which* element it should even move.
+    /// The `id` of `node` when it is a `<textarea>`, which scrolls its own
+    /// text before any ancestor does.
+    fn textarea_id(&self, node: NodeId) -> Option<String> {
+        let (arena, ..) = self.runtime.geometry();
+        (arena.tag(node) == "textarea")
+            .then(|| arena.id_attr(node).map(str::to_owned))
+            .flatten()
+    }
+
     fn handle_mouse_wheel(&mut self, delta: MouseScrollDelta) {
         let (dx, dy) = self.to_logical_scroll_delta(delta);
         let (x, y) = self.to_logical_cursor(self.last_cursor.0, self.last_cursor.1);
         let Some(hit) = self.runtime.hit_test(x, y) else {
             return;
         };
+        if let Some(text_id) = self.textarea_id(hit) {
+            let registry = self.runtime.text_input_registry();
+            let (_, _, _, font) = self.runtime.geometry_and_font_mut();
+            if registry.scroll_by(&text_id, dy, font) {
+                self.window.request_redraw();
+                return;
+            }
+        }
         let Some(id) = self.scrollable_ancestor_id(hit, dx, dy) else {
             return;
         };
@@ -1462,10 +1478,14 @@ impl WindowState {
             }) else {
                 return;
             };
-            let local_x = x - self.text_input_content_origin(node).0;
+            let (local_x, local_y) = self.text_input_local_point(node, &id, x, y);
             let registry = self.runtime.text_input_registry();
             let (_, _, _, font) = self.runtime.geometry_and_font_mut();
-            registry.apply(&id, TextEditOp::ExtendSelectionToPoint(local_x), font);
+            registry.apply(
+                &id,
+                TextEditOp::ExtendSelectionToPoint(local_x, local_y),
+                font,
+            );
             self.update_and_request_redraw();
             return;
         }
@@ -1625,7 +1645,7 @@ impl WindowState {
             && !self.is_disabled(node)
             && self.is_editable_text_input(node)
         {
-            self.handle_text_input_press(node, x);
+            self.handle_text_input_press(node, x, y);
             return;
         }
         if let Some(node) = hit
@@ -1689,7 +1709,7 @@ impl WindowState {
 
     fn is_editable_text_input(&self, node: NodeId) -> bool {
         let (arena, ..) = self.runtime.geometry();
-        arena.tag(node) == "input" && crate::focus::is_editable_input_type(arena.input_type(node))
+        crate::focus::is_text_control(arena, node)
     }
 
     /// A real press on an editable, enabled `<input>`: focuses it (like
@@ -1699,12 +1719,17 @@ impl WindowState {
     /// within [`DOUBLE_CLICK_INTERVAL`] of the last one. Starts a
     /// same-input drag-select, extended by [`Self::handle_cursor_moved`]
     /// and ended by [`Self::handle_release`].
-    fn handle_text_input_press(&mut self, node: NodeId, x: f32) {
+    fn handle_text_input_press(&mut self, node: NodeId, x: f32, y: f32) {
         let now = std::time::Instant::now();
-        let is_double_click = self
-            .last_text_input_click
-            .is_some_and(|(last_node, at)| last_node == node && now - at < DOUBLE_CLICK_INTERVAL);
-        self.last_text_input_click = Some((node, now));
+        let clicks = match self.last_text_input_click {
+            Some((last_node, at, count))
+                if last_node == node && now - at < DOUBLE_CLICK_INTERVAL =>
+            {
+                (count + 1).min(3)
+            }
+            _ => 1,
+        };
+        self.last_text_input_click = Some((node, now, clicks));
 
         let previous = self.focused_text_input();
         self.runtime.set_focused(Some(node), false);
@@ -1722,13 +1747,13 @@ impl WindowState {
             self.update_and_request_redraw();
             return;
         };
-        let local_x = x - self.text_input_content_origin(node).0;
         let registry = self.runtime.text_input_registry();
+        let (local_x, local_y) = self.text_input_local_point(node, &id, x, y);
         let (_, _, _, font) = self.runtime.geometry_and_font_mut();
-        let op = if is_double_click {
-            TextEditOp::SelectWordAtPoint(local_x)
-        } else {
-            TextEditOp::MoveToPoint(local_x)
+        let op = match clicks {
+            1 => TextEditOp::MoveToPoint(local_x, local_y),
+            2 => TextEditOp::SelectWordAtPoint(local_x, local_y),
+            _ => TextEditOp::SelectHardLineAtPoint(local_x, local_y),
         };
         // A pure caret/selection move never changes the text itself, so
         // there is nothing to commit back through a `Binding`/
@@ -1751,6 +1776,14 @@ impl WindowState {
         text_input_content_origin(arena, styles, layouts, node)
     }
 
+    /// The pointer position `(x, y)` in the editor's own space: relative to
+    /// the content box, shifted by how far the field is scrolled.
+    fn text_input_local_point(&self, node: NodeId, id: &str, x: f32, y: f32) -> (f32, f32) {
+        let (origin_x, origin_y) = self.text_input_content_origin(node);
+        let (scroll_x, scroll_y) = self.runtime.text_input_registry().scroll_offset(id);
+        (x - origin_x + scroll_x, y - origin_y + scroll_y)
+    }
+
     fn is_drag_region(&self, node: NodeId) -> bool {
         let (arena, ..) = self.runtime.geometry();
         arena.id_attr(node) == Some(crate::WINDOW_DRAG_REGION_ID)
@@ -1768,7 +1801,7 @@ impl WindowState {
             return false;
         }
         match arena.tag(node) {
-            "button" | "select" => true,
+            "button" | "select" | "textarea" => true,
             "input" => {
                 crate::focus::is_editable_input_type(arena.input_type(node))
                     || crate::focus::is_checkable_input_type(arena.input_type(node))
@@ -2227,8 +2260,7 @@ impl WindowState {
     fn focused_text_input(&self) -> Option<NodeId> {
         let node = self.runtime.focused()?;
         let (arena, ..) = self.runtime.geometry();
-        (arena.tag(node) == "input" && crate::focus::is_editable_input_type(arena.input_type(node)))
-            .then_some(node)
+        crate::focus::is_text_control(arena, node).then_some(node)
     }
 
     /// Whether IME composition should ever be allowed for `node` --
@@ -2310,9 +2342,33 @@ impl WindowState {
         let ctrl = self.modifiers.control_key();
         let shift = self.modifiers.shift_key();
 
+        let multiline = self.runtime.geometry().0.tag(node) == "textarea";
         if matches!(event.logical_key, Key::Named(NamedKey::Enter)) {
-            if !event.repeat {
+            if multiline {
+                self.commit_text_input_op(
+                    &registry,
+                    &id,
+                    node,
+                    TextEditOp::InsertOrReplace("\n".to_string()),
+                );
+            } else if !event.repeat {
                 self.submit_implicitly(node);
+            }
+            return;
+        }
+        if multiline
+            && !ctrl
+            && let Key::Named(key @ (NamedKey::PageUp | NamedKey::PageDown)) = event.logical_key
+        {
+            let direction = if matches!(key, NamedKey::PageUp) {
+                -1
+            } else {
+                1
+            };
+            let (_, _, _, font) = self.runtime.geometry_and_font_mut();
+            match registry.page(&id, direction, shift, font) {
+                Some(new_text) => self.commit_text_input_value(node, new_text),
+                None => self.update_and_request_redraw(),
             }
             return;
         }
@@ -2351,9 +2407,7 @@ impl WindowState {
                 }
                 Some(KeyCode::KeyV) => {
                     if let Some(pasted) = clipboard.get_text() {
-                        let pasted = self
-                            .runtime
-                            .filter_typed(node, &strip_disallowed_input_chars(&pasted));
+                        let pasted = self.runtime.clean_typed(node, &pasted);
                         self.commit_text_input_op(
                             &registry,
                             &id,
@@ -2392,15 +2446,17 @@ impl WindowState {
                 (false, true) => TextEditOp::SelectRight,
                 (false, false) => TextEditOp::MoveRight,
             }),
-            Key::Named(NamedKey::Home) => Some(if shift {
-                TextEditOp::SelectLineStart
-            } else {
-                TextEditOp::MoveLineStart
+            Key::Named(NamedKey::Home) => Some(match (ctrl, shift) {
+                (true, true) => TextEditOp::SelectTextStart,
+                (true, false) => TextEditOp::MoveTextStart,
+                (false, true) => TextEditOp::SelectLineStart,
+                (false, false) => TextEditOp::MoveLineStart,
             }),
-            Key::Named(NamedKey::End) => Some(if shift {
-                TextEditOp::SelectLineEnd
-            } else {
-                TextEditOp::MoveLineEnd
+            Key::Named(NamedKey::End) => Some(match (ctrl, shift) {
+                (true, true) => TextEditOp::SelectTextEnd,
+                (true, false) => TextEditOp::MoveTextEnd,
+                (false, true) => TextEditOp::SelectLineEnd,
+                (false, false) => TextEditOp::MoveLineEnd,
             }),
             Key::Named(NamedKey::Backspace) => Some(if ctrl {
                 TextEditOp::BackdeleteWord
@@ -2412,15 +2468,12 @@ impl WindowState {
             } else {
                 TextEditOp::Delete
             }),
-            // A real character the user typed -- `\n`/`\r`/`\t` stripped,
-            // real single-line-input discipline (see
-            // `strip_disallowed_input_chars`'s own doc); Ctrl-held
-            // combinations other than the shortcuts already handled above
-            // carry no text-insertion meaning here.
+            // A real character the user typed, cleaned for this field's own
+            // kind (see `UiRuntime::clean_typed`); Ctrl-held combinations
+            // other than the shortcuts already handled above carry no
+            // text-insertion meaning here.
             Key::Character(text) if !ctrl => {
-                let text = self
-                    .runtime
-                    .filter_typed(node, &strip_disallowed_input_chars(text));
+                let text = self.runtime.clean_typed(node, text);
                 (!text.is_empty()).then_some(TextEditOp::InsertOrReplace(text))
             }
             // Unlike every other printable character, winit reports the
@@ -2431,6 +2484,15 @@ impl WindowState {
             // space did nothing.
             Key::Named(NamedKey::Space) if !ctrl => {
                 Some(TextEditOp::InsertOrReplace(" ".to_string()))
+            }
+            // A textarea moves its caret between lines; Shift extends.
+            Key::Named(key @ (NamedKey::ArrowUp | NamedKey::ArrowDown)) if multiline => {
+                Some(match (matches!(key, NamedKey::ArrowUp), shift) {
+                    (true, false) => TextEditOp::MoveUp,
+                    (true, true) => TextEditOp::SelectUp,
+                    (false, false) => TextEditOp::MoveDown,
+                    (false, true) => TextEditOp::SelectDown,
+                })
             }
             // A number field steps with Up/Down instead of moving a caret.
             Key::Named(key @ (NamedKey::ArrowUp | NamedKey::ArrowDown)) if !ctrl => {
@@ -2500,9 +2562,7 @@ impl WindowState {
                 self.update_and_request_redraw();
             }
             Ime::Commit(text) => {
-                let text = self
-                    .runtime
-                    .filter_typed(node, &strip_disallowed_input_chars(&text));
+                let text = self.runtime.clean_typed(node, &text);
                 self.commit_text_input_op(&registry, &id, node, TextEditOp::InsertOrReplace(text));
             }
             // `Enabled` needs no action (this window already allowed IME
@@ -2569,17 +2629,6 @@ impl WindowState {
         self.runtime.commit_value(node, new_text);
         self.update_and_request_redraw();
     }
-}
-
-/// Strips control characters a single-line `<input>` must never contain
-/// in its own committed text — a newline/carriage-return/tab pasted or
-/// typed in is silently dropped, matching real browsers' own `type=text`
-/// discipline, rather than being inserted and producing multi-line text
-/// this editor was never built to lay out or navigate.
-fn strip_disallowed_input_chars(text: &str) -> String {
-    text.chars()
-        .filter(|c| !matches!(c, '\n' | '\r' | '\t'))
-        .collect()
 }
 
 /// Owns every currently-open window and whichever [`WindowSpec`]s haven't
@@ -3165,9 +3214,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                                 }) else {
                                     return;
                                 };
-                                let value = state
-                                    .runtime
-                                    .filter_typed(node, &strip_disallowed_input_chars(&value));
+                                let value = state.runtime.clean_typed(node, &value);
                                 let registry = state.runtime.text_input_registry();
                                 if action == accesskit::Action::SetValue {
                                     state.commit_text_input_op(

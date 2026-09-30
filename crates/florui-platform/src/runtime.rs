@@ -468,7 +468,7 @@ impl UiRuntime {
         self.scroll_registry
             .sync(&self.arena, &self.layouts, &content_extents);
         self.text_input_registry
-            .sync(&self.arena, &self.styles, &mut self.font);
+            .sync(&self.arena, &self.styles, &self.layouts, &mut self.font);
     }
 
     /// Widens any *auto-width* select whose widest option's real measured

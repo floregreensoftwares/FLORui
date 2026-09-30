@@ -81,6 +81,98 @@ struct TextInputState {
     /// *continuing* a coalesced run of single-character insertions — see
     /// [`TextInputRegistry::apply`]'s own doc for the coalescing rule.
     coalescing_insert: bool,
+    /// A `<textarea>`: wraps at its content width and scrolls vertically.
+    multiline: bool,
+    /// A `readonly` field can be focused, selected and copied but never
+    /// edited.
+    read_only: bool,
+    /// How far the text is scrolled, in logical pixels.
+    scroll: (f32, f32),
+    /// The content box in logical pixels, what the text scrolls inside.
+    viewport: (f32, f32),
+}
+
+/// Width a vertical scrollbar takes from a textarea's text once the
+/// content overflows (measured in Edge on Windows).
+pub(crate) const SCROLLBAR_WIDTH: f32 = 15.0;
+
+impl TextInputState {
+    /// Wraps a multiline field at the viewport width, giving up the
+    /// scrollbar's width once the text is taller than the viewport, then
+    /// keeps the scroll offset inside the new bounds.
+    fn relayout(&mut self, font: &mut Font) {
+        if !self.multiline {
+            return;
+        }
+        let (vw, vh) = self.viewport;
+        self.editor.set_width(Some(vw.max(1.0)));
+        let (_, height) = font.content_size(&mut self.editor);
+        if height > vh {
+            self.editor.set_width(Some((vw - SCROLLBAR_WIDTH).max(1.0)));
+        }
+        self.clamp_scroll(font);
+    }
+
+    fn clamp_scroll(&mut self, font: &mut Font) {
+        let (_, content_h) = font.content_size(&mut self.editor);
+        let max_y = (content_h - self.viewport.1).max(0.0);
+        self.scroll = (0.0, self.scroll.1.clamp(0.0, max_y));
+    }
+
+    /// Scrolls the least distance that brings the caret into view.
+    fn reveal_caret(&mut self, font: &mut Font) {
+        if !self.multiline {
+            return;
+        }
+        self.clamp_scroll(font);
+        let Some((_, y0, _, y1)) = font.caret_rect(&mut self.editor) else {
+            return;
+        };
+        let vh = self.viewport.1;
+        if y0 < self.scroll.1 {
+            self.scroll.1 = y0;
+        } else if y1 > self.scroll.1 + vh {
+            self.scroll.1 = y1 - vh;
+        }
+        self.clamp_scroll(font);
+    }
+}
+
+/// Whether `op` would change the text, as opposed to only moving the caret
+/// or the selection.
+fn changes_text(op: &TextEditOp) -> bool {
+    matches!(
+        op,
+        TextEditOp::InsertOrReplace(_)
+            | TextEditOp::Delete
+            | TextEditOp::Backdelete
+            | TextEditOp::DeleteWord
+            | TextEditOp::BackdeleteWord
+            | TextEditOp::SetCompose(..)
+    )
+}
+
+/// The content box of a node (its layout box less border and padding) in
+/// Whether `op` would change the text (as opposed to only moving the caret/// or the selection).fn changes_text(op: &TextEditOp) -> bool {    matches!(        op,        TextEditOp::InsertOrReplace(_)            | TextEditOp::Delete            | TextEditOp::Backdelete            | TextEditOp::DeleteWord            | TextEditOp::BackdeleteWord            | TextEditOp::SetCompose(..)    )}
+/// logical pixels.
+fn content_box(
+    style: Option<&ComputedStyle>,
+    layout: Option<&florui_layout::BoxLayout>,
+) -> (f32, f32) {
+    let (Some(style), Some(layout)) = (style, layout) else {
+        return (0.0, 0.0);
+    };
+    let width = layout.width
+        - style.border.left.width
+        - style.border.right.width
+        - style.padding.left
+        - style.padding.right;
+    let height = layout.height
+        - style.border.top.width
+        - style.border.bottom.width
+        - style.padding.top
+        - style.padding.bottom;
+    (width.max(0.0), height.max(0.0))
 }
 
 /// Real editing state for every currently-live editable `<input>`, keyed
@@ -107,13 +199,15 @@ impl TextInputRegistry {
         &self,
         arena: &Arena,
         styles: &HashMap<NodeId, ComputedStyle>,
+        layouts: &HashMap<NodeId, florui_layout::BoxLayout>,
         font: &mut Font,
     ) {
         let mut states = self.states.borrow_mut();
         let mut seen = HashSet::new();
 
         let editable_inputs = arena.find_all(|arena, id| {
-            arena.tag(id) == "input" && focus::is_editable_input_type(arena.input_type(id))
+            arena.tag(id) == "textarea"
+                || (arena.tag(id) == "input" && focus::is_editable_input_type(arena.input_type(id)))
         });
         for node in editable_inputs {
             let Some(id) = arena.id_attr(node) else {
@@ -133,11 +227,16 @@ impl TextInputRegistry {
                 florui_layout::to_text_font_family(s.font_family)
             });
             let font_weight = style.map_or(400.0, |s| s.font_weight);
+            let multiline = arena.tag(node) == "textarea";
+            let viewport = content_box(style, layouts.get(&node));
 
             if let Some(state) = states.get_mut(id) {
                 state.font_family = font_family;
                 state.font_weight = font_weight;
                 state.kind = value_kind(arena, node);
+                state.read_only = arena.attr_flag(node, "readonly");
+                let mut needs_relayout = state.viewport != viewport;
+                state.viewport = viewport;
                 if state.last_committed_text != value {
                     state.editor.set_text(value);
                     state.bad_input = false;
@@ -151,6 +250,11 @@ impl TextInputRegistry {
                     state.undo_stack.clear();
                     state.redo_stack.clear();
                     state.coalescing_insert = false;
+                    needs_relayout = true;
+                }
+                if needs_relayout {
+                    state.relayout(font);
+                    state.reveal_caret(font);
                 }
             } else {
                 let font_size = style.map_or(16.0, |s| s.font_size);
@@ -162,20 +266,24 @@ impl TextInputRegistry {
                     font_family,
                     font_weight,
                 );
-                states.insert(
-                    id.to_string(),
-                    TextInputState {
-                        editor,
-                        last_committed_text: value.to_string(),
-                        kind: value_kind(arena, node),
-                        bad_input: false,
-                        font_family,
-                        font_weight,
-                        undo_stack: Vec::new(),
-                        redo_stack: Vec::new(),
-                        coalescing_insert: false,
-                    },
-                );
+                let mut state = TextInputState {
+                    editor,
+                    last_committed_text: value.to_string(),
+                    kind: value_kind(arena, node),
+                    bad_input: false,
+                    font_family,
+                    font_weight,
+                    undo_stack: Vec::new(),
+                    redo_stack: Vec::new(),
+                    coalescing_insert: false,
+                    multiline,
+                    read_only: arena.attr_flag(node, "readonly"),
+                    scroll: (0.0, 0.0),
+                    viewport,
+                };
+                state.relayout(font);
+                state.reveal_caret(font);
+                states.insert(id.to_string(), state);
             }
         }
 
@@ -197,6 +305,9 @@ impl TextInputRegistry {
     pub fn apply(&self, id: &str, op: TextEditOp, font: &mut Font) -> Option<String> {
         let mut states = self.states.borrow_mut();
         let state = states.get_mut(id)?;
+        if state.read_only && changes_text(&op) {
+            return None;
+        }
 
         let is_coalescable_insert = matches!(&op, TextEditOp::InsertOrReplace(text) if text.chars().count() == 1)
             && state.editor.selection().is_collapsed();
@@ -204,6 +315,10 @@ impl TextInputRegistry {
 
         let changed =
             font.apply_text_edit(&mut state.editor, op, state.font_family, state.font_weight);
+        if changed {
+            state.relayout(font);
+        }
+        state.reveal_caret(font);
         if !changed {
             return None;
         }
@@ -245,7 +360,7 @@ impl TextInputRegistry {
         font: &mut Font,
         is_undo: bool,
     ) -> Option<String> {
-        let state = states.get_mut(id)?;
+        let state = states.get_mut(id).filter(|state| !state.read_only)?;
         let entry = if is_undo {
             state.undo_stack.pop()?
         } else {
@@ -269,11 +384,61 @@ impl TextInputRegistry {
             state.font_weight,
         );
         state.coalescing_insert = false;
+        state.relayout(font);
+        state.reveal_caret(font);
         let raw = state.editor.text();
         let new_text = sanitize_value(state.kind, &raw);
         state.bad_input = !raw.is_empty() && new_text.is_empty() && state.kind == ValueKind::Number;
         state.last_committed_text = new_text.clone();
         Some(new_text)
+    }
+
+    /// `id`'s scroll offset in logical pixels, `(0, 0)` for an untracked id.
+    pub(crate) fn scroll_offset(&self, id: &str) -> (f32, f32) {
+        self.states
+            .borrow()
+            .get(id)
+            .map_or((0.0, 0.0), |state| state.scroll)
+    }
+
+    /// Scrolls a multiline field by `dy` logical pixels; `true` if it moved,
+    /// `false` at a limit, so the wheel can pass on to whatever scrolls
+    /// behind it, as a browser does.
+    pub(crate) fn scroll_by(&self, id: &str, dy: f32, font: &mut Font) -> bool {
+        let mut states = self.states.borrow_mut();
+        let Some(state) = states.get_mut(id).filter(|state| state.multiline) else {
+            return false;
+        };
+        let before = state.scroll.1;
+        state.scroll.1 += dy;
+        state.clamp_scroll(font);
+        state.scroll.1 != before
+    }
+
+    /// One page up or down: the caret moves by the field's height less one
+    /// line (measured in Edge: three rows in a four-row field), keeping its
+    /// column, and the view follows it. `extend` grows the selection.
+    pub(crate) fn page(
+        &self,
+        id: &str,
+        direction: i32,
+        extend: bool,
+        font: &mut Font,
+    ) -> Option<String> {
+        let (x, y, step) = {
+            let mut states = self.states.borrow_mut();
+            let state = states.get_mut(id).filter(|state| state.multiline)?;
+            let (x0, y0, _, y1) = font.caret_rect(&mut state.editor)?;
+            let line = y1 - y0;
+            (x0, (y0 + y1) / 2.0, (state.viewport.1 - line).max(line))
+        };
+        let target = (x, y + direction as f32 * step);
+        let op = if extend {
+            TextEditOp::ExtendSelectionToPoint(target.0, target.1)
+        } else {
+            TextEditOp::MoveToPoint(target.0, target.1)
+        };
+        self.apply(id, op, font)
     }
 
     /// Whether `id`'s typed text is not a number, for `badInput`.
@@ -342,12 +507,16 @@ impl TextInputRegistry {
         let Some(state) = states.get_mut(id) else {
             return;
         };
+        if state.read_only {
+            return;
+        }
         font.apply_text_edit(
             &mut state.editor,
             TextEditOp::SetCompose(text.to_owned(), cursor),
             state.font_family,
             state.font_weight,
         );
+        state.reveal_caret(font);
     }
 
     /// Ends `id`'s composition, if any — a real no-op when nothing is
@@ -382,7 +551,7 @@ mod tests {
         let mut font = Font::load_embedded();
         let styles: HashMap<NodeId, ComputedStyle> = HashMap::new();
         let registry = TextInputRegistry::new();
-        registry.sync(&arena, &styles, &mut font);
+        registry.sync(&arena, &styles, &HashMap::new(), &mut font);
         (registry, font)
     }
 
@@ -463,7 +632,7 @@ mod tests {
         let mut font = Font::load_embedded();
         let styles: HashMap<NodeId, ComputedStyle> = HashMap::new();
         let registry = TextInputRegistry::new();
-        registry.sync(&arena, &styles, &mut font);
+        registry.sync(&arena, &styles, &HashMap::new(), &mut font);
 
         // The owner rejected this, so a fresh render's own arena still
         // carries the original "hello" -- exactly what a real rejecting
@@ -471,7 +640,7 @@ mod tests {
         registry.apply("x", TextEditOp::InsertOrReplace("!".to_string()), &mut font);
         let tree: Element = view! { <input type="text" id="x" value={Binding::new("hello".to_string(), |_| {})} /> };
         arena = Arena::build(&tree);
-        registry.sync(&arena, &styles, &mut font);
+        registry.sync(&arena, &styles, &HashMap::new(), &mut font);
 
         registry.apply("x", TextEditOp::SelectAll, &mut font);
         assert_eq!(
@@ -487,7 +656,7 @@ mod tests {
         let empty: Element = view! { <div /> };
         let arena = Arena::build(&empty);
         let styles: HashMap<NodeId, ComputedStyle> = HashMap::new();
-        registry.sync(&arena, &styles, &mut font);
+        registry.sync(&arena, &styles, &HashMap::new(), &mut font);
         assert_eq!(registry.apply("x", TextEditOp::SelectAll, &mut font), None);
     }
 }
