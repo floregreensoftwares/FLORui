@@ -171,6 +171,19 @@ const CSS: &str = "
         padding-left: 2px;
     }
 
+    textarea {
+        display: inline-block;
+        border: 1px solid #767676;
+        background-color: #ffffff;
+        color: #000000;
+        padding-top: 2px;
+        padding-right: 2px;
+        padding-bottom: 2px;
+        padding-left: 2px;
+        font-family: monospace;
+        font-size: 13.3333px;
+    }
+
     select {
         display: inline-block;
         border: 1px solid #767676;

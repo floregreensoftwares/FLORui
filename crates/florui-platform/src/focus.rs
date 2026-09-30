@@ -37,8 +37,15 @@ pub(crate) fn is_range_input_type(input_type: Option<&str>) -> bool {
 
 /// Whether a `<label>` can hand its click to `id`: an `<input>`, a
 /// `<button>`, or a `<select>`.
+/// Whether `id` is a text-editing control: a `<textarea>`, or an `<input>`
+/// of an editable type.
+pub(crate) fn is_text_control(arena: &Arena, id: NodeId) -> bool {
+    arena.tag(id) == "textarea"
+        || (arena.tag(id) == "input" && is_editable_input_type(arena.input_type(id)))
+}
+
 pub(crate) fn is_labelable(arena: &Arena, id: NodeId) -> bool {
-    matches!(arena.tag(id), "input" | "button" | "select")
+    matches!(arena.tag(id), "input" | "button" | "select" | "textarea")
 }
 
 fn is_radio(arena: &Arena, id: NodeId) -> bool {
@@ -53,7 +60,7 @@ pub(crate) fn is_focusable(arena: &Arena, id: NodeId) -> bool {
         // after it.
         "a" => arena.href(id).is_some(),
         _ if arena.is_disabled(id) => false,
-        "button" | "select" => true,
+        "button" | "select" | "textarea" => true,
         "input" => {
             is_editable_input_type(arena.input_type(id))
                 || is_checkable_input_type(arena.input_type(id))

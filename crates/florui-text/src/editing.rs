@@ -1,12 +1,13 @@
-//! Real, Unicode/bidi-aware single-line text editing — caret positioning,
-//! selection, and the movement/deletion vocabulary a real `<input>` needs.
+//! Real, Unicode/bidi-aware text editing — caret positioning,
+//! selection, and the movement/deletion vocabulary a real `<input>` or
+//! `<textarea>` needs.
 //!
 //! Wraps Parley's own `editing::PlainEditor` rather than hand-rolling
 //! grapheme/word/bidi boundaries — it already implements exactly this
-//! vocabulary, tested and bidi/cluster-correct. [`TextEditor`] never calls
-//! `PlainEditor::set_width`, so it stays single-line by construction; a
-//! future multiline slice would need a different type, not a flag on this
-//! one, since single-line callers should never pay for line-wrap tracking.
+//! vocabulary, tested and bidi/cluster-correct. Without
+//! [`TextEditor::set_width`] text never wraps, which is what a single-line
+//! `<input>` wants; a `<textarea>` sets a width and gets wrapped lines,
+//! with `Up`/`Down` and the point operations working across them.
 //!
 //! IME composition goes through [`TextEditOp::SetCompose`]/[`ClearCompose`]
 //! — real Parley preedit state, spliced directly into the live buffer
@@ -79,9 +80,14 @@ pub enum TextEditOp {
     SelectTextStart,
     SelectTextEnd,
     SelectAll,
-    MoveToPoint(f32),
-    SelectWordAtPoint(f32),
-    ExtendSelectionToPoint(f32),
+    MoveUp,
+    MoveDown,
+    SelectUp,
+    SelectDown,
+    MoveToPoint(f32, f32),
+    SelectWordAtPoint(f32, f32),
+    SelectHardLineAtPoint(f32, f32),
+    ExtendSelectionToPoint(f32, f32),
     /// Sets the selection to an exact byte range — undo/redo's own way to
     /// restore a prior selection, not reachable from any real keyboard/
     /// mouse gesture (those all resolve relative to the current layout).
@@ -97,16 +103,16 @@ pub enum TextEditOp {
     ClearCompose,
 }
 
-/// Every point-based [`TextEditOp`] resolves against `y = 0.0` in
-/// Parley's own hit-testing — always correct for a single-line editor
-/// (there is only one line to resolve to), and simpler than plumbing a
-/// real vertical position through for a dimension that can never
-/// disambiguate anything here.
-const SINGLE_LINE_Y: f32 = 0.0;
-
 impl TextEditor {
     pub fn new(font_size: f32) -> Self {
         Self(PlainEditor::new(font_size))
+    }
+
+    /// Wraps text at `width` logical pixels, or never for `None`. A
+    /// single-line `<input>` leaves this unset; a `<textarea>` sets it to
+    /// its content width so long lines break like they do in a browser.
+    pub fn set_width(&mut self, width: Option<f32>) {
+        self.0.set_width(width);
     }
 
     /// Overwrites the whole buffer — used both to seed a freshly-created
@@ -200,16 +206,29 @@ impl Font {
             TextEditOp::SelectTextStart => driver.select_to_text_start(),
             TextEditOp::SelectTextEnd => driver.select_to_text_end(),
             TextEditOp::SelectAll => driver.select_all(),
-            TextEditOp::MoveToPoint(x) => driver.move_to_point(x, SINGLE_LINE_Y),
-            TextEditOp::SelectWordAtPoint(x) => driver.select_word_at_point(x, SINGLE_LINE_Y),
-            TextEditOp::ExtendSelectionToPoint(x) => {
-                driver.extend_selection_to_point(x, SINGLE_LINE_Y)
-            }
+            TextEditOp::MoveUp => driver.move_up(),
+            TextEditOp::MoveDown => driver.move_down(),
+            TextEditOp::SelectUp => driver.select_up(),
+            TextEditOp::SelectDown => driver.select_down(),
+            TextEditOp::MoveToPoint(x, y) => driver.move_to_point(x, y),
+            TextEditOp::SelectWordAtPoint(x, y) => driver.select_word_at_point(x, y),
+            TextEditOp::SelectHardLineAtPoint(x, y) => driver.select_hard_line_at_point(x, y),
+            TextEditOp::ExtendSelectionToPoint(x, y) => driver.extend_selection_to_point(x, y),
             TextEditOp::SelectByteRange(start, end) => driver.select_byte_range(start, end),
             TextEditOp::SetCompose(text, cursor) => driver.set_compose(&text, cursor),
             TextEditOp::ClearCompose => driver.clear_compose(),
         }
         editor.0.raw_text() != text_before
+    }
+
+    /// The laid-out text's total size in logical pixels — what a scroll
+    /// range is measured against. For an editor with no wrap width the
+    /// width is the longest line's.
+    pub fn content_size(&mut self, editor: &mut TextEditor) -> (f32, f32) {
+        let mut driver = editor.0.driver(&mut self.font_cx, &mut self.layout_cx);
+        driver.refresh_layout();
+        let layout = driver.layout();
+        (layout.full_width(), layout.height())
     }
 
     /// The area of the current IME preedit composition, or the current
@@ -559,5 +578,119 @@ mod tests {
         let plain = font.shape(FontFamily::SansSerif, "Hi", 16.0, 400.0);
         assert_eq!(edited_runs.len(), plain.runs.len());
         assert_eq!(edited_runs[0].glyphs.len(), plain.runs[0].glyphs.len());
+    }
+
+    fn multiline(font: &mut Font, text: &str, width: Option<f32>) -> TextEditor {
+        let mut editor = TextEditor::new(16.0);
+        editor.set_width(width);
+        font.apply_text_edit(
+            &mut editor,
+            TextEditOp::InsertOrReplace(text.to_string()),
+            FontFamily::SansSerif,
+            400.0,
+        );
+        font.apply_text_edit(
+            &mut editor,
+            TextEditOp::MoveTextStart,
+            FontFamily::SansSerif,
+            400.0,
+        );
+        editor
+    }
+
+    fn op(font: &mut Font, editor: &mut TextEditor, op: TextEditOp) -> bool {
+        font.apply_text_edit(editor, op, FontFamily::SansSerif, 400.0)
+    }
+
+    #[test]
+    fn down_and_up_move_between_lines_and_keep_the_column() {
+        let mut font = Font::load_embedded();
+        let mut editor = multiline(&mut font, "abcdef\nab\nabcdef", None);
+        op(&mut font, &mut editor, TextEditOp::MoveToPoint(200.0, 0.0));
+        assert_eq!(editor.selection().focus, 6, "end of the first line");
+        op(&mut font, &mut editor, TextEditOp::MoveDown);
+        assert_eq!(
+            editor.selection().focus,
+            9,
+            "clamped to the short line's end"
+        );
+        op(&mut font, &mut editor, TextEditOp::MoveDown);
+        assert_eq!(
+            editor.selection().focus,
+            16,
+            "the column comes back on the long one"
+        );
+        op(&mut font, &mut editor, TextEditOp::MoveUp);
+        assert_eq!(editor.selection().focus, 9);
+    }
+
+    #[test]
+    fn a_wrap_width_breaks_a_long_line_and_home_end_stay_on_the_visual_row() {
+        let mut font = Font::load_embedded();
+        let long = "word ".repeat(12);
+        let mut wrapped = multiline(&mut font, long.trim_end(), Some(80.0));
+        let mut unwrapped = multiline(&mut font, long.trim_end(), None);
+        let (_, wrapped_height) = font.content_size(&mut wrapped);
+        let (_, unwrapped_height) = font.content_size(&mut unwrapped);
+        assert!(
+            wrapped_height > unwrapped_height * 2.0,
+            "wrapping adds rows"
+        );
+
+        op(&mut font, &mut wrapped, TextEditOp::MoveLineEnd);
+        let row_end = wrapped.selection().focus;
+        assert!(
+            row_end < long.trim_end().len(),
+            "End stops at the end of the visual row"
+        );
+        op(&mut font, &mut wrapped, TextEditOp::MoveDown);
+        op(&mut font, &mut wrapped, TextEditOp::MoveLineStart);
+        assert!(
+            wrapped.selection().focus >= row_end,
+            "the next row starts after the first ends"
+        );
+    }
+
+    #[test]
+    fn a_point_op_uses_y_to_pick_the_line() {
+        let mut font = Font::load_embedded();
+        let mut editor = multiline(&mut font, "first\nsecond\nthird", None);
+        let (_, _, _, line_bottom) = font.caret_rect(&mut editor).unwrap();
+        op(
+            &mut font,
+            &mut editor,
+            TextEditOp::MoveToPoint(0.0, line_bottom * 1.5),
+        );
+        assert_eq!(editor.selection().focus, 6, "the start of the second line");
+        op(
+            &mut font,
+            &mut editor,
+            TextEditOp::MoveToPoint(0.0, line_bottom * 2.5),
+        );
+        assert_eq!(editor.selection().focus, 13, "the start of the third line");
+    }
+
+    #[test]
+    fn select_hard_line_at_point_selects_the_whole_paragraph_even_when_wrapped() {
+        let mut font = Font::load_embedded();
+        let long = "word ".repeat(12);
+        let text = format!("head\n{}\ntail", long.trim_end());
+        let mut editor = multiline(&mut font, &text, Some(80.0));
+        let (_, _, _, line_bottom) = font.caret_rect(&mut editor).unwrap();
+        op(
+            &mut font,
+            &mut editor,
+            TextEditOp::SelectHardLineAtPoint(10.0, line_bottom * 2.5),
+        );
+        assert_eq!(editor.selected_text(), Some(long.trim_end()));
+    }
+
+    #[test]
+    fn shift_down_extends_the_selection_across_lines() {
+        let mut font = Font::load_embedded();
+        let mut editor = multiline(&mut font, "ab\ncd\nef", None);
+        op(&mut font, &mut editor, TextEditOp::SelectDown);
+        op(&mut font, &mut editor, TextEditOp::SelectDown);
+        assert_eq!(editor.selected_text(), Some("ab\ncd\n"));
     }
 }

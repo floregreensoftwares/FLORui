@@ -226,6 +226,43 @@ enum LeafContext {
     Text(TextContext),
     Inline(Vec<InlineContentItem>),
     Image(ImageContext),
+    /// A control whose content box has a fixed intrinsic size independent of
+    /// what it holds (a `<textarea>`: `cols` by `rows`). Explicit CSS
+    /// dimensions still win, as with any element.
+    Fixed(Size<f32>),
+}
+
+/// Width a `<textarea>`'s default size reserves for its scrollbar (measured
+/// in Edge on Windows: 20 columns of a 7.33px monospace advance measure
+/// 162px wide, which is 146.7 + 15).
+const TEXTAREA_SCROLLBAR_WIDTH: f32 = 15.0;
+
+/// A `<textarea>`'s default content size: `cols` (default 20) average
+/// characters wide plus its scrollbar, `rows` (default 2) lines tall.
+fn textarea_intrinsic_size(
+    font: &mut florui_text::Font,
+    arena: &Arena,
+    node: NodeId,
+    style: Option<&ComputedStyle>,
+) -> Size<f32> {
+    let family = style.map_or(florui_text::FontFamily::Monospace, |s| {
+        to_text_font_family(s.font_family)
+    });
+    let font_size = style.map_or(13.3333, |s| s.font_size);
+    let font_weight = style.map_or(400.0, |s| s.font_weight);
+    let attr_count = |name: &str, default: f32| {
+        arena
+            .attr(node, name)
+            .and_then(|raw| raw.trim().parse::<u32>().ok())
+            .filter(|&count| count > 0)
+            .map_or(default, |count| count as f32)
+    };
+    let advance = font.measure(family, "0", font_size, font_weight).width;
+    let line_height = font.measure(family, " ", font_size, font_weight).height;
+    Size {
+        width: attr_count("cols", 20.0) * advance + TEXTAREA_SCROLLBAR_WIDTH,
+        height: attr_count("rows", 2.0) * line_height,
+    }
 }
 
 /// A replaced element's own sizing inputs, pre-resolved at build time the
@@ -335,7 +372,14 @@ fn measure_inline_block_intrinsic_size(
     let font_family = style.map_or(florui_text::FontFamily::SansSerif, |s| {
         to_text_font_family(s.font_family)
     });
-    let measured = if text.is_empty() {
+    let measured = if arena.tag(child) == "textarea" {
+        let size = textarea_intrinsic_size(font, arena, child, style);
+        florui_text::TextMetrics {
+            width: size.width,
+            height: size.height,
+            baseline: 0.0,
+        }
+    } else if text.is_empty() {
         florui_text::TextMetrics {
             width: 0.0,
             height: 0.0,
@@ -703,8 +747,9 @@ fn layout_root_group(
                         t.font_family,
                     )),
                     LeafContext::Inline(items) => Some(BaselineSource::Inline(items.clone())),
-                    // A replaced element has no text baseline to recover.
-                    LeafContext::Image(_) => None,
+                    // A replaced element has no text baseline to recover,
+                    // and neither does a fixed-size control.
+                    LeafContext::Image(_) | LeafContext::Fixed(_) => None,
                 });
 
                 let mut measured_baseline = None;
@@ -959,6 +1004,10 @@ fn measure_leaf(
                 height: result.height,
             }
         }
+        LeafContext::Fixed(size) => Size {
+            width: known_dimensions.width.unwrap_or(size.width),
+            height: known_dimensions.height.unwrap_or(size.height),
+        },
         LeafContext::Image(image_context) => {
             // A replaced element contributes no text baseline;
             // `baseline_out` stays whatever the caller already
@@ -1199,6 +1248,9 @@ fn build_node(
                                     .map_or_else(Default::default, |s| s.aspect_ratio),
                             }),
                         )?
+                    } else if arena.tag(node) == "textarea" {
+                        let size = textarea_intrinsic_size(font, arena, node, styles.get(&node));
+                        tree.new_leaf_with_context(style, LeafContext::Fixed(size))?
                     } else if leaf_text(arena, node).is_empty() {
                         tree.new_leaf(style)?
                     } else {
@@ -4127,6 +4179,43 @@ mod tests {
             assert_eq!(layouts[&node].width, 123.0);
             assert_eq!(layouts[&node].height, 45.0);
         }
+    }
+
+    /// Measured in Edge: a default `<textarea>` is 168x36 (162x30 content),
+    /// and `rows`/`cols` scale the content box by line height and advance.
+    #[test]
+    fn a_textarea_defaults_to_twenty_columns_by_two_rows_plus_a_scrollbar() {
+        let tree: Element = view! {
+            <div>
+                <textarea id="a"></textarea>
+                <textarea id="b" rows="4" cols="30"></textarea>
+                <textarea id="c" style="width: 100px; height: 50px;"></textarea>
+            </div>
+        };
+        let (arena, layouts) = layout_for(&tree, "");
+        let size = |id: &str| {
+            let node = arena.find(|a, n| a.id_attr(n) == Some(id)).unwrap();
+            (layouts[&node].width, layouts[&node].height)
+        };
+        let (aw, ah) = size("a");
+        let (bw, bh) = size("b");
+        assert!(bw > aw && bh > ah, "more cols and rows make it bigger");
+        // 1px border + 2px padding on each side is 6px of chrome.
+        let (content_a, content_b) = (ah - 6.0, bh - 6.0);
+        assert!(
+            (content_b - 2.0 * content_a).abs() < 0.5,
+            "four rows are twice the height of two"
+        );
+        let (cols_a, cols_b) = (aw - 6.0 - 15.0, bw - 6.0 - 15.0);
+        assert!(
+            (cols_b / cols_a - 30.0 / 20.0).abs() < 0.01,
+            "columns scale the width left after the scrollbar"
+        );
+        assert_eq!(
+            size("c"),
+            (106.0, 56.0),
+            "explicit CSS sizes the content box, as in a browser"
+        );
     }
 
     #[test]
