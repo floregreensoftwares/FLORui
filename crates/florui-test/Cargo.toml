@@ -1,0 +1,19 @@
+[package]
+name = "florui-test"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Mount a component in isolation, drive it with real input, inspect and compare it, and check what it leaves behind."
+
+[lib]
+name = "florui_test"
+
+[dependencies]
+florui = { path = "../florui" }
+florui-platform = { path = "../florui-platform" }
+# Turns on the live-state counts that teardown checks read.
+florui-reactive = { path = "../florui-reactive", features = ["live-counts"] }
+florui-style = { path = "../florui-style" }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
