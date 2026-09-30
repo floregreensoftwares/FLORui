@@ -58,6 +58,7 @@ pub fn use_ref<T: 'static>(init: impl FnOnce() -> T) -> Ref<T> {
         let cell = Ref {
             value: Rc::new(RefCell::new(init())),
         };
+        crate::live::ref_created(&cell.value);
         slots.push(Box::new(cell.clone()));
         cell
     } else {

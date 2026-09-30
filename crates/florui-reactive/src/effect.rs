@@ -69,10 +69,14 @@ pub(crate) fn run_pending(scope: &ComponentScopeInner) {
             .cleanup
             .take();
         if let Some(cleanup) = old_cleanup {
+            crate::live::effect_cleanup_ran();
             cleanup();
         }
 
         let new_cleanup = (pending.run)();
+        if new_cleanup.is_some() {
+            crate::live::effect_cleanup_set();
+        }
         scope.slots.borrow_mut()[pending.index]
             .downcast_mut::<EffectSlot>()
             .expect("effect slots are only ever populated as EffectSlot")
@@ -87,6 +91,7 @@ pub(crate) fn dispose(scope: &ComponentScopeInner) {
         if let Some(effect) = slot.downcast_mut::<EffectSlot>()
             && let Some(cleanup) = effect.cleanup.take()
         {
+            crate::live::effect_cleanup_ran();
             cleanup();
         }
     }

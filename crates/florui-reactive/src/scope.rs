@@ -83,18 +83,18 @@ impl ComponentScope {
     /// A fresh scope sharing an existing dirty flag, so a write anywhere
     /// under it is still visible to whoever holds that flag.
     fn with_dirty_flag(dirty: DirtyFlag) -> Self {
-        Self {
-            inner: Rc::new(ComponentScopeInner {
-                slots: RefCell::new(Vec::new()),
-                cursor: Cell::new(0),
-                dirty,
-                context: RefCell::new(HashMap::new()),
-                pending_effects: RefCell::new(Vec::new()),
-                pending_attachments: RefCell::new(Vec::new()),
-                keyed_children: RefCell::new(HashMap::new()),
-                keys_seen_this_render: RefCell::new(HashSet::new()),
-            }),
-        }
+        let inner = Rc::new(ComponentScopeInner {
+            slots: RefCell::new(Vec::new()),
+            cursor: Cell::new(0),
+            dirty,
+            context: RefCell::new(HashMap::new()),
+            pending_effects: RefCell::new(Vec::new()),
+            pending_attachments: RefCell::new(Vec::new()),
+            keyed_children: RefCell::new(HashMap::new()),
+            keys_seen_this_render: RefCell::new(HashSet::new()),
+        });
+        crate::live::scope_created(&inner);
+        Self { inner }
     }
 
     /// Runs `render` with this scope active, so hook calls inside see the
