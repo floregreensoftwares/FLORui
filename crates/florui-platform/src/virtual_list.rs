@@ -167,6 +167,7 @@ pub struct VirtualListHandle {
     pinned: Ref<Option<Key>>,
     pin_version: Signal<u64>,
     focus: Rc<FocusController>,
+    viewport_height: Ref<f32>,
 }
 
 impl VirtualListHandle {
@@ -194,10 +195,37 @@ impl VirtualListHandle {
         }
     }
 
-    /// Brings `key`'s item into view, mounts it if it was not, and moves
-    /// focus to it (its first focusable part when the row itself is not
-    /// focusable) — for keyboard movement to an item that is not mounted
-    /// yet. A key no longer present does nothing.
+    /// Scrolls by the smallest amount that shows all of `key`'s item: not at
+    /// all when it is already visible, else its top or bottom edge lands on
+    /// the viewport's. Top-aligns while the viewport's height is unknown. A
+    /// key no longer present does nothing.
+    pub fn reveal_item(&self, key: impl Into<Key>) {
+        let key = key.into();
+        let viewport = self.viewport_height.get();
+        if viewport <= 0.0 {
+            self.scroll_to_item(key);
+            return;
+        }
+        let Some(layout) = self.layout.get() else {
+            return;
+        };
+        let anchor = ScrollAnchor::new(key.clone(), 0.0);
+        let Some(top) = self.extents.with(|e| anchor.resolve(&layout.keys, e)) else {
+            return;
+        };
+        let bottom = top + self.extents.with(|e| e.get(&key).value());
+        let (x, y) = self.scroll.offset();
+        if top < y {
+            self.scroll.scroll_to(x, top);
+        } else if bottom > y + viewport {
+            self.scroll.scroll_to(x, bottom - viewport);
+        }
+    }
+
+    /// Brings `key`'s item into view (see [`Self::reveal_item`]), mounts it
+    /// if it was not, and moves focus to it (its first focusable part when
+    /// the row itself is not focusable) — for keyboard movement to an item
+    /// that is not mounted yet. A key no longer present does nothing.
     pub fn focus_item(&self, key: impl Into<Key>) {
         let key = key.into();
         let Some(layout) = self.layout.get() else {
@@ -206,7 +234,7 @@ impl VirtualListHandle {
         if !layout.keys.contains(&key) {
             return;
         }
-        self.scroll_to_item(key.clone());
+        self.reveal_item(key.clone());
         self.focus.request_focus(row_id_of(&self.id, &key));
         self.pinned.set(Some(key));
         self.pin_version.set(self.pin_version.get() + 1);
@@ -306,6 +334,8 @@ pub fn use_virtual_list(
         use_committed_size(id.clone(), move |_w, h| viewport_height_signal.set(h));
     }
     let viewport_height = viewport_height_signal.get();
+    let viewport_height_ref = use_ref(|| 0.0f32);
+    viewport_height_ref.set(viewport_height);
     let range = visible_range(&layout, scroll_top, viewport_height, &overscan);
 
     // Anchored on the first *visible* item, not the first mounted one: rows
@@ -428,6 +458,7 @@ pub fn use_virtual_list(
             pinned,
             pin_version,
             focus,
+            viewport_height: viewport_height_ref,
         },
     )
 }
@@ -720,6 +751,37 @@ mod tests {
         settle(&mut runtime);
         assert_eq!(runtime.focused(), None);
     }
+
+    fn offset_after_reveal(start: f32, key: usize) -> f32 {
+        let keys: Keys = std::rc::Rc::new(std::cell::RefCell::new((0..100).collect()));
+        let (mut runtime, handle) =
+            focus_runtime(&keys, &std::rc::Rc::new(std::cell::Cell::new(0)));
+        let handle = handle.borrow().clone().unwrap();
+        runtime.scroll_registry().scroll_to("list", 0.0, start);
+        settle(&mut runtime);
+        handle.reveal_item(key);
+        settle(&mut runtime);
+        handle.offset().1
+    }
+
+    #[test]
+    fn revealing_a_visible_item_does_not_scroll() {
+        // Rows are 20px in a 100px viewport: items 0..5 show at offset 0.
+        assert_eq!(offset_after_reveal(0.0, 4), 0.0);
+        assert_eq!(offset_after_reveal(200.0, 12), 200.0);
+    }
+
+    #[test]
+    fn revealing_an_item_below_the_viewport_aligns_its_bottom_edge() {
+        // Item 7 spans 140..160; its bottom on the viewport's gives offset 60.
+        assert_eq!(offset_after_reveal(0.0, 7), 60.0);
+    }
+
+    #[test]
+    fn revealing_an_item_above_the_viewport_aligns_its_top_edge() {
+        assert_eq!(offset_after_reveal(400.0, 3), 60.0);
+    }
+
     #[test]
     fn rows_carry_their_place_in_the_whole_collection() {
         let runtime = build_runtime(100, 20.0, 100.0, Overscan::Items(0));
