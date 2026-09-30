@@ -109,6 +109,15 @@ pub(crate) static CONTROLS: &[ControlSpec] = &[
         constraints: unconstrained,
     },
     ControlSpec {
+        tag: "input",
+        input_type: Some("hidden"),
+        submittable: true,
+        validatable: false,
+        text_field: false,
+        entries: text_entries,
+        constraints: unconstrained,
+    },
+    ControlSpec {
         tag: "select",
         input_type: None,
         submittable: true,

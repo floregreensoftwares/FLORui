@@ -156,6 +156,10 @@ const CSS: &str = "
         border: 1px solid #767676;
     }
 
+    input[type=\"hidden\"] {
+        display: none;
+    }
+
     input {
         display: inline-block;
         border: 1px solid #767676;

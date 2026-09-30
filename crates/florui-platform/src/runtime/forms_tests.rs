@@ -553,3 +553,31 @@ fn user_invalid_follows_edit_then_blur_and_window_blur_but_not_a_bare_focus_chan
     rt.window_focus_lost();
     assert!(user_invalid(&rt, "windowed"), "window blur counts as blur");
 }
+
+/// Measured in Edge: a hidden input has no box, is not focusable, is
+/// submitted with its value, and is never validated even when `required`.
+#[test]
+fn a_hidden_input_is_submitted_but_never_focusable_or_validated() {
+    let (log, on_submit) = submitted();
+    let mut rt = runtime("", move || {
+        let on_submit = on_submit.clone();
+        view! {
+            <form id="f" onsubmit={move |data: FormData| on_submit(data)}>
+                <input id="token" type="hidden" name="token" value="secret" required="true" />
+                <input id="after" type="text" name="after" value="x" />
+            </form>
+        }
+    });
+    let (form, token) = (node(&rt, "f"), node(&rt, "token"));
+    let (arena, styles, layouts) = rt.geometry();
+    assert!(!crate::focus::is_focusable(arena, token));
+    assert_eq!(styles[&token].display, florui_style::Display::None);
+    assert_eq!(layouts[&token].width, 0.0);
+    assert_eq!(rt.submit_form(form, None, false), SubmitOutcome::Submitted);
+    assert_eq!(
+        pairs(&log.borrow()[0]),
+        [entry("token", "secret"), entry("after", "x")]
+    );
+    let state = rt.form_state_of(node(&rt, "token")).unwrap();
+    assert!(!state.valid && !state.invalid, "not a validation candidate");
+}
