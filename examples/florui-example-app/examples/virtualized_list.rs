@@ -4,9 +4,13 @@
 //! while the rest of the dataset never materializes as real `Element`s or
 //! `ComponentScope`s at all.
 //!
+//! Every row is a button. Focus one, then scroll far away: the focused row
+//! stays mounted (and keeps focus) until focus leaves it. "Focus row 7500"
+//! brings a row that is not mounted into view and focuses it.
+//!
 //! `cargo run --example virtualized_list -p florui-example-app`
 
-use florui::Element;
+use florui::prelude::*;
 use florui_platform::{ItemHeight, Overscan, use_virtual_list};
 use florui_reactive::Key;
 use florui_style::Rgba;
@@ -14,6 +18,7 @@ use florui_style::Rgba;
 const CSS: &str = include_str!("virtualized_list.css");
 const ITEM_COUNT: usize = 10_000;
 const ITEM_HEIGHT: f32 = 32.0;
+const JUMP_TARGET: usize = 7_500;
 
 fn main() {
     florui_platform::run(
@@ -26,11 +31,7 @@ fn main() {
 }
 
 fn row(i: usize) -> Element {
-    Element::node(
-        "div",
-        vec![("class".to_string(), "row".to_string())],
-        vec![Element::text(format!("Row {i}"))],
-    )
+    view! { <button class="row">{format!("Row {i}")}</button> }
 }
 
 fn widget() -> Element {
@@ -45,26 +46,19 @@ fn widget() -> Element {
     );
 
     let (_, scroll_top) = handle.offset();
-    let status = Element::node(
-        "div",
-        vec![("class".to_string(), "status".to_string())],
-        vec![Element::text(format!(
-            "near row {} of {ITEM_COUNT} -- scroll offset: {scroll_top:.0}",
-            (scroll_top / ITEM_HEIGHT) as usize
-        ))],
+    let status = format!(
+        "near row {} of {ITEM_COUNT} -- scroll offset: {scroll_top:.0}",
+        (scroll_top / ITEM_HEIGHT) as usize
     );
-    let scroll_box = Element::node(
-        "div",
-        vec![
-            ("id".to_string(), "virtual-list".to_string()),
-            ("class".to_string(), "scroll-box".to_string()),
-        ],
-        vec![content],
-    );
-
-    Element::node(
-        "div",
-        vec![("class".to_string(), "page".to_string())],
-        vec![status, scroll_box],
-    )
+    view! {
+        <div class="page">
+            <div class="status">{status}</div>
+            <button class="jump" onclick={move || handle.focus_item(JUMP_TARGET)}>
+                {format!("Focus row {JUMP_TARGET}")}
+            </button>
+            <div id="virtual-list" class="scroll-box" role="list" accessible_label="Rows">
+                {content}
+            </div>
+        </div>
+    }
 }

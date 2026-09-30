@@ -31,3 +31,26 @@
     border-bottom-style: solid;
     border-bottom-color: #38383f;
 }
+
+.jump {
+    margin-bottom: 12px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    color: #ffffff;
+    background-color: #26262c;
+    border-width: 1px;
+    border-style: solid;
+    border-color: #4c4c56;
+}
+
+button.row {
+    color: #ffffff;
+    border-left-width: 0px;
+    border-top-width: 0px;
+    border-right-width: 0px;
+    justify-content: flex-start;
+}
+
+button.row:focus-visible {
+    background-color: #35353d;
+}
