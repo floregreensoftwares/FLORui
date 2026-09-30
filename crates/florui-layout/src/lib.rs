@@ -62,6 +62,10 @@ use florui_style::{
 use taffy::prelude::*;
 use taffy::{Baselines, compute_leaf_layout};
 
+mod transform;
+
+pub use transform::{Affine, resolve_transform};
+
 /// Checked before Taffy's own recursive layout algorithms run — if less
 /// than this much stack remains, `stacker` allocates a fresh
 /// [`RECURSION_STACK_SIZE`]-byte segment first rather than let a deep
@@ -1608,6 +1612,11 @@ pub fn apply_scroll_offsets(
 /// A node with `pointer-events: none` is never the target, though its
 /// descendants still can be. A node with no entry in `styles` is a plain
 /// rectangle.
+///
+/// A node's `transform` (and every ancestor's) moves where it is hit as
+/// well as where it is drawn: the pointer is mapped back through each
+/// transform from the outermost inward, and a transform that flattens the
+/// plane (a zero scale) leaves its whole subtree unhittable.
 pub fn hit_test(
     arena: &Arena,
     layouts: &HashMap<NodeId, BoxLayout>,
@@ -1616,19 +1625,50 @@ pub fn hit_test(
     y: f32,
 ) -> Option<NodeId> {
     let mut hit = None;
-    let mut stack: Vec<NodeId> = arena.roots().iter().rev().copied().collect();
-    while let Some(node) = stack.pop() {
+    // Each entry: the node, the pointer in its parent's frame, and whether
+    // every clipping ancestor admits it.
+    let mut stack: Vec<(NodeId, (f32, f32), bool)> = arena
+        .roots()
+        .iter()
+        .rev()
+        .map(|&root| (root, (x, y), true))
+        .collect();
+    while let Some((node, parent_point, admitted)) = stack.pop() {
+        let mut point = parent_point;
+        let mut admits_children = admitted;
         if let Some(&layout) = layouts.get(&node) {
             let (ax, ay) = absolute_position(arena, layouts, node);
-            let pointer_events_none = styles.get(&node).is_some_and(|s| s.pointer_events_none);
-            if !pointer_events_none
-                && border_box_outline(styles, node, ax, ay, layout).contains(x, y)
-                && !clipped_out(arena, layouts, styles, node, x, y)
-            {
+            let style = styles.get(&node);
+            if let Some(style) = style {
+                let transform = resolve_transform(style, &layout, ax, ay, 1.0);
+                if !transform.is_identity() {
+                    let Some(inverse) = transform.invert() else {
+                        continue;
+                    };
+                    point = inverse.map_point(point);
+                }
+            }
+            let outline = border_box_outline(styles, node, ax, ay, layout);
+            let pointer_events_none = style.is_some_and(|s| s.pointer_events_none);
+            if admitted && !pointer_events_none && outline.contains(point.0, point.1) {
                 hit = Some(node);
             }
+            if let Some(style) = style
+                && style.overflow_clips
+            {
+                let border = style.border;
+                let padding_box = outline.inset(
+                    border.top.width,
+                    border.right.width,
+                    border.bottom.width,
+                    border.left.width,
+                );
+                admits_children = admitted && padding_box.contains(point.0, point.1);
+            }
         }
-        stack.extend(arena.children(node).iter().rev());
+        for &child in arena.children(node).iter().rev() {
+            stack.push((child, point, admits_children));
+        }
     }
     hit
 }
@@ -1648,38 +1688,6 @@ fn border_box_outline(
         }
         None => RoundedRect::square(x, y, layout.width, layout.height),
     }
-}
-
-/// Whether some `overflow`-clipping ancestor of `node` excludes `(x, y)`
-/// from its rounded padding box.
-fn clipped_out(
-    arena: &Arena,
-    layouts: &HashMap<NodeId, BoxLayout>,
-    styles: &HashMap<NodeId, ComputedStyle>,
-    node: NodeId,
-    x: f32,
-    y: f32,
-) -> bool {
-    let mut ancestor = arena.parent(node);
-    while let Some(id) = ancestor {
-        if let (Some(style), Some(&layout)) = (styles.get(&id), layouts.get(&id))
-            && style.overflow_clips
-        {
-            let (ax, ay) = absolute_position(arena, layouts, id);
-            let border = style.border;
-            let padding_box = border_box_outline(styles, id, ax, ay, layout).inset(
-                border.top.width,
-                border.right.width,
-                border.bottom.width,
-                border.left.width,
-            );
-            if !padding_box.contains(x, y) {
-                return true;
-            }
-        }
-        ancestor = arena.parent(id);
-    }
-    false
 }
 
 /// An explanation for why a flex or grid item's final size doesn't match
@@ -2824,6 +2832,141 @@ mod tests {
         assert_close(layouts[&node].height, expected.height);
     }
 
+    fn hit_styled(
+        tree: &Element,
+        css: &str,
+        points: &[(f32, f32)],
+    ) -> (Arena, Vec<Option<NodeId>>) {
+        let (arena, styles, layouts) = layout_with_styles(tree, css);
+        let hits = points
+            .iter()
+            .map(|&(x, y)| super::hit_test(&arena, &layouts, &styles, x, y))
+            .collect();
+        (arena, hits)
+    }
+
+    #[test]
+    fn a_translated_box_is_hit_where_it_is_drawn() {
+        let tree: Element = view! { <div class="box" /> };
+        let (arena, hits) = hit_styled(
+            &tree,
+            ".box { width: 20px; height: 20px; transform: translate(50px, 30px); }",
+            &[(10.0, 10.0), (60.0, 40.0)],
+        );
+        let node = arena.roots()[0];
+        assert_eq!(
+            hits,
+            [None, Some(node)],
+            "its old spot is empty, the new one hits"
+        );
+    }
+
+    #[test]
+    fn a_rotated_box_is_hit_inside_its_rotated_outline_only() {
+        // 100x20 about its centre (50, 10), turned 90deg clockwise: it now
+        // stands 20 wide and 100 tall around x 40..60, y -40..60.
+        let tree: Element = view! { <div class="bar" /> };
+        let (arena, hits) = hit_styled(
+            &tree,
+            ".bar { width: 100px; height: 20px; transform: rotate(90deg); }",
+            &[(50.0, 50.0), (5.0, 10.0), (50.0, 5.0)],
+        );
+        let node = arena.roots()[0];
+        assert_eq!(
+            hits,
+            [Some(node), None, Some(node)],
+            "the turned bar covers (50, 50) but no longer its old left end"
+        );
+    }
+
+    #[test]
+    fn a_scaled_box_grows_about_its_origin() {
+        let tree: Element = view! { <div class="box" /> };
+        let (arena, hits) = hit_styled(
+            &tree,
+            ".box { width: 20px; height: 20px; transform: scale(3); }",
+            &[(-15.0, -15.0), (39.0, 39.0), (45.0, 45.0)],
+        );
+        let node = arena.roots()[0];
+        assert_eq!(
+            hits,
+            [Some(node), Some(node), None],
+            "centre-origin scale 3 spans -20..40 on both axes"
+        );
+    }
+
+    #[test]
+    fn a_childs_hit_follows_its_ancestors_transform() {
+        let tree: Element = view! {
+            <div class="parent">
+                <div class="child" />
+            </div>
+        };
+        let (arena, hits) = hit_styled(
+            &tree,
+            ".parent { width: 50px; height: 50px; transform: translate(100px, 0px); } \
+             .child { width: 10px; height: 10px; }",
+            &[(105.0, 5.0), (5.0, 5.0), (140.0, 40.0)],
+        );
+        let parent = arena.roots()[0];
+        let child = arena.children(parent)[0];
+        assert_eq!(hits, [Some(child), None, Some(parent)]);
+    }
+
+    #[test]
+    fn a_clipping_ancestor_clips_where_it_is_drawn_not_where_it_was_laid_out() {
+        let tree: Element = view! {
+            <div class="clip">
+                <div class="wide" />
+            </div>
+        };
+        let (arena, hits) = hit_styled(
+            &tree,
+            ".clip { width: 20px; height: 20px; overflow: hidden; transform: translate(100px, 0px); } \
+             .wide { width: 200px; height: 20px; }",
+            &[(110.0, 10.0), (150.0, 10.0), (10.0, 10.0)],
+        );
+        let clip = arena.roots()[0];
+        let wide = arena.children(clip)[0];
+        assert_eq!(
+            hits,
+            [Some(wide), None, None],
+            "the overflowing part is clipped to the moved box; the old spot is empty"
+        );
+    }
+
+    #[test]
+    fn a_transform_that_flattens_the_plane_hides_its_whole_subtree() {
+        let tree: Element = view! {
+            <div class="flat">
+                <div class="child" />
+            </div>
+        };
+        let (_, hits) = hit_styled(
+            &tree,
+            ".flat { width: 50px; height: 50px; transform: scale(0); } \
+             .child { width: 10px; height: 10px; }",
+            &[(5.0, 5.0), (25.0, 25.0)],
+        );
+        assert_eq!(hits, [None, None]);
+    }
+
+    #[test]
+    fn a_percentage_translate_and_a_custom_origin_are_honoured() {
+        let tree: Element = view! { <div class="box" /> };
+        let (arena, hits) = hit_styled(
+            &tree,
+            ".box { width: 40px; height: 40px; transform-origin: 0px 0px; \
+                   transform: translate(100%, 0px) scale(2); }",
+            &[(45.0, 5.0), (115.0, 70.0), (10.0, 10.0)],
+        );
+        let node = arena.roots()[0];
+        assert_eq!(
+            hits,
+            [Some(node), Some(node), None],
+            "scale 2 about the corner, then moved one box-width right: x 40..120, y 0..80"
+        );
+    }
     #[test]
     fn hit_test_finds_the_deepest_node_containing_the_point() {
         let tree: Element = view! {
