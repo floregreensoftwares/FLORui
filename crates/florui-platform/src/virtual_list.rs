@@ -726,6 +726,29 @@ mod tests {
     }
 
     #[test]
+    fn a_real_wheel_tick_re_renders_the_window_of_a_virtual_list() {
+        let keys: Keys = std::rc::Rc::new(std::cell::RefCell::new((0..100).collect()));
+        let (mut runtime, _) = focus_runtime(&keys, &std::rc::Rc::new(std::cell::Cell::new(0)));
+        settle(&mut runtime);
+        runtime.clear_dirty();
+        assert!(button(&runtime, 0).is_some() && button(&runtime, 60).is_none());
+
+        assert!(
+            runtime
+                .scroll_registry()
+                .wheel_scroll_by("list", 0.0, 1200.0)
+        );
+        assert!(
+            runtime.is_dirty(),
+            "the list rendered from the offset, so the wheel must dirty it"
+        );
+        settle(&mut runtime);
+
+        assert!(button(&runtime, 60).is_some(), "the new window is mounted");
+        assert!(button(&runtime, 0).is_none(), "the old window is released");
+    }
+
+    #[test]
     fn a_row_is_released_once_focus_leaves_it() {
         let keys: Keys = std::rc::Rc::new(std::cell::RefCell::new((0..100).collect()));
         let (mut runtime, _) = focus_runtime(&keys, &std::rc::Rc::new(std::cell::Cell::new(0)));
