@@ -281,6 +281,7 @@ impl AccessibilityTree {
                     node.add_action(Action::Decrement);
                 }
             }
+            "input" if arena.input_type(id) == Some("hidden") => node.set_hidden(),
             "input" => {
                 let role = match arena.input_type(id) {
                     Some("password") => Role::PasswordInput,
@@ -649,6 +650,16 @@ mod tests {
         assert_eq!(role_of(&update, ak_id), Role::ListBoxOption);
         let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
         assert_eq!(node.is_selected(), Some(true));
+    }
+
+    #[test]
+    fn a_hidden_input_is_hidden_from_the_accessibility_tree() {
+        let tree: Element = view! { <form><input id="tok" type="hidden" value="s" /></form> };
+        let (update, reverse, arena) = build(&tree, None);
+        let hidden = arena.find(|a, id| a.id_attr(id) == Some("tok")).unwrap();
+        let ak_id = *reverse.iter().find(|&(_, &n)| n == hidden).unwrap().0;
+        let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
+        assert!(node.is_hidden());
     }
 
     #[test]
