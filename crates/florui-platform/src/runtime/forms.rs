@@ -75,6 +75,17 @@ impl UiRuntime {
         SubmitOutcome::Submitted
     }
 
+    /// The window lost focus: like a browser, the focused control blurs, so
+    /// an edited one may now match `:user-invalid`. Focus itself stays put.
+    pub(crate) fn window_focus_lost(&mut self) {
+        if let Some(path) = self.focused_path.clone()
+            && self.edited.borrow().contains(&path)
+        {
+            self.user_validated.insert(path);
+            self.rebuild_interaction();
+        }
+    }
+
     /// Reports a reset through `onreset` and forgets what the user has
     /// edited in `form`'s controls. The app resets its own state; nothing
     /// here rewrites a control.
