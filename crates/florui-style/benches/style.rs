@@ -126,10 +126,94 @@ fn bench_wide_tree(c: &mut Criterion) {
     group.finish();
 }
 
+/// `n` distinct class rules with a few declarations each, every fifth a
+/// descendant selector — closer to a real stylesheet than one repeated rule.
+fn stylesheet(n: usize) -> String {
+    (0..n)
+        .map(|i| {
+            let selector = if i % 5 == 0 {
+                format!(".panel-{} .item-{}", i % 7, i)
+            } else {
+                format!(".item-{i}")
+            };
+            format!(
+                "{selector} {{ color: #{:06x}; padding: {}px; margin-left: {}px; display: flex; }}\n",
+                i * 2654435 % 0x1000000,
+                i % 16,
+                i % 8
+            )
+        })
+        .collect()
+}
+
+fn bench_parse_stylesheet(c: &mut Criterion) {
+    let mut group = c.benchmark_group("style/parse_stylesheet");
+    group.sample_size(20);
+    for &n in &[100usize, 1000] {
+        let css = stylesheet(n);
+        group.bench_function(format!("{n}_rules"), |b| {
+            b.iter(|| parse_stylesheet(&css).expect("benchmark CSS must be valid"));
+        });
+    }
+    group.finish();
+}
+
+fn bench_arena_build(c: &mut Criterion) {
+    let mut group = c.benchmark_group("style/arena_build");
+    group.sample_size(20);
+    for &n in &[100usize, 1000] {
+        let wide = wide_tree(n);
+        group.bench_function(format!("{n}_wide"), |b| {
+            b.iter(|| florui_style::Arena::build(&wide));
+        });
+        let deep = deep_tree(n);
+        group.bench_function(format!("{n}_deep"), |b| {
+            b.iter(|| florui_style::Arena::build(&deep));
+        });
+    }
+    group.finish();
+}
+
+/// Selector matching scales with rules as well as nodes: `n` elements each
+/// carrying its own class, against `n` distinct class rules.
+fn bench_many_rules(c: &mut Criterion) {
+    let mut group = c.benchmark_group("style/many_rules");
+    group.sample_size(10);
+    for &n in &[100usize, 1000] {
+        let children = (0..n)
+            .map(|i| {
+                Element::node(
+                    "div",
+                    vec![("class".into(), format!("item-{i}"))],
+                    Vec::new(),
+                )
+            })
+            .collect();
+        let tree = Element::node("div", Vec::new(), children);
+        let arena = florui_style::Arena::build(&tree);
+        let rules = parse_stylesheet(&stylesheet(n)).expect("benchmark CSS must be valid");
+        group.bench_function(format!("{n}_rules_{n}_nodes"), |b| {
+            b.iter(|| {
+                compute(
+                    &arena,
+                    &rules,
+                    &InteractionState::new(),
+                    Viewport::default(),
+                    &mut AnimationTimeline::default(),
+                )
+            });
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_deep_tree,
     bench_deep_tree_with_matching,
     bench_wide_tree,
+    bench_parse_stylesheet,
+    bench_arena_build,
+    bench_many_rules,
 );
 criterion_main!(benches);
