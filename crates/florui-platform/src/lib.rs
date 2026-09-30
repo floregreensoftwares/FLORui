@@ -17,6 +17,9 @@
 //! and run with `cargo test -p florui-platform -- --ignored`, as CI does on a
 //! Windows runner. What needs real windows, mouse and keyboard input is
 //! driven through UI Automation by the scripts in `scripts/real-session/`.
+//!
+//! What each control does is published in `CONTROLS.md`, next to this crate's
+//! `Cargo.toml`.
 
 mod auto_id;
 mod components;
