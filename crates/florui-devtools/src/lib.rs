@@ -3,11 +3,11 @@
 //! [`live`] — a real `florui-style`/`florui-layout`-backed preview paired
 //! with the [`inspector`].
 //!
-//! This crate is a *host*, not the core: it owns the window and event loop
-//! the way a desktop shell would. [`element_scene`]/[`scene`] are an older
-//! stand-in reading a literal inline `style=` attribute with no real
-//! layout; [`preview`] watches a raw CSS-only fixture with no real
-//! component tree; [`live`] is the real-tree counterpart of both.
+//! [`element_scene`]/[`scene`] are an older stand-in reading a literal inline
+//! `style=` attribute with no real layout; [`preview`] watches a raw CSS-only
+//! fixture with no real component tree and owns its own window; [`live`] is
+//! the real-tree counterpart: the application runs on `florui_platform`'s own
+//! desktop host and the inspector only observes it.
 
 pub mod capture;
 pub mod color;

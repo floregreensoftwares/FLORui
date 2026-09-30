@@ -37,6 +37,8 @@ mod scroll;
 mod scroll_animation;
 mod select;
 mod size_observer;
+#[cfg(all(test, feature = "desktop", target_os = "windows"))]
+mod test_event_loop;
 mod text_input;
 mod textarea_resize;
 mod validation_bubble;
@@ -81,9 +83,15 @@ mod clipboard;
 mod desktop;
 
 #[cfg(feature = "desktop")]
+mod host_observer;
+
+#[cfg(feature = "desktop")]
+pub use host_observer::{HostObserver, ObservedFrame, OverlayCanvas};
+
+#[cfg(feature = "desktop")]
 pub use desktop::{
     RunError, RunOutcome, WindowOptions, WindowSpec, run, run_single_instance, run_windows,
-    run_with_css_reload, run_with_css_reload_and_options, run_with_options,
+    run_windows_observed, run_with_css_reload, run_with_css_reload_and_options, run_with_options,
 };
 
 #[cfg(feature = "desktop")]

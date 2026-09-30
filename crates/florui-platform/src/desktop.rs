@@ -46,6 +46,7 @@ use crate::dpi::{self, ViewportScale};
 use crate::drag_drop::{self, DragDropRegistration};
 use crate::file_dialog::{OpenFileDialogOutcome, SaveFileDialogOutcome};
 use crate::gpu::{self, GpuPresenter};
+use crate::host_observer::{HostObserver, SharedObserver};
 use crate::list_keys::ListKey;
 use crate::menu_keys::{self, MenuKey, MenuMove};
 use crate::scroll_animation::ScrollKind;
@@ -103,7 +104,7 @@ impl std::error::Error for RunError {
 /// Every variant now carries the `WindowId` it's about -- with more than
 /// one window live, each of these needs to say which one, whereas a
 /// single-window host had nothing to disambiguate.
-enum UserEvent {
+pub(crate) enum UserEvent {
     /// Either a [`florui_reactive::Signal`] changed somewhere under this
     /// window's root, or a [`florui_reactive::use_resource`] fetch became
     /// newly pollable — see [`UiRuntime::on_needs_update`]. Both call for
@@ -292,6 +293,22 @@ pub fn run_with_css_reload_and_options(
 /// [`run_with_options`]'s own single-window failure behavior) — this is
 /// only reachable at startup, not once windows are already running.
 pub fn run_windows(initial: Vec<WindowSpec>) -> Result<(), RunError> {
+    run_windows_with(initial, None)
+}
+
+/// Same as [`run_windows`], with `observer` watching every window (see
+/// [`HostObserver`]). The windows behave exactly as without it.
+pub fn run_windows_observed(
+    initial: Vec<WindowSpec>,
+    observer: impl HostObserver + 'static,
+) -> Result<(), RunError> {
+    run_windows_with(initial, Some(Rc::new(RefCell::new(observer))))
+}
+
+fn run_windows_with(
+    initial: Vec<WindowSpec>,
+    observer: Option<SharedObserver>,
+) -> Result<(), RunError> {
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
         .map_err(RunError::EventLoop)?;
@@ -306,6 +323,8 @@ pub fn run_windows(initial: Vec<WindowSpec>) -> Result<(), RunError> {
         primary_window_id: None,
         clipboard: crate::clipboard::Clipboard::new(),
         visited_links: crate::visited_links::VisitedLinks::new(),
+        observer,
+        pending_blur: None,
     };
     event_loop.run_app(&mut host).map_err(RunError::EventLoop)?;
     match host.fatal_error {
@@ -399,6 +418,8 @@ pub fn run_single_instance(
                 primary_window_id: None,
                 clipboard: crate::clipboard::Clipboard::new(),
                 visited_links: crate::visited_links::VisitedLinks::new(),
+                observer: None,
+                pending_blur: None,
             };
             event_loop.run_app(&mut host).map_err(RunError::EventLoop)?;
             match host.fatal_error {
@@ -1155,6 +1176,7 @@ struct WindowState {
     /// node -- rebuilt every `redraw`, read by an inbound `ActionRequest`
     /// arriving before the next one.
     accessibility_reverse: HashMap<accesskit::NodeId, NodeId>,
+    observer: Option<SharedObserver>,
 }
 
 /// Not spec-mandated to an exact number — a common real-OS default for
@@ -1549,7 +1571,7 @@ impl WindowState {
         self.accessibility_adapter
             .update_if_active(|| accessibility_update);
 
-        let canvas = florui_paint::paint_to_buffer_with_desktop_extras(
+        let mut canvas = florui_paint::paint_to_buffer_with_desktop_extras(
             font,
             size.width,
             size.height,
@@ -1561,6 +1583,28 @@ impl WindowState {
             Some(&text_inputs),
             Some(&images),
         );
+        if let Some(observer) = &self.observer {
+            let mut observer = observer.borrow_mut();
+            observer.frame(
+                window.id(),
+                &crate::host_observer::ObservedFrame {
+                    arena,
+                    styles,
+                    layouts: &physical_layouts,
+                    bounds: &node_bounds,
+                    scale_factor,
+                    focused,
+                },
+            );
+            observer.paint_overlay(
+                window.id(),
+                crate::host_observer::OverlayCanvas {
+                    width: size.width,
+                    height: size.height,
+                    rgba: canvas.data_mut(),
+                },
+            );
+        }
 
         match &mut self.presenter {
             Presenter::Gpu(presenter) => {
@@ -1734,6 +1778,13 @@ impl WindowState {
     fn handle_cursor_moved(&mut self, x: f64, y: f64) {
         self.last_cursor = (x, y);
         let (x, y) = self.to_logical_cursor(x, y);
+        if self.observer_is_picking() {
+            let hit = self.runtime.hit_test(x, y);
+            if let Some(observer) = &self.observer {
+                observer.borrow_mut().pointer_moved(self.window.id(), hit);
+            }
+            return;
+        }
         // A resize edge always wins over content's own `cursor: pointer`
         // -- resolved once here so the check below can skip content
         // cursor logic entirely rather than have both methods race to
@@ -1889,12 +1940,16 @@ impl WindowState {
     /// reads back) and re-renders so a component styling itself from that
     /// query — e.g. dimming a custom caption while inactive — picks up the
     /// change immediately rather than waiting for an unrelated redraw.
-    fn handle_focus_changed(&mut self, focused: bool) {
+    /// `blur_now` is `false` when the blur's effect on form state waits for
+    /// the end of the event batch (see `DesktopHost::pending_blur`).
+    fn handle_focus_changed(&mut self, focused: bool, blur_now: bool) {
         self.controls.set_focused(focused);
         if !focused {
             self.spinner_hold = None;
             self.scroll_hold = None;
-            self.runtime.window_focus_lost();
+            if blur_now {
+                self.runtime.window_focus_lost();
+            }
         }
         self.update_and_request_redraw();
     }
@@ -2136,6 +2191,9 @@ impl WindowState {
     /// single-click drag gesture, so there is no matching press to
     /// remember here.
     fn handle_press(&mut self) {
+        if self.observer_is_picking() {
+            return;
+        }
         let (x, y) = self.to_logical_cursor(self.last_cursor.0, self.last_cursor.1);
         let hit = self.runtime.hit_test(x, y);
         self.dismiss_bubble_on_press(hit);
@@ -2435,7 +2493,22 @@ impl WindowState {
         Some(next)
     }
 
+    /// Whether an observer's element picker owns the pointer right now.
+    fn observer_is_picking(&self) -> bool {
+        self.observer
+            .as_ref()
+            .is_some_and(|observer| observer.borrow().is_picking(self.window.id()))
+    }
+
     fn handle_release(&mut self) {
+        if self.observer_is_picking() {
+            let (x, y) = self.to_logical_cursor(self.last_cursor.0, self.last_cursor.1);
+            let hit = self.runtime.hit_test(x, y);
+            if let Some(observer) = &self.observer {
+                observer.borrow_mut().picked(self.window.id(), hit);
+            }
+            return;
+        }
         self.text_selecting = None;
         self.scroll_drag = None;
         self.resize_drag = None;
@@ -3317,6 +3390,13 @@ struct DesktopHost {
     /// `clipboard` above — cloned (cheap: an `Rc` handle) into every
     /// window's own [`WindowControls`]/[`UiRuntime`] as it's created.
     visited_links: crate::visited_links::VisitedLinks,
+    /// A development tool watching every window, if one was asked for.
+    observer: Option<SharedObserver>,
+    /// A window that lost focus while an observer is attached: its blur takes
+    /// effect at the end of the event batch unless focus went to one of the
+    /// observer's own windows, so inspecting never marks an edited field
+    /// invalid.
+    pending_blur: Option<WindowId>,
 }
 
 impl DesktopHost {
@@ -3346,6 +3426,9 @@ impl DesktopHost {
             window_state::capture_and_save(&state.window, persistence);
         }
         self.windows.remove(&id);
+        if let Some(observer) = &self.observer {
+            observer.borrow_mut().window_closed(id);
+        }
         if self.windows.is_empty() {
             event_loop.exit();
         }
@@ -3592,6 +3675,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 accessibility_adapter,
                 accessibility_tree: accessibility::tree::AccessibilityTree::new(),
                 accessibility_reverse: HashMap::new(),
+                observer: self.observer.clone(),
             };
             state.redraw();
             // A `@keyframes` animation already running on mount (no `:hover`
@@ -3600,6 +3684,13 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             // this constructor's own first render already ran.
             state.refresh_animation_schedule();
             self.windows.insert(window_id, state);
+            if let Some(observer) = &self.observer
+                && let Some(state) = self.windows.get(&window_id)
+            {
+                observer
+                    .borrow_mut()
+                    .window_opened(event_loop, &state.window);
+            }
         }
     }
 
@@ -3611,6 +3702,12 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
     /// every window still waiting on one, so no window's animation lags
     /// behind another's.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(id) = self.pending_blur.take()
+            && let Some(state) = self.windows.get_mut(&id)
+        {
+            state.runtime.window_focus_lost();
+            state.update_and_request_redraw();
+        }
         let now = std::time::Instant::now();
         let mut next_wake: Option<std::time::Instant> = None;
         for state in self.windows.values_mut() {
@@ -3650,6 +3747,20 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        // A development tool's own window never reaches window state.
+        if let Some(observer) = &self.observer
+            && observer
+                .borrow_mut()
+                .window_event(event_loop, window_id, &event)
+        {
+            if matches!(event, WindowEvent::Focused(true)) {
+                self.pending_blur = None;
+            }
+            return;
+        }
+        if matches!(event, WindowEvent::Focused(false)) && self.observer.is_some() {
+            self.pending_blur = Some(window_id);
+        }
         // Handled before looking up `windows` mutably -- closing calls
         // `self.close_if_confirmed`, a `&mut self` method, which a live
         // `&mut WindowState` borrow (below) would conflict with.
@@ -3675,7 +3786,9 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             // all this needs.
             WindowEvent::ScaleFactorChanged { .. } => state.update_and_request_redraw(),
             WindowEvent::ThemeChanged(theme) => state.handle_theme_changed(theme),
-            WindowEvent::Focused(focused) => state.handle_focus_changed(focused),
+            WindowEvent::Focused(focused) => {
+                state.handle_focus_changed(focused, self.observer.is_none());
+            }
             // A pure move (dragging the window, snapping it) changes
             // nothing about its content, only where `InputMode::Selective`'s
             // own screen-space regions sit -- resyncing them here, from
@@ -4090,5 +4203,83 @@ mod tests {
         let mut ids: Vec<NodeId> = scaled.keys().copied().collect();
         ids.sort();
         assert_eq!(ids, vec![1, 2]);
+    }
+
+    /// Records what the host offers an observer.
+    struct Recorder {
+        log: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl HostObserver for Recorder {
+        fn window_opened(&mut self, _: &ActiveEventLoop, _: &Arc<Window>) {
+            self.log.borrow_mut().push("opened".to_string());
+        }
+
+        fn frame(&mut self, _: WindowId, frame: &crate::host_observer::ObservedFrame<'_>) {
+            let nodes = frame.arena.roots().len();
+            let drawn = frame.bounds.len();
+            self.log
+                .borrow_mut()
+                .push(format!("frame roots={nodes} drawn={drawn}"));
+        }
+
+        fn paint_overlay(&mut self, _: WindowId, canvas: crate::host_observer::OverlayCanvas<'_>) {
+            let ok = canvas.rgba.len() == (canvas.width * canvas.height * 4) as usize;
+            self.log.borrow_mut().push(format!("overlay ok={ok}"));
+        }
+    }
+
+    #[test]
+    #[ignore = "needs a real Windows session: cargo test -p florui-platform -- --ignored"]
+    fn an_observer_sees_the_first_frame_then_the_window_and_a_canvas_of_the_right_size() {
+        crate::test_event_loop::on_event_loop(|event_loop| {
+            let log = Rc::new(RefCell::new(Vec::new()));
+            let spec = WindowSpec::new(
+                "observer test",
+                "",
+                Rgba::opaque(0x10, 0x10, 0x14),
+                WindowOptions::default(),
+                || florui::Element::node("div", Vec::new(), Vec::new()),
+            )
+            .expect("an empty stylesheet parses");
+            let mut host = DesktopHost {
+                windows: HashMap::new(),
+                pending: vec![spec],
+                proxy: event_loop.create_proxy(),
+                fatal_error: None,
+                activation_queue: None,
+                primary_window_id: None,
+                clipboard: crate::clipboard::Clipboard::new(),
+                visited_links: crate::visited_links::VisitedLinks::new(),
+                observer: Some(Rc::new(RefCell::new(Recorder {
+                    log: Rc::clone(&log),
+                }))),
+                pending_blur: None,
+            };
+            for _ in 0..40 {
+                crate::test_event_loop::pump(
+                    event_loop,
+                    &mut host,
+                    std::time::Duration::from_millis(50),
+                );
+                if log.borrow().iter().any(|entry| entry == "opened") {
+                    break;
+                }
+            }
+
+            let log = log.borrow();
+            assert!(host.fatal_error.is_none(), "the window opens");
+            assert!(log.len() >= 3, "got {log:?}");
+            assert!(
+                log[0].starts_with("frame roots=1"),
+                "the first frame is painted before the window is announced: {log:?}"
+            );
+            assert_eq!(
+                log[1], "overlay ok=true",
+                "the canvas is width x height x 4 bytes"
+            );
+            assert_eq!(log[2], "opened");
+            // The window is dropped with the host before the next test runs.
+        });
     }
 }

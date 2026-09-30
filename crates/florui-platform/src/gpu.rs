@@ -474,10 +474,10 @@ mod tests {
 
     use winit::application::ApplicationHandler;
     use winit::event::WindowEvent;
-    use winit::event_loop::{ActiveEventLoop, EventLoop};
-    use winit::platform::pump_events::EventLoopExtPumpEvents;
-    use winit::platform::windows::EventLoopBuilderExtWindows;
+    use winit::event_loop::ActiveEventLoop;
     use winit::window::{Window, WindowId};
+
+    use crate::desktop::UserEvent;
 
     use super::*;
 
@@ -486,7 +486,7 @@ mod tests {
         window: Option<Arc<Window>>,
     }
 
-    impl ApplicationHandler for App {
+    impl ApplicationHandler<UserEvent> for App {
         fn resumed(&mut self, event_loop: &ActiveEventLoop) {
             let attributes =
                 Window::default_attributes().with_inner_size(winit::dpi::PhysicalSize::new(64, 64));
@@ -504,42 +504,41 @@ mod tests {
     #[test]
     #[ignore = "needs a real Windows session: cargo test -p florui-platform -- --ignored"]
     fn a_lost_device_is_reported_and_a_new_presenter_works() {
-        let mut event_loop = EventLoop::builder()
-            .with_any_thread(true)
-            .build()
-            .expect("an event loop needs a desktop session");
-        let mut app = App::default();
-        event_loop.pump_app_events(Some(Duration::ZERO), &mut app);
-        let window = app.window.clone().expect("the window opens");
+        crate::test_event_loop::on_event_loop(|event_loop| {
+            let mut app = App::default();
+            crate::test_event_loop::pump(event_loop, &mut app, Duration::ZERO);
+            let window = app.window.clone().expect("the window opens");
 
-        let Some(mut presenter) = GpuPresenter::try_new(window.clone()) else {
-            eprintln!("no GPU adapter on this machine; nothing to lose");
-            return;
-        };
-        assert_ne!(frame(&mut presenter), PresentOutcome::Lost);
+            let Some(mut presenter) = GpuPresenter::try_new(window.clone()) else {
+                eprintln!("no GPU adapter on this machine; nothing to lose");
+                return;
+            };
+            assert_ne!(frame(&mut presenter), PresentOutcome::Lost);
 
-        presenter.lose_device();
-        assert!(presenter.is_lost(), "wgpu reports the destroyed device");
-        assert_eq!(frame(&mut presenter), PresentOutcome::Lost);
-        presenter.resize(128, 128);
-        assert_eq!(
-            frame(&mut presenter),
-            PresentOutcome::Lost,
-            "a lost presenter stays lost and never panics"
-        );
+            presenter.lose_device();
+            assert!(presenter.is_lost(), "wgpu reports the destroyed device");
+            assert_eq!(frame(&mut presenter), PresentOutcome::Lost);
+            presenter.resize(128, 128);
+            assert_eq!(
+                frame(&mut presenter),
+                PresentOutcome::Lost,
+                "a lost presenter stays lost and never panics"
+            );
 
-        drop(presenter);
-        let mut rebuilt = GpuPresenter::try_new(window.clone()).expect("a new presenter comes up");
-        assert!(!rebuilt.is_lost());
-        assert_ne!(frame(&mut rebuilt), PresentOutcome::Lost);
+            drop(presenter);
+            let mut rebuilt =
+                GpuPresenter::try_new(window.clone()).expect("a new presenter comes up");
+            assert!(!rebuilt.is_lost());
+            assert_ne!(frame(&mut rebuilt), PresentOutcome::Lost);
 
-        // The software adapter is the next level down after a second loss.
-        drop(rebuilt);
-        if let Some(mut software) = GpuPresenter::try_new_software(window) {
-            assert!(!software.is_lost());
-            assert_ne!(frame(&mut software), PresentOutcome::Lost);
-        } else {
-            eprintln!("no software adapter on this machine");
-        }
+            // The software adapter is the next level down after a second loss.
+            drop(rebuilt);
+            if let Some(mut software) = GpuPresenter::try_new_software(window) {
+                assert!(!software.is_lost());
+                assert_ne!(frame(&mut software), PresentOutcome::Lost);
+            } else {
+                eprintln!("no software adapter on this machine");
+            }
+        });
     }
 }
