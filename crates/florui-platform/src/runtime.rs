@@ -126,6 +126,8 @@ pub struct UiRuntime {
     /// [`florui_style::AnimationTimeline`]'s own doc.
     animation_timeline: AnimationTimeline,
     animation_epoch: std::time::Instant,
+    /// When set, animations read this many seconds instead of the wall clock.
+    clock_override: Option<f64>,
     /// The one long-lived font this runtime's own [`Self::update`] lays out
     /// with — loading one builds a whole Parley `FontContext` (and, with
     /// fontique's default `system_fonts: true`, enumerates the system's
@@ -301,6 +303,7 @@ impl UiRuntime {
             resized: RefCell::new(HashMap::new()),
             animation_timeline,
             animation_epoch: std::time::Instant::now(),
+            clock_override: None,
             font: florui_text::Font::load_embedded(),
             executor: Rc::new(LocalExecutor::new()),
             size_observers: Rc::new(SizeObserverRegistry::new()),
@@ -317,6 +320,12 @@ impl UiRuntime {
         };
         runtime.update(viewport);
         runtime
+    }
+
+    /// Makes animations and transitions read `seconds` instead of the wall
+    /// clock, so a test steps them deterministically; `None` restores it.
+    pub(crate) fn set_manual_clock(&mut self, seconds: Option<f64>) {
+        self.clock_override = seconds;
     }
 
     /// Pushes a freshly-read real OS reduced-motion preference in — a real
@@ -492,8 +501,10 @@ impl UiRuntime {
         self.icon_registry.sync(&self.arena, &*self.executor);
         self.resolve_hover();
         self.resolve_focus();
-        self.animation_timeline
-            .advance_to(self.animation_epoch.elapsed().as_secs_f64());
+        self.animation_timeline.advance_to(
+            self.clock_override
+                .unwrap_or_else(|| self.animation_epoch.elapsed().as_secs_f64()),
+        );
         let florui_layout::LayoutResult {
             styles,
             layouts,

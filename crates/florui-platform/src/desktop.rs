@@ -577,7 +577,10 @@ pub(crate) fn text_input_content_origin(
 /// Scales every committed box from the logical pixels layout ran against
 /// up to physical pixels, so painting can rasterize at full device
 /// resolution instead of the canvas's own (unscaled) unit.
-fn scale_layouts(layouts: &HashMap<NodeId, BoxLayout>, factor: f32) -> HashMap<NodeId, BoxLayout> {
+pub(crate) fn scale_layouts(
+    layouts: &HashMap<NodeId, BoxLayout>,
+    factor: f32,
+) -> HashMap<NodeId, BoxLayout> {
     layouts
         .iter()
         .map(|(&id, layout)| {
@@ -596,16 +599,16 @@ fn scale_layouts(layouts: &HashMap<NodeId, BoxLayout>, factor: f32) -> HashMap<N
 
 /// What [`build_text_input_paint`] reads about the frame being painted.
 #[derive(Clone, Copy)]
-struct TextInputPaintContext<'a> {
-    arena: &'a florui_style::Arena,
-    styles: &'a HashMap<NodeId, ComputedStyle>,
-    layouts: &'a HashMap<NodeId, BoxLayout>,
-    registry: &'a crate::text_input::TextInputRegistry,
-    focused: Option<NodeId>,
-    hovered: Option<NodeId>,
-    pointer: (f32, f32),
+pub(crate) struct TextInputPaintContext<'a> {
+    pub(crate) arena: &'a florui_style::Arena,
+    pub(crate) styles: &'a HashMap<NodeId, ComputedStyle>,
+    pub(crate) layouts: &'a HashMap<NodeId, BoxLayout>,
+    pub(crate) registry: &'a crate::text_input::TextInputRegistry,
+    pub(crate) focused: Option<NodeId>,
+    pub(crate) hovered: Option<NodeId>,
+    pub(crate) pointer: (f32, f32),
     /// The `id` of the textarea whose scrollbar thumb is being dragged.
-    scroll_dragging: Option<&'a str>,
+    pub(crate) scroll_dragging: Option<&'a str>,
 }
 
 /// Builds one [`florui_paint::TextInputPaint`] entry for every editable
@@ -618,7 +621,7 @@ struct TextInputPaintContext<'a> {
 /// real browsers, which never show a selection swatch on an unfocused
 /// text field. `type="password"` gets a masked substitute run instead of
 /// its real glyphs — see [`masked_glyphs`].
-fn build_text_input_paint(
+pub(crate) fn build_text_input_paint(
     font: &mut florui_text::Font,
     context: TextInputPaintContext<'_>,
     spinner_for: &dyn Fn(NodeId) -> Option<florui_paint::SpinnerHover>,
@@ -777,7 +780,7 @@ fn build_text_input_paint(
 /// intrinsic size is known. Runs every redraw, so a later resize/DPI
 /// change re-requests at the new size on its own.
 #[allow(clippy::too_many_arguments)]
-fn build_image_paint(
+pub(crate) fn build_image_paint(
     arena: &florui_style::Arena,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, florui_layout::BoxLayout>,
@@ -816,7 +819,7 @@ fn build_image_paint(
 /// `currentColor` source), read the normal way any other style value
 /// already is — nothing icon-specific about *that* part.
 #[allow(clippy::too_many_arguments)]
-fn build_icon_paint(
+pub(crate) fn build_icon_paint(
     arena: &florui_style::Arena,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, florui_layout::BoxLayout>,
@@ -867,7 +870,7 @@ fn build_icon_paint(
 /// already is elsewhere, not full size-aware rasterization. *Positioned*
 /// within the control's own content box by `florui_paint`'s own
 /// control-icon paint branch, which reads that same constant.
-fn build_control_icon_paint(
+pub(crate) fn build_control_icon_paint(
     arena: &florui_style::Arena,
     styles: &HashMap<NodeId, ComputedStyle>,
     registry: &crate::icon::IconRegistry,
@@ -1367,74 +1370,28 @@ impl WindowState {
         let cursor = self.to_logical_cursor(self.input.last_cursor.0, self.input.last_cursor.1);
         let (arena, styles, layouts, font, interaction) =
             self.runtime.geometry_font_and_interaction_mut();
-        let scroll_offsets = scroll_registry.offsets_by_node(arena);
-        let scrolled_layouts = florui_layout::apply_scroll_offsets(arena, layouts, &scroll_offsets);
-        let physical_layouts = scale_layouts(&scrolled_layouts, scale_factor as f32);
-        if self.controls.input_mode() == InputMode::Selective {
-            sync_input_regions(&self.controls, &window, arena, &physical_layouts);
-        }
-        let spinner_for = |node: NodeId| {
-            if arena.input_type(node) != Some("number")
-                || arena.is_disabled(node)
-                || arena.attr_flag(node, "readonly")
-            {
-                return None;
-            }
-            let is_hovered = hovered == Some(node);
-            if !is_hovered && focused != Some(node) {
-                return None;
-            }
-            let layout = layouts.get(&node)?;
-            let (x, y) = florui_layout::absolute_position(arena, &scrolled_layouts, node);
-            Some(if is_hovered {
-                florui_paint::spinner_half_at((x, y, layout.width, layout.height), cursor)
-            } else {
-                florui_paint::SpinnerHover::None
-            })
-        };
-        let text_inputs = build_text_input_paint(
+        let parts = crate::frame::build_paint_parts(crate::frame::PaintSources {
+            arena,
+            styles,
+            layouts,
             font,
-            TextInputPaintContext {
-                arena,
-                styles,
-                layouts: &scrolled_layouts,
-                registry: &text_input_registry,
-                focused,
-                hovered,
-                pointer: cursor,
-                scroll_dragging: self.input.scroll_drag.as_ref().map(|drag| drag.id.as_str()),
-            },
-            &spinner_for,
-        );
-        // One combined map: `florui_paint` blits either tag's own decoded
-        // pixels identically (see its own "img"/"icon" tag check), so it
-        // only needs one `NodeId -> ImagePaint` map, not one per registry.
-        let mut images = build_image_paint(
-            arena,
-            styles,
-            &physical_layouts,
-            &image_registry,
-            &asset_cache,
-            &*executor,
-        );
-        images.extend(build_icon_paint(
-            arena,
-            styles,
-            &physical_layouts,
-            &icon_registry,
-            &asset_cache,
-            &*executor,
-        ));
-        images.extend(build_control_icon_paint(
-            arena,
-            styles,
-            &icon_registry,
-            &asset_cache,
-            &*executor,
-            scale_factor as f32,
-        ));
+            scroll_registry: &scroll_registry,
+            text_input_registry: &text_input_registry,
+            image_registry: &image_registry,
+            icon_registry: &icon_registry,
+            asset_cache: &asset_cache,
+            executor: &*executor,
+            focused,
+            hovered,
+            cursor,
+            scroll_dragging: self.input.scroll_drag.as_ref().map(|drag| drag.id.as_str()),
+            scale_factor,
+        });
+        if self.controls.input_mode() == InputMode::Selective {
+            sync_input_regions(&self.controls, &window, arena, &parts.physical_layouts);
+        }
         if let Some(node) = focused
-            && let Some(paint) = text_inputs.get(&node)
+            && let Some(paint) = parts.text_inputs.get(&node)
             && let Some((x0, y0, x1, y1)) = paint.compose_rect
         {
             // Logical coordinates straight through -- `set_ime_cursor_area`
@@ -1443,7 +1400,7 @@ impl WindowState {
             // `scale_factor` multiplication belongs here (unlike
             // `physical_layouts`, which painting needs pre-scaled).
             let (origin_x, origin_y) = text_input_content_origin(
-                florui_layout::absolute_position(arena, &scrolled_layouts, node),
+                florui_layout::absolute_position(arena, &parts.scrolled_layouts, node),
                 styles,
                 node,
             );
@@ -1453,8 +1410,12 @@ impl WindowState {
             );
         }
 
-        let node_bounds: HashMap<NodeId, (f32, f32, f32, f32)> =
-            florui_layout::screen_bounds(arena, &physical_layouts, styles, scale_factor as f32);
+        let node_bounds: HashMap<NodeId, (f32, f32, f32, f32)> = florui_layout::screen_bounds(
+            arena,
+            &parts.physical_layouts,
+            styles,
+            scale_factor as f32,
+        );
         let (accessibility_update, accessibility_reverse) =
             self.accessibility_tree
                 .build(arena, focused, &node_bounds, interaction);
@@ -1469,10 +1430,10 @@ impl WindowState {
             self.canvas_color,
             arena,
             styles,
-            &physical_layouts,
+            &parts.physical_layouts,
             scale_factor as f32,
-            Some(&text_inputs),
-            Some(&images),
+            Some(&parts.text_inputs),
+            Some(&parts.images),
         );
         if let Some(observer) = &self.observer {
             let mut observer = observer.borrow_mut();
@@ -1481,7 +1442,7 @@ impl WindowState {
                 &crate::host_observer::ObservedFrame {
                     arena,
                     styles,
-                    layouts: &physical_layouts,
+                    layouts: &parts.physical_layouts,
                     bounds: &node_bounds,
                     scale_factor,
                     focused,
