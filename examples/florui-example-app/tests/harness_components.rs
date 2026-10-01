@@ -5,7 +5,7 @@ use florui::prelude::*;
 use florui_example_app::components::counter::{Counter, CounterProps};
 use florui_example_app::components::stepper::{Stepper, StepperProps};
 use florui_reactive::use_signal;
-use florui_test::{Harness, Key, Mounted, by_class, by_role_named};
+use florui_test::{Harness, Key, Mounted, Route, assert_matches_clean, by_class, by_role_named};
 
 const COUNTER_CSS: &str = include_str!("../src/components/counter.css");
 const STEPPER_CSS: &str = include_str!("../src/components/stepper.css");
@@ -78,6 +78,10 @@ fn the_counter_button_is_named_for_assistive_technology_and_disposes_cleanly() {
 /// stepper is shown to be driven by its owner's validation, not just by an
 /// adapter that accepts everything.
 fn stepper(initial: i32, min: i32, max: i32) -> Mounted {
+    stepper_harness(initial, min, max).mount()
+}
+
+fn stepper_harness(initial: i32, min: i32, max: i32) -> Harness {
     Harness::new(move || {
         let count = use_signal(|| initial);
         let value = Binding::new(count.get(), move |requested: i32| {
@@ -89,7 +93,6 @@ fn stepper(initial: i32, min: i32, max: i32) -> Mounted {
     })
     .css(STEPPER_CSS)
     .viewport(240.0, 120.0)
-    .mount()
 }
 
 #[test]
@@ -125,4 +128,26 @@ fn the_owner_rejects_a_request_above_its_maximum() {
     mounted.click(up);
     assert_eq!(text(&mut mounted, "value"), "10");
     mounted.dispose().assert_clean();
+}
+
+/// A state reached by pressing the button three times looks exactly like the same
+/// state mounted directly. Both end with the "+1" button focused by the keyboard
+/// (a click would focus it too, but a twin cannot be focused by a click without
+/// counting it).
+#[test]
+fn a_stepper_pressed_three_times_looks_like_one_that_started_at_three() {
+    assert_matches_clean(
+        "stepper_pressed",
+        Route::new(stepper_harness(0, 0, 10), |m| {
+            m.press(Key::Tab);
+            m.press(Key::Tab);
+            for _ in 0..3 {
+                m.press(Key::Enter);
+            }
+        }),
+        Route::new(stepper_harness(3, 0, 10), |m| {
+            m.press(Key::Tab);
+            m.press(Key::Tab);
+        }),
+    );
 }
