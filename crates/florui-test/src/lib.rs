@@ -31,6 +31,21 @@
 //! assert_eq!(mounted.text(count), "1");
 //! mounted.dispose().assert_clean();
 //! ```
+//!
+//! A test can also assert how much work a change did, and what caused it:
+//!
+//! ```no_run
+//! # use florui::prelude::*;
+//! # use florui_test::{Harness, by_tag};
+//! # fn counter() -> Element { view! { <button>{"+1"}</button> } }
+//! use florui_profile::Counter;
+//!
+//! let mut mounted = Harness::new(counter).mount();
+//! let button = mounted.get(by_tag("button"));
+//! let ((), profile) = mounted.profile(|m| m.click(button));
+//! assert!(profile.was_dispatched("click", button));
+//! assert!(profile.counter(Counter::NodesLaidOut) < 100);
+//! ```
 
 mod guard;
 mod snapshot;
@@ -40,6 +55,7 @@ pub use florui_platform::TestKey as Key;
 use florui_platform::{
     A11yNode, HeadlessFrame, HeadlessOptions, HeadlessWindow, MemoryClipboard, TestKey,
 };
+use florui_profile::{Cause, Counter, FrameProfile, Phase};
 use florui_reactive::live::{LiveCounts, live_counts};
 use florui_style::{Rgba, StyleError};
 
@@ -219,6 +235,60 @@ impl TeardownReport {
              cycle are the usual causes.",
             self.left_behind
         );
+    }
+}
+
+/// What a stretch of work did, as [`Mounted::profile`] measured it. Times vary
+/// from run to run, so assert on counts, counters and causes; use times to
+/// compare, not to pin.
+#[derive(Debug, Clone)]
+pub struct Profile {
+    frames: Vec<FrameProfile>,
+}
+
+impl Profile {
+    /// The frames the work produced, with every span's total.
+    pub fn frames(&self) -> &[FrameProfile] {
+        &self.frames
+    }
+
+    /// What `counter` counted, summed over the frames.
+    pub fn counter(&self, counter: Counter) -> u64 {
+        self.frames.iter().map(|f| f.counter(counter)).sum()
+    }
+
+    /// How many times `phase` ran.
+    pub fn calls(&self, phase: Phase) -> u32 {
+        self.frames
+            .iter()
+            .map(|f| f.phase(phase).map_or(0, |p| p.calls))
+            .sum()
+    }
+
+    /// The time `phase` took, summed.
+    pub fn time(&self, phase: Phase) -> std::time::Duration {
+        self.frames.iter().map(|f| f.total(phase)).sum()
+    }
+
+    /// What caused the work, in the order it happened: a click, a signal
+    /// write, a resource.
+    pub fn causes(&self) -> Vec<&Cause> {
+        self.frames.iter().flat_map(|f| f.causes.iter()).collect()
+    }
+
+    /// Whether a signal was written while the handler of `name` on `node` ran:
+    /// the write is attributed to that event.
+    pub fn written_during(&self, name: &str, node: Node) -> bool {
+        self.causes()
+            .iter()
+            .any(|c| c.kind == "signal-write" && c.event == Some((name, node.0)))
+    }
+
+    /// Whether an event named `name` (`click`, ...) was dispatched on `node`.
+    pub fn was_dispatched(&self, name: &str, node: Node) -> bool {
+        self.causes()
+            .iter()
+            .any(|c| c.kind == "event" && c.event == Some((name, node.0)))
     }
 }
 
@@ -445,6 +515,24 @@ impl Mounted {
             .bounds(node)
             .expect("the element is drawn, so it has a box to click");
         (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0)
+    }
+
+    /// Runs `work` and then paints a frame, and reports what that cost: what
+    /// caused it, how many elements each stage touched, how the text and image
+    /// caches answered, and how long each stage took. A test can assert that a
+    /// change did little work (or that a cache answered) as well as that it
+    /// looked right.
+    ///
+    /// Everything between the start of `work` and the end of the frame counts,
+    /// so the update the work triggered and the painting that follows are both
+    /// in it. Calls do not nest.
+    pub fn profile<R>(&mut self, work: impl FnOnce(&mut Mounted) -> R) -> (R, Profile) {
+        florui_profile::start(false);
+        let result = work(self);
+        self.window_mut().frame();
+        florui_profile::stop();
+        let frames = florui_profile::recent_frames(1);
+        (result, Profile { frames })
     }
 
     // Assertions
