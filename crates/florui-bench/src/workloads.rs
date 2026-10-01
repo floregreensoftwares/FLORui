@@ -8,7 +8,7 @@ use std::hint::black_box;
 use std::rc::Rc;
 
 use florui::Element;
-use florui_platform::{HeadlessOptions, HeadlessWindow};
+use florui_platform::{HeadlessOptions, HeadlessWindow, use_scroll_offset};
 use florui_reactive::{Signal, use_signal};
 
 /// One thing to measure: building it is the setup, calling the returned
@@ -119,6 +119,38 @@ fn window(css: &str, root: impl Fn() -> Element + 'static) -> HeadlessWindow {
 
 fn rows_window(class_name: &'static str, n: usize) -> HeadlessWindow {
     window(CSS, move || list(class_name, n))
+}
+
+/// A scroll box of `n` rows that the wheel can move: the engine scrolls only an
+/// element that has an `id` and is registered with `use_scroll_offset`, so a
+/// plain `overflow: auto` box never scrolls.
+fn scroll_window(n: usize) -> HeadlessWindow {
+    window(CSS, move || {
+        let _scroll = use_scroll_offset("scroll", |_, _| {});
+        Element::node(
+            "div",
+            vec![
+                ("id".into(), "scroll".into()),
+                ("class".into(), "scroll".into()),
+            ],
+            (0..n).map(row).collect(),
+        )
+    })
+}
+
+/// Asserts `window` paints differently after `act`, so a workload that is meant
+/// to move something cannot quietly measure a window where nothing moved.
+fn assert_changes_the_frame(
+    window: &mut HeadlessWindow,
+    what: &str,
+    act: impl FnOnce(&mut HeadlessWindow),
+) {
+    let before = window.frame().rgba;
+    act(window);
+    assert!(
+        window.frame().rgba != before,
+        "the {what} workload changed nothing on screen, so it would measure a window that did not move"
+    );
 }
 
 /// A list whose root keeps a signal, returned with its handle.
@@ -255,20 +287,22 @@ pub fn all() -> Vec<Workload> {
         },
         Workload {
             name: "scroll_1k_rows",
-            description: "One wheel notch over a scroll box of 1,000 rows, then paint",
-            exercises: "wheel input, scroll offset update, update, paint with clipping",
+            description: "One 100 px wheel tick over a scroll box of 1,000 rows, then paint",
+            exercises: "wheel input, scroll offset update, repaint-only scroll, paint with clipping",
             build: || {
-                let mut win = rows_window("scroll", 1000);
+                let mut win = scroll_window(1000);
                 win.pointer_move(400.0, 300.0);
+                assert_changes_the_frame(&mut win, "scroll", |w| w.wheel(0.0, -100.0, false));
                 let mut ticks = 0usize;
                 Box::new(move || {
-                    let direction = if (ticks / 100).is_multiple_of(2) {
-                        -1.0
+                    // Forward for 100 ticks, then back, so it never reaches either end.
+                    let delta = if (ticks / 100).is_multiple_of(2) {
+                        -100.0
                     } else {
-                        1.0
+                        100.0
                     };
                     ticks += 1;
-                    win.wheel(0.0, direction, true);
+                    win.wheel(0.0, delta, false);
                     black_box(win.frame());
                 })
             },
@@ -279,10 +313,17 @@ pub fn all() -> Vec<Workload> {
             exercises: "hit test, hover state, restyle of the changed rows, paint",
             build: || {
                 let mut win = rows_window("list", 1000);
+                // Over the row's own padding (x = 4), not over a child: the engine
+                // styles only the node under the pointer, so a pointer over the
+                // label would restyle nothing.
+                assert_changes_the_frame(&mut win, "hover", |w| {
+                    w.pointer_move(4.0, 10.0);
+                    w.pointer_move(4.0, 200.0);
+                });
                 let mut tick = 0usize;
                 Box::new(move || {
                     tick += 1;
-                    win.pointer_move(100.0, 10.0 + ((tick * 37) % 580) as f32);
+                    win.pointer_move(4.0, 10.0 + ((tick * 37) % 580) as f32);
                     black_box(win.frame());
                 })
             },
@@ -365,4 +406,20 @@ pub fn all() -> Vec<Workload> {
 
 pub fn find(name: &str) -> Option<Workload> {
     all().into_iter().find(|w| w.name == name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_scroll_and_hover_workloads_really_move_something() {
+        // Building each one asserts the window paints differently after its
+        // first action; one that moved nothing would panic here.
+        for name in ["scroll_1k_rows", "hover_1k_rows"] {
+            let build = find(name).expect("the workload exists").build;
+            let mut op = build();
+            op();
+        }
+    }
 }
