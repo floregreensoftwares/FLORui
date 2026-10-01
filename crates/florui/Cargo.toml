@@ -11,6 +11,8 @@ name = "florui"
 [features]
 # Keeps each element's source location in a release build too, for profiling.
 source-locations = []
+# Records update traces in a release build too, for profiling.
+profiling = ["florui-reactive/profiling"]
 
 [dependencies]
 florui-macros = { path = "../florui-macros" }
