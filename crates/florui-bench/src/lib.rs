@@ -4,6 +4,7 @@
 //! comparison separates a real change from noise. See `florui-bench --help`.
 
 pub mod alloc;
+pub mod collections;
 pub mod overhead;
 pub mod phases;
 pub mod report;

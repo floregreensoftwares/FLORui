@@ -25,3 +25,9 @@ florui-platform = { path = "../florui-platform" }
 florui-reactive = { path = "../florui-reactive" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
+
+[dev-dependencies]
+# Counts live scopes, signals and cleanups so the tests can check what an
+# unmounted component released. Only the tests build it, since tracking every
+# scope and signal would slow the workloads it is meant to leave alone.
+florui-reactive = { path = "../florui-reactive", features = ["live-counts"] }
