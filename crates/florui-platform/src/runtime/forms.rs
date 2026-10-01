@@ -37,9 +37,12 @@ impl UiRuntime {
     }
 
     pub(super) fn form_state_of(&self, node: NodeId) -> Option<FormState> {
-        let validated = self
-            .user_validated
-            .contains(&FocusPath::of(&self.arena, node));
+        // Almost always empty; building a path for every control to look in it
+        // would be for show.
+        let validated = !self.user_validated.is_empty()
+            && self
+                .user_validated
+                .contains(&FocusPath::of(&self.arena, node));
         self.with_form_context(|ctx| form::form_state(ctx, node, validated))
     }
 
