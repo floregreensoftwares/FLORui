@@ -768,6 +768,78 @@ mod tests {
     }
 
     #[test]
+    fn a_hover_rule_applies_to_an_element_while_a_descendant_is_under_the_pointer() {
+        const HOVER_CSS: &str = ".row { width: 200px; padding: 12px; background-color: #ffffff; }             .row:hover { background-color: #0000ff; }             .label { display: block; width: 100px; height: 20px; background-color: #ff0000; }             .label:hover { background-color: #00ff00; }";
+        let mut window = HeadlessWindow::new(
+            HOVER_CSS,
+            || {
+                Element::node(
+                    "div",
+                    vec![("class".into(), "row".into())],
+                    vec![Element::node(
+                        "span",
+                        vec![("class".into(), "label".into())],
+                        vec![],
+                    )],
+                )
+            },
+            HeadlessOptions {
+                width: 300.0,
+                height: 300.0,
+                ..HeadlessOptions::default()
+            },
+        )
+        .expect("the stylesheet parses");
+        let class = |window: &HeadlessWindow, name: &str| {
+            let (arena, ..) = window.runtime().geometry();
+            arena
+                .find(|a, id| a.classes(id).iter().any(|c| c == name))
+                .unwrap_or_else(|| panic!("no .{name}"))
+        };
+        let (row, label) = (class(&window, "row"), class(&window, "label"));
+        let pixel_at = |frame: &HeadlessFrame, node: NodeId, dx: f32, dy: f32| {
+            let (x, y, ..) = frame.bounds[&node];
+            let at = ((y + dy) as u32 * frame.width + (x + dx) as u32) as usize * 4;
+            [frame.rgba[at], frame.rgba[at + 1], frame.rgba[at + 2]]
+        };
+
+        let idle = window.frame();
+        assert_eq!(
+            pixel_at(&idle, row, 2.0, 2.0),
+            [255, 255, 255],
+            "nothing hovered"
+        );
+
+        // Over the label, which is inside the row's padding.
+        let (x, y, w, h) = idle.bounds[&label];
+        window.pointer_move(x + w / 2.0, y + h / 2.0);
+        window.settle();
+        let over_label = window.frame();
+        assert_eq!(
+            pixel_at(&over_label, row, 2.0, 2.0),
+            [0, 0, 255],
+            "the row is :hover while its label is under the pointer"
+        );
+        assert_eq!(
+            pixel_at(&over_label, label, 2.0, 2.0),
+            [0, 255, 0],
+            "the label's own :hover rule applies as well"
+        );
+
+        // Over the row's own padding the label is not hovered.
+        let (rx, ry, ..) = over_label.bounds[&row];
+        window.pointer_move(rx + 3.0, ry + 3.0);
+        window.settle();
+        let over_row = window.frame();
+        assert_eq!(pixel_at(&over_row, row, 2.0, 2.0), [0, 0, 255]);
+        assert_eq!(
+            pixel_at(&over_row, label, 2.0, 2.0),
+            [255, 0, 0],
+            "a child is not :hover because its parent is"
+        );
+    }
+
+    #[test]
     fn a_click_is_the_origin_of_the_write_its_handler_makes() {
         use florui_reactive::trace::{self, Origin, TraceKind};
 
