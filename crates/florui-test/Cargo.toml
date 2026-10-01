@@ -13,6 +13,8 @@ name = "florui_test"
 [dependencies]
 florui = { path = "../florui" }
 florui-platform = { path = "../florui-platform" }
+# Always measuring-capable here, so a test can ask what work a change did in any build.
+florui-profile = { path = "../florui-profile", features = ["profiling"] }
 # Turns on the live-state counts that teardown checks read.
 florui-reactive = { path = "../florui-reactive", features = ["live-counts"] }
 florui-style = { path = "../florui-style" }

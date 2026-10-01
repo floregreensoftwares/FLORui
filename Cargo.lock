@@ -1989,6 +1989,7 @@ version = "0.1.0"
 dependencies = [
  "florui",
  "florui-platform",
+ "florui-profile",
  "florui-reactive",
  "florui-style",
  "image",

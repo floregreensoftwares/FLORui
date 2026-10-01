@@ -219,3 +219,65 @@ fn resizing_past_the_ceiling_is_refused() {
     let mut mounted = mount_panel();
     mounted.resize(9_000.0, 9_000.0);
 }
+
+#[test]
+fn a_change_is_traced_to_the_event_that_caused_it_and_the_work_it_did() {
+    use florui_profile::{Counter, Phase};
+
+    let mut mounted = mount_panel();
+    let add = mounted.get(by_text("Add"));
+
+    let ((), profile) = mounted.profile(|m| m.click(add));
+
+    assert!(
+        profile.was_dispatched("click", add),
+        "the click is named as a cause: {:?}",
+        profile.causes()
+    );
+    assert!(
+        profile.written_during("click", add),
+        "the write its handler made is attributed to that click"
+    );
+    assert!(profile.calls(Phase::Layout) >= 1, "layout ran");
+    assert!(profile.counter(Counter::NodesLaidOut) > 0);
+    assert!(profile.counter(Counter::NodesPainted) > 0);
+}
+
+#[test]
+fn text_that_did_not_change_is_answered_from_the_cache_and_changed_text_is_measured_again() {
+    use florui_profile::Counter;
+
+    let mut mounted = mount_panel();
+    let add = mounted.get(by_text("Add"));
+
+    // A resize to the size it already has re-renders without changing anything.
+    let ((), idle) = mounted.profile(|m| m.resize(160.0, 120.0));
+    assert_eq!(
+        idle.counter(Counter::TextMemoMisses),
+        0,
+        "nothing changed, so no text is measured again"
+    );
+    assert!(idle.counter(Counter::TextMemoHits) > 0);
+
+    let ((), changed) = mounted.profile(|m| m.click(add));
+    assert!(
+        changed.counter(Counter::TextMemoMisses) > 0,
+        "the count text changed, so it was measured again"
+    );
+}
+
+#[test]
+fn profiling_a_stretch_of_work_does_not_change_what_is_shown() {
+    let mut plain = mount_panel();
+    let add = plain.get(by_text("Add"));
+    plain.click(add);
+    let expected = plain.frame();
+
+    let mut profiled = mount_panel();
+    let add = profiled.get(by_text("Add"));
+    profiled.profile(|m| m.click(add));
+    let actual = profiled.frame();
+
+    assert_eq!(expected.rgba, actual.rgba);
+    assert_eq!(expected.bounds, actual.bounds);
+}
