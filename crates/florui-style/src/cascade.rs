@@ -2691,6 +2691,40 @@ mod tests {
     }
 
     #[test]
+    fn the_florui_properties_read_alongside_unrelated_custom_properties() {
+        let tree: Element = view! {
+            <div class="theme">
+                <textarea class="all" />
+                <textarea class="none" />
+            </div>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".theme { --brand: #ff0000; } \
+             .all { --florui-appearance: none; --florui-resize: vertical; \
+                    --florui-placeholder-color: #112233; --florui-scroll-behavior: smooth; }",
+            &InteractionState::new(),
+        );
+        let find = |class: &str| {
+            arena
+                .find(|a, id| a.classes(id).iter().any(|c| c == class))
+                .unwrap()
+        };
+        let all = &computed[&find("all")];
+        assert_eq!(all.appearance, Appearance::None);
+        assert_eq!(all.resize, Resize::Vertical);
+        assert_eq!(all.placeholder_color, Some(Rgba::opaque(0x11, 0x22, 0x33)));
+        assert!(all.scroll_behavior_smooth);
+
+        // A node whose custom properties are all someone else's keeps the defaults.
+        let none = &computed[&find("none")];
+        assert_eq!(none.appearance, Appearance::Auto);
+        assert_eq!(none.resize, Resize::Both);
+        assert_eq!(none.placeholder_color, None);
+        assert!(!none.scroll_behavior_smooth);
+    }
+
+    #[test]
     fn scroll_behavior_is_auto_until_an_author_asks_for_smooth() {
         let tree: Element = view! { <div class="a" /> };
         assert!(!smooth_of("", &tree, "a"));
