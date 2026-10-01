@@ -66,6 +66,26 @@ profiler compiled out against built in, build the binary twice (with and without
 run `ab`; the variable `FLORUI_BENCH_PROFILER=summary` (or `detail`) starts the profiler in the
 second build. `overhead/profiler-overhead.md` has the recorded result.
 
+## Collections and what a component owns
+
+`virtual_list_*` mounts the same row view in a virtualized list over 1,000, 10,000 and 100,000
+items, so a difference between the three is the cost of the data size alone; what a frame mounts is
+the same in all of them (`florui-bench phases` reports it: 81 nodes styled and laid out for any
+data size). `virtual_list_10k_variable` has rows whose height depends on their text, which are
+measured after they mount and correct the list's estimate, and `virtual_list_jump_10k_variable`
+jumps to an item thousands of rows away where nothing was measured. A sample of those is one 100 px
+wheel tick (forward for 100 ticks, then back) or one jump, then a paint.
+
+`mount_unmount_300_components` unmounts and mounts again 300 components that each keep a signal, a
+memo and an effect with a cleanup; one sample is the whole cycle, since alternating the two halves
+would make the median a mix of a cheap and an expensive operation.
+
+Timing cannot show that unmounting released what mounting created, so the crate's tests check it
+with the live-count feature of `florui-reactive` (a dev-dependency only: tracking every scope and
+signal in the benchmark binary would slow the workloads). They check that a list holds the same
+scopes whatever the data size, that scrolling away and back 400 ticks accumulates no row state, and
+that five unmount and mount cycles leave nothing behind.
+
 ## What it does not measure
 
 The workloads run in a headless window: update, layout, paint and the
@@ -91,5 +111,12 @@ engine improves.
   measure a window where nothing moved (the scroll box was not registered, so it never scrolled, and
   the hover pointer sat over a child, so no row was restyled); use this one for those two. A real
   100 px wheel tick over 1,000 rows costs about 96 ms, not the 27 ms the earlier figure suggested.
+- `collections-f7c0223`: only the virtualized list and mount-cycle workloads, 5 processes, on the
+  commit that adds them (a rebase can rewrite its hash; the engine is `grow/main` as of the cascade
+  style sharing and the layout measure memo). A wheel tick costs 11.7 ms over 1,000, 10,000 and
+  100,000 items with the same 5,517 allocations and 6,963 KiB per operation, and the peak heap grows
+  with the data (6.7, 6.9 and 9.8 MiB): the data size costs memory, not time. Variable rows 22.3 ms,
+  a jump 22.5 ms, a mount and unmount cycle of 300 components 21.5 ms. Between-process spread is 3%
+  to 10% except the 100,000-item list, which showed 19.9%.
 
 Repeat a measurement on a quiet machine before trusting a small difference.
