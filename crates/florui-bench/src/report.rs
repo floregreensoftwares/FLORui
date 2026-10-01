@@ -282,6 +282,64 @@ pub fn render(report: &Report) -> String {
     out
 }
 
+/// A workload that got clearly slower: worth someone's analysis, not a verdict.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Alarm {
+    pub workload: String,
+    pub baseline_ms: f64,
+    pub candidate_ms: f64,
+    /// `(candidate - baseline) / baseline`.
+    pub change: f64,
+    /// 95% bootstrap interval of `change`.
+    pub interval: (f64, f64),
+}
+
+/// The workloads that are slower by at least `alarm` (a fraction, 0.10 for
+/// 10%) and by more than `threshold` with an interval that excludes zero, the
+/// same bar a comparison uses to call a workload slower at all. Meant to
+/// raise a flag on a shared machine, where a small change cannot be told from
+/// noise; it never fails anything.
+pub fn alarms(baseline: &Report, candidate: &Report, threshold: f64, alarm: f64) -> Vec<Alarm> {
+    baseline
+        .workloads
+        .iter()
+        .filter_map(|base| {
+            let cand = candidate.workload(&base.name)?;
+            let c = stats::compare(&base.warm_samples(), &cand.warm_samples(), threshold)?;
+            (c.verdict == Verdict::Slower && c.relative_change >= alarm).then(|| Alarm {
+                workload: base.name.clone(),
+                baseline_ms: c.baseline_median,
+                candidate_ms: c.candidate_median,
+                change: c.relative_change,
+                interval: c.interval,
+            })
+        })
+        .collect()
+}
+
+/// The alarms as Markdown, for a pull request comment.
+pub fn render_alarms(alarms: &[Alarm]) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "| Workload | Before (ms) | After (ms) | Change | 95% interval |"
+    );
+    let _ = writeln!(out, "| --- | ---: | ---: | ---: | --- |");
+    for a in alarms {
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {:+.1}% | {:+.1}% to {:+.1}% |",
+            a.workload,
+            ms(a.baseline_ms),
+            ms(a.candidate_ms),
+            a.change * 100.0,
+            a.interval.0 * 100.0,
+            a.interval.1 * 100.0
+        );
+    }
+    out
+}
+
 /// A candidate against a baseline, workload by workload.
 pub fn render_comparison(baseline: &Report, candidate: &Report, threshold: f64) -> String {
     let mut out = String::new();
@@ -448,6 +506,37 @@ mod tests {
         assert!(text.contains("# Performance baseline: label"));
         assert!(text.contains("| w |"));
         assert!(text.contains("CPU work"));
+    }
+
+    #[test]
+    fn only_a_clear_and_large_slowdown_raises_an_alarm() {
+        let base = report("base", &[10.0, 10.1, 9.9, 10.05, 9.95, 10.0]);
+        let large = report("cand", &[11.6, 11.7, 11.5, 11.65, 11.55, 11.6]);
+        let small = report("cand", &[10.7, 10.8, 10.6, 10.75, 10.65, 10.7]);
+        let faster = report("cand", &[7.0, 7.1, 6.9, 7.05, 6.95, 7.0]);
+        let noisy = report("cand", &[7.0, 16.0, 6.0, 15.0, 8.0, 14.0]);
+
+        let raised = alarms(&base, &large, 0.05, 0.10);
+        assert_eq!(raised.len(), 1);
+        assert_eq!(raised[0].workload, "w");
+        assert!(raised[0].change > 0.15);
+        assert!(
+            alarms(&base, &small, 0.05, 0.10).is_empty(),
+            "7% is slower but not alarming"
+        );
+        assert!(
+            alarms(&base, &small, 0.05, 0.05).len() == 1,
+            "the bar is the caller's"
+        );
+        assert!(
+            alarms(&base, &faster, 0.05, 0.10).is_empty(),
+            "faster is never an alarm"
+        );
+        assert!(
+            alarms(&base, &noisy, 0.05, 0.10).is_empty(),
+            "a spread that swallows the shift is not one"
+        );
+        assert!(render_alarms(&raised).contains("| w |"));
     }
 
     #[test]

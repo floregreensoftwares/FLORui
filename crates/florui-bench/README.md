@@ -66,6 +66,23 @@ profiler compiled out against built in, build the binary twice (with and without
 run `ab`; the variable `FLORUI_BENCH_PROFILER=summary` (or `detail`) starts the profiler in the
 second build. `overhead/profiler-overhead.md` has the recorded result.
 
+## Against the base, on every pull request
+
+`scripts/bench-pr.ps1 -Base <sha> -Head <sha>` builds both commits, alternates them with `ab` and
+writes `report.md`. The workflow `bench.yml` runs it for each pull request and posts the result as
+one comment, updated in place. It is not a required check and never fails a pull request: a shared
+runner is too noisy for a number to mean anything alone, so each run compares a commit with its base
+on the same machine, not with a stored figure.
+
+`ab --alarm 0.10` also writes `alarms.json` (and `alarms.md` when there is something): the
+workloads slower by 10% or more, past the usual 5% bar with an interval that excludes zero. A pull
+request with one gets the `perf-alert` label, so `label:perf-alert` lists what is worth looking at.
+It is a flag to rerun and open the profiler, not a verdict.
+
+The job runs only the workloads of a thousand rows and more, five rounds. Two identical builds run
+this way raised no alarm and moved at most 4.5%; the same two builds on 100-row workloads with two
+rounds raised a false one at +17%, which is why the small workloads and short runs are left out.
+
 ## Collections and what a component owns
 
 `virtual_list_*` mounts the same row view in a virtualized list over 1,000, 10,000 and 100,000
