@@ -195,38 +195,21 @@ impl std::error::Error for TextError {}
 /// back into [`Font::measure_cached`].
 pub struct CachedLayout(parley::Layout<[u8; 4]>);
 
-/// Metrics of text already measured, by exactly what was asked: style, text
-/// and wrap width. The same tree asks the same questions every frame, so a
-/// hit skips shaping and line breaking entirely. Flattened into two levels
-/// so a lookup borrows the text instead of allocating a key for it.
 /// Family, font size bits and font weight bits.
 type MemoStyle = (u8, u32, u32);
 
 /// A wrap width (bits, `None` for unwrapped) and what it measured.
 type MemoWidth = (Option<u32>, TextMetrics);
 
-struct MetricsMemo {
+/// One generation of [`MetricsMemo`]. Flattened into two levels so a lookup
+/// borrows the text instead of allocating a key for it.
+#[derive(Default)]
+struct Generation {
     by_style: HashMap<MemoStyle, HashMap<String, Vec<MemoWidth>>>,
     entries: usize,
-    capacity: usize,
-    #[cfg(test)]
-    misses: usize,
 }
 
-/// Entries kept before the memo is emptied and refilled by the next frame.
-const METRICS_MEMO_CAPACITY: usize = 50_000;
-
-impl MetricsMemo {
-    fn with_capacity(capacity: usize) -> Self {
-        Self {
-            by_style: HashMap::new(),
-            entries: 0,
-            capacity,
-            #[cfg(test)]
-            misses: 0,
-        }
-    }
-
+impl Generation {
     fn get(&self, style: MemoStyle, text: &str, width: Option<u32>) -> Option<TextMetrics> {
         self.by_style
             .get(&style)?
@@ -237,9 +220,6 @@ impl MetricsMemo {
     }
 
     fn insert(&mut self, style: MemoStyle, text: &str, width: Option<u32>, metrics: TextMetrics) {
-        if self.entries >= self.capacity {
-            self.clear();
-        }
         self.by_style
             .entry(style)
             .or_default()
@@ -248,10 +228,64 @@ impl MetricsMemo {
             .push((width, metrics));
         self.entries += 1;
     }
+}
+
+/// Metrics of text already measured, by exactly what was asked: style, text
+/// and wrap width. The same tree asks the same questions every frame, so a
+/// hit skips shaping and line breaking entirely.
+///
+/// Kept in two generations. New answers go into the current one; when it
+/// fills, it becomes the previous one and the old previous is dropped. A hit
+/// in the previous generation moves back into the current one, so whatever a
+/// frame keeps asking for survives indefinitely and whatever stopped being
+/// asked for is gone within two generations, without tracking the order of
+/// every use. The two together hold at most `capacity` entries.
+struct MetricsMemo {
+    current: Generation,
+    previous: Generation,
+    generation_capacity: usize,
+    #[cfg(test)]
+    misses: usize,
+}
+
+/// Entries kept in total, across both generations.
+const METRICS_MEMO_CAPACITY: usize = 50_000;
+
+impl MetricsMemo {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            current: Generation::default(),
+            previous: Generation::default(),
+            generation_capacity: (capacity / 2).max(1),
+            #[cfg(test)]
+            misses: 0,
+        }
+    }
+
+    #[cfg(test)]
+    fn entries(&self) -> usize {
+        self.current.entries + self.previous.entries
+    }
+
+    fn get(&mut self, style: MemoStyle, text: &str, width: Option<u32>) -> Option<TextMetrics> {
+        if let Some(metrics) = self.current.get(style, text, width) {
+            return Some(metrics);
+        }
+        let metrics = self.previous.get(style, text, width)?;
+        self.insert(style, text, width, metrics);
+        Some(metrics)
+    }
+
+    fn insert(&mut self, style: MemoStyle, text: &str, width: Option<u32>, metrics: TextMetrics) {
+        if self.current.entries >= self.generation_capacity {
+            self.previous = std::mem::take(&mut self.current);
+        }
+        self.current.insert(style, text, width, metrics);
+    }
 
     fn clear(&mut self) {
-        self.by_style.clear();
-        self.entries = 0;
+        self.current = Generation::default();
+        self.previous = Generation::default();
     }
 }
 
@@ -827,37 +861,72 @@ mod tests {
             (metrics.width, metrics.height, metrics.baseline),
             (0.0, 0.0, 0.0)
         );
-        assert_eq!(font.metrics_memo.entries, 0);
+        assert_eq!(font.metrics_memo.entries(), 0);
     }
 
     #[test]
     fn registering_a_font_empties_the_memo() {
         let mut font = Font::load_embedded();
         font.measure_memoized(&mut None, FontFamily::SansSerif, "kept", 16.0, 400.0, None);
-        assert_eq!(font.metrics_memo.entries, 1);
+        assert_eq!(font.metrics_memo.entries(), 1);
 
         font.register(EMBEDDED_MONOSPACE_FONT).unwrap();
 
-        assert_eq!(font.metrics_memo.entries, 0);
+        assert_eq!(font.metrics_memo.entries(), 0);
+    }
+
+    fn metrics(width: f32) -> TextMetrics {
+        TextMetrics {
+            width,
+            height: 2.0,
+            baseline: 3.0,
+        }
     }
 
     #[test]
-    fn the_memo_is_emptied_once_it_reaches_its_capacity() {
-        let mut memo = MetricsMemo::with_capacity(2);
-        let metrics = TextMetrics {
-            width: 1.0,
-            height: 2.0,
-            baseline: 3.0,
-        };
-        memo.insert((0, 0, 0), "a", None, metrics);
-        memo.insert((0, 0, 0), "b", None, metrics);
-        assert_eq!(memo.entries, 2);
+    fn what_keeps_being_asked_for_survives_while_the_unused_is_dropped() {
+        // Two generations of two entries each.
+        let mut memo = MetricsMemo::with_capacity(4);
+        memo.insert((0, 0, 0), "hot", None, metrics(1.0));
+        memo.insert((0, 0, 0), "cold", None, metrics(2.0));
+        memo.insert((0, 0, 0), "c", None, metrics(3.0));
+        // "hot" and "cold" are now the previous generation; asking for "hot"
+        // brings it back into the current one.
+        assert_eq!(memo.get((0, 0, 0), "hot", None), Some(metrics(1.0)));
 
-        memo.insert((0, 0, 0), "c", None, metrics);
+        memo.insert((0, 0, 0), "d", None, metrics(4.0));
+        memo.insert((0, 0, 0), "e", None, metrics(5.0));
 
-        assert_eq!(memo.entries, 1, "emptied, then the new entry stored");
-        assert!(memo.get((0, 0, 0), "a", None).is_none());
-        assert!(memo.get((0, 0, 0), "c", None).is_some());
+        assert_eq!(memo.get((0, 0, 0), "hot", None), Some(metrics(1.0)));
+        assert!(
+            memo.get((0, 0, 0), "cold", None).is_none(),
+            "never asked for again"
+        );
+    }
+
+    #[test]
+    fn the_memo_never_holds_more_than_its_capacity() {
+        let mut memo = MetricsMemo::with_capacity(10);
+        for i in 0..200 {
+            memo.insert((0, 0, 0), &format!("text {i}"), None, metrics(i as f32));
+            assert!(
+                memo.entries() <= 10,
+                "after {i} inserts: {}",
+                memo.entries()
+            );
+        }
+    }
+
+    #[test]
+    fn a_promoted_entry_keeps_its_exact_answer_and_width() {
+        let mut memo = MetricsMemo::with_capacity(6);
+        memo.insert((0, 0, 0), "wide", Some(40), metrics(7.0));
+        memo.insert((0, 0, 0), "wide", None, metrics(9.0));
+        memo.insert((0, 0, 0), "other", None, metrics(1.0));
+
+        assert_eq!(memo.get((0, 0, 0), "wide", Some(40)), Some(metrics(7.0)));
+        assert_eq!(memo.get((0, 0, 0), "wide", None), Some(metrics(9.0)));
+        assert!(memo.get((0, 0, 0), "wide", Some(41)).is_none());
     }
 
     #[test]
