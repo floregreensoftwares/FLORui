@@ -15,6 +15,7 @@ florui-bench: reproducible performance baselines
   florui-bench run [--label L] [--out FILE.json] [--processes N] [--filter A,B] [--no-heap] [--allow-debug]
   florui-bench compare BASELINE.json CANDIDATE.json [--threshold 0.05] [--out FILE.md]
   florui-bench ab --a EXE --b EXE [--rounds N] [--filter A,B] [--no-heap] [--threshold 0.05] [--out-dir DIR]
+  florui-bench phases NAME [--ops N] [--out FILE.md]   (where a frame's time goes, from the profiler)
   florui-bench overhead [--out FILE.md]   (what one profiler span and counter cost in each mode)
   florui-bench mode                       (this build's profile and profiler mode)
   florui-bench measure NAME [--heap]      (one process's measurement; used by the commands above)
@@ -193,6 +194,23 @@ fn overhead_command(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn phases_command(args: &[String]) -> Result<(), String> {
+    let name = args.first().ok_or("phases needs a workload name")?;
+    let workload = workloads::find(name).ok_or_else(|| format!("no workload named {name}"))?;
+    let ops: usize = number(args, "--ops", 30)?;
+    let report = florui_bench::phases::measure(&workload, ops)?;
+    let text = format!(
+        "{}\n- Build: {} profile\n",
+        florui_bench::phases::render(&report),
+        profile()
+    );
+    if let Some(path) = option(args, "--out") {
+        write(&PathBuf::from(path), &text)?;
+    }
+    println!("{text}");
+    Ok(())
+}
+
 fn measure_command(args: &[String]) -> Result<(), String> {
     let name = args.first().ok_or("measure needs a workload name")?;
     let workload = workloads::find(name).ok_or_else(|| format!("no workload named {name}"))?;
@@ -218,6 +236,7 @@ fn main() -> ExitCode {
         Some("ab") => ab_command(&args[1..]),
         Some("measure") => measure_command(&args[1..]),
         Some("overhead") => overhead_command(&args[1..]),
+        Some("phases") => phases_command(&args[1..]),
         Some("mode") => {
             println!("{}", florui_bench::report::BuildInfo::this_build().line());
             Ok(())
