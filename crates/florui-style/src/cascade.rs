@@ -539,6 +539,103 @@ pub struct ComputedStyle {
     pub scroll_behavior_smooth: bool,
 }
 
+impl ComputedStyle {
+    /// Copies from `other` the fields that change only how a node is painted:
+    /// its colors (background, text, each border side's color, placeholder),
+    /// box shadows, opacity, text underline and the pointer cursor. Nothing
+    /// that can change a size, a position, which node is hit, stacking, or what
+    /// a registry reads from a style (overflow, font, appearance, transform)
+    /// is copied.
+    ///
+    /// The destructuring below names every field, so adding one to
+    /// [`ComputedStyle`] does not compile until it is put on one side or the
+    /// other here. A field left off the paint side only makes a restyle take
+    /// the slower path; a field wrongly put on it would leave a layout stale.
+    pub fn copy_paint_from(&mut self, other: &ComputedStyle) {
+        let ComputedStyle {
+            // Paint only.
+            background_color,
+            color,
+            border,
+            box_shadow,
+            opacity,
+            text_decoration_underline,
+            cursor_pointer,
+            placeholder_color,
+            // Everything else may change layout, hit testing, stacking or what a
+            // registry reads, so it is not copied.
+            width: _,
+            height: _,
+            max_width: _,
+            max_height: _,
+            margin: _,
+            padding: _,
+            font_size: _,
+            font_family: _,
+            font_weight: _,
+            display: _,
+            flex_direction: _,
+            flex_wrap: _,
+            justify_content: _,
+            align_content: _,
+            align_items: _,
+            align_self: _,
+            flex_grow: _,
+            flex_shrink: _,
+            flex_basis: _,
+            column_gap: _,
+            row_gap: _,
+            border_radius: _,
+            grid_template_columns: _,
+            grid_template_rows: _,
+            grid_column: _,
+            grid_row: _,
+            position: _,
+            inset: _,
+            z_index: _,
+            pointer_events_none: _,
+            overflow_clips: _,
+            overflow_scrolls_x: _,
+            overflow_scrolls_y: _,
+            transform: _,
+            transform_origin: _,
+            filter: _,
+            backdrop_filter: _,
+            container_type: _,
+            container_name: _,
+            object_fit: _,
+            object_position: _,
+            aspect_ratio: _,
+            appearance: _,
+            resize: _,
+            scroll_behavior_smooth: _,
+        } = other;
+        self.background_color = *background_color;
+        self.color = *color;
+        self.border.top.color = border.top.color;
+        self.border.right.color = border.right.color;
+        self.border.bottom.color = border.bottom.color;
+        self.border.left.color = border.left.color;
+        self.box_shadow.clone_from(box_shadow);
+        self.opacity = *opacity;
+        self.text_decoration_underline = *text_decoration_underline;
+        self.cursor_pointer = *cursor_pointer;
+        self.placeholder_color = *placeholder_color;
+    }
+
+    /// Whether `other` differs from `self` only in what
+    /// [`Self::copy_paint_from`] copies: a node whose style changed this way
+    /// needs repainting, not laying out again.
+    pub fn differs_only_in_paint(&self, other: &ComputedStyle) -> bool {
+        if self == other {
+            return true;
+        }
+        let mut repainted = self.clone();
+        repainted.copy_paint_from(other);
+        repainted == *other
+    }
+}
+
 /// The values of `resize`, spelled through `--florui-resize`. Only a
 /// `<textarea>` acts on it; anything unset or unrecognized is `Both`, which
 /// is what a textarea has by default.
@@ -701,6 +798,100 @@ pub fn compute_with_container_query_signature(
 
 #[cfg(test)]
 mod tests {
+    mod paint_only {
+        use super::*;
+
+        /// The style of a bare element under no stylesheet.
+        fn base() -> ComputedStyle {
+            let tree: Element = view! { <div /> };
+            let (arena, computed) = styles(&tree, "", &InteractionState::new());
+            computed[&arena.roots()[0]].clone()
+        }
+
+        fn rgba(r: u8) -> Rgba {
+            Rgba::opaque(r, 0, 0)
+        }
+
+        #[test]
+        fn a_style_equal_to_itself_differs_in_nothing() {
+            let style = base();
+            assert!(style.differs_only_in_paint(&style.clone()));
+        }
+
+        #[test]
+        fn colors_shadows_opacity_underline_and_cursor_are_paint_only() {
+            let base = base();
+            let mut changed = base.clone();
+            changed.background_color = rgba(10);
+            changed.color = rgba(20);
+            changed.border.left.color = rgba(30);
+            changed.opacity = 0.5;
+            changed.text_decoration_underline = true;
+            changed.cursor_pointer = true;
+            changed.placeholder_color = Some(rgba(40));
+            changed.box_shadow = vec![BoxShadow {
+                offset_x: 1.0,
+                offset_y: 2.0,
+                blur_radius: 3.0,
+                spread_radius: 0.0,
+                color: rgba(50),
+                inset: false,
+            }];
+            assert!(base.differs_only_in_paint(&changed));
+
+            let mut copied = base.clone();
+            copied.copy_paint_from(&changed);
+            assert_eq!(
+                copied, changed,
+                "copying the paint fields reaches the new style"
+            );
+        }
+
+        #[test]
+        fn a_size_a_margin_or_a_border_width_is_not_paint_only() {
+            let base = base();
+            for change in [
+                (|s: &mut ComputedStyle| s.width = Some(10.0)) as fn(&mut ComputedStyle),
+                |s| s.margin.top = Some(4.0),
+                |s| s.border.top.width = 2.0,
+                |s| s.font_size = 20.0,
+                |s| s.display = Display::None,
+                |s| s.z_index = Some(3),
+                |s| s.overflow_clips = true,
+                |s| s.transform = vec![TransformFunction::Rotate(1.0)],
+                |s| s.filter = vec![FilterFunction::Blur(2.0)],
+            ] {
+                let mut changed = base.clone();
+                change(&mut changed);
+                assert!(
+                    !base.differs_only_in_paint(&changed),
+                    "a change to a layout field was taken for paint-only: {changed:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_color_together_with_a_width_is_not_paint_only() {
+            let base = base();
+            let mut changed = base.clone();
+            changed.background_color = rgba(10);
+            changed.width = Some(50.0);
+            assert!(!base.differs_only_in_paint(&changed));
+        }
+
+        #[test]
+        fn copying_paint_fields_leaves_layout_fields_alone() {
+            let mut target = base();
+            target.width = Some(77.0);
+            let mut source = base();
+            source.background_color = rgba(90);
+            source.width = Some(5.0);
+            target.copy_paint_from(&source);
+            assert_eq!(target.background_color, rgba(90));
+            assert_eq!(target.width, Some(77.0), "the width stays what it was");
+        }
+    }
+
     use std::collections::HashSet;
 
     use florui::prelude::*;
