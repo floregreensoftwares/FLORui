@@ -1556,92 +1556,80 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
     }
 }
 
-/// Reads `--florui-scroll-behavior` the way [`to_appearance`] reads its
-/// property: smooth only for the exact keyword.
+/// The `--florui-*` custom properties read for every node, interned once per
+/// thread: building an `Atom` from a string hashes it and takes the global
+/// table's lock, which dominated this conversion when done four times a node.
+struct FlorNames {
+    scroll_behavior: Atom,
+    appearance: Atom,
+    resize: Atom,
+    placeholder_color: Atom,
+}
+
+thread_local! {
+    static FLOR_NAMES: FlorNames = FlorNames {
+        scroll_behavior: Atom::from("florui-scroll-behavior"),
+        appearance: Atom::from("florui-appearance"),
+        resize: Atom::from("florui-resize"),
+        placeholder_color: Atom::from("florui-placeholder-color"),
+    };
+}
+
+/// The CSS text of one of this crate's own unregistered custom properties,
+/// or `None` when the node does not carry it. Every custom property authors
+/// can declare is unregistered (no `@property` support), so
+/// [`PropertyRegistrationData::unregistered`] (universal syntax, inherits)
+/// is the registration to read it against, the same default the cascade
+/// applies when substituting `var()`. Read directly, not substituted into
+/// another property, since there is no real property to substitute it into
+/// (see [`FlorAppearance`]'s own doc for why).
+fn florui_property(values: &ComputedValues, name: impl Fn(&FlorNames) -> &Atom) -> Option<String> {
+    use style::properties_and_values::registry::PropertyRegistrationData;
+    use style_traits::ToCss;
+
+    let properties = values.custom_properties();
+    if properties.is_empty() {
+        return None;
+    }
+    FLOR_NAMES.with(|names| {
+        let value = properties.get(PropertyRegistrationData::unregistered(), name(names))?;
+        let mut css = String::new();
+        value.to_css(&mut CssWriter::new(&mut css)).ok()?;
+        Some(css)
+    })
+}
+
+/// Reads `--florui-scroll-behavior`: smooth only for the exact keyword.
 fn to_scroll_behavior_smooth(values: &ComputedValues) -> bool {
-    use style::properties_and_values::registry::PropertyRegistrationData;
-    use style_traits::ToCss;
-
-    let name = Atom::from("florui-scroll-behavior");
-    let Some(value) = values
-        .custom_properties()
-        .get(PropertyRegistrationData::unregistered(), &name)
-    else {
-        return false;
-    };
-    let mut css = String::new();
-    value.to_css(&mut CssWriter::new(&mut css)).is_ok() && css.trim().eq_ignore_ascii_case("smooth")
+    florui_property(values, |names| &names.scroll_behavior)
+        .is_some_and(|css| css.trim().eq_ignore_ascii_case("smooth"))
 }
 
-/// Reads `--florui-appearance` the same way `var()` substitution already
-/// does internally (proven by this crate's own custom-property tests) --
-/// but read directly, not substituted into another property, since there
-/// is no real property to substitute it into (see [`FlorAppearance`]'s
-/// own doc for why). Every custom property this crate's authors can
-/// declare is unregistered (no `@property` support), so
-/// [`PropertyRegistrationData::unregistered`] (universal syntax,
-/// inherits) is always the right registration to read it against -- the
-/// same default the cascade itself already applies when substituting
-/// `var()`.
+/// Reads `--florui-appearance`.
 fn to_appearance(values: &ComputedValues) -> FlorAppearance {
-    use style::properties_and_values::registry::PropertyRegistrationData;
-    use style_traits::ToCss;
-
-    let name = Atom::from("florui-appearance");
-    let Some(value) = values
-        .custom_properties()
-        .get(PropertyRegistrationData::unregistered(), &name)
-    else {
-        return FlorAppearance::Auto;
-    };
-    let mut css = String::new();
-    if value.to_css(&mut CssWriter::new(&mut css)).is_err() {
-        return FlorAppearance::Auto;
-    }
-    if css.trim() == "none" {
-        FlorAppearance::None
-    } else {
-        FlorAppearance::Auto
+    match florui_property(values, |names| &names.appearance) {
+        Some(css) if css.trim() == "none" => FlorAppearance::None,
+        _ => FlorAppearance::Auto,
     }
 }
 
-/// Reads `--florui-resize` the way [`to_appearance`] reads its property.
+/// Reads `--florui-resize`.
 fn to_resize(values: &ComputedValues) -> FlorResize {
-    use style::properties_and_values::registry::PropertyRegistrationData;
-    use style_traits::ToCss;
-
-    let name = Atom::from("florui-resize");
-    let Some(value) = values
-        .custom_properties()
-        .get(PropertyRegistrationData::unregistered(), &name)
-    else {
-        return FlorResize::Both;
-    };
-    let mut css = String::new();
-    if value.to_css(&mut CssWriter::new(&mut css)).is_err() {
-        return FlorResize::Both;
-    }
-    match css.trim() {
-        "none" => FlorResize::None,
-        "vertical" => FlorResize::Vertical,
-        "horizontal" => FlorResize::Horizontal,
+    match florui_property(values, |names| &names.resize)
+        .as_deref()
+        .map(str::trim)
+    {
+        Some("none") => FlorResize::None,
+        Some("vertical") => FlorResize::Vertical,
+        Some("horizontal") => FlorResize::Horizontal,
         _ => FlorResize::Both,
     }
 }
 
-/// Reads `--florui-placeholder-color` the way [`to_appearance`] reads its
-/// property, then parses the color: hex, `rgb()`/`rgba()` and named colors.
+/// Reads `--florui-placeholder-color`, then parses the color: hex,
+/// `rgb()`/`rgba()` and named colors.
 fn to_placeholder_color(values: &ComputedValues) -> Option<Rgba> {
-    use style::properties_and_values::registry::PropertyRegistrationData;
-    use style_traits::ToCss;
-
-    let name = Atom::from("florui-placeholder-color");
-    let value = values
-        .custom_properties()
-        .get(PropertyRegistrationData::unregistered(), &name)?;
-    let mut css = String::new();
-    value.to_css(&mut CssWriter::new(&mut css)).ok()?;
-    parse_color(css.trim())
+    parse_color(florui_property(values, |names| &names.placeholder_color)?.trim())
 }
 
 fn parse_color(css: &str) -> Option<Rgba> {
