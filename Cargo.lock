@@ -1719,6 +1719,7 @@ dependencies = [
  "florui-platform",
  "florui-profile",
  "florui-reactive",
+ "florui-style",
  "serde",
  "serde_json",
 ]

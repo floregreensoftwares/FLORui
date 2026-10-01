@@ -212,6 +212,7 @@ fn signal_frame(n: usize) -> Box<dyn FnMut()> {
 pub fn all() -> Vec<Workload> {
     let mut all = frame_pipeline();
     all.extend(crate::collections::all());
+    all.extend(crate::effects::all());
     all
 }
 
