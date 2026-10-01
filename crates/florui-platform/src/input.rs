@@ -537,7 +537,7 @@ impl<H: InputHost> Input<'_, H> {
             self.runtime.dispatch_event(node, "mouseenter");
         }
         self.runtime
-            .set_os_prefers_reduced_motion(crate::accessibility::prefers_reduced_motion());
+            .set_os_prefers_reduced_motion(self.host.prefers_reduced_motion());
         self.runtime.update(viewport);
         self.host.request_redraw();
         self.refresh_animation_schedule();
