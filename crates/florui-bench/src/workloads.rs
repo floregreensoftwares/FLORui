@@ -313,9 +313,8 @@ pub fn all() -> Vec<Workload> {
             exercises: "hit test, hover state, restyle of the changed rows, paint",
             build: || {
                 let mut win = rows_window("list", 1000);
-                // Over the row's own padding (x = 4), not over a child: the engine
-                // styles only the node under the pointer, so a pointer over the
-                // label would restyle nothing.
+                // Over the row's own padding (x = 4), so the row itself is the hit node
+                // and a row change is what the pointer moves between.
                 assert_changes_the_frame(&mut win, "hover", |w| {
                     w.pointer_move(4.0, 10.0);
                     w.pointer_move(4.0, 200.0);
