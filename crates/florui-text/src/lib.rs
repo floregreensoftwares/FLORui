@@ -451,13 +451,53 @@ impl Font {
         font_weight: f32,
         max_width: Option<f32>,
     ) -> TextMetrics {
+        self.memoized_metrics(cache, family, text, font_size, font_weight, max_width, true)
+    }
+
+    /// [`Self::measure_memoized`] for a caller asking how big text is rather
+    /// than measuring it for layout: it shares the memo but leaves the
+    /// profiler's text counters to the layout's own lookups.
+    pub fn probe_memoized(
+        &mut self,
+        family: FontFamily,
+        text: &str,
+        font_size: f32,
+        font_weight: f32,
+        max_width: Option<f32>,
+    ) -> TextMetrics {
+        self.memoized_metrics(
+            &mut None,
+            family,
+            text,
+            font_size,
+            font_weight,
+            max_width,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn memoized_metrics(
+        &mut self,
+        cache: &mut Option<CachedLayout>,
+        family: FontFamily,
+        text: &str,
+        font_size: f32,
+        font_weight: f32,
+        max_width: Option<f32>,
+        counted: bool,
+    ) -> TextMetrics {
         let style = (family as u8, font_size.to_bits(), font_weight.to_bits());
         let width = max_width.map(f32::to_bits);
         if let Some(metrics) = self.metrics_memo.get(style, text, width) {
-            florui_profile::count(florui_profile::Counter::TextMemoHits, 1);
+            if counted {
+                florui_profile::count(florui_profile::Counter::TextMemoHits, 1);
+            }
             return metrics;
         }
-        florui_profile::count(florui_profile::Counter::TextMemoMisses, 1);
+        if counted {
+            florui_profile::count(florui_profile::Counter::TextMemoMisses, 1);
+        }
         let metrics = self.measure_cached(cache, family, text, font_size, font_weight, max_width);
         #[cfg(test)]
         {
@@ -1562,5 +1602,32 @@ mod tests {
         assert_eq!(metrics.height, 0.0);
         assert_eq!(metrics.baseline, 0.0);
         assert!(cache.is_none());
+    }
+
+    #[test]
+    fn a_probe_shares_the_memo_but_is_not_counted_as_cache_activity() {
+        use florui_profile::Counter;
+
+        let mut font = Font::load_embedded();
+        florui_profile::start(false);
+        // Miss then hit through the probe: neither is counted.
+        let probed = font.probe_memoized(FontFamily::SansSerif, "Hello", 14.0, 400.0, Some(80.0));
+        font.probe_memoized(FontFamily::SansSerif, "Hello", 14.0, 400.0, Some(80.0));
+        // The same entry answers a real measurement, which is counted.
+        let measured = font.measure_memoized(
+            &mut None,
+            FontFamily::SansSerif,
+            "Hello",
+            14.0,
+            400.0,
+            Some(80.0),
+        );
+        florui_profile::finish_frame(Vec::new());
+        let frames = florui_profile::frames();
+        florui_profile::stop();
+
+        assert_eq!(probed.height, measured.height);
+        assert_eq!(frames[0].counter(Counter::TextMemoHits), 1);
+        assert_eq!(frames[0].counter(Counter::TextMemoMisses), 0);
     }
 }
