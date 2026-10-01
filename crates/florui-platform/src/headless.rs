@@ -642,6 +642,36 @@ mod tests {
     }
 
     #[test]
+    fn a_click_is_the_origin_of_the_write_its_handler_makes() {
+        use florui_reactive::trace::{self, Origin, TraceKind};
+
+        let mut window = window(counter);
+        let button = first(&window, "button");
+        let (x, y) = center(&mut window, button);
+        let mark = trace::next_sequence();
+        window.click_at(x, y);
+        window.settle();
+
+        let traces = trace::since(mark);
+        let click = Origin::Event {
+            name: "click",
+            target: button,
+        };
+        assert!(
+            traces
+                .iter()
+                .any(|t| t.kind == TraceKind::EventDispatched && t.origin == click),
+            "{traces:?}"
+        );
+        assert!(
+            traces
+                .iter()
+                .any(|t| t.kind == TraceKind::SignalWrite && t.origin == click),
+            "the counter's write happens inside the click handler: {traces:?}"
+        );
+    }
+
+    #[test]
     fn tab_focuses_the_button_and_enter_and_space_activate_it() {
         let mut window = window(counter);
         window.press_key(TestKey::Tab);

@@ -10,6 +10,8 @@ name = "florui_platform"
 
 [features]
 default = ["desktop"]
+# Records update traces in a release build too, for profiling.
+profiling = ["florui/profiling"]
 # winit/softbuffer/notify/wgpu/pollster are only needed by the desktop
 # host, not by the window-independent UiRuntime — a mobile or game host
 # driving UiRuntime on its own shouldn't have to pull them in.
