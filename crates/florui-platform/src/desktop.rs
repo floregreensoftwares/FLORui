@@ -1418,12 +1418,15 @@ impl WindowState {
             scale_factor as f32,
         );
         let accessibility_span = florui_profile::span(florui_profile::Phase::Accessibility);
-        let (accessibility_update, accessibility_reverse) =
-            self.accessibility_tree
-                .build(arena, focused, &node_bounds, interaction);
-        self.accessibility_reverse = accessibility_reverse;
-        self.accessibility_adapter
-            .update_if_active(|| accessibility_update);
+        // Only built when assistive technology is listening: the tree walks
+        // every node, and the reverse table is read only by its requests.
+        self.accessibility_adapter.update_if_active(|| {
+            let (update, reverse) =
+                self.accessibility_tree
+                    .build(arena, focused, &node_bounds, interaction);
+            self.accessibility_reverse = reverse;
+            update
+        });
         drop(accessibility_span);
 
         let raster_span = florui_profile::span(florui_profile::Phase::Raster);
