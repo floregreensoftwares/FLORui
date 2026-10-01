@@ -5,6 +5,7 @@
 
 pub mod alloc;
 pub mod overhead;
+pub mod phases;
 pub mod report;
 pub mod runner;
 pub mod stats;

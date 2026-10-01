@@ -41,6 +41,23 @@ A change counts when it exceeds 5% and its 95% bootstrap interval excludes
 zero (`--threshold` adjusts it). Use a release build, close other builds and
 heavy programs, and keep the same power plan.
 
+## Where a frame's time goes
+
+`florui-bench phases NAME [--ops N] [--out FILE.md]` runs one workload in this process with the
+profiler started, drops the first run and a few warm-up runs, and prints the median time and calls
+of each phase over the rest, plus the counters of the last frame (nodes styled, laid out and
+painted, memo hits). It needs a build with the profiler:
+
+```
+cargo build --release -p florui-bench --features profiling
+target/release/florui-bench phases frame_1k_rows
+```
+
+`ab` says whether a change moved a workload; this says in which phase. A phase can contain others
+(an update contains render, cascade and layout), so the rows do not add up to the frame. The
+profiler summarizes a frame when one is painted, so a workload that only updates (`update_*`) has
+none and the command says so; use the matching frame workload.
+
 ## Profiler overhead
 
 `florui-bench overhead` measures what one profiler span and counter update cost in each mode (idle,
