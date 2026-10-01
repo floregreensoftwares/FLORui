@@ -318,6 +318,15 @@ pub fn frames() -> Vec<FrameProfile> {
     RECORDER.with(|r| r.borrow().frames.iter().cloned().collect())
 }
 
+/// The last `count` finished frames, oldest first.
+pub fn recent_frames(count: usize) -> Vec<FrameProfile> {
+    RECORDER.with(|r| {
+        let r = r.borrow();
+        let skip = r.frames.len().saturating_sub(count);
+        r.frames.iter().skip(skip).cloned().collect()
+    })
+}
+
 /// The most recent finished frame.
 pub fn last_frame() -> Option<FrameProfile> {
     RECORDER.with(|r| r.borrow().frames.back().cloned())
@@ -607,6 +616,22 @@ mod tests {
             frame.phase(Phase::Layout).unwrap().calls as usize,
             MAX_SPANS_PER_FRAME + 10
         );
+    }
+
+    #[test]
+    fn recent_frames_returns_the_last_few_oldest_first() {
+        start(false);
+        for _ in 0..5 {
+            {
+                let _span = span(Phase::Raster);
+            }
+            finish_frame(Vec::new());
+        }
+        let last_two: Vec<u64> = recent_frames(2).iter().map(|f| f.index).collect();
+        let all = recent_frames(50).len();
+        stop();
+        assert_eq!(last_two, [3, 4]);
+        assert_eq!(all, 5);
     }
 
     #[test]
