@@ -526,6 +526,13 @@ fn paint_nodes(
         .map(|id| (id, clip.clone()))
         .collect();
     let mut mask_cache: Option<(ClipRect, Option<Mask>)> = None;
+    // Nothing outside the surface can appear, whatever clips the tree has.
+    let surface_rect = ClipRect::from_xywh(
+        buffer.origin.0 as f32,
+        buffer.origin.1 as f32,
+        buffer.width() as f32,
+        buffer.height() as f32,
+    );
     while let Some((node, node_clip)) = stack.pop() {
         if styles
             .get(&node)
@@ -587,18 +594,16 @@ fn paint_nodes(
             (Some(_), Some((_, mask))) => mask.as_ref(),
             _ => None,
         };
-        let invisible = node_clip.as_ref().is_some_and(|c| {
-            ink_is_outside_clip(
-                arena,
-                styles,
-                layouts,
-                font,
-                node,
-                node_abs,
-                c,
-                scale_factor,
-            )
-        });
+        let invisible = ink_is_outside_clip(
+            arena,
+            styles,
+            layouts,
+            font,
+            node,
+            node_abs,
+            [Some(&surface_rect), node_clip.as_ref()],
+            scale_factor,
+        );
         if !invisible {
             paint_node(
                 buffer,
@@ -631,8 +636,9 @@ thread_local! {
     static CULLING_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Whether nothing [`paint_node`] would draw for `node` can reach `clip`, so
-/// painting it can be skipped. Conservative: when in doubt it says no.
+/// Whether everything [`paint_node`] would draw for `node` lies outside at
+/// least one of `clips` (the surface being painted and the node's clip, if
+/// any), so painting it can be skipped. Conservative: when in doubt it says no.
 ///
 /// What a node draws is its border box, its box shadows (which reach past the
 /// box by their offset, spread and blur) and its own text, which can overflow
@@ -648,7 +654,7 @@ fn ink_is_outside_clip(
     font: &mut Font,
     node: NodeId,
     (x, y): (f32, f32),
-    clip: &ClipRect,
+    clips: [Option<&ClipRect>; 2],
     scale_factor: f32,
 ) -> bool {
     #[cfg(test)]
@@ -660,7 +666,10 @@ fn ink_is_outside_clip(
     };
     let style = styles.get(&node);
     let outside = |(x0, y0, x1, y1): (f32, f32, f32, f32)| {
-        x1 <= clip.x0 || x0 >= clip.x1 || y1 <= clip.y0 || y0 >= clip.y1
+        clips
+            .iter()
+            .flatten()
+            .any(|clip| x1 <= clip.x0 || x0 >= clip.x1 || y1 <= clip.y0 || y0 >= clip.y1)
     };
 
     let reach = style.map_or(0.0, |s| {
@@ -7831,11 +7840,13 @@ mod tests {
         assert_eq!(pixel_rgb(&buffer, 55, 55), [0xfc, 0, 0]);
     }
 
-    /// A scroll box whose clip only hides nodes below it, plus two nodes whose
+    /// A scroll box (or, unclipped, a page longer than its canvas) whose edge only
+    /// hides nodes below it, plus two nodes whose
     /// own box is outside the clip but whose ink is not: a short box above the
     /// clip with text spilling down into it, and a row below it with a shadow
     /// thrown back up. Painted with and without the off-screen shortcut.
-    fn clipped_list(culling: bool) -> (Canvas, u32, u32) {
+    fn list_scene(culling: bool, clipped: bool) -> (Canvas, u32, u32) {
+        let height = if clipped { 140 } else { 100 };
         let div = |class: &str, children: Vec<Element>| {
             Element::node("div", vec![("class".into(), class.into())], children)
         };
@@ -7848,8 +7859,9 @@ mod tests {
             "pull",
             vec![Element::text("aaaa bbbb cccc dddd eeee ffff")],
         ));
-        let tree = div("clip", children);
+        let tree = div(if clipped { "clip" } else { "page" }, children);
         let css = "
+            .page { width: 200px; display: flex; flex-direction: column; }
             .clip { width: 200px; height: 100px; overflow: hidden;
                     display: flex; flex-direction: column; }
             .spacer { height: 100px; flex-shrink: 0; }
@@ -7875,7 +7887,7 @@ mod tests {
         let buffer = paint_to_buffer(
             &mut font,
             200,
-            140,
+            height,
             Rgba::opaque(0, 0, 0),
             &arena,
             &styles,
@@ -7883,29 +7895,53 @@ mod tests {
             1.0,
         );
         CULLING_OFF.with(|off| off.set(false));
-        (buffer, 200, 140)
+        (buffer, 200, height)
     }
 
     #[test]
     fn skipping_nodes_outside_the_clip_changes_no_pixel() {
-        let (with, width, height) = clipped_list(true);
-        let (without, _, _) = clipped_list(false);
-        assert_eq!(with.data(), without.data());
+        for clipped in [true, false] {
+            let (with, width, height) = list_scene(true, clipped);
+            let (without, _, _) = list_scene(false, clipped);
+            assert_eq!(with.data(), without.data(), "clipped: {clipped}");
 
-        // Not vacuous: the two nodes that look skippable did paint inside the clip.
-        let has = |predicate: &dyn Fn([u8; 3]) -> bool, rows: std::ops::Range<u32>| {
-            rows.into_iter()
-                .any(|py| (0..width).any(|px| predicate(pixel_rgb(&with, px, py))))
-        };
-        assert!(
-            has(&|p| p[1] > 0x80 && p[0] < 0x40 && p[2] < 0x40, 0..30),
-            "text spilling out of a box above the clip is drawn"
-        );
-        assert!(
-            has(&|p| p[0] > 0x40 && p[1] < 0x20 && p[2] < 0x20, 50..100),
-            "a shadow thrown up from a row below the clip is drawn"
-        );
-        assert!(height > 100);
+            // Not vacuous: the two nodes that look skippable did paint inside
+            // the visible area.
+            let has = |predicate: &dyn Fn([u8; 3]) -> bool, rows: std::ops::Range<u32>| {
+                rows.into_iter()
+                    .any(|py| (0..width).any(|px| predicate(pixel_rgb(&with, px, py))))
+            };
+            assert!(
+                has(&|p| p[1] > 0x80 && p[0] < 0x40 && p[2] < 0x40, 0..30),
+                "text spilling out of a box above the area is drawn (clipped: {clipped})"
+            );
+            assert!(
+                has(&|p| p[0] > 0x40 && p[1] < 0x20 && p[2] < 0x20, 50..100),
+                "a shadow thrown up from a row below the area is drawn (clipped: {clipped})"
+            );
+            assert!(height >= 100);
+        }
+    }
+
+    #[test]
+    fn skipping_nodes_outside_the_clip_shows_in_the_painted_count() {
+        use florui_profile::Counter;
+
+        for clipped in [true, false] {
+            let painted = |culling: bool| {
+                florui_profile::start(false);
+                list_scene(culling, clipped);
+                florui_profile::finish_frame(Vec::new());
+                let frames = florui_profile::frames();
+                florui_profile::stop();
+                frames[0].counter(Counter::NodesPainted)
+            };
+            let (with, without) = (painted(true), painted(false));
+            assert!(
+                with < without,
+                "{with} nodes painted with the shortcut, {without} without (clipped: {clipped})"
+            );
+        }
     }
 
     /// The off-screen shortcut sizes a text-only element's ink with the plain
@@ -7955,24 +7991,5 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn skipping_nodes_outside_the_clip_shows_in_the_painted_count() {
-        use florui_profile::Counter;
-
-        let painted = |culling: bool| {
-            florui_profile::start(false);
-            clipped_list(culling);
-            florui_profile::finish_frame(Vec::new());
-            let frames = florui_profile::frames();
-            florui_profile::stop();
-            frames[0].counter(Counter::NodesPainted)
-        };
-        let (with, without) = (painted(true), painted(false));
-        assert!(
-            with < without,
-            "{with} nodes painted with the shortcut, {without} without"
-        );
     }
 }
