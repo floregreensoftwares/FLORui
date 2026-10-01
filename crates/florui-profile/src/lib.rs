@@ -136,8 +136,10 @@ pub enum Counter {
     TextMemoHits,
     /// Text that had to be shaped and measured.
     TextMemoMisses,
-    /// Inline runs shaped; these are never memoized.
+    /// Inline runs shaped because the cross-frame memo had no answer.
     InlineShapes,
+    /// Inline runs answered from the cross-frame memo.
+    InlineMemoHits,
     /// Box shadows painted through a blur.
     ShadowBlurs,
     /// Images answered from the asset cache.
@@ -147,13 +149,14 @@ pub enum Counter {
 }
 
 impl Counter {
-    pub const ALL: [Counter; 9] = [
+    pub const ALL: [Counter; 10] = [
         Counter::NodesStyled,
         Counter::NodesLaidOut,
         Counter::NodesPainted,
         Counter::TextMemoHits,
         Counter::TextMemoMisses,
         Counter::InlineShapes,
+        Counter::InlineMemoHits,
         Counter::ShadowBlurs,
         Counter::AssetCacheHits,
         Counter::AssetCacheMisses,
@@ -167,6 +170,7 @@ impl Counter {
             Counter::TextMemoHits => "text-memo-hits",
             Counter::TextMemoMisses => "text-memo-misses",
             Counter::InlineShapes => "inline-shapes",
+            Counter::InlineMemoHits => "inline-memo-hits",
             Counter::ShadowBlurs => "shadow-blurs",
             Counter::AssetCacheHits => "asset-cache-hits",
             Counter::AssetCacheMisses => "asset-cache-misses",
