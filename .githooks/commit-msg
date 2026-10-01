@@ -23,7 +23,7 @@ esac
 types="feat|fix|refactor|perf|test|docs|build|ci|chore"
 # Deliberately small and stable — add a name here only when a genuinely
 # new, lasting subsystem needs one, not per commit.
-scopes="style|layout|text|paint|render|platform|api|conformance|reactive|view|primitives|devtools|cli|build|example|workspace|config|icon|assets|testing"
+scopes="style|layout|text|paint|render|platform|api|conformance|reactive|view|primitives|devtools|cli|build|example|workspace|config|icon|assets|testing|bench"
 
 if echo "$first_line" | grep -qE "^($types)(\(($scopes)\))?: .+"; then
     exit 0
@@ -41,7 +41,7 @@ got:
 types:  feat fix refactor perf test docs build ci chore
 scopes: style layout text paint render platform api conformance
         reactive view primitives devtools cli build example workspace
-        config icon assets testing
+        config icon assets testing bench
 
 a type with no scope is only for a workspace-wide change (e.g. "ci: ...").
 if this is really a new, lasting subsystem, add its name to the scopes

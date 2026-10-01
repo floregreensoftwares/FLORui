@@ -1711,6 +1711,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "florui-bench"
+version = "0.1.0"
+dependencies = [
+ "florui",
+ "florui-platform",
+ "florui-reactive",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "florui-build"
 version = "0.1.0"
 dependencies = [
