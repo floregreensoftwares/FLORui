@@ -47,6 +47,7 @@ use parley::{
 use peniko::Blob;
 
 pub mod editing;
+mod inline_memo;
 
 /// Open Sans (SIL Open Font License 1.1) — see `fonts/NOTICE.md` for
 /// provenance and why it's this crate's sans-serif default despite not
@@ -305,6 +306,7 @@ pub struct Font {
     sans_serif_family_name: String,
     monospace_family_name: String,
     metrics_memo: MetricsMemo,
+    inline_memo: inline_memo::InlineMemo,
 }
 
 impl Font {
@@ -323,6 +325,7 @@ impl Font {
             sans_serif_family_name,
             monospace_family_name,
             metrics_memo: MetricsMemo::with_capacity(METRICS_MEMO_CAPACITY),
+            inline_memo: inline_memo::InlineMemo::with_capacity(inline_memo::INLINE_MEMO_BYTES),
         }
     }
 
@@ -335,6 +338,7 @@ impl Font {
     pub fn register(&mut self, font_bytes: &[u8]) -> Result<String, TextError> {
         // A newly registered font can change what text measures.
         self.metrics_memo.clear();
+        self.inline_memo.clear();
         Self::register_into(&mut self.font_cx, font_bytes)
     }
 
@@ -611,6 +615,31 @@ impl Font {
             width: layout.width(),
             height: layout.height(),
         }
+    }
+
+    /// [`Self::shape_inline`], remembered across calls: the same items at the
+    /// same wrap width answer from the memo without shaping or breaking lines,
+    /// which is what layout asks for at several widths in one pass, again on
+    /// every frame, and what paint asks for after it. The result is shared,
+    /// not copied.
+    pub fn shape_inline_memoized(
+        &mut self,
+        items: &[InlineContent<'_>],
+        max_width: Option<f32>,
+    ) -> Arc<InlineLayout> {
+        if let Some(layout) = self.inline_memo.get(items, max_width) {
+            florui_profile::count(florui_profile::Counter::InlineMemoHits, 1);
+            return layout;
+        }
+        florui_profile::count(florui_profile::Counter::InlineShapes, 1);
+        #[cfg(test)]
+        {
+            self.inline_memo.misses += 1;
+        }
+        let layout = Arc::new(self.shape_inline(items, max_width));
+        self.inline_memo
+            .insert(items, max_width, Arc::clone(&layout));
+        layout
     }
 
     /// Lays out a real inline formatting context: `items` in source order,
@@ -1632,5 +1661,146 @@ mod tests {
         assert_eq!(probed.height, measured.height);
         assert_eq!(frames[0].counter(Counter::TextMemoHits), 1);
         assert_eq!(frames[0].counter(Counter::TextMemoMisses), 0);
+    }
+
+    fn mixed<'a>(size: f32, weight: f32, tail: &'a str) -> [InlineContent<'a>; 3] {
+        [
+            InlineContent::Text {
+                text: "Mixed paragraph with ",
+                font_size: 14.0,
+                font_weight: 400.0,
+                family: FontFamily::SansSerif,
+            },
+            InlineContent::Text {
+                text: "a styled span",
+                font_size: size,
+                font_weight: weight,
+                family: FontFamily::SansSerif,
+            },
+            InlineContent::Text {
+                text: tail,
+                font_size: 14.0,
+                font_weight: 400.0,
+                family: FontFamily::SansSerif,
+            },
+        ]
+    }
+
+    fn same_layout(a: &InlineLayout, b: &InlineLayout) -> bool {
+        a.width == b.width
+            && a.height == b.height
+            && a.baseline == b.baseline
+            && a.boxes == b.boxes
+            && a.runs.len() == b.runs.len()
+            && a.runs.iter().zip(&b.runs).all(|(x, y)| {
+                x.font_size == y.font_size
+                    && x.normalized_coords == y.normalized_coords
+                    && x.glyphs.len() == y.glyphs.len()
+                    && x.glyphs
+                        .iter()
+                        .zip(&y.glyphs)
+                        .all(|(p, q)| (p.id, p.x, p.y) == (q.id, q.x, q.y))
+            })
+    }
+
+    #[test]
+    fn a_memoized_inline_run_equals_a_fresh_one_and_is_shared_on_repeat() {
+        let mut font = Font::load_embedded();
+        let items = mixed(18.0, 700.0, " and more words to wrap onto several lines.");
+        for width in [None, Some(60.0), Some(140.0), Some(4000.0)] {
+            let fresh = font.shape_inline(&items, width);
+            let first = font.shape_inline_memoized(&items, width);
+            let again = font.shape_inline_memoized(&items, width);
+            assert!(same_layout(&fresh, &first), "width {width:?}");
+            assert!(Arc::ptr_eq(&first, &again), "width {width:?} is shared");
+        }
+        assert_eq!(font.inline_memo.misses, 4, "one shaping per width");
+    }
+
+    #[test]
+    fn every_part_of_the_key_makes_a_separate_entry() {
+        every_part_of_the_key_is_told_apart();
+    }
+
+    #[test]
+    fn colliding_keys_are_told_apart_by_the_whole_key() {
+        inline_memo::COLLIDE.with(|c| c.set(true));
+        every_part_of_the_key_is_told_apart();
+        inline_memo::COLLIDE.with(|c| c.set(false));
+    }
+
+    fn every_part_of_the_key_is_told_apart() {
+        let mut font = Font::load_embedded();
+        let base = mixed(14.0, 400.0, " tail");
+        font.shape_inline_memoized(&base, Some(100.0));
+        // Each of these differs from the base in exactly one input.
+        font.shape_inline_memoized(&base, Some(101.0));
+        font.shape_inline_memoized(&mixed(15.0, 400.0, " tail"), Some(100.0));
+        font.shape_inline_memoized(&mixed(14.0, 700.0, " tail"), Some(100.0));
+        font.shape_inline_memoized(&mixed(14.0, 400.0, " tale"), Some(100.0));
+        font.shape_inline_memoized(&base[..2], Some(100.0));
+        font.shape_inline_memoized(&base, None);
+        let mut boxed = base.to_vec();
+        boxed.push(InlineContent::Box {
+            id: 1,
+            width: 10.0,
+            height: 10.0,
+        });
+        font.shape_inline_memoized(&boxed, Some(100.0));
+        let mut taller = boxed.clone();
+        taller[3] = InlineContent::Box {
+            id: 1,
+            width: 10.0,
+            height: 12.0,
+        };
+        font.shape_inline_memoized(&taller, Some(100.0));
+        assert_eq!(font.inline_memo.misses, 9);
+        assert_eq!(font.inline_memo.entries(), 9);
+    }
+
+    #[test]
+    fn registering_a_font_empties_the_inline_memo() {
+        let mut font = Font::load_embedded();
+        font.shape_inline_memoized(&mixed(14.0, 400.0, " tail"), Some(100.0));
+        assert_eq!(font.inline_memo.entries(), 1);
+        font.register(EMBEDDED_MONOSPACE_FONT).unwrap();
+        assert_eq!(font.inline_memo.entries(), 0);
+    }
+
+    #[test]
+    fn the_inline_memo_stays_within_its_byte_budget() {
+        let mut font = Font::load_embedded();
+        // Room for a few entries only; far more distinct runs are asked for.
+        font.inline_memo = inline_memo::InlineMemo::with_capacity(8 * 1024);
+        for i in 0..200 {
+            let tail = format!(" tail number {i}");
+            font.shape_inline_memoized(&mixed(14.0, 400.0, &tail), Some(100.0));
+        }
+        let entries = font.inline_memo.entries();
+        assert!(entries > 0 && entries < 200, "kept {entries} of 200");
+        // A run larger than a whole generation is shaped but not kept.
+        let mut tiny = Font::load_embedded();
+        tiny.inline_memo = inline_memo::InlineMemo::with_capacity(16);
+        let a = tiny.shape_inline_memoized(&mixed(14.0, 400.0, " tail"), Some(100.0));
+        let b = tiny.shape_inline_memoized(&mixed(14.0, 400.0, " tail"), Some(100.0));
+        assert_eq!(tiny.inline_memo.entries(), 0);
+        assert!(same_layout(&a, &b));
+    }
+
+    #[test]
+    fn inline_hits_and_shapings_are_counted_apart() {
+        use florui_profile::Counter;
+
+        let mut font = Font::load_embedded();
+        let items = mixed(14.0, 400.0, " tail");
+        florui_profile::start(false);
+        font.shape_inline_memoized(&items, Some(100.0));
+        font.shape_inline_memoized(&items, Some(100.0));
+        font.shape_inline_memoized(&items, Some(100.0));
+        florui_profile::finish_frame(Vec::new());
+        let frames = florui_profile::frames();
+        florui_profile::stop();
+        assert_eq!(frames[0].counter(Counter::InlineShapes), 1);
+        assert_eq!(frames[0].counter(Counter::InlineMemoHits), 2);
     }
 }

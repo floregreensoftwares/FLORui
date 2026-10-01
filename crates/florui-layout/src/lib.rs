@@ -490,14 +490,14 @@ pub fn shape_inline_formatting_context(
     styles: &HashMap<NodeId, ComputedStyle>,
     node: NodeId,
     wrap_width: f32,
-) -> Option<florui_text::InlineLayout> {
+) -> Option<std::sync::Arc<florui_text::InlineLayout>> {
     if !needs_inline_layout(arena, styles, node) {
         return None;
     }
     let items = build_inline_content_items(font, arena, styles, node);
     let content: Vec<florui_text::InlineContent<'_>> =
         items.iter().map(to_inline_content).collect();
-    Some(font.shape_inline(&content, Some(wrap_width)))
+    Some(font.shape_inline_memoized(&content, Some(wrap_width)))
 }
 
 /// Computes block-layout geometry for every node in `arena`, using
@@ -629,7 +629,7 @@ pub fn compute_layout_with_content_extents(
         let layout = tree.layout(tid).map_err(LayoutError)?;
         let content: Vec<florui_text::InlineContent<'_>> =
             items.iter().map(to_inline_content).collect();
-        let shaped = font.shape_inline(&content, Some(layout.size.width));
+        let shaped = font.shape_inline_memoized(&content, Some(layout.size.width));
 
         let container_style = styles.get(container);
         // A `Box` item's own position comes back from `shape_inline`
@@ -652,7 +652,7 @@ pub fn compute_layout_with_content_extents(
             })
             .collect();
 
-        for positioned in shaped.boxes {
+        for positioned in &shaped.boxes {
             let child = positioned.id as NodeId;
             if let Some(&(width, height)) = box_sizes.get(&child) {
                 result.insert(
@@ -798,7 +798,7 @@ fn layout_root_group(
                     Some(LeafContext::Inline(items)) => {
                         let content: Vec<florui_text::InlineContent<'_>> =
                             items.iter().map(to_inline_content).collect();
-                        Some(font.shape_inline(&content, None).baseline)
+                        Some(font.shape_inline_memoized(&content, None).baseline)
                     }
                     // A replaced element has no text baseline to recover,
                     // and neither does a fixed-size control.
@@ -1001,15 +1001,12 @@ fn measure_leaf(
             }
         }
         LeafContext::Inline(items) => {
-            // Not cached the same way the plain-text case above is: a real
-            // inline formatting context's shape is a materially different
-            // build path (`shape_inline`'s own multi-item `RangedBuilder`,
-            // not a single family/text/size/weight tuple) — a known,
-            // separate follow-up, not folded into this change.
+            // A real inline formatting context is its own build path
+            // (`shape_inline`'s multi-item `RangedBuilder`), remembered whole
+            // by its items and wrap width rather than by one text and style.
             let content: Vec<florui_text::InlineContent<'_>> =
                 items.iter().map(to_inline_content).collect();
-            florui_profile::count(florui_profile::Counter::InlineShapes, 1);
-            let result = font.shape_inline(&content, wrap_width);
+            let result = font.shape_inline_memoized(&content, wrap_width);
             *baseline_out = Some(result.baseline);
             Size {
                 width: result.width,
