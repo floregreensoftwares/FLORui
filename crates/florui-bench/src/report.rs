@@ -18,6 +18,10 @@ pub struct Environment {
     pub logical_cores: usize,
     pub power_plan: String,
     pub profile: String,
+    /// `compiled out`, `idle`, `summary` or `detail`; reports from before the
+    /// profiler existed have none.
+    #[serde(default)]
+    pub profiler: String,
     pub captured_at_unix_seconds: u64,
 }
 
@@ -112,7 +116,7 @@ impl Report {
     }
 }
 
-pub fn capture_environment(profile: &str) -> Environment {
+pub fn capture_environment(profile: &str, profiler: &str) -> Environment {
     let output = |program: &str, args: &[&str]| -> Option<String> {
         let out = Command::new(program).args(args).output().ok()?;
         let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -127,6 +131,7 @@ pub fn capture_environment(profile: &str) -> Environment {
         logical_cores: std::thread::available_parallelism().map_or(0, |n| n.get()),
         power_plan: output("powercfg", &["/getactivescheme"]).unwrap_or_else(|| "unknown".into()),
         profile: profile.into(),
+        profiler: profiler.into(),
         captured_at_unix_seconds: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs()),
@@ -160,6 +165,9 @@ pub fn render(report: &Report) -> String {
         }
     );
     let _ = writeln!(out, "- Build: {} profile, {}", env.profile, env.rustc);
+    if !env.profiler.is_empty() {
+        let _ = writeln!(out, "- Profiler: {}", env.profiler);
+    }
     let _ = writeln!(out, "- OS: {}", env.os);
     let _ = writeln!(
         out,
@@ -234,15 +242,24 @@ pub fn render_comparison(baseline: &Report, candidate: &Report, threshold: f64) 
         "# Comparison: {} against {}\n",
         candidate.label, baseline.label
     );
+    let describe = |e: &Environment| {
+        if e.profiler.is_empty() {
+            format!("{} profile", e.profile)
+        } else {
+            format!("{} profile, profiler {}", e.profile, e.profiler)
+        }
+    };
     let _ = writeln!(
         out,
-        "- Baseline: `{}` ({} profile)",
-        baseline.environment.commit, baseline.environment.profile
+        "- Baseline: `{}` ({})",
+        baseline.environment.commit,
+        describe(&baseline.environment)
     );
     let _ = writeln!(
         out,
-        "- Candidate: `{}` ({} profile)",
-        candidate.environment.commit, candidate.environment.profile
+        "- Candidate: `{}` ({})",
+        candidate.environment.commit,
+        describe(&candidate.environment)
     );
     if baseline.environment.cpu != candidate.environment.cpu
         || baseline.environment.os != candidate.environment.os
@@ -314,7 +331,7 @@ mod tests {
     fn report(label: &str, warm: &[f64]) -> Report {
         Report {
             label: label.into(),
-            environment: capture_environment("test"),
+            environment: capture_environment("test", "idle"),
             workloads: vec![WorkloadReport {
                 name: "w".into(),
                 description: "d".into(),

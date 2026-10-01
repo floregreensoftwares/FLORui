@@ -1717,6 +1717,7 @@ version = "0.1.0"
 dependencies = [
  "florui",
  "florui-platform",
+ "florui-profile",
  "florui-reactive",
  "serde",
  "serde_json",

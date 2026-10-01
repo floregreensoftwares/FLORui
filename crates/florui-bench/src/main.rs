@@ -12,9 +12,11 @@ const USAGE: &str = "\
 florui-bench: reproducible performance baselines
 
   florui-bench list
-  florui-bench run [--label L] [--out FILE.json] [--processes N] [--filter TEXT] [--no-heap] [--allow-debug]
+  florui-bench run [--label L] [--out FILE.json] [--processes N] [--filter A,B] [--no-heap] [--allow-debug]
   florui-bench compare BASELINE.json CANDIDATE.json [--threshold 0.05] [--out FILE.md]
-  florui-bench ab --a EXE --b EXE [--rounds N] [--filter TEXT] [--threshold 0.05] [--out-dir DIR]
+  florui-bench ab --a EXE --b EXE [--rounds N] [--filter A,B] [--no-heap] [--threshold 0.05] [--out-dir DIR]
+  florui-bench overhead [--out FILE.md]   (what one profiler span and counter cost in each mode)
+  florui-bench mode                       (this build's profile and profiler mode)
   florui-bench measure NAME [--heap]      (one process's measurement; used by the commands above)
 
 `run` measures every workload in separate processes, alternating their order,
@@ -75,7 +77,6 @@ fn run_command(args: &[String]) -> Result<(), String> {
         processes,
         &filter,
         !flag(args, "--no-heap"),
-        profile(),
         &mut progress,
     );
     let json_path = PathBuf::from(option(args, "--out").unwrap_or_else(|| format!("{label}.json")));
@@ -132,8 +133,14 @@ fn ab_command(args: &[String]) -> Result<(), String> {
             [(&b, "candidate"), (&a, "baseline")]
         };
         for (exe, label) in order {
-            let part =
-                runner::run_suite(exe, label, 1, &filter, round == 0, "release", &mut progress);
+            let part = runner::run_suite(
+                exe,
+                label,
+                1,
+                &filter,
+                round == 0 && !flag(args, "--no-heap"),
+                &mut progress,
+            );
             let slot = if label == "baseline" {
                 &mut baseline
             } else {
@@ -163,6 +170,29 @@ fn ab_command(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn overhead_command(args: &[String]) -> Result<(), String> {
+    let costs = florui_bench::overhead::primitive_costs();
+    if costs.is_empty() {
+        return Err("this build has no profiler; build with --features profiling".into());
+    }
+    let text = format!(
+        "# Cost of one profiler primitive
+
+- Build: {} profile
+- Each figure is nanoseconds per call over {} calls with the cost of an empty loop taken off; detail mode finishes a frame every 1,000 spans.
+
+{}",
+        profile(),
+        2_000_000,
+        florui_bench::overhead::render_primitive_costs(&costs)
+    );
+    if let Some(path) = option(args, "--out") {
+        write(&PathBuf::from(path), &text)?;
+    }
+    println!("{text}");
+    Ok(())
+}
+
 fn measure_command(args: &[String]) -> Result<(), String> {
     let name = args.first().ok_or("measure needs a workload name")?;
     let workload = workloads::find(name).ok_or_else(|| format!("no workload named {name}"))?;
@@ -187,6 +217,11 @@ fn main() -> ExitCode {
         Some("compare") => compare_command(&args[1..]),
         Some("ab") => ab_command(&args[1..]),
         Some("measure") => measure_command(&args[1..]),
+        Some("overhead") => overhead_command(&args[1..]),
+        Some("mode") => {
+            println!("{}|{}", profile(), florui_bench::overhead::profiler_mode());
+            Ok(())
+        }
         _ => {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
