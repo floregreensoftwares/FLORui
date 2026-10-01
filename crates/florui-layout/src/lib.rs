@@ -617,6 +617,14 @@ pub fn compute_layout_with_content_extents(
     // `measure_leaf` would also have used for Taffy's own final "perform
     // layout" call on this same leaf.
     for (container, items) in &inline_leaves {
+        // Only `Box` items need this pass; a paragraph of text and plain
+        // inline elements has nothing to place, so reshaping it is wasted.
+        if !items
+            .iter()
+            .any(|item| matches!(item, InlineContentItem::Box { .. }))
+        {
+            continue;
+        }
         let tid = taffy_ids[container];
         let layout = tree.layout(tid).map_err(LayoutError)?;
         let content: Vec<florui_text::InlineContent<'_>> =
