@@ -86,6 +86,7 @@ pub struct InspectorModel {
     /// click selects instead of activating, then disarms itself.
     pub picking: bool,
     pub stale: bool,
+    pub profile: crate::profile_panel::ProfileModel,
 }
 
 /// What the user did with the inspector this frame, if anything.
@@ -93,6 +94,7 @@ pub struct InspectorModel {
 pub enum InspectorAction {
     SelectNode(NodeId),
     TogglePicking,
+    Profile(crate::profile_panel::ProfileAction),
 }
 
 #[derive(Debug)]
@@ -273,6 +275,15 @@ fn draw_ui(ui: &mut egui::Ui, model: &InspectorModel) -> Option<InspectorAction>
             }
         });
     });
+
+    egui::Panel::bottom("florui-inspector-profile")
+        .resizable(true)
+        .min_size(300.0)
+        .show(ui, |ui| {
+            if let Some(profile_action) = crate::profile_panel::draw(ui, &model.profile) {
+                action = Some(InspectorAction::Profile(profile_action));
+            }
+        });
 
     egui::Panel::left("florui-inspector-tree").show(ui, |ui| {
         ui.heading("Tree");

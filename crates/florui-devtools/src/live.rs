@@ -117,6 +117,7 @@ fn build_inspector_model(
         selected,
         picking,
         stale: false,
+        profile: crate::profile_panel::ProfileModel::default(),
     }
 }
 
@@ -272,6 +273,8 @@ pub struct InspectorObserver {
     selections: HashMap<WindowId, NodeId>,
     picking: bool,
     hovered: Option<NodeId>,
+    /// The frame the profile panel shows instead of the latest, if one was picked.
+    chosen_frame: Option<u64>,
 }
 
 impl InspectorObserver {
@@ -318,6 +321,38 @@ impl InspectorObserver {
         }
     }
 
+    fn profile_action(&mut self, action: crate::profile_panel::ProfileAction) {
+        use crate::profile_panel::ProfileAction;
+        match action {
+            ProfileAction::ToggleRecording => {
+                if florui_profile::is_recording() {
+                    florui_profile::stop();
+                } else {
+                    florui_profile::start(false);
+                    self.chosen_frame = None;
+                }
+            }
+            ProfileAction::Clear => {
+                florui_profile::clear();
+                self.chosen_frame = None;
+            }
+            ProfileAction::SelectFrame(index) => self.chosen_frame = Some(index),
+        }
+        self.refresh_profile();
+    }
+
+    fn refresh_profile(&mut self) {
+        let Some(model) = self.model.as_mut() else {
+            return;
+        };
+        model.profile = crate::profile_panel::build(
+            &florui_profile::recent_frames(crate::profile_panel::STRIP_FRAMES),
+            &model.nodes,
+            florui_profile::is_recording(),
+            self.chosen_frame,
+        );
+    }
+
     fn redraw_inspector(&mut self) {
         let selected = self.selected();
         let (Some(model), Some(inspector)) = (self.model.as_mut(), self.inspector.as_mut()) else {
@@ -333,6 +368,10 @@ impl InspectorObserver {
             Some(InspectorAction::TogglePicking) => {
                 self.picking = !self.picking;
                 self.hovered = None;
+                self.request_redraws();
+            }
+            Some(InspectorAction::Profile(action)) => {
+                self.profile_action(action);
                 self.request_redraws();
             }
             None => {}
@@ -415,6 +454,7 @@ impl HostObserver for InspectorObserver {
             self.selected(),
             self.picking,
         ));
+        self.refresh_profile();
         self.bounds = frame.bounds.clone();
         self.scale_factor = frame.scale_factor;
         if let Some(inspector) = &self.inspector {

@@ -1788,6 +1788,7 @@ dependencies = [
  "florui-layout",
  "florui-paint",
  "florui-platform",
+ "florui-profile",
  "florui-style",
  "image",
  "notify",
