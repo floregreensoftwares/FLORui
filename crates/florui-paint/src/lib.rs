@@ -587,18 +587,32 @@ fn paint_nodes(
             (Some(_), Some((_, mask))) => mask.as_ref(),
             _ => None,
         };
-        paint_node(
-            buffer,
-            arena,
-            styles,
-            layouts,
-            font,
-            node,
-            scale_factor,
-            node_mask,
-            text_inputs,
-            images,
-        );
+        let invisible = node_clip.as_ref().is_some_and(|c| {
+            ink_is_outside_clip(
+                arena,
+                styles,
+                layouts,
+                font,
+                node,
+                node_abs,
+                c,
+                scale_factor,
+            )
+        });
+        if !invisible {
+            paint_node(
+                buffer,
+                arena,
+                styles,
+                layouts,
+                font,
+                node,
+                scale_factor,
+                node_mask,
+                text_inputs,
+                images,
+            );
+        }
         let child_clip = clip_for_children(arena, styles, layouts, node, node_clip, scale_factor);
         let child_display = styles.get(&node).map(|s| s.display);
         stack.extend(
@@ -608,6 +622,126 @@ fn paint_nodes(
                 .map(|id| (id, child_clip.clone())),
         );
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Lets a test paint the same tree without the off-screen shortcut, as the
+    /// reference the shortcut must match pixel for pixel.
+    static CULLING_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether nothing [`paint_node`] would draw for `node` can reach `clip`, so
+/// painting it can be skipped. Conservative: when in doubt it says no.
+///
+/// What a node draws is its border box, its box shadows (which reach past the
+/// box by their offset, spread and blur) and its own text, which can overflow
+/// the box when the box is smaller than the text. The text's extent comes from
+/// the metrics memo, which the layout pass already filled for the same text
+/// and width. Images, control decorations and mixed inline content are never
+/// skipped; their extent is not known without more work than painting them.
+#[allow(clippy::too_many_arguments)]
+fn ink_is_outside_clip(
+    arena: &Arena,
+    styles: &HashMap<NodeId, ComputedStyle>,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    font: &mut Font,
+    node: NodeId,
+    (x, y): (f32, f32),
+    clip: &ClipRect,
+    scale_factor: f32,
+) -> bool {
+    #[cfg(test)]
+    if CULLING_OFF.with(|off| off.get()) {
+        return false;
+    }
+    let Some(&layout) = layouts.get(&node) else {
+        return false;
+    };
+    let style = styles.get(&node);
+    let outside = |(x0, y0, x1, y1): (f32, f32, f32, f32)| {
+        x1 <= clip.x0 || x0 >= clip.x1 || y1 <= clip.y0 || y0 >= clip.y1
+    };
+
+    let reach = style.map_or(0.0, |s| {
+        s.box_shadow
+            .iter()
+            .map(|shadow| {
+                shadow.offset_x.abs().max(shadow.offset_y.abs())
+                    + shadow.spread_radius.abs()
+                    + shadow.blur_radius * 2.0
+            })
+            .fold(0.0, f32::max)
+    }) * scale_factor.max(1.0);
+    let ink = (
+        x - reach,
+        y - reach,
+        x + layout.width + reach,
+        y + layout.height + reach,
+    );
+    if !outside(ink) {
+        return false;
+    }
+
+    let tag = arena.tag(node);
+    if matches!(tag, "img" | "icon") || is_control_icon_node(arena, node) {
+        return false;
+    }
+    // A field cuts its own text at its padding box.
+    if matches!(tag, "input" | "textarea") {
+        return true;
+    }
+    // An element holding only text counts as an inline formatting context,
+    // but shapes that one text in the container's own font, exactly as the
+    // plain path does. Anything mixed with other elements is left alone.
+    let text = if florui_layout::is_inline_formatting_context(arena, styles, node) {
+        match arena.inline_items(node) {
+            [florui_style::InlineItem::Text(text)] => text.as_str(),
+            _ => return false,
+        }
+    } else {
+        arena.text_content(node)
+    };
+    if text.is_empty() {
+        return true;
+    }
+
+    let border = style.map_or(NO_BORDER, |s| s.border);
+    let padding = style.map_or(
+        florui_style::Edges {
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+        },
+        |s| s.padding,
+    );
+    let content_x = x + border.left.width + padding.left;
+    let content_y = y + border.top.width + padding.top;
+    let content_width =
+        (layout.width - border.left.width - border.right.width - padding.left - padding.right)
+            .max(0.0);
+    let font_size = style.map_or(16.0, |s| s.font_size);
+    let metrics = font.probe_memoized(
+        style.map_or(florui_text::FontFamily::SansSerif, |s| {
+            to_text_font_family(s.font_family)
+        }),
+        text,
+        font_size,
+        style.map_or(400.0, |s| s.font_weight),
+        Some(content_width / scale_factor),
+    );
+    // A glyph can overhang its advance box, and right-to-left lines start at
+    // the far edge; one em of slack on every side, and the wider of the
+    // shaped and wrapping widths either way, covers both.
+    let em = font_size * scale_factor;
+    let span = metrics.width.max(content_width / scale_factor) * scale_factor;
+    outside((
+        content_x - span - em,
+        content_y - em,
+        content_x + span + em,
+        content_y + metrics.height * scale_factor + em,
+    ))
 }
 
 /// A mask of `node`'s padding box (its border box less the border),
@@ -7695,5 +7829,150 @@ mod tests {
         // Inside the group but outside the glass: red, faded by the
         // same 0.99 group opacity (0xff * 0.99 rounds down to 0xfc).
         assert_eq!(pixel_rgb(&buffer, 55, 55), [0xfc, 0, 0]);
+    }
+
+    /// A scroll box whose clip only hides nodes below it, plus two nodes whose
+    /// own box is outside the clip but whose ink is not: a short box above the
+    /// clip with text spilling down into it, and a row below it with a shadow
+    /// thrown back up. Painted with and without the off-screen shortcut.
+    fn clipped_list(culling: bool) -> (Canvas, u32, u32) {
+        let div = |class: &str, children: Vec<Element>| {
+            Element::node("div", vec![("class".into(), class.into())], children)
+        };
+        let mut children = vec![div("spacer", Vec::new())];
+        for i in 0..10 {
+            let class = if i == 0 { "row first" } else { "row" };
+            children.push(div(class, vec![Element::text(format!("row {i}"))]));
+        }
+        children.push(div(
+            "pull",
+            vec![Element::text("aaaa bbbb cccc dddd eeee ffff")],
+        ));
+        let tree = div("clip", children);
+        let css = "
+            .clip { width: 200px; height: 100px; overflow: hidden;
+                    display: flex; flex-direction: column; }
+            .spacer { height: 100px; flex-shrink: 0; }
+            .row { height: 20px; flex-shrink: 0; background-color: #223; color: #eee;
+                   font-size: 12px; }
+            .first { box-shadow: 0px -40px 4px rgba(255, 0, 0, 0.9); }
+            .pull { margin-top: -330px; width: 30px; height: 10px; flex-shrink: 0;
+                    color: #00ff00; font-size: 14px; }
+        ";
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        CULLING_OFF.with(|off| off.set(!culling));
+        let buffer = paint_to_buffer(
+            &mut font,
+            200,
+            140,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        );
+        CULLING_OFF.with(|off| off.set(false));
+        (buffer, 200, 140)
+    }
+
+    #[test]
+    fn skipping_nodes_outside_the_clip_changes_no_pixel() {
+        let (with, width, height) = clipped_list(true);
+        let (without, _, _) = clipped_list(false);
+        assert_eq!(with.data(), without.data());
+
+        // Not vacuous: the two nodes that look skippable did paint inside the clip.
+        let has = |predicate: &dyn Fn([u8; 3]) -> bool, rows: std::ops::Range<u32>| {
+            rows.into_iter()
+                .any(|py| (0..width).any(|px| predicate(pixel_rgb(&with, px, py))))
+        };
+        assert!(
+            has(&|p| p[1] > 0x80 && p[0] < 0x40 && p[2] < 0x40, 0..30),
+            "text spilling out of a box above the clip is drawn"
+        );
+        assert!(
+            has(&|p| p[0] > 0x40 && p[1] < 0x20 && p[2] < 0x20, 50..100),
+            "a shadow thrown up from a row below the clip is drawn"
+        );
+        assert!(height > 100);
+    }
+
+    /// The off-screen shortcut sizes a text-only element's ink with the plain
+    /// text metrics, while painting shapes it through the inline path; the
+    /// two have to agree for it to be a safe bound.
+    #[test]
+    fn plain_and_inline_shaping_measure_single_style_text_alike() {
+        let words = "Item number 17 with a few more words to wrap onto several lines";
+        let mut font = Font::load_embedded();
+        for (size, weight) in [(11.0, 400.0), (14.0, 400.0), (14.0, 700.0), (27.0, 400.0)] {
+            let css = format!(".t {{ font-size: {size}px; font-weight: {weight}; }}");
+            let tree: Element = Element::node(
+                "div",
+                vec![("class".into(), "t".into())],
+                vec![Element::text(words)],
+            );
+            let arena = Arena::build(&tree);
+            let rules = florui_style::parse_stylesheet(&css).unwrap();
+            let styles = florui_style::compute(
+                &arena,
+                &rules,
+                &InteractionState::new(),
+                florui_style::Viewport::default(),
+                &mut florui_style::AnimationTimeline::default(),
+            );
+            let node = arena.roots()[0];
+            assert!(florui_layout::is_inline_formatting_context(
+                &arena, &styles, node
+            ));
+            for width in [40.0, 90.0, 200.0, 4000.0] {
+                let inline = florui_layout::shape_inline_formatting_context(
+                    &mut font, &arena, &styles, node, width,
+                )
+                .unwrap();
+                let plain = font.measure_memoized(
+                    &mut None,
+                    florui_text::FontFamily::SansSerif,
+                    words,
+                    size,
+                    weight,
+                    Some(width),
+                );
+                assert_eq!(
+                    (inline.width, inline.height),
+                    (plain.width, plain.height),
+                    "{size}px weight {weight} wrapped at {width}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn skipping_nodes_outside_the_clip_shows_in_the_painted_count() {
+        use florui_profile::Counter;
+
+        let painted = |culling: bool| {
+            florui_profile::start(false);
+            clipped_list(culling);
+            florui_profile::finish_frame(Vec::new());
+            let frames = florui_profile::frames();
+            florui_profile::stop();
+            frames[0].counter(Counter::NodesPainted)
+        };
+        let (with, without) = (painted(true), painted(false));
+        assert!(
+            with < without,
+            "{with} nodes painted with the shortcut, {without} without"
+        );
     }
 }
