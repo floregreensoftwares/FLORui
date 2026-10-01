@@ -111,7 +111,9 @@ struct NodeSlot {
 /// final address) stay valid for the tree's whole lifetime.
 struct StyloTree {
     slots: Vec<NodeSlot>,
-    index_of: HashMap<NodeId, usize>,
+    /// Where each node sits in `slots`, indexed by its `NodeId` (a pre-order
+    /// index, so small and dense); `usize::MAX` for an id not in the tree.
+    index_of: Vec<usize>,
     /// Pre-order (parent before children), the same order [`Self::slots`]
     /// was built in — [`compute_in_layout_state`] resolves in this order
     /// rather than `index_of's arbitrary `HashMap` iteration order, so an
@@ -137,12 +139,36 @@ impl StyloTree {
             Self::collect_order(arena, root, &mut order);
         }
 
-        let mut index_of = HashMap::new();
+        let mut index_of = vec![usize::MAX; order.iter().copied().max().map_or(0, |max| max + 1)];
+        for (index, &id) in order.iter().enumerate() {
+            index_of[id] = index;
+        }
+        // Each node's position among its siblings of the same tag, ignoring
+        // class, so a class toggle alone does not reassign identity.
+        let mut ordinal = vec![0usize; index_of.len()];
+        let mut assign_ordinals = |siblings: &[NodeId]| {
+            let mut seen: Vec<(&str, usize)> = Vec::new();
+            for &sibling in siblings {
+                let tag = arena.tag(sibling);
+                match seen.iter_mut().find(|(seen_tag, _)| *seen_tag == tag) {
+                    Some((_, count)) => {
+                        ordinal[sibling] = *count;
+                        *count += 1;
+                    }
+                    None => {
+                        ordinal[sibling] = 0;
+                        seen.push((tag, 1));
+                    }
+                }
+            }
+        };
+        assign_ordinals(arena.roots());
+        for &id in &order {
+            assign_ordinals(arena.children(id));
+        }
         let mut slots: Vec<NodeSlot> = Vec::with_capacity(order.len());
         let mut stable_ids: Vec<usize> = Vec::with_capacity(order.len());
-        let mut same_tag_seen: HashMap<(Option<NodeId>, &str), usize> = HashMap::new();
-        for (index, &id) in order.iter().enumerate() {
-            index_of.insert(id, index);
+        for &id in &order {
             let mut node_state = ElementState::empty();
             if state.is_hovered(id) {
                 node_state |= ElementState::HOVER;
@@ -254,22 +280,12 @@ impl StyloTree {
             }
             let parent_stable = arena
                 .parent(id)
-                .map(|parent_id| stable_ids[index_of[&parent_id]]);
-            // Ordinal among same-tag siblings, ignoring class so a class
-            // toggle alone doesn't reassign identity.
-            let stable_id = timeline.stable_id(parent_stable, arena.tag(id), {
-                let seen = same_tag_seen
-                    .entry((arena.parent(id), arena.tag(id)))
-                    .or_insert(0);
-                *seen += 1;
-                *seen - 1
-            });
+                .map(|parent_id| stable_ids[index_of[parent_id]]);
+            let stable_id = timeline.stable_id(parent_stable, arena.tag(id), ordinal[id]);
             stable_ids.push(stable_id);
             slots.push(NodeSlot {
                 parent: None,
-                depth: arena
-                    .parent(id)
-                    .map_or(0, |p| slots[index_of[&p]].depth + 1),
+                depth: arena.parent(id).map_or(0, |p| slots[index_of[p]].depth + 1),
                 sibling_index: 0,
                 children: Vec::new(),
                 tag: arena.tag(id),
@@ -292,16 +308,16 @@ impl StyloTree {
         for (index, &id) in order.iter().enumerate() {
             let parent_ptr = arena
                 .parent(id)
-                .map(|parent_id| &slots[index_of[&parent_id]] as *const NodeSlot);
+                .map(|parent_id| &slots[index_of[parent_id]] as *const NodeSlot);
             let children_ptrs: Vec<*const NodeSlot> = arena
                 .children(id)
                 .iter()
-                .map(|child_id| &slots[index_of[child_id]] as *const NodeSlot)
+                .map(|&child_id| &slots[index_of[child_id]] as *const NodeSlot)
                 .collect();
             slots[index].parent = parent_ptr;
             slots[index].children = children_ptrs;
             for (position, child_id) in arena.children(id).iter().enumerate() {
-                slots[index_of[child_id]].sibling_index = position;
+                slots[index_of[*child_id]].sibling_index = position;
             }
         }
 
@@ -336,7 +352,7 @@ impl StyloTree {
     }
 
     fn node(&self, id: NodeId) -> StyloNode<'_> {
-        StyloNode(&self.slots[self.index_of[&id]])
+        StyloNode(&self.slots[self.index_of[id]])
     }
 }
 
