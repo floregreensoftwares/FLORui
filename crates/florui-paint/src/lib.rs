@@ -525,6 +525,7 @@ fn paint_nodes(
         .rev()
         .map(|id| (id, clip.clone()))
         .collect();
+    let mut mask_cache: Option<(ClipRect, Option<Mask>)> = None;
     while let Some((node, node_clip)) = stack.pop() {
         if styles
             .get(&node)
@@ -575,7 +576,17 @@ fn paint_nodes(
             );
             continue;
         }
-        let node_mask = node_clip.as_ref().and_then(|c| c.to_mask(buffer));
+        // Siblings and their descendants mostly share one clip; rasterizing a
+        // surface-sized mask for each of them dominates a clipped scroll box.
+        if let Some(clip) = node_clip.as_ref()
+            && mask_cache.as_ref().is_none_or(|(cached, _)| cached != clip)
+        {
+            mask_cache = Some((clip.clone(), clip.to_mask(buffer)));
+        }
+        let node_mask = match (&node_clip, &mask_cache) {
+            (Some(_), Some((_, mask))) => mask.as_ref(),
+            _ => None,
+        };
         paint_node(
             buffer,
             arena,
@@ -584,7 +595,7 @@ fn paint_nodes(
             font,
             node,
             scale_factor,
-            node_mask.as_ref(),
+            node_mask,
             text_inputs,
             images,
         );
