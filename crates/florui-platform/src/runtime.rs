@@ -1345,8 +1345,12 @@ impl UiRuntime {
                 .and_then(|node| self.arena.id_attr(node).map(str::to_owned)),
         );
         let mut state = InteractionState::new().with_visited(&self.visited_links.snapshot());
-        if let Some(id) = self.hovered {
+        // An element is :hover when it or any descendant is under the pointer, so
+        // the hit node and every ancestor of it are.
+        let mut hovered = self.hovered;
+        while let Some(id) = hovered {
             state = state.with_hovered(id);
+            hovered = self.arena.parent(id);
         }
         if let Some(id) = self.focused_node {
             state = state.with_focused(id);
