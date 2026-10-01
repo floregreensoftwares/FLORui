@@ -9,8 +9,13 @@ publish = false
 [lib]
 name = "florui_devtools"
 
+[features]
+# Makes the profile panel usable in a release build (a debug build always has it).
+profiling = ["florui/profiling", "florui-platform/profiling"]
+
 [dependencies]
 florui = { path = "../florui" }
+florui-profile = { path = "../florui-profile" }
 florui-style = { path = "../florui-style" }
 florui-layout = { path = "../florui-layout" }
 florui-paint = { path = "../florui-paint" }

@@ -18,4 +18,5 @@ pub mod fixture;
 pub mod inspector;
 pub mod live;
 pub mod preview;
+pub mod profile_panel;
 pub mod scene;

@@ -252,6 +252,7 @@ impl App {
             selected: self.selected.then_some(0),
             picking: self.picking,
             stale: self.stale,
+            profile: crate::profile_panel::ProfileModel::default(),
         }
     }
 
@@ -270,7 +271,8 @@ impl App {
                 self.picking = !self.picking;
                 self.request_redraws();
             }
-            None => {}
+            // The fixture preview runs no frame pipeline to profile.
+            Some(InspectorAction::Profile(_)) | None => {}
         }
     }
 
