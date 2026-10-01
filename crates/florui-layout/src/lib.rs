@@ -878,9 +878,14 @@ pub fn compute_with_style(
     timeline: &mut AnimationTimeline,
     available: Size<AvailableSpace>,
 ) -> Result<LayoutResult, LayoutError> {
-    let base_styles = florui_style::compute(arena, rules, state, viewport, timeline);
-    let (base_layouts, base_content_extents) =
-        compute_layout_with_content_extents(font, arena, &base_styles, available)?;
+    let base_styles = {
+        let _span = florui_profile::span(florui_profile::Phase::Cascade);
+        florui_style::compute(arena, rules, state, viewport, timeline)
+    };
+    let (base_layouts, base_content_extents) = {
+        let _span = florui_profile::span(florui_profile::Phase::Layout);
+        compute_layout_with_content_extents(font, arena, &base_styles, available)?
+    };
 
     if !rules.iter().any(Rule::has_container_queries) {
         return Ok(LayoutResult {
@@ -902,6 +907,7 @@ pub fn compute_with_style(
             )
         })
         .collect();
+    let cascade_span = florui_profile::span(florui_profile::Phase::Cascade);
     let signatures =
         florui_style::resolve_container_query_signatures(arena, rules, &base_styles, &sizes);
 
@@ -932,6 +938,8 @@ pub fn compute_with_style(
         }
     }
 
+    drop(cascade_span);
+    let _span = florui_profile::span(florui_profile::Phase::Layout);
     let (final_layouts, final_content_extents) =
         compute_layout_with_content_extents(font, arena, &final_styles, available)?;
     Ok(LayoutResult {

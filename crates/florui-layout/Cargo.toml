@@ -9,6 +9,7 @@ publish = false
 name = "florui_layout"
 
 [dependencies]
+florui-profile = { path = "../florui-profile" }
 florui-style = { path = "../florui-style" }
 florui-text = { path = "../florui-text" }
 taffy = "0.14"

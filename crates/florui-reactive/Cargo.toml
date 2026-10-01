@@ -12,9 +12,10 @@ name = "florui_reactive"
 # Counts live scopes, signals, refs and cleanups for test harnesses; see `live`.
 live-counts = []
 # Records update traces in a release build too (a debug build always does).
-profiling = []
+profiling = ["florui-profile/profiling"]
 
 [dependencies]
+florui-profile = { path = "../florui-profile" }
 futures = "0.3.34"
 
 [dev-dependencies]

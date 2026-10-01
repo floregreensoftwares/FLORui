@@ -439,6 +439,7 @@ impl UiRuntime {
     /// geometry for [`Self::geometry`]/[`Self::hit_test`] to answer
     /// without rendering again.
     pub fn update(&mut self, viewport: Size<AvailableSpace>) {
+        let _update = florui_profile::span(florui_profile::Phase::Update);
         let executor = Rc::clone(&self.executor);
         let size_observers = Rc::clone(&self.size_observers);
         let position_observers = Rc::clone(&self.position_observers);
@@ -449,6 +450,7 @@ impl UiRuntime {
         // Resolved once so use_viewport_size sees the same value layout uses.
         let resolved_viewport = media_viewport(viewport);
         scroll_registry.begin_render();
+        let render_span = florui_profile::span(florui_profile::Phase::Render);
         let tree = self.scope.render(|| {
             provide_context(Rc::clone(&executor) as Rc<dyn Executor>);
             provide_context(Rc::clone(&size_observers));
@@ -468,9 +470,13 @@ impl UiRuntime {
             (self.root)()
         });
         scroll_registry.end_render();
+        drop(render_span);
         // Lets any resource the render just started (or a prior task's
         // waker already requeued) make progress before this frame commits.
-        self.executor.run_until_stalled();
+        {
+            let _span = florui_profile::span(florui_profile::Phase::Async);
+            self.executor.run_until_stalled();
+        }
         let mut tree = tree;
         self.option_summaries = crate::select::normalize(&mut tree);
         crate::textarea_resize::apply(&mut tree, &self.resized.borrow());
@@ -494,7 +500,11 @@ impl UiRuntime {
                 crate::validation_bubble::element(&bubble.message, wrap_width),
             ]);
         }
-        self.arena = Arena::build(&tree);
+        {
+            let _span = florui_profile::span(florui_profile::Phase::ArenaBuild);
+            self.arena = Arena::build(&tree);
+        }
+        let sync_span = florui_profile::span(florui_profile::Phase::Sync);
         self.drop_validation_bubble_if_orphaned();
         self.image_registry
             .sync(&self.arena, &self.asset_cache, &*self.executor);
@@ -505,6 +515,7 @@ impl UiRuntime {
             self.clock_override
                 .unwrap_or_else(|| self.animation_epoch.elapsed().as_secs_f64()),
         );
+        drop(sync_span);
         let florui_layout::LayoutResult {
             styles,
             layouts,
@@ -520,6 +531,7 @@ impl UiRuntime {
         )
         .expect("this tree's explicit sizes never produce a layout failure");
         self.styles = styles;
+        let post_layout_span = florui_profile::span(florui_profile::Phase::PostLayout);
         self.icon_registry
             .sync_controls(&self.arena, &self.styles, &*self.executor);
         let (layouts, content_extents) = self.fix_select_widths(layouts, content_extents, viewport);
@@ -528,6 +540,8 @@ impl UiRuntime {
         self.layouts = layouts;
         self.position_open_selects(resolved_viewport.width, resolved_viewport.height);
         self.position_validation_bubble(resolved_viewport.width, resolved_viewport.height);
+        drop(post_layout_span);
+        let _observers_span = florui_profile::span(florui_profile::Phase::Observers);
         // After layout, not before: a committed-size/-position observer
         // must see this render's own real geometry, not the previous one's.
         self.size_observers.notify(&self.arena, &self.layouts);

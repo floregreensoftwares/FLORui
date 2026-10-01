@@ -1358,6 +1358,7 @@ impl WindowState {
         else {
             return;
         };
+        let _frame_end = crate::frame::FrameEnd;
 
         let scroll_registry = self.runtime.scroll_registry();
         let text_input_registry = self.runtime.text_input_registry();
@@ -1416,12 +1417,16 @@ impl WindowState {
             styles,
             scale_factor as f32,
         );
+        let accessibility_span = florui_profile::span(florui_profile::Phase::Accessibility);
         let (accessibility_update, accessibility_reverse) =
             self.accessibility_tree
                 .build(arena, focused, &node_bounds, interaction);
         self.accessibility_reverse = accessibility_reverse;
         self.accessibility_adapter
             .update_if_active(|| accessibility_update);
+        drop(accessibility_span);
+
+        let raster_span = florui_profile::span(florui_profile::Phase::Raster);
 
         let mut canvas = florui_paint::paint_to_buffer_with_desktop_extras(
             font,
@@ -1435,7 +1440,9 @@ impl WindowState {
             Some(&parts.text_inputs),
             Some(&parts.images),
         );
+        drop(raster_span);
         if let Some(observer) = &self.observer {
+            let _span = florui_profile::span(florui_profile::Phase::Overlay);
             let mut observer = observer.borrow_mut();
             observer.frame(
                 window.id(),
@@ -1458,6 +1465,7 @@ impl WindowState {
             );
         }
 
+        let _present_span = florui_profile::span(florui_profile::Phase::Present);
         match &mut self.presenter {
             Presenter::Gpu(presenter) => {
                 // tiny-skia's own pixel format is RGBA byte order,

@@ -20,6 +20,7 @@ members = [
     "crates/florui-platform",
     "crates/florui-test",
     "crates/florui-bench",
+    "crates/florui-profile",
     "crates/florui-reactive",
     "crates/florui-routing",
     "examples/florui-example-app",

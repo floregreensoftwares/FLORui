@@ -471,6 +471,7 @@ impl HeadlessWindow {
 
     /// Paints a frame and describes it, through the code a window paints with.
     pub fn frame(&mut self) -> HeadlessFrame {
+        let _frame_end = crate::frame::FrameEnd;
         let scale_factor = self.host.scale_factor;
         let physical = (
             (self.host.size.0 as f64 * scale_factor).round() as u32,
@@ -514,10 +515,11 @@ impl HeadlessWindow {
             styles,
             scale_factor as f32,
         );
+        let accessibility_span = florui_profile::span(florui_profile::Phase::Accessibility);
         let (update, reverse) = self
             .accessibility_tree
             .build(arena, focused, &bounds, interaction);
-        let accessibility = update
+        let accessibility: Vec<A11yNode> = update
             .nodes
             .iter()
             .filter_map(|(id, node)| {
@@ -545,6 +547,8 @@ impl HeadlessWindow {
                 })
             })
             .collect();
+        drop(accessibility_span);
+        let raster_span = florui_profile::span(florui_profile::Phase::Raster);
         let canvas = florui_paint::paint_to_buffer_with_desktop_extras(
             font,
             physical.0,
@@ -557,6 +561,7 @@ impl HeadlessWindow {
             Some(&parts.text_inputs),
             Some(&parts.images),
         );
+        drop(raster_span);
         HeadlessFrame {
             width: physical.0,
             height: physical.1,
@@ -638,6 +643,90 @@ mod tests {
             text_of(&window, "count"),
             "1",
             "a click elsewhere does nothing"
+        );
+    }
+
+    fn click_the_button_and_paint() -> HeadlessFrame {
+        let mut window = window(counter);
+        let button = first(&window, "button");
+        let (x, y) = center(&mut window, button);
+        window.click_at(x, y);
+        window.settle();
+        window.frame()
+    }
+
+    #[test]
+    fn profiling_does_not_change_what_a_frame_shows() {
+        let plain = click_the_button_and_paint();
+        florui_profile::start(true);
+        let profiled = click_the_button_and_paint();
+        florui_profile::stop();
+
+        assert_eq!(plain.rgba, profiled.rgba, "the pixels are the same");
+        assert_eq!(plain.bounds, profiled.bounds, "the geometry is the same");
+        assert_eq!(plain.accessibility, profiled.accessibility);
+    }
+
+    #[test]
+    fn a_frame_is_profiled_by_phase_with_its_causes() {
+        use florui_profile::Phase;
+
+        let mut window = window(counter);
+        let button = first(&window, "button");
+        let (x, y) = center(&mut window, button);
+        florui_profile::start(true);
+        window.click_at(x, y);
+        window.settle();
+        window.frame();
+        let frames = florui_profile::frames();
+        florui_profile::stop();
+
+        let frame = frames.last().expect("the frame was profiled");
+        for phase in [
+            Phase::Update,
+            Phase::Render,
+            Phase::ArenaBuild,
+            Phase::Cascade,
+            Phase::Layout,
+            Phase::Observers,
+            Phase::PaintParts,
+            Phase::Accessibility,
+            Phase::Raster,
+        ] {
+            assert!(frame.phase(phase).is_some(), "{phase:?} did not run");
+        }
+        let update = frame.total(Phase::Update);
+        let inside: std::time::Duration = [
+            Phase::Render,
+            Phase::Async,
+            Phase::ArenaBuild,
+            Phase::Sync,
+            Phase::Cascade,
+            Phase::Layout,
+            Phase::PostLayout,
+            Phase::Observers,
+        ]
+        .iter()
+        .map(|p| frame.total(*p))
+        .sum();
+        assert!(inside <= update, "the stages of an update fit inside it");
+        assert!(frame.wall() >= update + frame.total(Phase::Raster));
+
+        assert!(
+            frame
+                .causes
+                .iter()
+                .any(|c| c.kind == "event" && c.event == Some(("click", button))),
+            "the click that started it is named: {:?}",
+            frame.causes
+        );
+        assert!(
+            frame
+                .causes
+                .iter()
+                .any(|c| c.kind == "signal-write" && c.event == Some(("click", button))),
+            "the write its handler made is listed with the click: {:?}",
+            frame.causes
         );
     }
 

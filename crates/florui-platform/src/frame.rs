@@ -48,6 +48,7 @@ pub(crate) struct PaintParts {
 }
 
 pub(crate) fn build_paint_parts(sources: PaintSources<'_>) -> PaintParts {
+    let _span = florui_profile::span(florui_profile::Phase::PaintParts);
     let PaintSources {
         arena,
         styles,
@@ -134,4 +135,47 @@ pub(crate) fn build_paint_parts(sources: PaintSources<'_>) -> PaintParts {
         text_inputs,
         images,
     }
+}
+
+/// Ends the frame being profiled when dropped, including on an early return,
+/// with the causes recorded since profiling started or the last frame ended.
+pub(crate) struct FrameEnd;
+
+impl Drop for FrameEnd {
+    fn drop(&mut self) {
+        finish_profile_frame();
+    }
+}
+
+thread_local! {
+    static CAUSES_SEEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn finish_profile_frame() {
+    if !florui_profile::is_recording() {
+        return;
+    }
+    use florui_reactive::trace::{self, Origin, TraceKind};
+    let since = CAUSES_SEEN.with(std::cell::Cell::get);
+    let started = florui_profile::started_at().unwrap_or_default();
+    let causes = trace::since(since)
+        .into_iter()
+        .filter(|t| t.at >= started)
+        .map(|t| florui_profile::Cause {
+            at: t.at,
+            component: t.component,
+            kind: match t.kind {
+                TraceKind::SignalWrite => "signal-write",
+                TraceKind::EventDispatched => "event",
+                TraceKind::ResourceStarted => "resource-started",
+                TraceKind::ResourceCompleted => "resource-completed",
+            },
+            event: match t.origin {
+                Origin::Event { name, target } => Some((name, target)),
+                _ => None,
+            },
+        })
+        .collect();
+    CAUSES_SEEN.with(|seen| seen.set(trace::next_sequence()));
+    florui_profile::finish_frame(causes);
 }
