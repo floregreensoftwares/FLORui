@@ -210,6 +210,12 @@ fn signal_frame(n: usize) -> Box<dyn FnMut()> {
 }
 
 pub fn all() -> Vec<Workload> {
+    let mut all = frame_pipeline();
+    all.extend(crate::collections::all());
+    all
+}
+
+fn frame_pipeline() -> Vec<Workload> {
     vec![
         Workload {
             name: "update_100_rows",
