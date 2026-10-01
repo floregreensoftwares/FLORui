@@ -69,5 +69,10 @@ engine improves.
   larger workloads, 18% to 23% on the 100-row and deep-tree ones, so a small change there needs more
   processes before it can be trusted). Updating 1,000 rows went from 95.6 ms to 52.5 ms and a
   wheel notch over a scroll box from 476 ms to 27 ms; inline text is unchanged.
+- `scroll-hover-ebd9729`: only `scroll_1k_rows` and `hover_1k_rows`, 8 processes, after those two
+  workloads were fixed. The `scroll_1k_rows` and `hover_1k_rows` rows of the two reports above
+  measure a window where nothing moved (the scroll box was not registered, so it never scrolled, and
+  the hover pointer sat over a child, so no row was restyled); use this one for those two. A real
+  100 px wheel tick over 1,000 rows costs about 96 ms, not the 27 ms the earlier figure suggested.
 
 Repeat a measurement on a quiet machine before trusting a small difference.
