@@ -321,3 +321,100 @@ fn a_wheel_jump_paints_what_a_re_render_at_the_same_size_would() {
         }),
     );
 }
+
+/// The same page with a different hover rule on the rows, mounted with the
+/// reduced-motion preference the other scenarios use.
+fn harness_with_hover_rule(rule: &str) -> Harness {
+    Harness::new(|| panel(0, false))
+        .css(&format!("{CSS} {rule}"))
+        .viewport(320.0, 360.0)
+        .reduced_motion(true)
+}
+
+fn over_row(m: &mut Mounted, row: usize) {
+    let list = m.get(by_id("list"));
+    let b = m.bounds(list).expect("the list is drawn");
+    m.move_pointer(b.x + 4.0, b.y + 12.0 + row as f32 * 40.0);
+}
+
+#[test]
+fn a_hover_that_changes_a_color_lays_nothing_out_and_matches_a_clean_render() {
+    use florui_profile::Counter;
+
+    assert_matches_clean(
+        "hover_color_repaints",
+        Route::new(harness(0, false), |m| {
+            for row in [0, 3, 1, 4, 2] {
+                over_row(m, row);
+            }
+        }),
+        Route::new(harness(0, false), |m| over_row(m, 2)),
+    );
+
+    let mut m = harness(0, false).mount();
+    over_row(&mut m, 0);
+    let ((), profile) = m.profile(|m| over_row(m, 3));
+    assert_eq!(
+        profile.counter(Counter::NodesLaidOut),
+        0,
+        "moving onto another row only repaints it"
+    );
+}
+
+#[test]
+fn a_hover_that_changes_a_size_lays_out_again_and_matches_a_clean_render() {
+    use florui_profile::Counter;
+
+    let make = || harness_with_hover_rule(".row:hover { height: 40px; }");
+    assert_matches_clean(
+        "hover_size_relayouts",
+        Route::new(make(), |m| {
+            for row in [0, 3, 1, 4, 2] {
+                over_row(m, row);
+            }
+        }),
+        Route::new(make(), |m| over_row(m, 2)),
+    );
+
+    let mut m = make().mount();
+    over_row(&mut m, 0);
+    let ((), profile) = m.profile(|m| over_row(m, 3));
+    assert!(
+        profile.counter(Counter::NodesLaidOut) > 0,
+        "a taller row moves everything below it, so the layout runs"
+    );
+}
+
+#[test]
+fn a_hover_rule_that_restyles_every_row_matches_a_clean_render() {
+    let make = || harness_with_hover_rule(".list:hover .row { background-color: #ffe0e0; }");
+    assert_matches_clean(
+        "hover_restyles_every_row",
+        Route::new(make(), |m| {
+            for row in [1, 4, 2] {
+                over_row(m, row);
+            }
+        }),
+        Route::new(make(), |m| over_row(m, 2)),
+    );
+}
+
+#[test]
+fn a_hover_under_a_container_query_matches_a_clean_render() {
+    let make = || {
+        harness_with_hover_rule(
+            ".page { container-type: inline-size; } \
+             .row:hover { background-color: #ddeeff; } \
+             @container (min-width: 100px) { .row { padding: 6px; } }",
+        )
+    };
+    assert_matches_clean(
+        "hover_under_a_container_query",
+        Route::new(make(), |m| {
+            for row in [0, 3, 1] {
+                over_row(m, row);
+            }
+        }),
+        Route::new(make(), |m| over_row(m, 1)),
+    );
+}
