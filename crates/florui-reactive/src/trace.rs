@@ -20,11 +20,10 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Whether this build records traces.
-pub const ENABLED: bool = cfg!(debug_assertions) || cfg!(feature = "profiling");
+pub const ENABLED: bool = florui_profile::ENABLED;
 
 /// How many recent traces [`recent`] keeps — bounded, not a log that grows for
 /// as long as the app runs.
@@ -87,8 +86,7 @@ thread_local! {
 /// stamped with it, and anything that times work alongside them should read
 /// the same clock so the two can be laid side by side.
 pub fn now() -> Duration {
-    static EPOCH: OnceLock<Instant> = OnceLock::new();
-    EPOCH.get_or_init(Instant::now).elapsed()
+    florui_profile::now()
 }
 
 /// Attributes any write [`record`] observes while `f` runs — directly, or

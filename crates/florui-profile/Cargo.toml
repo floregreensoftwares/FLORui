@@ -1,0 +1,17 @@
+[package]
+name = "florui-profile"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Phase timing for the frame pipeline: spans, per-frame summaries and a bounded record of recent frames. Off unless a debug build or the profiling feature, and idle until started."
+
+[lib]
+name = "florui_profile"
+
+[features]
+# Makes timing available in a release build too (a debug build always has it).
+profiling = []
+
+[dependencies]

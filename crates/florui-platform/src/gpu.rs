@@ -319,6 +319,7 @@ impl GpuPresenter {
              size — the caller must resize() before presenting a differently-sized frame"
         );
 
+        let upload_span = florui_profile::span(florui_profile::Phase::Upload);
         self.queue.write_texture(
             TexelCopyTextureInfo {
                 texture: &self.upload_texture,
@@ -339,6 +340,8 @@ impl GpuPresenter {
             },
         );
 
+        drop(upload_span);
+        let acquire_span = florui_profile::span(florui_profile::Phase::Acquire);
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
@@ -363,6 +366,8 @@ impl GpuPresenter {
             _ => return PresentOutcome::Skipped,
         };
 
+        drop(acquire_span);
+        let submit_span = florui_profile::span(florui_profile::Phase::Submit);
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -388,6 +393,8 @@ impl GpuPresenter {
             },
         );
         self.queue.submit(Some(encoder.finish()));
+        drop(submit_span);
+        let _flip_span = florui_profile::span(florui_profile::Phase::Flip);
         frame.present();
         PresentOutcome::Presented
     }
