@@ -137,6 +137,46 @@ struct TextContext {
     font_family: florui_text::FontFamily,
 }
 
+/// What the measure closure keeps for one text leaf across its calls in one
+/// layout pass. Taffy asks about a leaf a dozen times with different inputs
+/// (min-content and max-content in each axis, then the widths a flex line
+/// settles on), but a text leaf's answer depends only on the width it is
+/// wrapped at, which in a typical leaf takes two values: unconstrained and
+/// the one it ends up with. The answers already given are kept by wrap width
+/// so a repeat does not go back to the text memo.
+#[derive(Default)]
+struct LeafScratch {
+    /// The shaped layout, reused across widths (see `measure_cached`).
+    shaping: Option<florui_text::CachedLayout>,
+    /// Wrap width bits (`None` for unwrapped) and what that width measured.
+    answers: [Option<(Option<u32>, florui_text::TextMetrics)>; 4],
+}
+
+impl LeafScratch {
+    /// What `width` measures to, from an earlier answer or from `measure`
+    /// (which gets this leaf's shaped layout to reuse). A leaf asked at more
+    /// than four widths still measures correctly; it just stops being kept.
+    fn answer(
+        &mut self,
+        width: Option<f32>,
+        measure: impl FnOnce(&mut Option<florui_text::CachedLayout>) -> florui_text::TextMetrics,
+    ) -> florui_text::TextMetrics {
+        let key = width.map(f32::to_bits);
+        for slot in &self.answers {
+            if let Some((known, metrics)) = slot
+                && *known == key
+            {
+                return *metrics;
+            }
+        }
+        let metrics = measure(&mut self.shaping);
+        if let Some(free) = self.answers.iter_mut().find(|slot| slot.is_none()) {
+            *free = Some((key, metrics));
+        }
+        metrics
+    }
+}
+
 /// A childless leaf's own text to measure/shape — `<input>`'s `value`
 /// attribute (it can never have `Element::Text` children at all;
 /// `Content::Void` forbids it) for every other childless tag,
@@ -541,13 +581,13 @@ pub fn compute_layout_with_content_extents(
     styles: &HashMap<NodeId, ComputedStyle>,
     available: Size<AvailableSpace>,
 ) -> Result<LayoutsAndContentExtents, LayoutError> {
-    let mut tree: TaffyTree<LeafContext> = TaffyTree::new();
+    let mut tree: TaffyTree<LeafContext> = TaffyTree::with_capacity(styles.len() + 2);
     // Text is measured at its exact width and paint reshapes it at the laid
     // out width, so a width rounded down (a 36.26px label laid out at 36px)
     // wraps it at its only break opportunity. Browsers lay out in
     // fractional units and snap at paint; paint here already snaps fills.
     tree.disable_rounding();
-    let mut taffy_ids: HashMap<NodeId, taffy::NodeId> = HashMap::new();
+    let mut taffy_ids: HashMap<NodeId, taffy::NodeId> = HashMap::with_capacity(styles.len());
     // Every inline-formatting-context leaf built below, so the second pass
     // after layout can derive its `Box` items' own `BoxLayout` entries —
     // see that pass's own comment for why they aren't ordinary Taffy nodes.
@@ -727,8 +767,8 @@ fn layout_root_group(
     // calls instead of reshaping from scratch each time. Scoped to this
     // one call: a fresh, empty map every call, nothing persisted across
     // renders or between this group and any other.
-    let mut shaping_caches: HashMap<taffy::NodeId, Option<florui_text::CachedLayout>> =
-        HashMap::new();
+    let mut shaping_caches: HashMap<taffy::NodeId, LeafScratch> =
+        HashMap::with_capacity(taffy_ids.len());
 
     // Taffy's own block/flex/grid algorithms recurse once per tree depth
     // internally — third-party code this crate doesn't control, and deep
@@ -748,9 +788,9 @@ fn layout_root_group(
                 // stack-local stand-in for that common case; it's read and
                 // discarded, never reused across calls, since there's
                 // nothing to reuse.
-                let mut throwaway_cache = None;
+                let mut throwaway_cache = LeafScratch::default();
                 let shaping_cache = match context.as_deref() {
-                    Some(LeafContext::Text(_)) => shaping_caches.entry(node_id).or_insert(None),
+                    Some(LeafContext::Text(_)) => shaping_caches.entry(node_id).or_default(),
                     _ => &mut throwaway_cache,
                 };
                 let mut output = compute_leaf_layout(
@@ -785,15 +825,18 @@ fn layout_root_group(
                 // doc for why.
                 let baseline = measured_baseline.or_else(|| match context.as_deref() {
                     Some(LeafContext::Text(t)) => Some(
-                        font.measure_memoized(
-                            shaping_cache,
-                            t.font_family,
-                            &t.text,
-                            t.font_size,
-                            t.font_weight,
-                            None,
-                        )
-                        .baseline,
+                        shaping_cache
+                            .answer(None, |shaping| {
+                                font.measure_memoized(
+                                    shaping,
+                                    t.font_family,
+                                    &t.text,
+                                    t.font_size,
+                                    t.font_weight,
+                                    None,
+                                )
+                            })
+                            .baseline,
                     ),
                     Some(LeafContext::Inline(items)) => {
                         let content: Vec<florui_text::InlineContent<'_>> =
@@ -964,7 +1007,7 @@ pub fn compute_with_style(
 /// `florui_text`'s own module docs for that tracked gap.
 fn measure_leaf(
     font: &mut florui_text::Font,
-    shaping_cache: &mut Option<florui_text::CachedLayout>,
+    shaping_cache: &mut LeafScratch,
     context: Option<&mut LeafContext>,
     known_dimensions: Size<Option<f32>>,
     available_space: Size<AvailableSpace>,
@@ -986,14 +1029,16 @@ fn measure_leaf(
             // closure for this same leaf during one layout pass — see its
             // own doc, and the cache's own doc for why re-breaking a
             // shaped layout at a new width is safe to do repeatedly.
-            let metrics = font.measure_memoized(
-                shaping_cache,
-                text_context.font_family,
-                &text_context.text,
-                text_context.font_size,
-                text_context.font_weight,
-                wrap_width,
-            );
+            let metrics = shaping_cache.answer(wrap_width, |shaping| {
+                font.measure_memoized(
+                    shaping,
+                    text_context.font_family,
+                    &text_context.text,
+                    text_context.font_size,
+                    text_context.font_weight,
+                    wrap_width,
+                )
+            });
             *baseline_out = Some(metrics.baseline);
             Size {
                 width: metrics.width,
@@ -4644,5 +4689,62 @@ mod tests {
         assert_eq!(layouts[&node("c")].x, 30.0, "one gap, not two");
         assert_eq!(layouts[&node("b")].width, 0.0);
         assert_eq!(layouts[&node("b")].height, 0.0);
+    }
+
+    #[test]
+    fn a_leaf_is_measured_once_per_wrap_width_and_answers_repeats_from_memory() {
+        let mut font = florui_text::Font::load_embedded();
+        let family = florui_text::FontFamily::SansSerif;
+        let text = "A label long enough to wrap at a narrow width";
+        let mut scratch = LeafScratch::default();
+        let mut measured = 0;
+        let mut ask = |scratch: &mut LeafScratch, width: Option<f32>| {
+            scratch.answer(width, |shaping| {
+                measured += 1;
+                font.measure_memoized(shaping, family, text, 14.0, 400.0, width)
+            })
+        };
+        let unwrapped = ask(&mut scratch, None);
+        let narrow = ask(&mut scratch, Some(60.0));
+        // The eleven questions Taffy asks collapse onto these two widths.
+        for _ in 0..9 {
+            assert_eq!(ask(&mut scratch, None), unwrapped);
+            assert_eq!(ask(&mut scratch, Some(60.0)), narrow);
+        }
+        assert_eq!(measured, 2);
+        assert!(narrow.height > unwrapped.height, "the narrow width wraps");
+    }
+
+    #[test]
+    fn a_leaf_asked_at_more_widths_than_it_keeps_still_measures_each_correctly() {
+        let mut font = florui_text::Font::load_embedded();
+        let family = florui_text::FontFamily::SansSerif;
+        let text = "Several widths, more than a leaf keeps answers for";
+        let widths = [
+            None,
+            Some(40.0),
+            Some(80.0),
+            Some(120.0),
+            Some(160.0),
+            Some(200.0),
+        ];
+        let mut scratch = LeafScratch::default();
+        for round in 0..2 {
+            for width in widths {
+                let got = scratch.answer(width, |shaping| {
+                    font.measure_memoized(shaping, family, text, 14.0, 400.0, width)
+                });
+                let fresh = font.measure(family, text, 14.0, 400.0);
+                let expected = match width {
+                    None => fresh,
+                    Some(w) => font.measure_wrapped(family, text, 14.0, 400.0, w),
+                };
+                assert_eq!(
+                    (got.width, got.height, got.baseline),
+                    (expected.width, expected.height, expected.baseline),
+                    "round {round}, width {width:?}"
+                );
+            }
+        }
     }
 }
