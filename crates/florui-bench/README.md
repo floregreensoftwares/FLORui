@@ -86,6 +86,22 @@ signal in the benchmark binary would slow the workloads). They check that a list
 scopes whatever the data size, that scrolling away and back 400 ticks accumulates no row state, and
 that five unmount and mount cycles leave nothing behind.
 
+## Composition effects
+
+`effects_*` paint busy content (a window of colored tiles) with absolutely placed panels over it.
+`effects_opaque_large` is the cheapest way to cover 600 x 400 pixels and `effects_translucent_*` is the
+same panel translucent with no filter, which is the equivalent work without an effect: the
+difference between a filtered panel and the translucent one of its own area and content is what the
+effect costs. The filtered ones vary the area (200 x 150 and 600 x 400), the `backdrop-filter` blur
+radius (8 and 24 px), the overlap (three panels), the display scale (1 and 2), and use `filter: blur`
+on the element and a chain of color filters (`brightness`, `contrast`, `saturate`).
+
+Each effect workload asserts when it is built that it paints differently from its translucent
+baseline, so a declaration the engine ignores cannot be measured as the baseline. A sample is a full
+paint of the scene; the engine repaints everything, so a moving background costs the same as a still
+one. The heap columns are the intermediate memory an effect needs. These are CPU times of the
+headless path: GPU time and presentation are not included.
+
 ## What it does not measure
 
 The workloads run in a headless window: update, layout, paint and the
@@ -118,5 +134,12 @@ engine improves.
   with the data (6.7, 6.9 and 9.8 MiB): the data size costs memory, not time. Variable rows 22.3 ms,
   a jump 22.5 ms, a mount and unmount cycle of 300 components 21.5 ms. Between-process spread is 3%
   to 10% except the 100,000-item list, which showed 19.9%.
+- `effects-8d1fd88`: only the `effects_*` workloads, 5 processes, on the commit that adds them (a
+  rebase can rewrite its hash, the tree was clean, and the engine is `grow/main` as of the cascade
+  style sharing). A 600 x 400 panel costs 4.0 ms opaque and 5.5 ms translucent; with a backdrop blur of
+  8 px it costs 32.4 ms (a 200 x 150 panel 8.1 ms against 4.1), with 24 px 62.5 ms, with three
+  overlapping panels 34.2 ms, and at a display scale of 2 128 ms against 14.7 translucent; `filter:
+  blur(8px)` on the element costs 41.2 ms and the color filter chain 22.8 ms. Between-process
+  spread is 4% to 19%, so compare ratios within the report, not a single absolute figure.
 
 Repeat a measurement on a quiet machine before trusting a small difference.
