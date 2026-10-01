@@ -5,6 +5,7 @@
 
 pub mod alloc;
 pub mod collections;
+pub mod effects;
 pub mod overhead;
 pub mod phases;
 pub mod report;

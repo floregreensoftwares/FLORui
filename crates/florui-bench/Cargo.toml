@@ -23,6 +23,7 @@ florui-profile = { path = "../florui-profile" }
 florui = { path = "../florui" }
 florui-platform = { path = "../florui-platform" }
 florui-reactive = { path = "../florui-reactive" }
+florui-style = { path = "../florui-style" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["float_roundtrip"] }
 
