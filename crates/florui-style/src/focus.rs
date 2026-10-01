@@ -43,7 +43,7 @@ impl FocusPath {
                 ordinal: if element_id.is_some() {
                     0
                 } else {
-                    Self::sibling_ordinal(arena, node)
+                    arena.tag_ordinal(node)
                 },
                 id: element_id,
             });
@@ -63,9 +63,14 @@ impl FocusPath {
             .find(|&id| &Self::of(arena, id) == self)
     }
 
-    /// Same tie-breaker [`crate::stylo`]'s `StyloTree::sibling_ordinal`
-    /// uses: earlier same-tag siblings only, class-insensitive.
-    fn sibling_ordinal(arena: &Arena, id: NodeId) -> usize {
+    /// The ordinal found by scanning the siblings before `id`, which is what
+    /// [`Arena::tag_ordinal`] has to equal: earlier same-tag siblings only,
+    /// class-insensitive, the same tie-breaker [`crate::stylo`]'s
+    /// `StyloTree::sibling_ordinal` uses. Linear in the siblings, so a node
+    /// among a thousand rows cost a thousand comparisons, and building every
+    /// node's path in a long list was quadratic.
+    #[cfg(test)]
+    fn sibling_ordinal_by_scan(arena: &Arena, id: NodeId) -> usize {
         let siblings: &[NodeId] = match arena.parent(id) {
             Some(parent_id) => arena.children(parent_id),
             None => arena.roots(),
@@ -132,6 +137,71 @@ mod tests {
             "B",
             "not the button now in B's old place"
         );
+    }
+
+    #[test]
+    fn the_counted_ordinal_equals_the_scanned_one_for_every_node() {
+        // Repeated tags at several levels, mixed tags among siblings, several
+        // roots (a fragment), and a portal's content as later roots.
+        let tree: Element = view! {
+            <div>
+                <button>{"a"}</button>
+                <span>{"b"}</span>
+                <button>{"c"}</button>
+                <div>
+                    <p>{"x"}</p>
+                    <p>{"y"}</p>
+                    <button>{"z"}</button>
+                    <p>{"w"}</p>
+                </div>
+                <button>{"d"}</button>
+            </div>
+            <div>{"second root"}</div>
+            <div>{"third root"}</div>
+        };
+        let arena = Arena::build(&tree);
+        assert!(arena.roots().len() >= 3, "several roots");
+        let mut checked = 0;
+        for id in 0..arena.find_all(|_, _| true).len() {
+            assert_eq!(
+                arena.tag_ordinal(id),
+                FocusPath::sibling_ordinal_by_scan(&arena, id),
+                "node {id} <{}>",
+                arena.tag(id)
+            );
+            checked += 1;
+        }
+        assert!(checked >= 12);
+        // The ordinals really count: `d` is the third button among its siblings,
+        // while `z`, the third in document order, is the first in its own div.
+        let buttons = arena.find_all(|a, id| a.tag(id) == "button");
+        assert_eq!(arena.tag_ordinal(buttons[3]), 2);
+        assert_eq!(arena.tag_ordinal(buttons[2]), 0);
+    }
+
+    #[test]
+    fn the_counted_ordinal_continues_across_a_portals_roots() {
+        let div = |text: &str| Element::node("div", vec![], vec![Element::text(text)]);
+        let tree = Element::Fragment(vec![
+            div("first"),
+            Element::Portal(vec![div("in a portal"), div("also in it")]),
+            div("second"),
+        ]);
+        let arena = Arena::build(&tree);
+        // Two document roots, then the portal's content as later roots.
+        assert_eq!(arena.roots().len(), 4);
+        let ordinals: Vec<usize> = arena
+            .roots()
+            .iter()
+            .map(|&id| arena.tag_ordinal(id))
+            .collect();
+        assert_eq!(ordinals, vec![0, 1, 2, 3], "one count over every root");
+        for &id in arena.roots() {
+            assert_eq!(
+                arena.tag_ordinal(id),
+                FocusPath::sibling_ordinal_by_scan(&arena, id)
+            );
+        }
     }
 
     #[test]

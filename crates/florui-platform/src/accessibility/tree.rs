@@ -179,7 +179,7 @@ impl AccessibilityTree {
             }
         }
 
-        self.interner.retain(|path, _| seen.contains(path));
+        self.interner.retain(|_, id| seen.contains(id));
 
         let focus = focused
             .map(|id| self.stable_id(&FocusPath::of(arena, id)))
@@ -206,13 +206,13 @@ impl AccessibilityTree {
         reverse: &mut HashMap<AccessKitId, NodeId>,
         forward: &mut HashMap<NodeId, AccessKitId>,
         index_by_ak_id: &mut HashMap<AccessKitId, usize>,
-        seen: &mut HashSet<FocusPath>,
+        seen: &mut HashSet<u64>,
         label_targets: &mut Vec<(AccessKitId, NodeId)>,
         active_targets: &mut Vec<(AccessKitId, NodeId)>,
     ) -> AccessKitId {
         let path = FocusPath::of(arena, id);
-        seen.insert(path.clone());
         let ak_id = self.stable_id(&path);
+        seen.insert(ak_id.0);
         reverse.insert(ak_id, id);
         forward.insert(id, ak_id);
 
