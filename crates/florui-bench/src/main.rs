@@ -14,7 +14,7 @@ florui-bench: reproducible performance baselines
   florui-bench list
   florui-bench run [--label L] [--out FILE.json] [--processes N] [--filter A,B] [--no-heap] [--allow-debug]
   florui-bench compare BASELINE.json CANDIDATE.json [--threshold 0.05] [--out FILE.md]
-  florui-bench ab --a EXE --b EXE [--rounds N] [--filter A,B] [--no-heap] [--threshold 0.05] [--out-dir DIR]
+  florui-bench ab --a EXE --b EXE [--rounds N] [--filter A,B] [--no-heap] [--threshold 0.05] [--alarm 0.10] [--out-dir DIR]
   florui-bench phases NAME [--ops N] [--out FILE.md]   (where a frame's time goes, from the profiler)
   florui-bench overhead [--out FILE.md]   (what one profiler span and counter cost in each mode)
   florui-bench mode                       (this build's profile and profiler mode)
@@ -121,6 +121,7 @@ fn ab_command(args: &[String]) -> Result<(), String> {
     let b = PathBuf::from(option(args, "--b").ok_or("ab needs --b EXE")?);
     let rounds: usize = number(args, "--rounds", 5)?;
     let threshold: f64 = number(args, "--threshold", 0.05)?;
+    let alarm: f64 = number(args, "--alarm", 0.10)?;
     let filter = option(args, "--filter").unwrap_or_default();
     let out_dir = PathBuf::from(option(args, "--out-dir").unwrap_or_else(|| "ab".into()));
     let mut progress = |line: &str| eprintln!("{line}");
@@ -167,7 +168,20 @@ fn ab_command(args: &[String]) -> Result<(), String> {
     )?;
     let text = report::render_comparison(&baseline, &candidate, threshold);
     write(&out_dir.join("comparison.md"), &text)?;
+    // Workloads that got clearly slower, listed for someone to look at. This
+    // never changes the exit status: a run on a shared machine can flag, not fail.
+    let raised = report::alarms(&baseline, &candidate, threshold, alarm);
+    write(
+        &out_dir.join("alarms.json"),
+        &serde_json::to_string_pretty(&raised).map_err(|e| e.to_string())?,
+    )?;
+    if raised.is_empty() {
+        let _ = std::fs::remove_file(out_dir.join("alarms.md"));
+    } else {
+        write(&out_dir.join("alarms.md"), &report::render_alarms(&raised))?;
+    }
     println!("{text}");
+    eprintln!("alarms: {}", raised.len());
     Ok(())
 }
 

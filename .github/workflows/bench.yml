@@ -1,0 +1,94 @@
+name: Frame pipeline against the base
+
+# A relative comparison for each pull request: the base commit and the head are
+# built, alternated in one run on the same machine, and compared. It reports
+# and flags; it never fails the pull request and is not a required check. A
+# shared runner is too noisy for a number to mean anything alone, so nothing
+# here compares against a stored figure.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/bench-pr.ps1'
+      - '.github/workflows/bench.yml'
+  workflow_dispatch:
+    inputs:
+      base:
+        description: 'Base commit to compare against'
+        required: true
+      head:
+        description: 'Head commit (defaults to the checked-out one)'
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: bench-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: windows-latest
+    timeout-minutes: 60
+    # Reports and flags; never turns a pull request red.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bench
+
+      - name: Compare the base and the head
+        shell: pwsh
+        run: |
+          $base = '${{ github.event.pull_request.base.sha }}'
+          if (-not $base) { $base = '${{ inputs.base }}' }
+          $head = (git rev-parse HEAD).Trim()
+          scripts/bench-pr.ps1 -Base $base -Head $head -OutDir bench-out
+
+      - name: Publish the result
+        if: always() && hashFiles('bench-out/report.md') != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Get-Content bench-out/report.md | Add-Content $env:GITHUB_STEP_SUMMARY
+          $alarms = [int]((Get-Content bench-out/alarms.txt -ErrorAction SilentlyContinue) -replace 'alarms=', '')
+          $pr = '${{ github.event.pull_request.number }}'
+          if ($pr) {
+            # One comment per pull request, updated in place.
+            $marker = '<!-- florui-bench -->'
+            $existing = gh api "repos/${{ github.repository }}/issues/$pr/comments" --paginate `
+              --jq ".[] | select(.body | contains(\"$marker\")) | .id" | Select-Object -First 1
+            if ($existing) {
+              gh api "repos/${{ github.repository }}/issues/comments/$existing" --method PATCH --field body=@bench-out/report.md | Out-Null
+            } else {
+              gh pr comment $pr --body-file bench-out/report.md
+            }
+            # A label to list what is worth analysing: label:perf-alert.
+            gh label create perf-alert --color d93f0b --description 'A benchmark flagged a possible slowdown; look before merging' 2>$null
+            if ($alarms -gt 0) { gh pr edit $pr --add-label perf-alert } else { gh pr edit $pr --remove-label perf-alert 2>$null }
+          }
+          # Removing a label the pull request does not have is not a failure.
+          exit 0
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-${{ github.event.pull_request.number || github.run_id }}
+          path: |
+            bench-out/report.md
+            bench-out/ab/*.json
+            bench-out/ab/*.md
+          if-no-files-found: ignore
