@@ -113,6 +113,60 @@ fn bench_update_after_signal(c: &mut Criterion) {
     group.finish();
 }
 
+fn row_with_text(i: usize, tick: u32) -> Element {
+    Element::node(
+        "div",
+        vec![("class".into(), "row".into())],
+        vec![
+            Element::node(
+                "span",
+                vec![("class".into(), "label".into())],
+                vec![Element::text(format!("Item {tick} / {i}"))],
+            ),
+            Element::node(
+                "button",
+                vec![("class".into(), "action".into())],
+                vec![Element::text(format!("Open {tick}"))],
+            ),
+        ],
+    )
+}
+
+/// The memo's worst case: every label and button changes on every update,
+/// so nothing it remembers is ever asked for again.
+fn bench_update_all_text_new(c: &mut Criterion) {
+    let mut group = c.benchmark_group("platform/update_all_text_new");
+    group.sample_size(20);
+    for &n in &[100usize, 1000] {
+        let handle: Rc<RefCell<Option<Signal<u32>>>> = Rc::new(RefCell::new(None));
+        let sink = Rc::clone(&handle);
+        let mut rt = UiRuntime::new(
+            CSS,
+            move || {
+                let tick = use_signal(|| 0u32);
+                *sink.borrow_mut() = Some(tick.clone());
+                Element::node(
+                    "div",
+                    vec![("class".into(), "list".into())],
+                    (0..n).map(|i| row_with_text(i, tick.get())).collect(),
+                )
+            },
+            VIEWPORT,
+        )
+        .expect("benchmark CSS must be valid");
+        let signal = handle.borrow().clone().expect("root renders once in new");
+        let mut value = 0u32;
+        group.bench_function(format!("{n}_rows"), |b| {
+            b.iter(|| {
+                value += 1;
+                signal.set(value);
+                rt.update(VIEWPORT);
+            })
+        });
+    }
+    group.finish();
+}
+
 fn bench_hit_test(c: &mut Criterion) {
     let mut group = c.benchmark_group("platform/hit_test");
     for &n in &[100usize, 1000] {
@@ -234,6 +288,7 @@ criterion_group!(
     benches,
     bench_update,
     bench_update_after_signal,
+    bench_update_all_text_new,
     bench_hit_test,
     bench_frame,
     bench_update_phases,
