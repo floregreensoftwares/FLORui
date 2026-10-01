@@ -120,6 +120,70 @@ impl Phase {
     }
 }
 
+/// Something counted during a frame: how many nodes a stage touched, or how
+/// often a cache answered. Only caches that exist are counted; the style
+/// cascade's own sharing (inside Stylo), layout, and shadow and blur painting
+/// have none, so their cost shows in the phase times, not here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Counter {
+    /// Nodes styled, summed over every cascade pass (a container query adds one).
+    NodesStyled,
+    /// Nodes laid out, summed over every layout pass.
+    NodesLaidOut,
+    /// Nodes painted.
+    NodesPainted,
+    /// Text measured from the cross-frame memo.
+    TextMemoHits,
+    /// Text that had to be shaped and measured.
+    TextMemoMisses,
+    /// Inline runs shaped; these are never memoized.
+    InlineShapes,
+    /// Box shadows painted through a blur.
+    ShadowBlurs,
+    /// Images answered from the asset cache.
+    AssetCacheHits,
+    /// Images decoded because the asset cache had no live copy.
+    AssetCacheMisses,
+}
+
+impl Counter {
+    pub const ALL: [Counter; 9] = [
+        Counter::NodesStyled,
+        Counter::NodesLaidOut,
+        Counter::NodesPainted,
+        Counter::TextMemoHits,
+        Counter::TextMemoMisses,
+        Counter::InlineShapes,
+        Counter::ShadowBlurs,
+        Counter::AssetCacheHits,
+        Counter::AssetCacheMisses,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Counter::NodesStyled => "nodes-styled",
+            Counter::NodesLaidOut => "nodes-laid-out",
+            Counter::NodesPainted => "nodes-painted",
+            Counter::TextMemoHits => "text-memo-hits",
+            Counter::TextMemoMisses => "text-memo-misses",
+            Counter::InlineShapes => "inline-shapes",
+            Counter::ShadowBlurs => "shadow-blurs",
+            Counter::AssetCacheHits => "asset-cache-hits",
+            Counter::AssetCacheMisses => "asset-cache-misses",
+        }
+    }
+
+    fn index(self) -> usize {
+        self as usize
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CounterTotal {
+    pub counter: Counter,
+    pub value: u64,
+}
+
 /// Why a frame happened, one cause per recorded trace since the previous
 /// frame: a signal write, an event, a resource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,6 +226,8 @@ pub struct FrameProfile {
     /// Every phase that ran, in the order of [`Phase::ALL`].
     pub phases: Vec<PhaseTotal>,
     pub causes: Vec<Cause>,
+    /// Every counter that was above zero, in the order of [`Counter::ALL`].
+    pub counters: Vec<CounterTotal>,
     /// Empty unless [`start`] asked for detail.
     pub spans: Vec<SpanRecord>,
     /// Spans beyond [`MAX_SPANS_PER_FRAME`] that were timed but not kept.
@@ -181,6 +247,14 @@ impl FrameProfile {
     pub fn total(&self, phase: Phase) -> Duration {
         self.phase(phase).map_or(Duration::ZERO, |p| p.total)
     }
+
+    /// What `counter` counted this frame; zero if it never moved.
+    pub fn counter(&self, counter: Counter) -> u64 {
+        self.counters
+            .iter()
+            .find(|c| c.counter == counter)
+            .map_or(0, |c| c.value)
+    }
 }
 
 /// The time since this process first asked, on a monotonic clock. Everything
@@ -197,6 +271,7 @@ struct Recorder {
     frame_start: Option<Duration>,
     frame_end: Duration,
     totals: [(u32, Duration); Phase::ALL.len()],
+    counters: [u64; Counter::ALL.len()],
     spans: Vec<SpanRecord>,
     open: Vec<u32>,
     dropped: u32,
@@ -257,6 +332,19 @@ pub fn clear() {
         r.detail = detail;
         r.started_at = started_at;
         r.next_index = next_index;
+    });
+}
+
+/// Adds `amount` to `counter` for the frame being measured. A flag read and
+/// nothing else when nothing is recording.
+pub fn count(counter: Counter, amount: u64) {
+    if !ENABLED || !RECORDING.with(Cell::get) {
+        return;
+    }
+    RECORDER.with(|r| {
+        let mut r = r.borrow_mut();
+        r.frame_start.get_or_insert_with(now);
+        r.counters[counter.index()] += amount;
     });
 }
 
@@ -352,11 +440,20 @@ pub fn finish_frame(causes: Vec<Cause>) {
             end: r.frame_end,
             phases,
             causes,
+            counters: Counter::ALL
+                .iter()
+                .filter(|c| r.counters[c.index()] > 0)
+                .map(|&counter| CounterTotal {
+                    counter,
+                    value: r.counters[counter.index()],
+                })
+                .collect(),
             spans: std::mem::take(&mut r.spans),
             dropped_spans: std::mem::take(&mut r.dropped),
         };
         r.next_index += 1;
         r.totals = Default::default();
+        r.counters = Default::default();
         r.open.clear();
         r.frame_end = Duration::ZERO;
         if r.frames.len() == RETAINED_FRAMES {
@@ -528,6 +625,45 @@ mod tests {
         let frame = last_frame().unwrap();
         stop();
         assert_eq!(frame.causes, [cause]);
+    }
+
+    #[test]
+    fn counters_add_up_within_a_frame_and_reset_for_the_next() {
+        start(false);
+        count(Counter::NodesStyled, 10);
+        count(Counter::NodesStyled, 5);
+        count(Counter::TextMemoHits, 1);
+        finish_frame(Vec::new());
+        count(Counter::NodesPainted, 7);
+        finish_frame(Vec::new());
+        let frames = frames();
+        stop();
+
+        assert_eq!(frames[0].counter(Counter::NodesStyled), 15);
+        assert_eq!(frames[0].counter(Counter::TextMemoHits), 1);
+        assert_eq!(frames[0].counter(Counter::NodesPainted), 0);
+        assert_eq!(frames[1].counter(Counter::NodesPainted), 7);
+        assert_eq!(
+            frames[1].counter(Counter::NodesStyled),
+            0,
+            "a counter starts each frame at zero"
+        );
+        assert!(
+            frames[0].counters.iter().all(|c| c.value > 0),
+            "only counters that moved are listed"
+        );
+    }
+
+    #[test]
+    fn nothing_is_counted_until_started() {
+        stop();
+        clear();
+        count(Counter::NodesStyled, 99);
+        start(false);
+        finish_frame(Vec::new());
+        let count = frames().len();
+        stop();
+        assert_eq!(count, 0);
     }
 
     #[test]

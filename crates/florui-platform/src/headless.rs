@@ -731,6 +731,43 @@ mod tests {
     }
 
     #[test]
+    fn a_frame_counts_what_each_stage_touched_and_how_the_text_cache_answered() {
+        use florui_profile::Counter;
+
+        let mut window = window(counter);
+        let button = first(&window, "button");
+        let (x, y) = center(&mut window, button);
+        window.update();
+        window.frame();
+
+        florui_profile::start(false);
+        window.update();
+        window.frame();
+        window.click_at(x, y);
+        window.settle();
+        window.frame();
+        let frames = florui_profile::frames();
+        florui_profile::stop();
+
+        let unchanged = &frames[0];
+        let nodes = unchanged.counter(Counter::NodesLaidOut);
+        assert!(nodes > 0);
+        assert_eq!(unchanged.counter(Counter::NodesStyled), nodes);
+        assert!(unchanged.counter(Counter::NodesPainted) > 0);
+        assert!(
+            unchanged.counter(Counter::TextMemoHits) > 0,
+            "text that did not change is answered from the memo"
+        );
+        assert_eq!(unchanged.counter(Counter::TextMemoMisses), 0);
+
+        let changed = &frames[1];
+        assert!(
+            changed.counter(Counter::TextMemoMisses) > 0,
+            "the count text changed, so it had to be measured again"
+        );
+    }
+
+    #[test]
     fn a_click_is_the_origin_of_the_write_its_handler_makes() {
         use florui_reactive::trace::{self, Origin, TraceKind};
 

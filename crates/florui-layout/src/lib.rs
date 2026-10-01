@@ -882,10 +882,18 @@ pub fn compute_with_style(
         let _span = florui_profile::span(florui_profile::Phase::Cascade);
         florui_style::compute(arena, rules, state, viewport, timeline)
     };
+    florui_profile::count(
+        florui_profile::Counter::NodesStyled,
+        base_styles.len() as u64,
+    );
     let (base_layouts, base_content_extents) = {
         let _span = florui_profile::span(florui_profile::Phase::Layout);
         compute_layout_with_content_extents(font, arena, &base_styles, available)?
     };
+    florui_profile::count(
+        florui_profile::Counter::NodesLaidOut,
+        base_layouts.len() as u64,
+    );
 
     if !rules.iter().any(Rule::has_container_queries) {
         return Ok(LayoutResult {
@@ -939,9 +947,17 @@ pub fn compute_with_style(
     }
 
     drop(cascade_span);
+    florui_profile::count(
+        florui_profile::Counter::NodesStyled,
+        final_styles.len() as u64,
+    );
     let _span = florui_profile::span(florui_profile::Phase::Layout);
     let (final_layouts, final_content_extents) =
         compute_layout_with_content_extents(font, arena, &final_styles, available)?;
+    florui_profile::count(
+        florui_profile::Counter::NodesLaidOut,
+        final_layouts.len() as u64,
+    );
     Ok(LayoutResult {
         styles: final_styles,
         layouts: final_layouts,
@@ -1009,6 +1025,7 @@ fn measure_leaf(
             // separate follow-up, not folded into this change.
             let content: Vec<florui_text::InlineContent<'_>> =
                 items.iter().map(to_inline_content).collect();
+            florui_profile::count(florui_profile::Counter::InlineShapes, 1);
             let result = font.shape_inline(&content, wrap_width);
             *baseline_out = Some(result.baseline);
             Size {

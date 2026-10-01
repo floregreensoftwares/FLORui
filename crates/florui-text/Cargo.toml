@@ -9,6 +9,7 @@ publish = false
 name = "florui_text"
 
 [dependencies]
+florui-profile = { path = "../florui-profile" }
 parley = "0.11"
 peniko = "0.6"
 
