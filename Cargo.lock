@@ -1704,6 +1704,7 @@ dependencies = [
 name = "florui-assets"
 version = "0.1.0"
 dependencies = [
+ "florui-profile",
  "image",
  "notify",
  "resvg",
@@ -1874,6 +1875,7 @@ dependencies = [
  "florui",
  "florui-assets",
  "florui-layout",
+ "florui-profile",
  "florui-style",
  "florui-text",
  "png 0.17.16",
@@ -1996,6 +1998,7 @@ name = "florui-text"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "florui-profile",
  "parley",
  "peniko",
 ]

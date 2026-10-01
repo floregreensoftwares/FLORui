@@ -75,8 +75,10 @@ impl AssetCache {
         let key = CacheKey { id, params };
 
         if let Some(existing) = self.upgrade(&key) {
+            florui_profile::count(florui_profile::Counter::AssetCacheHits, 1);
             return Ok(existing);
         }
+        florui_profile::count(florui_profile::Counter::AssetCacheMisses, 1);
 
         let decoded = Arc::new(decode(source, params)?);
         self.lock().insert(key, Arc::downgrade(&decoded));

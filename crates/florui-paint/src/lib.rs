@@ -1972,6 +1972,7 @@ fn paint_node(
     images: Option<&HashMap<NodeId, ImagePaint>>,
 ) {
     if let Some(&layout) = layouts.get(&node) {
+        florui_profile::count(florui_profile::Counter::NodesPainted, 1);
         let style = styles.get(&node);
         let (x, y) = absolute_position(arena, layouts, node);
 
@@ -2818,6 +2819,7 @@ fn paint_outset_shadow(
     height: f32,
     shadow: &florui_style::BoxShadow,
 ) {
+    florui_profile::count(florui_profile::Counter::ShadowBlurs, 1);
     let (outer_x, outer_y, outer_width, outer_height) =
         outset_shadow_extent(shadow, x, y, width, height);
     fill_rect_minus_hole(
@@ -2850,6 +2852,7 @@ fn paint_inset_shadow(
     border: florui_style::Edges<florui_style::BorderSide>,
     shadow: &florui_style::BoxShadow,
 ) {
+    florui_profile::count(florui_profile::Counter::ShadowBlurs, 1);
     let padding_x = x + border.left.width;
     let padding_y = y + border.top.width;
     let padding_width = (width - border.left.width - border.right.width).max(0.0);

@@ -454,8 +454,10 @@ impl Font {
         let style = (family as u8, font_size.to_bits(), font_weight.to_bits());
         let width = max_width.map(f32::to_bits);
         if let Some(metrics) = self.metrics_memo.get(style, text, width) {
+            florui_profile::count(florui_profile::Counter::TextMemoHits, 1);
             return metrics;
         }
+        florui_profile::count(florui_profile::Counter::TextMemoMisses, 1);
         let metrics = self.measure_cached(cache, family, text, font_size, font_weight, max_width);
         #[cfg(test)]
         {

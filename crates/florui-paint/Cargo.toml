@@ -9,6 +9,7 @@ publish = false
 name = "florui_paint"
 
 [dependencies]
+florui-profile = { path = "../florui-profile" }
 florui-assets = { path = "../florui-assets" }
 florui-layout = { path = "../florui-layout" }
 florui-style = { path = "../florui-style" }

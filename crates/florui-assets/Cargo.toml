@@ -19,6 +19,7 @@ default = ["watch"]
 watch = ["dep:notify"]
 
 [dependencies]
+florui-profile = { path = "../florui-profile" }
 resvg = { version = "0.48.1", default-features = false }
 image = { version = "0.25.10", default-features = false, features = [
     "png",
