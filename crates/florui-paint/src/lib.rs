@@ -2777,9 +2777,8 @@ fn paint_rounded_shadow(
         shadow.color,
         shadow.inset,
         |canvas_x, canvas_y| {
-            let inside = outline_contains_pixel(&padding, canvas_x, canvas_y);
             if shadow.inset {
-                inside
+                outline_contains_pixel(&padding, canvas_x, canvas_y)
             } else {
                 !outline_contains_pixel(outline, canvas_x, canvas_y)
             }
@@ -3227,37 +3226,94 @@ fn composite_blurred_shadow(
     // converts to `buffer`'s own local one.
     let surface_width = buffer.width() as i64;
     let surface_height = buffer.height() as i64;
+    let (surface_x, surface_y) = (buffer.origin.0 as i64, buffer.origin.1 as i64);
+    let (mask_x, mask_y) = (blurred.origin_x as i64, blurred.origin_y as i64);
+    let blend = ShadowBlend::new(color);
+
+    // The mask columns that land on the surface, worked out once rather than
+    // tested for every pixel.
+    let first_column = (surface_x - mask_x).max(0);
+    let end_column = (surface_x + surface_width - mask_x).min(blurred.width as i64);
+    if first_column >= end_column {
+        return;
+    }
+    let row_width = buffer.width();
+    let pixels = buffer.pixmap.pixels_mut();
 
     for local_y in 0..blurred.height {
-        let canvas_y = blurred.origin_y as i64 + local_y as i64;
-        for local_x in 0..blurred.width {
+        let canvas_y = mask_y + local_y as i64;
+        let buffer_y = canvas_y - surface_y;
+        if buffer_y < 0 || buffer_y >= surface_height {
+            continue;
+        }
+        let coverage_row =
+            &blurred.coverage[(local_y * blurred.width) as usize..][..blurred.width as usize];
+        for local_x in first_column..end_column {
             // Checked first: most of a mask is zero, and `allowed` (a
-            // rounded-outline test) is by far the dearest part of a pixel.
-            let raw = blurred.coverage[(local_y * blurred.width + local_x) as usize];
+            // rounded-outline test) is the dearest part of a pixel.
+            let raw = coverage_row[local_x as usize];
             let coverage = if invert { 255 - raw } else { raw };
             if coverage == 0 {
                 continue;
             }
 
-            let canvas_x = blurred.origin_x as i64 + local_x as i64;
+            let canvas_x = mask_x + local_x;
             if !allowed(canvas_x as f32, canvas_y as f32) {
                 continue;
             }
 
-            let (buffer_x, buffer_y) = buffer.local(canvas_x as f32, canvas_y as f32);
-            let (buffer_x, buffer_y) = (buffer_x as i64, buffer_y as i64);
-            if buffer_x < 0
-                || buffer_x >= surface_width
-                || buffer_y < 0
-                || buffer_y >= surface_height
-            {
-                continue;
-            }
-
-            let index = (buffer_y as u32 * buffer.width() + buffer_x as u32) as usize;
-            let dst = buffer.pixmap.pixels()[index];
-            buffer.pixmap.pixels_mut()[index] = blend_source_over(dst, color, coverage);
+            let index = (buffer_y as u32 * row_width + (canvas_x - surface_x) as u32) as usize;
+            pixels[index] = blend.over(pixels[index], coverage);
         }
+    }
+}
+
+/// [`blend_source_over`] for one shadow color: everything that depends only
+/// on the color and the coverage is worked out once per coverage value, so a
+/// pixel needs lookups and the destination's own arithmetic. Produces exactly
+/// what [`blend_source_over`] does.
+struct ShadowBlend {
+    src_alpha: [u8; 256],
+    src_red: [u8; 256],
+    src_green: [u8; 256],
+    src_blue: [u8; 256],
+}
+
+impl ShadowBlend {
+    fn new(color: Rgba) -> Self {
+        let mut blend = Self {
+            src_alpha: [0; 256],
+            src_red: [0; 256],
+            src_green: [0; 256],
+            src_blue: [0; 256],
+        };
+        for coverage in 0..=255u8 {
+            let alpha = mul_div_255(color.a, coverage);
+            let slot = coverage as usize;
+            blend.src_alpha[slot] = alpha;
+            blend.src_red[slot] = mul_div_255(color.r, alpha);
+            blend.src_green[slot] = mul_div_255(color.g, alpha);
+            blend.src_blue[slot] = mul_div_255(color.b, alpha);
+        }
+        blend
+    }
+
+    fn over(&self, dst: PremultipliedColorU8, coverage: u8) -> PremultipliedColorU8 {
+        let slot = coverage as usize;
+        let src_a = self.src_alpha[slot];
+        let inv = 255 - src_a;
+        let out_a = (src_a as u16 + mul_div_255(dst.alpha(), inv) as u16).min(255) as u8;
+        let channel = |src: u8, dst: u8| -> u8 {
+            let value = src as u16 + mul_div_255(dst, inv) as u16;
+            value.min(out_a as u16) as u8
+        };
+        PremultipliedColorU8::from_rgba(
+            channel(self.src_red[slot], dst.red()),
+            channel(self.src_green[slot], dst.green()),
+            channel(self.src_blue[slot], dst.blue()),
+            out_a,
+        )
+        .unwrap_or(dst)
     }
 }
 
@@ -3278,6 +3334,7 @@ fn mul_div_255(a: u8, b: u8) -> u8 {
 /// (non-premultiplied) — the same shape [`florui_style::Rgba`] and this
 /// crate's own alpha masks already use — converted to a premultiplied
 /// source here before blending.
+#[cfg(test)]
 fn blend_source_over(
     dst: PremultipliedColorU8,
     src_color: Rgba,
@@ -6948,6 +7005,69 @@ mod tests {
             [0x40, 0x40, 0x40],
             "mid-gray (0x80) faded to half opacity against black"
         );
+    }
+
+    #[test]
+    fn the_tabled_shadow_blend_equals_the_plain_one_for_every_coverage() {
+        let colors = [
+            Rgba {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 128,
+            },
+            Rgba {
+                r: 255,
+                g: 128,
+                b: 0,
+                a: 255,
+            },
+            Rgba {
+                r: 10,
+                g: 20,
+                b: 30,
+                a: 0,
+            },
+            Rgba {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            },
+            Rgba {
+                r: 1,
+                g: 2,
+                b: 3,
+                a: 77,
+            },
+        ];
+        // Valid premultiplied destinations: channels never exceed alpha.
+        let mut destinations = Vec::new();
+        for alpha in [0u8, 1, 37, 128, 254, 255] {
+            for channel in [0u8, 1, alpha / 2, alpha] {
+                destinations.push(
+                    PremultipliedColorU8::from_rgba(
+                        channel.min(alpha),
+                        alpha / 3,
+                        channel.min(alpha),
+                        alpha,
+                    )
+                    .unwrap(),
+                );
+            }
+        }
+        for color in colors {
+            let blend = ShadowBlend::new(color);
+            for coverage in 0..=255u8 {
+                for &dst in &destinations {
+                    assert_eq!(
+                        blend.over(dst, coverage),
+                        blend_source_over(dst, color, coverage),
+                        "{color:?} at coverage {coverage} over {dst:?}"
+                    );
+                }
+            }
+        }
     }
 
     /// A white page with one 20x20 rounded, blur-shadowed card at each of
