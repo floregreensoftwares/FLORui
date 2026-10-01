@@ -58,7 +58,16 @@ only runs from the same machine.
 
 ## Recorded baselines
 
-`baselines/` holds the reports of runs on the development machine, with raw
-samples. The first was taken while other builds ran on the same machine at
-times, which shows as a between-process spread of up to 19% on some workloads;
-repeat a measurement on a quiet machine before trusting a small difference.
+`baselines/` holds the reports of runs on the development machine, with raw samples. Compare a
+change against the newest one that matches the code it is based on; a baseline goes stale as the
+engine improves.
+
+- `frame-pipeline-ac1e72b`: the first, before any performance work. Taken while other builds ran
+  on the same machine at times, which shows as up to 19% spread between processes.
+- `frame-pipeline-ec5815a`: the engine after the paint culling, clip-mask reuse, style and
+  accessibility work, on a quieter machine (between-process spread 1% to 5% on the 1,000-row and
+  larger workloads, 18% to 23% on the 100-row and deep-tree ones, so a small change there needs more
+  processes before it can be trusted). Updating 1,000 rows went from 95.6 ms to 52.5 ms and a
+  wheel notch over a scroll box from 476 ms to 27 ms; inline text is unchanged.
+
+Repeat a measurement on a quiet machine before trusting a small difference.
