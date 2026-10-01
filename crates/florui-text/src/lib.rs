@@ -37,7 +37,7 @@
 //! constraint (no definite width anywhere) still gets unwrapped
 //! measurement, which overstates how narrow the text could actually go.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 use parley::{
@@ -201,11 +201,14 @@ type MemoStyle = (u8, u32, u32);
 /// A wrap width (bits, `None` for unwrapped) and what it measured.
 type MemoWidth = (Option<u32>, TextMetrics);
 
-/// One generation of [`MetricsMemo`]. Flattened into two levels so a lookup
-/// borrows the text instead of allocating a key for it.
+/// One generation of [`MetricsMemo`], on a fast non-cryptographic hasher: a
+/// layout pass asks tens of thousands of times, and the memo is bounded, so
+/// the default hasher's collision resistance is not worth its cost here.
+/// Flattened into two levels so a lookup borrows the text instead of
+/// allocating a key for it.
 #[derive(Default)]
 struct Generation {
-    by_style: HashMap<MemoStyle, HashMap<String, Vec<MemoWidth>>>,
+    by_style: FxHashMap<MemoStyle, FxHashMap<String, Vec<MemoWidth>>>,
     entries: usize,
 }
 

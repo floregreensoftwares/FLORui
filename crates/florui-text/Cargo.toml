@@ -12,6 +12,7 @@ name = "florui_text"
 florui-profile = { path = "../florui-profile" }
 parley = "0.11"
 peniko = "0.6"
+rustc-hash = "2"
 
 [dev-dependencies]
 criterion = "0.5"

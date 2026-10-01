@@ -288,15 +288,6 @@ struct ImageContext {
     aspect_ratio: florui_style::AspectRatio,
 }
 
-/// What [`compute_layout`]'s measure closure needs to recompute a leaf's
-/// baseline after [`compute_leaf_layout`] returns — extracted from
-/// [`LeafContext`] before it's moved into the inner measure closure, same
-/// pattern the plain-text case already used before this slice.
-enum BaselineSource {
-    Text(String, f32, f32, florui_text::FontFamily),
-    Inline(Vec<InlineContentItem>),
-}
-
 /// Whether `node`'s own children should be laid out as a real inline
 /// formatting context (mixed text and inline-level elements sharing
 /// wrapped lines) rather than Taffy's own block/flex algorithm — real
@@ -738,24 +729,7 @@ fn layout_root_group(
         tree.compute_layout_with_measure(
             synthetic_root,
             available,
-            |inputs, node_id, context, style| {
-                // `compute_leaf_layout`'s own measure closure only ever
-                // returns a `Size` — extract what the baseline needs from
-                // `context` first, since the closure below moves `context`
-                // into `measure_leaf` and it isn't available again after.
-                let baseline_source = context.as_ref().and_then(|c| match c {
-                    LeafContext::Text(t) => Some(BaselineSource::Text(
-                        t.text.clone(),
-                        t.font_size,
-                        t.font_weight,
-                        t.font_family,
-                    )),
-                    LeafContext::Inline(items) => Some(BaselineSource::Inline(items.clone())),
-                    // A replaced element has no text baseline to recover,
-                    // and neither does a fixed-size control.
-                    LeafContext::Image(_) | LeafContext::Fixed(_) => None,
-                });
-
+            |inputs, node_id, mut context, style| {
                 let mut measured_baseline = None;
                 // Only a real `LeafContext::Text` leaf ever reads or writes
                 // a slot in `shaping_caches` — touching the map (hashing
@@ -779,7 +753,7 @@ fn layout_root_group(
                         measure_leaf(
                             font,
                             shaping_cache,
-                            context,
+                            context.as_deref_mut(),
                             known_dimensions,
                             available_space,
                             &mut measured_baseline,
@@ -801,25 +775,26 @@ fn layout_root_group(
                 // treating it as baseline-less. Wrap width is irrelevant
                 // either way: see `florui_text::TextMetrics::baseline`'s own
                 // doc for why.
-                let baseline = measured_baseline.or_else(|| {
-                    baseline_source.map(|source| match source {
-                        BaselineSource::Text(text, font_size, font_weight, font_family) => {
-                            font.measure_memoized(
-                                shaping_cache,
-                                font_family,
-                                &text,
-                                font_size,
-                                font_weight,
-                                None,
-                            )
-                            .baseline
-                        }
-                        BaselineSource::Inline(items) => {
-                            let content: Vec<florui_text::InlineContent<'_>> =
-                                items.iter().map(to_inline_content).collect();
-                            font.shape_inline(&content, None).baseline
-                        }
-                    })
+                let baseline = measured_baseline.or_else(|| match context.as_deref() {
+                    Some(LeafContext::Text(t)) => Some(
+                        font.measure_memoized(
+                            shaping_cache,
+                            t.font_family,
+                            &t.text,
+                            t.font_size,
+                            t.font_weight,
+                            None,
+                        )
+                        .baseline,
+                    ),
+                    Some(LeafContext::Inline(items)) => {
+                        let content: Vec<florui_text::InlineContent<'_>> =
+                            items.iter().map(to_inline_content).collect();
+                        Some(font.shape_inline(&content, None).baseline)
+                    }
+                    // A replaced element has no text baseline to recover,
+                    // and neither does a fixed-size control.
+                    _ => None,
                 });
                 if let Some(baseline) = baseline {
                     output.baselines = Baselines::from_first(Some(baseline));
