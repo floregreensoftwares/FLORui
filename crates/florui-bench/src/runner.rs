@@ -9,7 +9,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crate::alloc;
-use crate::report::{HeapRun, ProcessRun, Report, WorkloadReport, capture_environment};
+use crate::report::{BuildInfo, HeapRun, ProcessRun, Report, WorkloadReport, capture_environment};
 use crate::workloads::{self, Workload};
 
 /// Operations run and thrown away after the cold one, before sampling.
@@ -117,15 +117,14 @@ fn run_child(exe: &Path, name: &str, heap: bool) -> Result<ProcessRun, String> {
     }
 }
 
-/// What the binary at `exe` was built as: its profile and its profiler mode.
-fn exe_mode(exe: &Path) -> (String, String) {
+/// What the binary at `exe` says about how and from what it was built.
+fn exe_build(exe: &Path) -> BuildInfo {
     let text = Command::new(exe)
         .arg("mode")
         .output()
         .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
         .unwrap_or_default();
-    let (profile, profiler) = text.split_once('|').unwrap_or(("unknown", "unknown"));
-    (profile.to_string(), profiler.to_string())
+    BuildInfo::parse(&text)
 }
 
 /// Runs every workload whose name contains one of the comma-separated `filter`
@@ -182,10 +181,7 @@ pub fn run_suite(
     reports.retain(|r| !r.runs.is_empty());
     Report {
         label: label.into(),
-        environment: {
-            let (profile, profiler) = exe_mode(exe);
-            capture_environment(&profile, &profiler)
-        },
+        environment: capture_environment(&exe_build(exe)),
         workloads: reports,
     }
 }

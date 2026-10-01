@@ -219,7 +219,7 @@ fn main() -> ExitCode {
         Some("measure") => measure_command(&args[1..]),
         Some("overhead") => overhead_command(&args[1..]),
         Some("mode") => {
-            println!("{}|{}", profile(), florui_bench::overhead::profiler_mode());
+            println!("{}", florui_bench::report::BuildInfo::this_build().line());
             Ok(())
         }
         _ => {

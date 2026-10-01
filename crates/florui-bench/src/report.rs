@@ -116,22 +116,70 @@ impl Report {
     }
 }
 
-pub fn capture_environment(profile: &str, profiler: &str) -> Environment {
+/// What a benchmark binary says about itself: how it was built, and from which
+/// commit. Read at build time, so it describes the code that was measured.
+#[derive(Debug, Clone)]
+pub struct BuildInfo {
+    pub profile: String,
+    pub profiler: String,
+    pub commit: String,
+    pub uncommitted_changes: bool,
+}
+
+impl BuildInfo {
+    /// This binary's own.
+    pub fn this_build() -> Self {
+        Self {
+            profile: if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            }
+            .into(),
+            profiler: crate::overhead::profiler_mode().into(),
+            commit: env!("FLORUI_BENCH_COMMIT").into(),
+            uncommitted_changes: env!("FLORUI_BENCH_DIRTY") == "true",
+        }
+    }
+
+    /// The `mode` line a binary prints: `profile|profiler|commit|dirty`.
+    pub fn line(&self) -> String {
+        format!(
+            "{}|{}|{}|{}",
+            self.profile, self.profiler, self.commit, self.uncommitted_changes
+        )
+    }
+
+    /// Reads a `mode` line; a binary too old to print one is "unknown".
+    pub fn parse(line: &str) -> Self {
+        let mut parts = line.trim().split('|');
+        let mut next = || parts.next().unwrap_or("unknown").to_string();
+        let (profile, profiler, commit) = (next(), next(), next());
+        Self {
+            profile,
+            profiler,
+            commit,
+            uncommitted_changes: next() == "true",
+        }
+    }
+}
+
+pub fn capture_environment(build: &BuildInfo) -> Environment {
     let output = |program: &str, args: &[&str]| -> Option<String> {
         let out = Command::new(program).args(args).output().ok()?;
         let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
         (!text.is_empty()).then_some(text)
     };
     Environment {
-        commit: output("git", &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into()),
-        uncommitted_changes: output("git", &["status", "--porcelain"]).is_some(),
+        commit: build.commit.clone(),
+        uncommitted_changes: build.uncommitted_changes,
         rustc: output("rustc", &["-V"]).unwrap_or_else(|| "unknown".into()),
         os: output("cmd", &["/C", "ver"]).unwrap_or_else(|| std::env::consts::OS.into()),
         cpu: std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_else(|_| "unknown".into()),
         logical_cores: std::thread::available_parallelism().map_or(0, |n| n.get()),
         power_plan: output("powercfg", &["/getactivescheme"]).unwrap_or_else(|| "unknown".into()),
-        profile: profile.into(),
-        profiler: profiler.into(),
+        profile: build.profile.clone(),
+        profiler: build.profiler.clone(),
         captured_at_unix_seconds: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs()),
@@ -331,7 +379,7 @@ mod tests {
     fn report(label: &str, warm: &[f64]) -> Report {
         Report {
             label: label.into(),
-            environment: capture_environment("test", "idle"),
+            environment: capture_environment(&BuildInfo::this_build()),
             workloads: vec![WorkloadReport {
                 name: "w".into(),
                 description: "d".into(),
@@ -339,6 +387,35 @@ mod tests {
                 runs: vec![run(warm), run(warm)],
             }],
         }
+    }
+
+    #[test]
+    fn a_mode_line_round_trips_and_an_old_binary_reads_as_unknown() {
+        let build = BuildInfo {
+            profile: "release".into(),
+            profiler: "idle".into(),
+            commit: "abc123".into(),
+            uncommitted_changes: true,
+        };
+        let back = BuildInfo::parse(&build.line());
+        assert_eq!(
+            (
+                back.profile.as_str(),
+                back.profiler.as_str(),
+                back.commit.as_str()
+            ),
+            ("release", "idle", "abc123")
+        );
+        assert!(back.uncommitted_changes);
+
+        let old = BuildInfo::parse("");
+        assert_eq!(old.commit, "unknown");
+    }
+
+    #[test]
+    fn this_build_names_a_commit() {
+        let build = BuildInfo::this_build();
+        assert!(!build.commit.is_empty());
     }
 
     #[test]
