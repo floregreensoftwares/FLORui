@@ -14,7 +14,12 @@ name = "florui_bench"
 name = "florui-bench"
 path = "src/main.rs"
 
+[features]
+# Builds the benchmarked engine with the profiler available, to measure what it costs.
+profiling = ["florui-platform/profiling", "florui-profile/profiling"]
+
 [dependencies]
+florui-profile = { path = "../florui-profile" }
 florui = { path = "../florui" }
 florui-platform = { path = "../florui-platform" }
 florui-reactive = { path = "../florui-reactive" }

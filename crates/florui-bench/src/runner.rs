@@ -32,6 +32,7 @@ pub fn measure(workload: &Workload, heap: bool) -> ProcessRun {
     if heap {
         alloc::enable();
     }
+    crate::overhead::start_from_environment();
     let started = Instant::now();
     let mut op = (workload.build)();
     let setup_ms = elapsed_ms(started);
@@ -116,22 +117,33 @@ fn run_child(exe: &Path, name: &str, heap: bool) -> Result<ProcessRun, String> {
     }
 }
 
-/// Runs every workload whose name contains `filter` as `processes` timed
-/// child processes plus one heap run, through the binary at `exe`. Rounds run
-/// the workloads in alternating order so position in the run does not favor
-/// any of them. A workload the binary does not know is skipped.
+/// What the binary at `exe` was built as: its profile and its profiler mode.
+fn exe_mode(exe: &Path) -> (String, String) {
+    let text = Command::new(exe)
+        .arg("mode")
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .unwrap_or_default();
+    let (profile, profiler) = text.split_once('|').unwrap_or(("unknown", "unknown"));
+    (profile.to_string(), profiler.to_string())
+}
+
+/// Runs every workload whose name contains one of the comma-separated `filter`
+/// parts (all of them when it is empty) as `processes` timed child processes
+/// plus one heap run, through the binary at `exe`. Rounds run the workloads in
+/// alternating order so position in the run does not favor any of them. A
+/// workload the binary does not know is skipped.
 pub fn run_suite(
     exe: &Path,
     label: &str,
     processes: usize,
     filter: &str,
     heap: bool,
-    profile: &str,
     progress: &mut dyn FnMut(&str),
 ) -> Report {
     let selected: Vec<Workload> = workloads::all()
         .into_iter()
-        .filter(|w| w.name.contains(filter))
+        .filter(|w| filter.is_empty() || filter.split(',').any(|part| w.name.contains(part.trim())))
         .collect();
     let mut reports: Vec<WorkloadReport> = selected
         .iter()
@@ -170,7 +182,10 @@ pub fn run_suite(
     reports.retain(|r| !r.runs.is_empty());
     Report {
         label: label.into(),
-        environment: capture_environment(profile),
+        environment: {
+            let (profile, profiler) = exe_mode(exe);
+            capture_environment(&profile, &profiler)
+        },
         workloads: reports,
     }
 }

@@ -41,6 +41,14 @@ A change counts when it exceeds 5% and its 95% bootstrap interval excludes
 zero (`--threshold` adjusts it). Use a release build, close other builds and
 heavy programs, and keep the same power plan.
 
+## Profiler overhead
+
+`florui-bench overhead` measures what one profiler span and counter update cost in each mode (idle,
+summary, detail); it needs a build with `--features profiling`. To compare whole workloads with the
+profiler compiled out against built in, build the binary twice (with and without the feature) and
+run `ab`; the variable `FLORUI_BENCH_PROFILER=summary` (or `detail`) starts the profiler in the
+second build. `overhead/profiler-overhead.md` has the recorded result.
+
 ## What it does not measure
 
 The workloads run in a headless window: update, layout, paint and the
