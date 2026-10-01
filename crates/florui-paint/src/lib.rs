@@ -58,6 +58,7 @@ mod glyph_cache;
 mod rounded;
 mod shadow_cache;
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
@@ -150,6 +151,11 @@ fn control_icon_rect(
 struct Surface {
     pixmap: Pixmap,
     origin: (i32, i32),
+    /// The mask currently in use and the pixels (`x0, y0, x1, y1`, local) where
+    /// it is fully opaque, set by [`paint_nodes`] for a rectangular clip. A
+    /// fill that lies wholly inside those pixels needs no mask, and drawing
+    /// without one is what keeps tiny-skia on its fast path for a solid color.
+    solid_clip: Cell<Option<(usize, [i32; 4])>>,
 }
 
 impl Surface {
@@ -157,11 +163,44 @@ impl Surface {
         Self {
             pixmap,
             origin: (0, 0),
+            solid_clip: Cell::new(None),
         }
     }
 
     fn new(width: u32, height: u32, origin: (i32, i32)) -> Option<Self> {
-        Pixmap::new(width, height).map(|pixmap| Self { pixmap, origin })
+        Pixmap::new(width, height).map(|pixmap| Self {
+            pixmap,
+            origin,
+            solid_clip: Cell::new(None),
+        })
+    }
+
+    /// `clip`, or `None` when `clip` is the mask [`Self::solid_clip`] describes and
+    /// `bounds` (`x0, y0, x1, y1`, local pixels) lies wholly inside its opaque
+    /// pixels, where the mask would change nothing. Any other mask is returned
+    /// unchanged.
+    fn mask_for<'a>(
+        &self,
+        clip: Option<&'a Mask>,
+        bounds: (f32, f32, f32, f32),
+    ) -> Option<&'a Mask> {
+        let mask = clip?;
+        #[cfg(test)]
+        if SOLID_CLIP_OFF.with(Cell::get) {
+            return Some(mask);
+        }
+        if let Some((identity, [x0, y0, x1, y1])) = self.solid_clip.get()
+            && identity == std::ptr::from_ref(mask) as usize
+            && bounds.0.floor() >= x0 as f32
+            && bounds.1.floor() >= y0 as f32
+            && bounds.2.ceil() <= x1 as f32
+            && bounds.3.ceil() <= y1 as f32
+        {
+            #[cfg(test)]
+            SOLID_CLIP_DROPS.with(|drops| drops.set(drops.get() + 1));
+            return None;
+        }
+        Some(mask)
     }
 
     fn width(&self) -> u32 {
@@ -245,6 +284,23 @@ impl ClipRect {
             y1: self.y1.min(other.y1),
             rounded,
         }
+    }
+
+    /// The pixels of `surface` (`x0, y0, x1, y1`, local) that this clip's mask
+    /// covers completely, or `None` when there are none or the clip has a
+    /// rounded outline (whose corners the rectangle would overstate). Pixels
+    /// only partly inside a fractional edge are left out.
+    fn solid_interior(&self, surface: &Surface) -> Option<[i32; 4]> {
+        if self.rounded.is_some() || self.is_empty() {
+            return None;
+        }
+        let (lx0, ly0) = surface.local(self.x0, self.y0);
+        let (lx1, ly1) = surface.local(self.x1, self.y1);
+        let x0 = lx0.max(0.0).ceil() as i32;
+        let y0 = ly0.max(0.0).ceil() as i32;
+        let x1 = lx1.min(surface.width() as f32).floor() as i32;
+        let y1 = ly1.min(surface.height() as f32).floor() as i32;
+        (x0 < x1 && y0 < y1).then_some([x0, y0, x1, y1])
     }
 
     /// Materializes a real [`Mask`] the size of `surface`, opaque exactly
@@ -592,6 +648,13 @@ fn paint_nodes(
             && mask_cache.as_ref().is_none_or(|(cached, _)| cached != clip)
         {
             mask_cache = Some((clip.clone(), clip.to_mask(buffer)));
+            let solid = match (&mask_cache, clip.solid_interior(buffer)) {
+                (Some((_, Some(mask))), Some(interior)) => {
+                    Some((std::ptr::from_ref(mask) as usize, interior))
+                }
+                _ => None,
+            };
+            buffer.solid_clip.set(solid);
         }
         let node_mask = match (&node_clip, &mask_cache) {
             (Some(_), Some((_, mask))) => mask.as_ref(),
@@ -630,6 +693,8 @@ fn paint_nodes(
                 .map(|id| (id, child_clip.clone())),
         );
     }
+    // The mask this described goes away with `mask_cache`.
+    buffer.solid_clip.set(None);
 }
 
 #[cfg(test)]
@@ -637,6 +702,8 @@ thread_local! {
     /// Lets a test paint the same tree without the off-screen shortcut, as the
     /// reference the shortcut must match pixel for pixel.
     static CULLING_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static SOLID_CLIP_OFF: Cell<bool> = const { Cell::new(false) };
+    static SOLID_CLIP_DROPS: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Whether everything [`paint_node`] would draw for `node` lies outside at
@@ -2623,6 +2690,7 @@ fn fill_rect(
     let mut paint = Paint::default();
     paint.set_color_rgba8(color.r, color.g, color.b, color.a);
     paint.anti_alias = false;
+    let clip = buffer.mask_for(clip, (x0, y0, x1, y1));
     buffer
         .pixmap
         .fill_rect(rect, &paint, Transform::identity(), clip);
@@ -3807,6 +3875,105 @@ fn to_tiny_skia_color(color: Rgba) -> tiny_skia::Color {
 
 #[cfg(test)]
 mod tests {
+    /// A scroll box at fractional edges holding rows with opaque and translucent
+    /// backgrounds, borders on every side, rounded corners, text, and rows cut by
+    /// the clip's top and bottom edges. Painted with and without the shortcut that
+    /// drops the clip mask from a fill lying wholly inside it. Returns the canvas
+    /// and how many fills dropped it.
+    fn clip_scene(shortcut: bool, rounded_clip: bool, scale: f32) -> (Canvas, u32) {
+        let div = |class: &str, children: Vec<Element>| {
+            Element::node("div", vec![("class".into(), class.into())], children)
+        };
+        let rows: Vec<Element> = (0..14)
+            .map(|i| {
+                let class = match i % 4 {
+                    0 => "row opaque",
+                    1 => "row glass",
+                    2 => "row framed",
+                    _ => "row round",
+                };
+                div(class, vec![Element::text(format!("row {i}"))])
+            })
+            .collect();
+        let tree = div(
+            "page",
+            vec![div(if rounded_clip { "clip curved" } else { "clip" }, rows)],
+        );
+        let css = "
+            .page { width: 260px; display: flex; flex-direction: column; }
+            .clip { margin-left: 10.4px; margin-top: 20.6px; width: 150.3px; height: 90.7px;
+                    overflow: hidden; display: flex; flex-direction: column; }
+            .curved { border-radius: 14px; }
+            .row { height: 17.3px; flex-shrink: 0; margin: 1.4px 3px 0 3px; color: #eee; font-size: 11px; }
+            .row:first-child { margin-top: -9.2px; }
+            .clip > .row:last-child { margin-bottom: 0; }
+            .opaque { background-color: #334455; }
+            .glass { background-color: rgba(200, 80, 80, 0.5); }
+            .framed { background-color: #223322; border: 2px solid #ffaa00;
+                      border-bottom: 1.5px solid rgba(255, 255, 255, 0.6); }
+            .round { background-color: #552255; border-radius: 6px; }
+        ";
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        SOLID_CLIP_OFF.with(|off| off.set(!shortcut));
+        SOLID_CLIP_DROPS.with(|drops| drops.set(0));
+        let canvas = paint_to_buffer(
+            &mut font,
+            (260.0 * scale) as u32,
+            (150.0 * scale) as u32,
+            Rgba::opaque(10, 10, 12),
+            &arena,
+            &styles,
+            &layouts,
+            scale,
+        );
+        SOLID_CLIP_OFF.with(|off| off.set(false));
+        (canvas, SOLID_CLIP_DROPS.with(Cell::get))
+    }
+
+    #[test]
+    fn dropping_the_clip_mask_from_a_fill_inside_it_changes_no_pixel() {
+        for rounded_clip in [false, true] {
+            for scale in [1.0, 1.5] {
+                let (with, drops) = clip_scene(true, rounded_clip, scale);
+                let (without, _) = clip_scene(false, rounded_clip, scale);
+                let differing: Vec<usize> = with
+                    .data()
+                    .chunks(4)
+                    .zip(without.data().chunks(4))
+                    .enumerate()
+                    .filter(|(_, (a, b))| a != b)
+                    .map(|(i, _)| i)
+                    .collect();
+                let width = with.width() as usize;
+                assert!(
+                    differing.is_empty(),
+                    "rounded clip: {rounded_clip}, scale {scale}: {} pixels differ, the first at (x {}, y {}): {:?} with the shortcut, {:?} without",
+                    differing.len(),
+                    differing[0] % width,
+                    differing[0] / width,
+                    &with.data()[differing[0] * 4..differing[0] * 4 + 4],
+                    &without.data()[differing[0] * 4..differing[0] * 4 + 4],
+                );
+                if rounded_clip {
+                    assert_eq!(drops, 0, "a rounded clip's corners need the mask");
+                } else {
+                    assert!(drops > 0, "scale {scale}: the shortcut was never taken");
+                }
+            }
+        }
+    }
+
     use florui::prelude::*;
     use florui_style::InteractionState;
     use taffy::prelude::*;
