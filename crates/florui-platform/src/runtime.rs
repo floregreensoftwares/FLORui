@@ -125,6 +125,9 @@ pub struct UiRuntime {
     /// [`Self::with_rules_and_context`] — see
     /// [`florui_style::AnimationTimeline`]'s own doc.
     animation_timeline: AnimationTimeline,
+    /// Whether a hover change that only changes how nodes paint is answered
+    /// without a full update; a test turns it off to compare the two.
+    hover_repaint: bool,
     animation_epoch: std::time::Instant,
     /// When set, animations read this many seconds instead of the wall clock.
     clock_override: Option<f64>,
@@ -302,6 +305,7 @@ impl UiRuntime {
             validation_bubble: RefCell::new(None),
             resized: RefCell::new(HashMap::new()),
             animation_timeline,
+            hover_repaint: true,
             animation_epoch: std::time::Instant::now(),
             clock_override: None,
             font: florui_text::Font::load_embedded(),
@@ -398,6 +402,66 @@ impl UiRuntime {
     /// call [`Self::update`] afterward to see the new rules take effect.
     pub fn set_rules(&mut self, rules: Vec<Rule>) {
         self.rules = rules;
+    }
+
+    /// Turns off answering a paint-only hover change without a full update, so
+    /// a test can compare the two paths.
+    #[cfg(test)]
+    pub(crate) fn set_hover_repaint(&mut self, enabled: bool) {
+        self.hover_repaint = enabled;
+    }
+
+    /// After the hovered node changed (`set_hovered` already rebuilt the
+    /// interaction state): restyles the existing tree and, when no node's style
+    /// changed in any way but how it paints, keeps the layout, arena and
+    /// registries and returns `true`. Returns `false` without having changed
+    /// anything the caller sees when a full [`Self::update`] is needed: a signal
+    /// is dirty (a handler ran, so the tree may differ), the stylesheet has
+    /// container queries (its cascade depends on layout), or a style changed in
+    /// a way that can move or resize something.
+    ///
+    /// The cascade runs on the same animation timeline a full update uses, so a
+    /// transition a hover rule starts begins exactly as it would there; the
+    /// full update that follows a fallback finds that transition already
+    /// running and carries it on.
+    pub(crate) fn repaint_for_hover(&mut self, viewport: Size<AvailableSpace>) -> bool {
+        if !self.hover_repaint
+            || self.dirty.get()
+            || self.rules.iter().any(Rule::has_container_queries)
+        {
+            return false;
+        }
+        let _restyle = florui_profile::span(florui_profile::Phase::Restyle);
+        let _cascade = florui_profile::span(florui_profile::Phase::Cascade);
+        self.animation_timeline.advance_to(
+            self.clock_override
+                .unwrap_or_else(|| self.animation_epoch.elapsed().as_secs_f64()),
+        );
+        let restyled = florui_style::compute(
+            &self.arena,
+            &self.rules,
+            &self.interaction,
+            media_viewport(viewport),
+            &mut self.animation_timeline,
+        );
+        florui_profile::count(florui_profile::Counter::NodesStyled, restyled.len() as u64);
+        if restyled.len() != self.styles.len() {
+            return false;
+        }
+        for (id, style) in &restyled {
+            match self.styles.get(id) {
+                Some(old) if old.differs_only_in_paint(style) => {}
+                _ => return false,
+            }
+        }
+        for (id, style) in restyled {
+            if let Some(old) = self.styles.get_mut(&id)
+                && *old != style
+            {
+                old.copy_paint_from(&style);
+            }
+        }
+        true
     }
 
     /// Registers an additional font (e.g. for a script neither embedded
