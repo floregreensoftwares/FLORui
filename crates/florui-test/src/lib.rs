@@ -47,8 +47,11 @@
 //! assert!(profile.counter(Counter::NodesLaidOut) < 100);
 //! ```
 
+mod equivalence;
 mod guard;
 mod snapshot;
+
+pub use equivalence::{Route, assert_matches_clean};
 
 use florui::Element;
 pub use florui_platform::TestKey as Key;
@@ -434,6 +437,12 @@ impl Mounted {
         self.window_mut().frame()
     }
 
+    /// The tree of the mounted component, for a check that needs to name
+    /// elements.
+    pub(crate) fn arena(&self) -> &florui_style::Arena {
+        self.window().runtime().geometry().0
+    }
+
     // Input
 
     /// Moves to the middle of the element and presses and releases the
@@ -457,6 +466,31 @@ impl Mounted {
     pub fn hover(&mut self, node: Node) {
         let (x, y) = self.center(node);
         self.window_mut().pointer_move(x, y);
+        self.window_mut().settle();
+    }
+
+    /// Moves the pointer to `(x, y)` in logical pixels, without pressing.
+    pub fn move_pointer(&mut self, x: f32, y: f32) {
+        self.window_mut().pointer_move(x, y);
+        self.window_mut().settle();
+    }
+
+    /// Turns the wheel over wherever the pointer is: `dy` pixels down moves the
+    /// content up. Unlike [`Self::scroll`] it does not move the pointer first.
+    pub fn wheel(&mut self, dx: f32, dy: f32) {
+        self.window_mut().wheel(-dx, -dy, false);
+        self.window_mut().settle();
+    }
+
+    /// Replaces the stylesheet and re-renders, as a reload of the file does.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `css` does not parse.
+    pub fn reload_css(&mut self, css: &str) {
+        let rules = florui_style::parse_stylesheet(css).expect("the stylesheet parses");
+        self.window_mut().runtime_mut().set_rules(rules);
+        self.window_mut().update();
         self.window_mut().settle();
     }
 

@@ -1,0 +1,5 @@
+# What a failed comparison writes to show the difference; never committed.
+*.actual.png
+*.diff.png
+*.incremental.png
+*.clean.png

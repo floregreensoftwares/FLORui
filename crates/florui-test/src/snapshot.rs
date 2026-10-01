@@ -9,14 +9,14 @@ use std::path::PathBuf;
 use florui_platform::HeadlessFrame;
 use image::{ImageBuffer, Rgba, RgbaImage};
 
-fn directory() -> PathBuf {
+pub(crate) fn directory() -> PathBuf {
     let root = std::env::var_os("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
     root.join("tests").join("snapshots")
 }
 
-fn image_of(frame: &HeadlessFrame) -> RgbaImage {
+pub(crate) fn image_of(frame: &HeadlessFrame) -> RgbaImage {
     ImageBuffer::from_raw(frame.width, frame.height, frame.rgba.clone())
         .expect("a frame holds width x height x 4 bytes")
 }
@@ -69,7 +69,7 @@ pub(crate) fn assert_matches(name: &str, frame: &HeadlessFrame) {
 
 /// How many pixels differ, and an image with each of them in red over a dimmed
 /// copy of the baseline.
-fn diff(baseline: &RgbaImage, actual: &RgbaImage) -> (usize, RgbaImage) {
+pub(crate) fn diff(baseline: &RgbaImage, actual: &RgbaImage) -> (usize, RgbaImage) {
     let width = baseline.width().max(actual.width());
     let height = baseline.height().max(actual.height());
     let mut out = RgbaImage::new(width, height);
