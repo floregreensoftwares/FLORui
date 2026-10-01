@@ -39,6 +39,7 @@ use style::rule_tree::CascadeLevel;
 use style::selector_parser::{AttrValue, Lang, PseudoElement, SelectorImpl};
 use style::servo::media_queries::FontMetricsProvider;
 use style::shared_lock::{Locked, SharedRwLock, StylesheetGuards};
+use style::sharing::StyleSharingTarget;
 use style::style_resolver::{PseudoElementResolution, StyleResolverForElement};
 use style::stylesheets::DocumentStyleSheet;
 use style::stylesheets::layer_rule::LayerOrder;
@@ -349,6 +350,28 @@ impl StyloTree {
             order.push(id);
             stack.extend(arena.children(id).iter().rev());
         }
+    }
+
+    /// The nodes level by level (every node of one depth, then the next),
+    /// siblings in document order, one root's whole tree at a time. A parent
+    /// is still styled before its children, and Stylo's style sharing cache,
+    /// which only compares nodes at one depth, can then find a sibling or
+    /// cousin that is already styled. A root at a time, because Stylo's
+    /// ancestor filter needs the nodes it moves between to share an ancestor,
+    /// which the separate roots of a fragment do not.
+    fn level_order(&self) -> Vec<NodeId> {
+        let depth = |id: NodeId| self.slots[self.index_of[id]].depth;
+        let mut levels = Vec::with_capacity(self.order.len());
+        let mut start = 0;
+        for end in 1..=self.order.len() {
+            if end == self.order.len() || depth(self.order[end]) == 0 {
+                let mut tree = self.order[start..end].to_vec();
+                tree.sort_by_key(|&id| depth(id));
+                levels.extend(tree);
+                start = end;
+            }
+        }
+        levels
     }
 
     fn node(&self, id: NodeId) -> StyloNode<'_> {
@@ -1119,19 +1142,24 @@ fn compute_in_layout_state(
         registered_speculative_painters: &NoPainters,
     };
 
-    // Pre-order (`tree.order`), so an ancestor's style is already committed
-    // to its `ElementData` when a descendant resolves. One bloom filter is
-    // kept across the whole walk instead of `resolve_style`'s per-call
-    // `rebuild`, which re-hashes every ancestor and made deep chains
-    // quadratic.
+    // Level by level, so an ancestor's style is already committed to its
+    // `ElementData` when a descendant resolves and Stylo's style sharing
+    // cache sees every node of one depth together. One bloom filter is kept
+    // across the whole walk instead of `resolve_style`'s per-call `rebuild`,
+    // which re-hashes every ancestor and made deep chains quadratic.
     let mut thread_local = ThreadLocalStyleContext::<StyloNode<'_>>::new();
-    for &id in &tree.order {
+    // Converting a node's computed values is the same work for every node that
+    // shares them, so it is done once per distinct set of values. Every key
+    // is an `Arc` still held by its node's `ElementData`, so no address is
+    // reused while the map is alive.
+    let mut converted: HashMap<*const ComputedValues, ComputedStyle> = HashMap::new();
+    for id in tree.level_order() {
         let mut context = StyleContext {
             shared: &shared,
             thread_local: &mut thread_local,
         };
         let target = tree.node(id);
-        let styles = resolve_in_preorder(&mut context, target);
+        let styles = resolve_sharing_styles(&mut context, target);
 
         // Nothing here starts or samples a transition/animation; real Servo
         // does that in a step its traversal driver runs after cascading
@@ -1159,7 +1187,15 @@ fn compute_in_layout_state(
             primary.clone()
         };
 
-        result.insert(id, to_computed_style(&final_values));
+        let computed = if has_active_animation && !timeline.should_suppress_animations() {
+            to_computed_style(&final_values)
+        } else {
+            converted
+                .entry(&*primary as *const ComputedValues)
+                .or_insert_with(|| to_computed_style(&final_values))
+                .clone()
+        };
+        result.insert(id, computed);
         // `primary` (the raw cascade result), not `final_values` (already
         // spliced with any in-progress transition/animation) -- Stylo's own
         // `update_transitions_for_new_style` compares next frame's `primary`
@@ -1181,7 +1217,7 @@ fn compute_in_layout_state(
 
 /// Stylo's `resolve_style` body for a node whose ancestors already have a committed
 /// primary style, keeping `context`'s bloom filter across calls.
-fn resolve_in_preorder<'a>(
+fn resolve_sharing_styles<'a>(
     context: &mut StyleContext<'_, StyloNode<'a>>,
     element: StyloNode<'a>,
 ) -> ElementStyles {
@@ -1203,14 +1239,36 @@ fn resolve_in_preorder<'a>(
             layout_parent.and_then(|p| p.borrow_data().map(|d| d.styles.primary().clone()));
     }
 
-    StyleResolverForElement::new(
+    // A sibling or cousin already styled with the same matching rules and the
+    // same parent style is Stylo's own shortcut for a long list of alike rows.
+    // It is skipped under a `display: contents` parent, where the style the
+    // children inherit is not the parent's own.
+    let layout_parent_is_parent = match (&parent_style, &layout_parent_style) {
+        (Some(parent), Some(layout)) => Arc::ptr_eq(parent, layout),
+        (None, None) => true,
+        _ => false,
+    };
+    let mut target = StyleSharingTarget::new(element);
+    if layout_parent_is_parent && let Some(shared) = target.share_style_if_possible(context) {
+        return shared.into();
+    }
+    let resolved = StyleResolverForElement::new(
         element,
         context,
         RuleInclusion::All,
         PseudoElementResolution::Force,
     )
-    .resolve_style(parent_style.as_deref(), layout_parent_style.as_deref())
-    .into()
+    .resolve_style(parent_style.as_deref(), layout_parent_style.as_deref());
+    if layout_parent_is_parent {
+        context.thread_local.sharing_cache.insert_if_possible(
+            &element,
+            &resolved.primary,
+            Some(&mut target),
+            element.0.depth,
+            context.shared,
+        );
+    }
+    resolved.into()
 }
 
 /// Starts, updates, and samples `target`'s transitions/`@keyframes`

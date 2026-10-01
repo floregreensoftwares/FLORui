@@ -892,6 +892,146 @@ mod tests {
         }
     }
 
+    mod shared_styles {
+        use super::*;
+
+        fn row(i: usize) -> Element {
+            let mut attrs: Vec<(String, String)> = vec![(
+                "class".into(),
+                if i.is_multiple_of(3) {
+                    "row odd"
+                } else {
+                    "row"
+                }
+                .into(),
+            )];
+            if i % 4 == 1 {
+                attrs.push(("data-k".into(), "x".into()));
+            }
+            if i == 5 {
+                attrs.push(("id".into(), "unique".into()));
+            }
+            if i % 11 == 3 {
+                attrs.push(("style".into(), "color: #ff0000".into()));
+            }
+            Element::node(
+                "div",
+                attrs,
+                vec![
+                    Element::node("span", vec![("class".into(), "a".into())], vec![]),
+                    Element::node("span", vec![("class".into(), "b".into())], vec![]),
+                    Element::node("button", vec![("class".into(), "go".into())], vec![]),
+                ],
+            )
+        }
+
+        const CSS: &str = ".row { height: 20px; }             .row:nth-child(odd) { margin-left: 3px; }             .row:nth-child(3n+1) { margin-right: 4px; }             .row:first-child { padding-top: 9px; } .row:last-child { padding-bottom: 8px; }             .row + .row { margin-top: 2px; }             .row:not(.odd) { opacity: 0.5; }             .row[data-k] { padding-left: 5px; }             #unique { width: 77px; }             .a + .b { color: #00ff00; }             .row:hover { background-color: #0000ff; } .row:hover + .row { padding-right: 6px; }             .row:hover .a { color: #ff00ff; }";
+
+        const ROWS: usize = 40;
+
+        #[test]
+        fn alike_rows_that_differ_by_position_attribute_or_state_do_not_share_a_style() {
+            let list: Element = Element::node(
+                "div",
+                vec![("class".into(), "root".into())],
+                (0..ROWS).map(row).collect(),
+            );
+            let hovered_row = 7;
+            let arena = Arena::build(&list);
+            let rows = arena.find_all(|a, id| a.classes(id).iter().any(|c| c == "row"));
+            assert_eq!(rows.len(), ROWS);
+
+            let mut state = InteractionState::new().with_hovered(rows[hovered_row]);
+            let mut up = arena.parent(rows[hovered_row]);
+            while let Some(parent) = up {
+                state = state.with_hovered(parent);
+                up = arena.parent(parent);
+            }
+            let (arena, computed) = styles(&list, CSS, &state);
+            let rows = arena.find_all(|a, id| a.classes(id).iter().any(|c| c == "row"));
+
+            for (i, &row) in rows.iter().enumerate() {
+                let style = &computed[&row];
+                let position = i + 1; // :nth-child counts from one
+                // Each expectation below is worked out from the row's position and
+                // attributes, not by asking the cascade, so a row that took a
+                // look-alike sibling's style shows up as a difference.
+                assert_eq!(
+                    style.margin.left,
+                    Some(if position % 2 == 1 { 3.0 } else { 0.0 }),
+                    "row {i}: :nth-child(odd) margin"
+                );
+                assert_eq!(
+                    style.margin.right,
+                    Some(if position % 3 == 1 { 4.0 } else { 0.0 }),
+                    "row {i}: :nth-child(3n+1) margin"
+                );
+                assert_eq!(
+                    style.padding.top,
+                    if i == 0 { 9.0 } else { 0.0 },
+                    "row {i}: :first-child padding"
+                );
+                assert_eq!(
+                    style.padding.bottom,
+                    if i == ROWS - 1 { 8.0 } else { 0.0 },
+                    "row {i}: :last-child padding"
+                );
+                assert_eq!(
+                    style.margin.top,
+                    Some(if i == 0 { 0.0 } else { 2.0 }),
+                    "row {i}: sibling combinator margin"
+                );
+                assert_eq!(
+                    style.opacity,
+                    if i.is_multiple_of(3) { 1.0 } else { 0.5 },
+                    "row {i}: :not(.odd) opacity"
+                );
+                assert_eq!(
+                    style.padding.left,
+                    if i % 4 == 1 { 5.0 } else { 0.0 },
+                    "row {i}: attribute selector padding"
+                );
+                assert_eq!(
+                    style.width,
+                    if i == 5 { Some(77.0) } else { None },
+                    "row {i}: #id width"
+                );
+                assert_eq!(
+                    style.color,
+                    if i % 11 == 3 {
+                        Rgba::opaque(255, 0, 0)
+                    } else {
+                        computed[&rows[0]].color
+                    },
+                    "row {i}: inline style color"
+                );
+                assert_eq!(
+                    style.background_color == Rgba::opaque(0, 0, 255),
+                    i == hovered_row,
+                    "row {i}: only the hovered row is :hover"
+                );
+                assert_eq!(
+                    style.padding.right,
+                    if i == hovered_row + 1 { 6.0 } else { 0.0 },
+                    "row {i}: only the row after the hovered one gets `:hover +`"
+                );
+            }
+
+            // The first span of each row is `.a`; only the hovered row's recolors it.
+            for (i, &row) in rows.iter().enumerate() {
+                let first_span = arena.children(row)[0];
+                let recolored = computed[&first_span].color == Rgba::opaque(255, 0, 255);
+                assert_eq!(recolored, i == hovered_row, "row {i}: `.row:hover .a`");
+                let second_span = arena.children(row)[1];
+                assert_eq!(
+                    computed[&second_span].color,
+                    Rgba::opaque(0, 255, 0),
+                    "row {i}: `.a + .b` applies in every row"
+                );
+            }
+        }
+    }
+
     use std::collections::HashSet;
 
     use florui::prelude::*;
