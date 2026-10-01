@@ -193,6 +193,12 @@ struct ArenaNode {
     value_handlers: Vec<(String, ValueHandler)>,
     parent: Option<NodeId>,
     children: Vec<NodeId>,
+    /// How many earlier siblings have this node's tag, counted as the node
+    /// was added. See [`Arena::tag_ordinal`].
+    tag_ordinal: usize,
+    /// How many children of each tag this node has so far, which is what the
+    /// next child's [`Self::tag_ordinal`] is read from while building.
+    child_tag_counts: Vec<(&'static str, usize)>,
 }
 
 /// A tree may have more than one root: `view!` can produce an
@@ -210,6 +216,9 @@ pub struct Arena {
     /// only layout needs to tell the two groups apart, via
     /// [`Self::document_roots`]/[`Self::overlay_roots`].
     document_root_count: usize,
+    /// How many roots of each tag there are so far, the root-level
+    /// counterpart of an [`ArenaNode`]'s own `child_tag_counts`.
+    root_tag_counts: Vec<(&'static str, usize)>,
 }
 
 /// One still-unprocessed slice of sibling [`Element`]s, and where their
@@ -235,6 +244,7 @@ impl Arena {
             nodes: Vec::new(),
             roots: Vec::new(),
             document_root_count: 0,
+            root_tag_counts: Vec::new(),
         };
         let mut next_level = Vec::new();
         arena.push_all(std::slice::from_ref(root), &mut next_level);
@@ -253,6 +263,7 @@ impl Arena {
             nodes: Vec::new(),
             roots: Vec::new(),
             document_root_count: 0,
+            root_tag_counts: Vec::new(),
         };
         let mut next_level = Vec::new();
         arena.push_all(std::slice::from_ref(document), &mut next_level);
@@ -314,6 +325,22 @@ impl Arena {
             match element {
                 Element::Node(node) => {
                     let id = self.nodes.len();
+                    let tag_ordinal = {
+                        let counts = match parent {
+                            Some(p) => &mut self.nodes[p].child_tag_counts,
+                            None => &mut self.root_tag_counts,
+                        };
+                        match counts.iter_mut().find(|(tag, _)| *tag == node.tag) {
+                            Some((_, seen)) => {
+                                *seen += 1;
+                                *seen - 1
+                            }
+                            None => {
+                                counts.push((node.tag, 1));
+                                0
+                            }
+                        }
+                    };
                     // Real HTML's own default `value` when absent is the
                     // midpoint of `min`/`max`, so it needs those already
                     // parsed rather than a fixed literal default.
@@ -361,6 +388,8 @@ impl Arena {
                         value_handlers: node.value_handlers.clone(),
                         parent,
                         children: Vec::new(),
+                        tag_ordinal,
+                        child_tag_counts: Vec::new(),
                     });
                     match parent {
                         Some(p) => {
@@ -401,6 +430,14 @@ impl Arena {
 
     pub fn roots(&self) -> &[NodeId] {
         &self.roots
+    }
+
+    /// How many earlier siblings of `id` have its tag (its place among
+    /// same-tag siblings, which a node without an `id` is identified by),
+    /// read from a count kept while building rather than found by scanning
+    /// the siblings before it.
+    pub fn tag_ordinal(&self, id: NodeId) -> usize {
+        self.nodes[id].tag_ordinal
     }
 
     /// The ordinary document roots — everything [`Self::build`] always
