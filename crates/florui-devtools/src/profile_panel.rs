@@ -77,6 +77,7 @@ fn depth_of(phase: Phase) -> u8 {
         | Phase::Submit
         | Phase::Flip => 1,
         Phase::Update
+        | Phase::Restyle
         | Phase::PaintParts
         | Phase::Accessibility
         | Phase::Raster

@@ -33,6 +33,9 @@ pub enum Phase {
     /// One re-render of the tree against the viewport: everything below until
     /// `Observers`.
     Update,
+    /// A hover change answered without an update: the styles are computed again
+    /// and, when only paint changed, the layout is kept. Contains `Cascade`.
+    Restyle,
     /// Component render and its effects.
     Render,
     /// Async work that progressed before the tree committed.
@@ -71,8 +74,9 @@ pub enum Phase {
 }
 
 impl Phase {
-    pub const ALL: [Phase; 18] = [
+    pub const ALL: [Phase; 19] = [
         Phase::Update,
+        Phase::Restyle,
         Phase::Render,
         Phase::Async,
         Phase::ArenaBuild,
@@ -95,6 +99,7 @@ impl Phase {
     pub fn name(self) -> &'static str {
         match self {
             Phase::Update => "update",
+            Phase::Restyle => "restyle",
             Phase::Render => "render",
             Phase::Async => "async",
             Phase::ArenaBuild => "arena",

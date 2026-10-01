@@ -538,7 +538,11 @@ impl<H: InputHost> Input<'_, H> {
         }
         self.runtime
             .set_os_prefers_reduced_motion(self.host.prefers_reduced_motion());
-        self.runtime.update(viewport);
+        // A hover change usually restyles a few nodes' colors and nothing
+        // else; only a change that could move something needs the full update.
+        if !self.runtime.repaint_for_hover(viewport) {
+            self.runtime.update(viewport);
+        }
         self.host.request_redraw();
         self.refresh_animation_schedule();
     }

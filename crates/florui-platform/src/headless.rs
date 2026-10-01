@@ -735,7 +735,13 @@ mod tests {
         .iter()
         .map(|p| frame.total(*p))
         .sum();
-        assert!(inside <= update, "the stages of an update fit inside it");
+        // The pointer moving onto the button restyles without an update; that
+        // cascade is inside its own Restyle span, not inside Update.
+        let restyle = frame.total(Phase::Restyle);
+        assert!(
+            inside <= update + restyle,
+            "the stages of an update fit inside it, and a restyle's cascade inside the restyle"
+        );
         assert!(frame.wall() >= update + frame.total(Phase::Raster));
 
         assert!(
@@ -863,6 +869,132 @@ mod tests {
             [255, 0, 0],
             "a child is not :hover because its parent is"
         );
+    }
+
+    /// What a window paints after the pointer moves over three rows and back, with
+    /// the hover repaint path on or off, and how many nodes were laid out while
+    /// it moved.
+    fn paint_after_hovering(css: &str, repaint: bool, advance: f64) -> (Vec<u8>, u64) {
+        use florui_profile::Counter;
+
+        let mut window = HeadlessWindow::new(
+            css,
+            || {
+                let rows = (0..4)
+                    .map(|i| {
+                        Element::node(
+                            "div",
+                            vec![("class".into(), "row".into())],
+                            vec![Element::text(format!("Row {i}"))],
+                        )
+                    })
+                    .collect();
+                Element::node("div", vec![("class".into(), "list".into())], rows)
+            },
+            HeadlessOptions {
+                width: 300.0,
+                height: 300.0,
+                ..HeadlessOptions::default()
+            },
+        )
+        .expect("the stylesheet parses");
+        window.runtime_mut().set_hover_repaint(repaint);
+        let frame = window.frame();
+        let rows: Vec<NodeId> = {
+            let (arena, ..) = window.runtime().geometry();
+            arena.find_all(|a, id| a.classes(id).iter().any(|c| c == "row"))
+        };
+        let centers: Vec<(f32, f32)> = rows
+            .iter()
+            .map(|row| {
+                let (x, y, w, h) = frame.bounds[row];
+                (x + w / 2.0, y + h / 2.0)
+            })
+            .collect();
+
+        florui_profile::start(false);
+        for &i in &[1usize, 2, 3, 0, 2] {
+            window.pointer_move(centers[i].0, centers[i].1);
+            window.settle();
+        }
+        // The frame that ends the moves carries what they laid out; advancing the
+        // clock afterwards is a full update of its own and is not counted.
+        window.frame();
+        let laid_out = florui_profile::recent_frames(1)
+            .last()
+            .map_or(0, |f| f.counter(Counter::NodesLaidOut));
+        florui_profile::stop();
+        if advance > 0.0 {
+            window.advance_clock(advance);
+        }
+        (window.frame().rgba, laid_out)
+    }
+
+    #[test]
+    fn a_hover_that_only_repaints_paints_what_a_full_update_would() {
+        const BASE: &str = ".list { display: flex; flex-direction: column; width: 200px; }             .row { height: 30px; margin: 4px; padding: 2px; background-color: #ffffff; } ";
+        // (name, stylesheet, seconds to advance, whether the repaint path applies)
+        let cases: [(&str, String, f64, bool); 6] = [
+            (
+                "a color",
+                format!("{BASE}.row:hover {{ background-color: #0000ff; }}"),
+                0.0,
+                true,
+            ),
+            (
+                "a color and a shadow",
+                format!(
+                    "{BASE}.row:hover {{ background-color: #ff8800; box-shadow: 0px 2px 6px rgba(0, 0, 0, 0.4); }}"
+                ),
+                0.0,
+                true,
+            ),
+            (
+                "a color under a transition",
+                format!(
+                    "{BASE}.row {{ transition: background-color 1s; }} .row:hover {{ background-color: #0000ff; }}"
+                ),
+                0.3,
+                true,
+            ),
+            (
+                "a width, which moves layout",
+                format!("{BASE}.row:hover {{ width: 120px; }}"),
+                0.0,
+                false,
+            ),
+            (
+                "a font size, which re-measures text",
+                format!("{BASE}.row:hover {{ font-size: 24px; }}"),
+                0.0,
+                false,
+            ),
+            (
+                "a color under a container query",
+                format!(
+                    "{BASE}.list {{ container-type: inline-size; }} .row:hover {{ background-color: #0000ff; }} @container (min-width: 100px) {{ .row {{ padding: 6px; }} }}"
+                ),
+                0.0,
+                false,
+            ),
+        ];
+        for (name, css, advance, repaints) in cases {
+            let (with_path, laid_out_with) = paint_after_hovering(&css, true, advance);
+            let (full, laid_out_full) = paint_after_hovering(&css, false, advance);
+            assert!(
+                with_path == full,
+                "{name}: the frame after hovering differs between the repaint path and a full update"
+            );
+            assert!(laid_out_full > 0, "{name}: a full update lays the tree out");
+            if repaints {
+                assert_eq!(
+                    laid_out_with, 0,
+                    "{name}: a paint-only hover must not lay anything out"
+                );
+            } else {
+                assert!(laid_out_with > 0, "{name}: this change needs a layout");
+            }
+        }
     }
 
     #[test]
