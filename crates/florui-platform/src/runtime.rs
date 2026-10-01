@@ -1472,7 +1472,9 @@ impl UiRuntime {
         }
         let event = Event::new();
         if let Some(handler) = self.arena.handler(node, "click") {
-            florui_reactive::batch(|| handler.call(&event));
+            florui_reactive::trace::with_event("click", node, || {
+                florui_reactive::batch(|| handler.call(&event))
+            });
         }
         event.default_prevented()
     }
@@ -1493,9 +1495,9 @@ impl UiRuntime {
         }
         self.dismiss_validation_bubble_of(node);
         if let Some(binding) = self.arena.value_binding(node, "value") {
-            binding.request_update(value);
+            florui_reactive::trace::with_event("value", node, || binding.request_update(value));
         } else if let Some(handler) = self.arena.value_handler(node, "value") {
-            handler.call(value);
+            florui_reactive::trace::with_event("value", node, || handler.call(value));
         }
     }
 
@@ -1517,7 +1519,9 @@ impl UiRuntime {
     pub(crate) fn dispatch_event(&self, node: NodeId, event_name: &str) -> bool {
         let event = Event::new();
         if let Some(handler) = self.arena.handler(node, event_name) {
-            florui_reactive::batch(|| handler.call(&event));
+            florui_reactive::trace::with_event(trace_event_name(event_name), node, || {
+                florui_reactive::batch(|| handler.call(&event))
+            });
         }
         event.default_prevented()
     }
@@ -1531,6 +1535,17 @@ impl UiRuntime {
     pub fn clear_dirty(&self) {
         self.dirty.clear();
     }
+}
+
+/// A trace names an event with a `'static` string, so the dispatched names
+/// the runtime knows are listed and anything else is `"other"`.
+fn trace_event_name(name: &str) -> &'static str {
+    const KNOWN: [&str; 4] = ["mouseenter", "mouseleave", "dismiss", "click"];
+    KNOWN
+        .iter()
+        .find(|known| **known == name)
+        .copied()
+        .unwrap_or("other")
 }
 
 /// The viewport `@media`'s own size features resolve against, from
