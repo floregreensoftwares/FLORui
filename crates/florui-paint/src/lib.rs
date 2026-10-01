@@ -54,6 +54,7 @@
 //! background and border (see [`rounded::RoundedRect`]).
 
 mod blur;
+mod glyph_cache;
 mod rounded;
 mod shadow_cache;
 
@@ -69,7 +70,9 @@ use florui_style::{
 use florui_text::Font;
 use rounded::RoundedRectPath;
 use skrifa::instance::{LocationRef, NormalizedCoord, Size as GlyphSize};
-use skrifa::outline::{DrawSettings, OutlinePen};
+use skrifa::outline::DrawSettings;
+#[cfg(test)]
+use skrifa::outline::OutlinePen;
 use skrifa::{FontRef, GlyphId, MetadataProvider};
 use tiny_skia::{
     FillRule, IntRect, Mask, Paint, PathBuilder, Pixmap, PixmapPaint, PremultipliedColorU8, Rect,
@@ -3628,36 +3631,7 @@ fn paint_shaped_runs(
     let (x, y) = buffer.local(x, y);
     let mut builder = PathBuilder::new();
 
-    for run in runs {
-        let Ok(font_ref) = FontRef::from_index(run.font.data.data(), run.font.index) else {
-            continue;
-        };
-        let outlines = font_ref.outline_glyphs();
-        let size = GlyphSize::new(run.font_size * scale_factor);
-        // Without this, every glyph draws at the font's default variable
-        // instance regardless of what was actually shaped — a bold run
-        // would measure wider (Parley resolves the wght axis correctly
-        // for layout) but paint no bolder at all.
-        let coords: Vec<NormalizedCoord> = run
-            .normalized_coords
-            .iter()
-            .map(|&bits| NormalizedCoord::from_bits(bits))
-            .collect();
-        let location = LocationRef::new(&coords);
-
-        for glyph in &run.glyphs {
-            let Some(outline) = outlines.get(GlyphId::new(glyph.id)) else {
-                continue;
-            };
-            let mut pen = GlyphPen {
-                builder: &mut builder,
-                origin_x: x + glyph.x * scale_factor,
-                origin_y: y + glyph.y * scale_factor,
-            };
-            let settings = DrawSettings::unhinted(size, location);
-            let _ = outline.draw(settings, &mut pen);
-        }
-    }
+    append_glyphs(&mut builder, runs, x, y, scale_factor);
 
     let Some(path) = builder.finish() else {
         return;
@@ -3674,15 +3648,125 @@ fn paint_shaped_runs(
     );
 }
 
+/// Appends every glyph of `runs` to `builder`, positioned from `(x, y)` and
+/// scaled by `scale_factor`, through the glyph outline cache.
+fn append_glyphs(
+    builder: &mut PathBuilder,
+    runs: &[florui_text::ShapedRun],
+    x: f32,
+    y: f32,
+    scale_factor: f32,
+) {
+    #[cfg(test)]
+    if DIRECT_GLYPHS.with(std::cell::Cell::get) {
+        return append_glyphs_direct(builder, runs, x, y, scale_factor);
+    }
+    for run in runs {
+        let size = run.font_size * scale_factor;
+        let instance = glyph_cache::instance(
+            run.font.data.id(),
+            run.font.index,
+            size,
+            &run.normalized_coords,
+        );
+        // The font is parsed and the outlines extracted only for a glyph the
+        // cache has not seen at this size yet.
+        let mut outlines = None;
+        for glyph in &run.glyphs {
+            let segments = instance.outline(glyph.id, || {
+                let outlines = outlines.get_or_insert_with(|| {
+                    FontRef::from_index(run.font.data.data(), run.font.index)
+                        .ok()
+                        .map(|font_ref| font_ref.outline_glyphs())
+                });
+                let Some(outline) = outlines
+                    .as_ref()
+                    .and_then(|outlines| outlines.get(GlyphId::new(glyph.id)))
+                else {
+                    return Vec::new();
+                };
+                // Without the run's coordinates, every glyph draws at the
+                // font's default variable instance regardless of what was
+                // actually shaped: a bold run would measure wider (Parley
+                // resolves the wght axis correctly for layout) but paint no
+                // bolder at all.
+                let coords: Vec<NormalizedCoord> = run
+                    .normalized_coords
+                    .iter()
+                    .map(|&bits| NormalizedCoord::from_bits(bits))
+                    .collect();
+                let mut recorder = glyph_cache::Recorder::default();
+                let settings =
+                    DrawSettings::unhinted(GlyphSize::new(size), LocationRef::new(&coords));
+                let _ = outline.draw(settings, &mut recorder);
+                recorder.0
+            });
+            glyph_cache::replay(
+                builder,
+                x + glyph.x * scale_factor,
+                y + glyph.y * scale_factor,
+                &segments,
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Lets a test paint with outlines extracted directly each time, the
+    /// reference the cache has to match to the pixel.
+    static DIRECT_GLYPHS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// What [`append_glyphs`] replaced: every glyph's outline drawn straight into
+/// the path.
+#[cfg(test)]
+fn append_glyphs_direct(
+    builder: &mut PathBuilder,
+    runs: &[florui_text::ShapedRun],
+    x: f32,
+    y: f32,
+    scale_factor: f32,
+) {
+    for run in runs {
+        let Ok(font_ref) = FontRef::from_index(run.font.data.data(), run.font.index) else {
+            continue;
+        };
+        let outlines = font_ref.outline_glyphs();
+        let size = GlyphSize::new(run.font_size * scale_factor);
+        let coords: Vec<NormalizedCoord> = run
+            .normalized_coords
+            .iter()
+            .map(|&bits| NormalizedCoord::from_bits(bits))
+            .collect();
+        let location = LocationRef::new(&coords);
+
+        for glyph in &run.glyphs {
+            let Some(outline) = outlines.get(GlyphId::new(glyph.id)) else {
+                continue;
+            };
+            let mut pen = GlyphPen {
+                builder,
+                origin_x: x + glyph.x * scale_factor,
+                origin_y: y + glyph.y * scale_factor,
+            };
+            let settings = DrawSettings::unhinted(size, location);
+            let _ = outline.draw(settings, &mut pen);
+        }
+    }
+}
+
 /// Feeds a glyph's outline (font units, Y-up from its own baseline origin)
 /// into a [`PathBuilder`] (screen space, Y-down), offsetting by the
 /// glyph's pen position and flipping the Y axis for every emitted point.
+#[cfg(test)]
 struct GlyphPen<'a> {
     builder: &'a mut PathBuilder,
     origin_x: f32,
     origin_y: f32,
 }
 
+#[cfg(test)]
 impl OutlinePen for GlyphPen<'_> {
     fn move_to(&mut self, x: f32, y: f32) {
         self.builder.move_to(self.origin_x + x, self.origin_y - y);
@@ -7990,6 +8074,103 @@ mod tests {
                     "{size}px weight {weight} wrapped at {width}"
                 );
             }
+        }
+    }
+
+    /// A page of text in several sizes and weights, one paragraph mixing a
+    /// bold span into regular text, painted with outlines extracted directly
+    /// (`direct`) or through the glyph cache.
+    fn text_page(direct: bool, scale_factor: f32) -> Canvas {
+        let div = |class: &str, children: Vec<Element>| {
+            Element::node("div", vec![("class".into(), class.into())], children)
+        };
+        let tree = div(
+            "page",
+            vec![
+                div("small", vec![Element::text("Small text, 0123456789 fjgqy")]),
+                div("big", vec![Element::text("Bold Heading Hg")]),
+                div(
+                    "para",
+                    vec![
+                        Element::text("Mixed paragraph with "),
+                        Element::node(
+                            "span",
+                            vec![("class".into(), "strong".into())],
+                            vec![Element::text("a bold span")],
+                        ),
+                        Element::text(" inside regular text that wraps onto more lines."),
+                    ],
+                ),
+            ],
+        );
+        let css = "
+            .page { width: 180px; display: flex; flex-direction: column; }
+            .small { font-size: 11px; color: #123456; }
+            .big { font-size: 22px; font-weight: 700; color: #a01010; }
+            .para { font-size: 14px; color: #202020; }
+            .strong { font-weight: 700; }
+        ";
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let physical: HashMap<florui_style::NodeId, BoxLayout> = layouts
+            .iter()
+            .map(|(&id, l)| {
+                (
+                    id,
+                    BoxLayout {
+                        x: l.x * scale_factor,
+                        y: l.y * scale_factor,
+                        width: l.width * scale_factor,
+                        height: l.height * scale_factor,
+                    },
+                )
+            })
+            .collect();
+        DIRECT_GLYPHS.with(|d| d.set(direct));
+        let buffer = paint_to_buffer(
+            &mut font,
+            (200.0 * scale_factor) as u32,
+            (160.0 * scale_factor) as u32,
+            Rgba::opaque(255, 255, 255),
+            &arena,
+            &styles,
+            &physical,
+            scale_factor,
+        );
+        DIRECT_GLYPHS.with(|d| d.set(false));
+        buffer
+    }
+
+    #[test]
+    fn cached_glyph_outlines_paint_the_same_pixels_as_extracting_them_each_time() {
+        for scale_factor in [1.0, 1.5] {
+            let direct = text_page(true, scale_factor);
+            let cold = text_page(false, scale_factor);
+            let warm = text_page(false, scale_factor);
+            assert!(
+                direct.data().iter().any(|&byte| byte != 255),
+                "the page has ink, so the comparison is not vacuous (scale {scale_factor})"
+            );
+            assert_eq!(
+                direct.data(),
+                cold.data(),
+                "cold cache, scale {scale_factor}"
+            );
+            assert_eq!(
+                direct.data(),
+                warm.data(),
+                "warm cache, scale {scale_factor}"
+            );
         }
     }
 }
