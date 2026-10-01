@@ -174,7 +174,10 @@ where
     });
 
     let stale = state.get().data().cloned();
-    state.set(Resource::Pending { stale });
+    crate::trace::record_kind(crate::trace::TraceKind::ResourceStarted);
+    crate::trace::with_origin(crate::trace::Origin::ResourceStart, || {
+        state.set(Resource::Pending { stale })
+    });
 
     let (abortable, handle) = futures::future::abortable(fetch(key));
     abort_handle.set(Some(handle));
@@ -195,10 +198,13 @@ where
             && generation_for_task.get() == my_generation
         {
             let commit = || {
-                let stale = state_for_task.get().data().cloned();
-                state_for_task.set(match result {
-                    Ok(value) => Resource::Ready(value),
-                    Err(error) => Resource::Failed { error, stale },
+                crate::trace::record_kind(crate::trace::TraceKind::ResourceCompleted);
+                crate::trace::with_origin(crate::trace::Origin::ResourceCompletion, || {
+                    let stale = state_for_task.get().data().cloned();
+                    state_for_task.set(match result {
+                        Ok(value) => Resource::Ready(value),
+                        Err(error) => Resource::Failed { error, stale },
+                    });
                 });
             };
             match component {

@@ -6,13 +6,16 @@
 //! though it commits outside any render (traces identify
 //! the initiating component).
 
+// Traces are recorded in a debug build, and in release with `profiling`.
+#![cfg(any(debug_assertions, feature = "profiling"))]
+
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use florui::prelude::*;
 use florui::reactive::executor::LocalExecutor;
 use florui::reactive::testing::manual_future;
-use florui::reactive::trace::{self, UpdateTrace};
+use florui::reactive::trace::{self, Origin, TraceKind, UpdateTrace};
 
 fn capture_traces() -> (Rc<RefCell<Vec<UpdateTrace>>>, impl Fn()) {
     let captured = Rc::new(RefCell::new(Vec::new()));
@@ -121,6 +124,48 @@ fn an_async_resource_completion_is_attributed_to_the_component_that_started_it()
             .iter()
             .any(|t| t.component == Some("Fetcher")),
         "a completion committed well after Fetcher's render must still be attributed to it"
+    );
+    reset();
+}
+
+#[test]
+fn a_resource_records_its_start_and_completion_with_the_writes_each_made() {
+    let (captured, reset) = capture_traces();
+    let executor = Rc::new(LocalExecutor::new());
+    let (future, resolver) = manual_future::<Result<i32, String>>();
+    let future_slot: PendingFetch = Rc::new(RefCell::new(Some(future)));
+    let (scope, _dirty) = ComponentScope::new();
+
+    let executor_for_render = Rc::clone(&executor);
+    scope.render(move || {
+        provide_context(Rc::clone(&executor_for_render) as Rc<dyn Executor>);
+        view! { <Fetcher future_slot={future_slot} /> }
+    });
+    executor.run_until_stalled();
+    resolver.resolve(Ok(7));
+    executor.run_until_stalled();
+
+    let steps: Vec<(TraceKind, Origin)> = captured
+        .borrow()
+        .iter()
+        .filter(|t| t.component == Some("Fetcher"))
+        .map(|t| (t.kind, t.origin))
+        .collect();
+    assert!(
+        steps.contains(&(TraceKind::ResourceStarted, Origin::Code)),
+        "{steps:?}"
+    );
+    assert!(
+        steps.contains(&(TraceKind::SignalWrite, Origin::ResourceStart)),
+        "{steps:?}"
+    );
+    assert!(
+        steps.contains(&(TraceKind::ResourceCompleted, Origin::Code)),
+        "{steps:?}"
+    );
+    assert!(
+        steps.contains(&(TraceKind::SignalWrite, Origin::ResourceCompletion)),
+        "{steps:?}"
     );
     reset();
 }
