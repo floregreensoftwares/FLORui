@@ -60,6 +60,9 @@ fn overlay_role(role: AccessibleRole) -> Option<Role> {
 pub(crate) struct AccessibilityTree {
     interner: HashMap<FocusPath, u64>,
     next_id: u64,
+    /// How many trees this has built, for tests that check one was not.
+    #[cfg(test)]
+    builds: u64,
 }
 
 impl AccessibilityTree {
@@ -67,7 +70,14 @@ impl AccessibilityTree {
         Self {
             interner: HashMap::new(),
             next_id: 1,
+            #[cfg(test)]
+            builds: 0,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn builds(&self) -> u64 {
+        self.builds
     }
 
     fn stable_id(&mut self, path: &FocusPath) -> AccessKitId {
@@ -92,6 +102,10 @@ impl AccessibilityTree {
         bounds: &NodeBounds,
         interaction: &InteractionState,
     ) -> (TreeUpdate, HashMap<AccessKitId, NodeId>) {
+        #[cfg(test)]
+        {
+            self.builds += 1;
+        }
         // `for="some-id"` can point forward (a label written before its
         // control) or backward -- resolved against every `id`-attributed
         // node up front, not discovered mid-walk.

@@ -36,6 +36,10 @@ pub struct HeadlessOptions {
     pub prefers_dark: bool,
     /// What `prefers-reduced-motion: reduce` reports.
     pub prefers_reduced_motion: bool,
+    /// Whether an assistive technology is listening. The accessibility tree is
+    /// built for a frame only when it is, the way the desktop host does; a
+    /// window nobody listens to builds none.
+    pub assistive_technology: bool,
     /// Providers made reachable through context from the first render on,
     /// for a component that reads something its host supplies.
     pub context: Vec<Box<dyn Fn()>>,
@@ -50,6 +54,7 @@ impl Default for HeadlessOptions {
             canvas_color: Rgba::opaque(0x10, 0x10, 0x14),
             prefers_dark: false,
             prefers_reduced_motion: false,
+            assistive_technology: true,
             context: Vec::new(),
         }
     }
@@ -265,6 +270,7 @@ pub struct HeadlessWindow {
     clipboard: MemoryClipboard,
     canvas_color: Rgba,
     accessibility_tree: crate::accessibility::tree::AccessibilityTree,
+    assistive_technology: bool,
     clock: f64,
 }
 
@@ -304,8 +310,23 @@ impl HeadlessWindow {
             clipboard: MemoryClipboard::new(),
             canvas_color: options.canvas_color,
             accessibility_tree: crate::accessibility::tree::AccessibilityTree::new(),
+            assistive_technology: options.assistive_technology,
             clock: 0.0,
         })
+    }
+
+    /// Whether an assistive technology is listening, which is what decides
+    /// whether a frame builds the accessibility tree.
+    pub fn assistive_technology(&self) -> bool {
+        self.assistive_technology
+    }
+
+    /// Attaches or detaches an assistive technology. The next frame after
+    /// attaching builds the tree from scratch, as the desktop does when a
+    /// screen reader asks for its first one; while detached, a frame builds
+    /// none and [`HeadlessFrame::accessibility`] is empty.
+    pub fn set_assistive_technology(&mut self, listening: bool) {
+        self.assistive_technology = listening;
     }
 
     /// Device pixels per logical pixel.
@@ -516,37 +537,42 @@ impl HeadlessWindow {
             scale_factor as f32,
         );
         let accessibility_span = florui_profile::span(florui_profile::Phase::Accessibility);
-        let (update, reverse) = self
-            .accessibility_tree
-            .build(arena, focused, &bounds, interaction);
-        let accessibility: Vec<A11yNode> = update
-            .nodes
-            .iter()
-            .filter_map(|(id, node)| {
-                let target = *reverse.get(id)?;
-                let rect = node.bounds();
-                Some(A11yNode {
-                    node: target,
-                    role: format!("{:?}", node.role()),
-                    name: node.label().map(str::to_owned),
-                    value: node.value().map(str::to_owned),
-                    bounds: rect.map(|r| {
-                        (
-                            r.x0 as f32,
-                            r.y0 as f32,
-                            (r.x1 - r.x0) as f32,
-                            (r.y1 - r.y0) as f32,
-                        )
-                    }),
-                    focused: focused == Some(target),
-                    disabled: node.is_disabled(),
-                    expanded: node.is_expanded(),
-                    toggled: node
-                        .toggled()
-                        .map(|toggled| format!("{toggled:?}").to_lowercase()),
+        // Only while something listens, as in the desktop host.
+        let accessibility: Vec<A11yNode> = if !self.assistive_technology {
+            Vec::new()
+        } else {
+            let (update, reverse) =
+                self.accessibility_tree
+                    .build(arena, focused, &bounds, interaction);
+            update
+                .nodes
+                .iter()
+                .filter_map(|(id, node)| {
+                    let target = *reverse.get(id)?;
+                    let rect = node.bounds();
+                    Some(A11yNode {
+                        node: target,
+                        role: format!("{:?}", node.role()),
+                        name: node.label().map(str::to_owned),
+                        value: node.value().map(str::to_owned),
+                        bounds: rect.map(|r| {
+                            (
+                                r.x0 as f32,
+                                r.y0 as f32,
+                                (r.x1 - r.x0) as f32,
+                                (r.y1 - r.y0) as f32,
+                            )
+                        }),
+                        focused: focused == Some(target),
+                        disabled: node.is_disabled(),
+                        expanded: node.is_expanded(),
+                        toggled: node
+                            .toggled()
+                            .map(|toggled| format!("{toggled:?}").to_lowercase()),
+                    })
                 })
-            })
-            .collect();
+                .collect()
+        };
         drop(accessibility_span);
         let raster_span = florui_profile::span(florui_profile::Phase::Raster);
         let canvas = florui_paint::paint_to_buffer_with_desktop_extras(
@@ -978,5 +1004,102 @@ mod tests {
         window.click_at((x + w / 2.0) / 2.0, (y + h / 2.0) / 2.0);
         window.settle();
         assert_eq!(text_of(&window, "count"), "1");
+    }
+
+    fn window_listened_to(listening: bool) -> HeadlessWindow {
+        HeadlessWindow::new(
+            CSS,
+            counter,
+            HeadlessOptions {
+                width: 300.0,
+                height: 300.0,
+                assistive_technology: listening,
+                ..HeadlessOptions::default()
+            },
+        )
+        .expect("the stylesheet parses")
+    }
+
+    /// Clicks the button and presses Tab, which changes both the count the
+    /// tree names and the focus it reports.
+    fn interact(window: &mut HeadlessWindow) {
+        let button = first(window, "button");
+        let (x, y) = center(window, button);
+        window.click_at(x, y);
+        window.settle();
+        window.press_key(TestKey::Tab);
+        window.settle();
+    }
+
+    #[test]
+    fn a_window_nobody_listens_to_builds_no_tree() {
+        let mut window = window_listened_to(false);
+        assert!(!window.assistive_technology());
+        for _ in 0..3 {
+            window.update();
+            assert!(window.frame().accessibility.is_empty());
+        }
+        assert_eq!(window.accessibility_tree.builds(), 0);
+
+        window.set_assistive_technology(true);
+        let tree = window.frame().accessibility;
+        assert_eq!(window.accessibility_tree.builds(), 1);
+        assert!(
+            tree.iter().any(|node| node.role == "Button"),
+            "the first tree after attaching describes the page: {tree:?}"
+        );
+    }
+
+    #[test]
+    fn the_first_tree_after_attaching_equals_an_always_on_windows() {
+        let mut always = window_listened_to(true);
+        let mut late = window_listened_to(false);
+        // Both go through the same interaction; only one is being listened to.
+        interact(&mut always);
+        interact(&mut late);
+        always.frame();
+        assert!(late.frame().accessibility.is_empty());
+
+        late.set_assistive_technology(true);
+        let attached = late.frame().accessibility;
+        let expected = always.frame().accessibility;
+        assert!(!expected.is_empty());
+        assert_eq!(attached, expected, "the tree handed over on attaching");
+
+        // And it keeps agreeing as the page changes afterwards.
+        interact(&mut always);
+        interact(&mut late);
+        assert_eq!(late.frame().accessibility, always.frame().accessibility);
+    }
+
+    #[test]
+    fn detaching_stops_the_builds_and_attaching_again_builds_the_current_tree() {
+        let mut window = window_listened_to(true);
+        window.frame();
+        window.frame();
+        assert_eq!(window.accessibility_tree.builds(), 2);
+
+        window.set_assistive_technology(false);
+        interact(&mut window);
+        assert!(window.frame().accessibility.is_empty());
+        assert_eq!(
+            window.accessibility_tree.builds(),
+            2,
+            "nothing built while detached"
+        );
+
+        window.set_assistive_technology(true);
+        let after = window.frame().accessibility;
+        assert_eq!(window.accessibility_tree.builds(), 3);
+        assert!(
+            after.iter().any(|node| node.value.as_deref() == Some("1")),
+            "the tree reflects the click made while detached: {after:?}"
+        );
+        assert!(
+            after
+                .iter()
+                .any(|node| node.role == "Button" && node.focused),
+            "and the focus the Tab key moved while detached: {after:?}"
+        );
     }
 }

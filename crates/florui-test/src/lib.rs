@@ -183,6 +183,14 @@ impl Harness {
         self
     }
 
+    /// Whether an assistive technology is listening from the start (it is by
+    /// default). Without one the window builds no accessibility tree, as the
+    /// desktop does; [`Mounted::set_assistive_technology`] attaches one later.
+    pub fn assistive_technology(mut self, listening: bool) -> Self {
+        self.options.assistive_technology = listening;
+        self
+    }
+
     /// Makes something reachable through `use_context` from the first render
     /// on, the way a host would provide it.
     pub fn context(mut self, provide: impl Fn() + 'static) -> Self {
@@ -313,12 +321,28 @@ impl Mounted {
         self.window.as_mut().expect("the component is mounted")
     }
 
+    /// Attaches or detaches an assistive technology: while one is attached
+    /// every frame builds the accessibility tree, and after attaching, the
+    /// next frame builds it from scratch.
+    pub fn set_assistive_technology(&mut self, listening: bool) {
+        self.window_mut().set_assistive_technology(listening);
+    }
+
     // Queries
 
     /// Every element matching `query`, in document order.
     pub fn all(&mut self, query: Query) -> Vec<Node> {
+        // A query by role reads the accessibility tree, so it builds one for
+        // itself when nothing is listening, and leaves the window as it was.
         let roles = matches!(query, Query::Role(..))
-            .then(|| self.window_mut().frame().accessibility)
+            .then(|| {
+                let window = self.window_mut();
+                let listening = window.assistive_technology();
+                window.set_assistive_technology(true);
+                let tree = window.frame().accessibility;
+                window.set_assistive_technology(listening);
+                tree
+            })
             .unwrap_or_default();
         let (arena, ..) = self.window().runtime().geometry();
         match &query {

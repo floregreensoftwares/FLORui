@@ -281,3 +281,23 @@ fn profiling_a_stretch_of_work_does_not_change_what_is_shown() {
     assert_eq!(expected.rgba, actual.rgba);
     assert_eq!(expected.bounds, actual.bounds);
 }
+
+#[test]
+fn a_query_by_role_still_works_when_no_assistive_technology_is_listening() {
+    let mut mounted = Harness::new(panel)
+        .css(CSS)
+        .viewport(160.0, 120.0)
+        .assistive_technology(false)
+        .mount();
+
+    // The query reads the accessibility tree, so it builds one for itself.
+    let add = mounted.get(by_role_named("Button", "Add"));
+    mounted.click(add);
+    let count = mounted.get(by_class("count"));
+    assert_eq!(mounted.text(count), "1");
+
+    // A window nobody listens to builds none of its own: attaching one later
+    // and querying again finds the same button.
+    mounted.set_assistive_technology(true);
+    assert_eq!(mounted.get(by_role_named("Button", "Add")), add);
+}
