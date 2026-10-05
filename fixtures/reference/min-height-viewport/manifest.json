@@ -1,0 +1,16 @@
+{
+  "id": "min-height-viewport",
+  "description": "A root element with no content and min-height: 100vh fills the 200x120 viewport.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": { "width_css_px": 200, "height_css_px": 120, "device_pixel_ratio": 1.0 },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "app",
+    "css": ".app { min-height: 100vh; background-color: #2f7d6c; }",
+    "children": []
+  },
+  "classification": { "kind": "exact" }
+}

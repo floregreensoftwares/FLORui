@@ -1377,6 +1377,10 @@ fn to_taffy_style(style: Option<&ComputedStyle>) -> taffy::Style {
             width: to_dimension(style.width),
             height: to_dimension(style.height),
         },
+        min_size: Size {
+            width: to_min_size_dimension(style.min_width),
+            height: to_min_size_dimension(style.min_height),
+        },
         max_size: Size {
             width: to_length_percentage_auto(style.max_width),
             height: to_length_percentage_auto(style.max_height),
@@ -1485,6 +1489,16 @@ fn to_dimension(value: Option<f32>) -> Dimension {
     match value {
         Some(length) => Dimension::length(length),
         None => Dimension::auto(),
+    }
+}
+
+/// A `calc()` mixing a length and a percentage has no single Taffy
+/// representation, so it is treated as `auto`.
+fn to_min_size_dimension(value: Option<florui_style::LengthPercentage>) -> LengthPercentageAuto {
+    match value {
+        Some(lp) if lp.percentage == 0.0 => LengthPercentageAuto::length(lp.length),
+        Some(lp) if lp.length == 0.0 => LengthPercentageAuto::percent(lp.percentage),
+        _ => LengthPercentageAuto::auto(),
     }
 }
 
@@ -2757,6 +2771,66 @@ mod tests {
             layouts[&abs].width, 150.0,
             "200px containing block minus 0% left and 25% (50px) right, no explicit width"
         );
+    }
+
+    #[test]
+    fn min_size_stops_a_shrinking_flex_item_and_wins_over_max_size() {
+        let tree: Element = view! {
+            <div class="col">
+                <div class="row">
+                    <div class="a" />
+                    <div class="b" />
+                </div>
+                <div class="c" />
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".col { width: 200px; } \
+             .row { display: flex; width: 200px; height: 40px; } \
+             .a { width: 150px; min-width: 120px; } \
+             .b { width: 150px; } \
+             .c { max-width: 5px; min-width: 8px; min-height: 30px; }",
+        );
+        let col = arena.roots()[0];
+        let [row, c] = arena.children(col)[..] else {
+            panic!("a row and a box");
+        };
+        let [a, b] = arena.children(row)[..] else {
+            panic!("two flex items");
+        };
+        assert_eq!(
+            layouts[&a].width, 120.0,
+            "shrinks to its min-width, not 100"
+        );
+        assert_eq!(layouts[&b].width, 80.0);
+        assert_eq!(layouts[&c].width, 8.0, "min-width wins over max-width");
+        assert_eq!(layouts[&c].height, 30.0);
+    }
+
+    #[test]
+    fn a_percentage_min_size_resolves_against_a_definite_containing_block_only() {
+        let tree: Element = view! {
+            <div class="col">
+                <div class="fixed"><div class="m" /></div>
+                <div class="auto"><div class="i" /></div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".fixed { width: 200px; height: 100px; } \
+             .m { width: 10px; height: 10px; min-width: 50%; min-height: 50%; } \
+             .auto { width: 200px; } \
+             .i { height: 10px; min-height: 50%; }",
+        );
+        let [fixed, auto] = arena.children(arena.roots()[0])[..] else {
+            panic!("two containers");
+        };
+        let m = arena.children(fixed)[0];
+        let i = arena.children(auto)[0];
+        assert_eq!(layouts[&m].width, 100.0);
+        assert_eq!(layouts[&m].height, 50.0);
+        assert_eq!(layouts[&i].height, 10.0, "auto-height parent: ignored");
     }
 
     #[test]

@@ -179,3 +179,6 @@ fixture_test!(
     container_query_nested_matches_chromium,
     "container-query-nested"
 );
+fixture_test!(min_height_viewport_matches_chromium, "min-height-viewport");
+fixture_test!(min_size_clamp_matches_chromium, "min-size-clamp");
+fixture_test!(min_size_percent_matches_chromium, "min-size-percent");

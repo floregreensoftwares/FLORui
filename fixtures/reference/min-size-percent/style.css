@@ -1,0 +1,4 @@
+.fixed { width: 200px; height: 100px; }
+.m { width: 10px; height: 10px; min-width: 50%; min-height: 50%; background-color: #2f7d6c; }
+.auto { width: 200px; }
+.i { height: 10px; min-height: 50%; background-color: #c0392b; }

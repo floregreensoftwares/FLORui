@@ -1,0 +1,4 @@
+.row { display: flex; width: 200px; height: 40px; }
+.a { width: 150px; min-width: 120px; background-color: #2f7d6c; }
+.b { width: 150px; background-color: #808080; }
+.c { max-width: 50px; min-width: 80px; height: 20px; background-color: #c0392b; }

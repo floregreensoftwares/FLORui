@@ -1516,6 +1516,8 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         height: to_optional_length(&position.height),
         max_width: to_max_length(&position.max_width),
         max_height: to_max_length(&position.max_height),
+        min_width: to_min_size(&position.min_width),
+        min_height: to_min_size(&position.min_height),
         margin: Edges {
             top: to_optional_margin(&margin.margin_top),
             right: to_optional_margin(&margin.margin_right),
@@ -2311,6 +2313,20 @@ fn to_max_length(
     use style::values::generics::length::GenericMaxSize;
     match value {
         GenericMaxSize::LengthPercentage(lp) => lp.0.to_length().map(|length| length.px()),
+        _ => None,
+    }
+}
+
+/// `min-width`/`min-height`: `auto` is `None`, anything else keeps its
+/// percentage component for layout to resolve.
+fn to_min_size(
+    value: &style::values::generics::length::GenericSize<
+        style::values::generics::NonNegative<style::values::computed::LengthPercentage>,
+    >,
+) -> Option<FlorLengthPercentage> {
+    use style::values::generics::length::GenericSize;
+    match value {
+        GenericSize::LengthPercentage(lp) => Some(to_length_percentage(&lp.0)),
         _ => None,
     }
 }
