@@ -5,9 +5,15 @@
 
 pub mod alloc;
 pub mod collections;
+#[cfg(windows)]
+pub mod composition;
+pub mod edit_chain;
+#[cfg(windows)]
+pub mod edit_latency;
 pub mod effects;
 pub mod overhead;
 pub mod phases;
+pub mod reload;
 pub mod report;
 pub mod runner;
 pub mod stats;
