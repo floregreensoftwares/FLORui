@@ -41,6 +41,21 @@ pub struct FrameReport {
     pub phases: Vec<PhaseLine>,
     pub counters: Vec<(String, u64)>,
     pub causes: Vec<String>,
+    /// Set when the frame came from a stylesheet reload.
+    pub reload: Option<ReloadReport>,
+}
+
+/// Where the time went between the watcher reporting a stylesheet change and
+/// the frame it caused. It starts at the watcher's report, not at the file
+/// write, and ends when the present call returned, not when the screen changed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReloadReport {
+    /// Watcher report to the frame's first measured work: the event loop
+    /// waking up, reading and parsing the file.
+    pub to_frame_ms: f64,
+    pub frame_ms: f64,
+    /// Watcher report to the present call returning.
+    pub to_present_ms: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -142,6 +157,11 @@ fn report(frame: &FrameProfile, nodes: &[InspectorNode]) -> FrameReport {
             .map(|c| (counter_label(c.counter).to_string(), c.value))
             .collect(),
         causes: cause_lines(frame, nodes),
+        reload: frame.stylesheet_reload.map(|reported| ReloadReport {
+            to_frame_ms: millis(frame.start.saturating_sub(reported)),
+            frame_ms: wall_ms,
+            to_present_ms: millis(frame.end.saturating_sub(reported)),
+        }),
     }
 }
 
@@ -256,6 +276,17 @@ pub fn draw(ui: &mut egui::Ui, model: &ProfileModel) -> Option<ProfileAction> {
         }
         for cause in &frame.causes {
             ui.monospace(cause);
+        }
+        if let Some(reload) = &frame.reload {
+            ui.monospace(format!(
+                "stylesheet reload: {:.2} ms from the file event to the frame, \
+                 {:.2} ms frame, {:.2} ms until present returned",
+                reload.to_frame_ms, reload.frame_ms, reload.to_present_ms
+            ));
+            ui.label(
+                "From the watcher's report, not the file write, to the present call \
+                 returning, not the screen.",
+            );
         }
         ui.separator();
         for line in &frame.phases {
@@ -375,6 +406,7 @@ mod tests {
             }],
             spans: Vec::new(),
             dropped_spans: 0,
+            stylesheet_reload: None,
         }
     }
 
@@ -486,6 +518,25 @@ mod tests {
                 "signal write in Counter, during click on <button> at src/counter.rs:12:9",
             ]
         );
+    }
+
+    #[test]
+    fn a_reload_frame_reports_where_the_time_from_the_file_event_went() {
+        let mut f = frame(1, 10);
+        f.stylesheet_reload = Some(ms(990));
+
+        let report = build(&[f], &[], true, None).frame.unwrap().reload.unwrap();
+
+        assert_eq!(report.to_frame_ms, 10.0);
+        assert_eq!(report.frame_ms, 10.0);
+        assert_eq!(report.to_present_ms, 20.0);
+    }
+
+    #[test]
+    fn a_frame_that_was_not_a_reload_reports_no_reload() {
+        let report = build(&[frame(1, 10)], &[], true, None).frame.unwrap();
+
+        assert_eq!(report.reload, None);
     }
 
     #[test]

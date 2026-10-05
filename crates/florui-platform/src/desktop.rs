@@ -107,7 +107,7 @@ pub(crate) enum UserEvent {
     /// the same reaction: re-render and repaint.
     Dirty(WindowId),
     /// The watched CSS file (see [`run_with_css_reload`]) changed on disk.
-    CssChanged(WindowId),
+    CssChanged(WindowId, std::time::Duration),
     /// A [`crate::WindowControls::close`] call from inside the component
     /// tree, routed back through the event loop so it takes the exact
     /// same close path a real `WindowEvent::CloseRequested` (the OS's own
@@ -540,7 +540,7 @@ fn watch_css_file(
             .any(|p| p.canonicalize().map(|c| c == target).unwrap_or(false));
         if touches_target {
             // The event loop may already be gone; nothing to do if so.
-            let _ = proxy.send_event(UserEvent::CssChanged(window_id));
+            let _ = proxy.send_event(UserEvent::CssChanged(window_id, florui_profile::now()));
         }
     })?;
     watcher.watch(parent, RecursiveMode::NonRecursive)?;
@@ -1682,7 +1682,7 @@ impl WindowState {
     /// (bad syntax, a save-in-progress truncated read) is reported and the
     /// last good stylesheet keeps rendering, the same recovery contract
     /// the native inspector's own fixture preview already established.
-    fn reload_css(&mut self) {
+    fn reload_css(&mut self, reported_at: std::time::Duration) {
         let Some(path) = self.css_path.clone() else {
             return;
         };
@@ -1692,6 +1692,7 @@ impl WindowState {
         match loaded {
             Ok(rules) => {
                 self.runtime.set_rules(rules);
+                florui_profile::note_stylesheet_reload(reported_at);
                 println!(
                     "florui-platform: stylesheet reloaded from {}",
                     path.display()
@@ -2177,9 +2178,9 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                     state.update_and_request_redraw();
                 }
             }
-            UserEvent::CssChanged(id) => {
+            UserEvent::CssChanged(id, reported_at) => {
                 if let Some(state) = self.windows.get_mut(&id) {
-                    state.reload_css();
+                    state.reload_css(reported_at);
                 }
             }
             UserEvent::RequestClose(id) => self.close_if_confirmed(event_loop, id),
