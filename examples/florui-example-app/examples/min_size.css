@@ -1,0 +1,63 @@
+/* The layout applies content-box sizing whatever box-sizing says, so the 24px padding is taken off by hand. */
+.page {
+  display: flex;
+  flex-direction: column;
+  padding: 24px;
+  min-height: calc(100vh - 48px);
+  font-family: sans-serif;
+  color: #f0f0f0;
+}
+
+.main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex-grow: 1;
+}
+
+.title {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.label {
+  font-size: 14px;
+  color: #b0b0b8;
+}
+
+.row {
+  display: flex;
+  width: 360px;
+  height: 48px;
+}
+
+.held {
+  width: 240px;
+  min-width: 220px;
+  background-color: #2f7d6c;
+}
+
+.free {
+  width: 240px;
+  background-color: #606068;
+}
+
+.frame {
+  width: 300px;
+  height: 100px;
+  background-color: #26262c;
+}
+
+.half {
+  width: 10px;
+  height: 10px;
+  min-width: 50%;
+  min-height: 50%;
+  background-color: #c0763a;
+}
+
+.footer {
+  padding: 12px;
+  background-color: #26262c;
+  font-size: 14px;
+}
