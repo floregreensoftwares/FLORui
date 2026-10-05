@@ -1,0 +1,19 @@
+//! What `florui dev` runs: the same app, reloading `src/app.css` from disk
+//! whenever it changes, without resetting the component's state.
+
+use florui_style::Rgba;
+use {{crate}}::app::{App, AppProps};
+
+const CSS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/app.css");
+
+fn main() {
+    if let Err(error) = florui_platform::run_with_css_reload(
+        "{{name}}",
+        CSS_PATH,
+        Rgba::opaque(0x10, 0x10, 0x14),
+        || App(AppProps {}),
+    ) {
+        eprintln!("{{name}}: {error}");
+        std::process::exit(1);
+    }
+}

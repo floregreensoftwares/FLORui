@@ -1,0 +1,13 @@
+use florui_style::Rgba;
+use {{crate}}::app::{App, AppProps};
+
+const CSS: &str = include_str!("app.css");
+
+fn main() {
+    if let Err(error) = florui_platform::run("{{name}}", CSS, Rgba::opaque(0x10, 0x10, 0x14), || {
+        App(AppProps {})
+    }) {
+        eprintln!("{{name}}: {error}");
+        std::process::exit(1);
+    }
+}

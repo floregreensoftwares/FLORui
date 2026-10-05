@@ -68,7 +68,17 @@ cargo run -p florui-cli -- dev --fixture path/to/app.css
 
 The fixture must follow the same limited format. A desktop session is required to open the preview window.
 
-Only `dev` is currently implemented. The CLI also declares `new`, `test`, `compare`, and `build`, but these commands are placeholders and return an error.
+## Create a project
+
+```sh
+cargo run -p florui-cli -- new my-app
+```
+
+writes `my-app/` with a component, its stylesheet, a window entry, a `florui dev` entry that reloads the CSS, a test that clicks the button, and a `florui.config.toml`. Existing files are never overwritten: any collision is listed and nothing is written.
+
+The generated `Cargo.toml` depends on the Florui crates by version, as if they were published. They are not yet, so the project does not resolve from crates.io today. The generated project was built and tested against this checkout by patching the crates to local paths; that check is the ignored test `the_generated_project_builds_and_passes_its_own_test` in `florui-cli`.
+
+Run `florui --help` for the other commands.
 
 ## Format on save
 

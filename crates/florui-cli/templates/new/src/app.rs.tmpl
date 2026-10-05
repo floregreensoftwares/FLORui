@@ -1,0 +1,19 @@
+use florui::prelude::*;
+
+stylesheet!("./app.css");
+
+#[component]
+pub fn App() -> Element {
+    let count = use_signal(|| 0);
+    let clicked = count.clone();
+
+    view! {
+        <div class="app">
+            <h1 class="title">{"Hello from {{name}}"}</h1>
+            <span class="count">{format!("Clicked {} times", count.get())}</span>
+            <button class="increment" onclick={move || clicked.set(clicked.get() + 1)}>
+                {"Click me"}
+            </button>
+        </div>
+    }
+}

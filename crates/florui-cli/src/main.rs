@@ -23,6 +23,7 @@ use florui_devtools::diagnostics::{dim_text, failure, success};
 
 mod doctor;
 mod fmt;
+mod new;
 
 #[derive(Parser)]
 #[command(name = "florui", about = "Florui project CLI")]
@@ -186,7 +187,7 @@ fn main() -> ExitCode {
             Some(fixture) => run_dev(fixture),
             None => run_dev_example(cli.package, example, cli.environment),
         },
-        Command::New { name } => not_implemented(&format!("`florui new {name}`")),
+        Command::New { name } => new::run(&name),
         Command::Test => run_test(),
         Command::Compare {
             fixture,
@@ -1120,11 +1121,6 @@ fn run_build(target: String) -> ExitCode {
         dim_text(&format!("build report: {}", report_path.display()))
     );
     ExitCode::SUCCESS
-}
-
-fn not_implemented(command: &str) -> ExitCode {
-    eprintln!("{command} is not implemented yet.");
-    ExitCode::FAILURE
 }
 
 #[cfg(test)]
