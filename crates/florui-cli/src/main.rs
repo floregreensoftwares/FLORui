@@ -156,6 +156,11 @@ enum Command {
         /// exits 1 if any would.
         #[arg(long)]
         check: bool,
+        /// Format source read from stdin as if it were this file and print
+        /// only the result to stdout; diagnostics go to stderr. The path
+        /// selects the `rustfmt` configuration and edition.
+        #[arg(long, value_name = "PATH", conflicts_with = "paths")]
+        stdin_filepath: Option<PathBuf>,
     },
 }
 
@@ -214,7 +219,15 @@ fn main() -> ExitCode {
             json,
             strict,
         }),
-        Command::Fmt { paths, check } => fmt::run(fmt::Options { paths, check }),
+        Command::Fmt {
+            paths,
+            check,
+            stdin_filepath,
+        } => fmt::run(fmt::Options {
+            paths,
+            check,
+            stdin_filepath,
+        }),
     }
 }
 
