@@ -59,7 +59,7 @@ fn row(i: usize) -> Element {
     )
 }
 
-fn list(name: &str, n: usize) -> Element {
+pub(crate) fn list(name: &str, n: usize) -> Element {
     Element::node("div", class(name), (0..n).map(row).collect())
 }
 
@@ -112,7 +112,7 @@ fn card(i: usize) -> Element {
     )
 }
 
-fn window(css: &str, root: impl Fn() -> Element + 'static) -> HeadlessWindow {
+pub(crate) fn window(css: &str, root: impl Fn() -> Element + 'static) -> HeadlessWindow {
     HeadlessWindow::new(css, root, HeadlessOptions::default())
         .expect("the benchmark stylesheet is valid")
 }
@@ -140,7 +140,7 @@ fn scroll_window(n: usize) -> HeadlessWindow {
 
 /// Asserts `window` paints differently after `act`, so a workload that is meant
 /// to move something cannot quietly measure a window where nothing moved.
-fn assert_changes_the_frame(
+pub(crate) fn assert_changes_the_frame(
     window: &mut HeadlessWindow,
     what: &str,
     act: impl FnOnce(&mut HeadlessWindow),
@@ -213,6 +213,7 @@ pub fn all() -> Vec<Workload> {
     let mut all = frame_pipeline();
     all.extend(crate::collections::all());
     all.extend(crate::effects::all());
+    all.extend(crate::reload::all());
     all
 }
 

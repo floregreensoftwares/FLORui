@@ -296,6 +296,15 @@ struct Recorder {
 thread_local! {
     static RECORDING: Cell<bool> = const { Cell::new(false) };
     static RECORDER: RefCell<Recorder> = RefCell::new(Recorder::default());
+    static FRAME_SINK: Cell<Option<fn(&FrameProfile)>> = const { Cell::new(None) };
+}
+
+/// Calls `sink` with each frame the moment it finishes, on this thread, after
+/// it has been recorded. It runs outside the recorder, so it may read frames
+/// from it. `None` removes it. A tool uses this to see a frame when it ends
+/// instead of when the next one starts.
+pub fn set_frame_sink(sink: Option<fn(&FrameProfile)>) {
+    FRAME_SINK.with(|s| s.set(sink));
 }
 
 /// Begins measuring on this thread. With `detail`, each span is kept with its
@@ -457,11 +466,9 @@ pub fn finish_frame(causes: Vec<Cause>) {
     if !is_recording() {
         return;
     }
-    RECORDER.with(|r| {
+    let finished = RECORDER.with(|r| {
         let mut r = r.borrow_mut();
-        let Some(start) = r.frame_start.take() else {
-            return;
-        };
+        let start = r.frame_start.take()?;
         let phases = Phase::ALL
             .iter()
             .filter(|p| r.totals[p.index()].0 > 0)
@@ -497,8 +504,13 @@ pub fn finish_frame(causes: Vec<Cause>) {
         if r.frames.len() == RETAINED_FRAMES {
             r.frames.pop_front();
         }
+        let for_sink = FRAME_SINK.with(Cell::get).map(|_| frame.clone());
         r.frames.push_back(frame);
+        for_sink
     });
+    if let (Some(frame), Some(sink)) = (finished, FRAME_SINK.with(Cell::get)) {
+        sink(&frame);
+    }
 }
 
 #[cfg(test)]
@@ -521,6 +533,37 @@ mod tests {
         }
         finish_frame(Vec::new());
         assert!(frames().is_empty());
+    }
+
+    thread_local! {
+        static SEEN: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn remember(frame: &FrameProfile) {
+        // Reads the recorder from inside the sink, which must be allowed.
+        let kept = last_frame().map(|f| f.index);
+        assert_eq!(kept, Some(frame.index), "the frame is recorded first");
+        SEEN.with(|seen| seen.borrow_mut().push(frame.index));
+    }
+
+    #[test]
+    fn a_frame_sink_sees_each_frame_when_it_ends_and_can_be_removed() {
+        SEEN.with(|seen| seen.borrow_mut().clear());
+        start(false);
+        set_frame_sink(Some(remember));
+        for _ in 0..2 {
+            let _span = span(Phase::Cascade);
+            drop(_span);
+            finish_frame(Vec::new());
+        }
+        set_frame_sink(None);
+        {
+            let _span = span(Phase::Cascade);
+        }
+        finish_frame(Vec::new());
+
+        assert_eq!(SEEN.with(|seen| seen.borrow().clone()), [0, 1]);
+        assert_eq!(frames().len(), 3);
     }
 
     #[test]
