@@ -119,11 +119,41 @@ paint of the scene; the engine repaints everything, so a moving background costs
 one. The heap columns are the intermediate memory an effect needs. These are CPU times of the
 headless path: GPU time and presentation are not included.
 
+## Edit to present
+
+`florui-bench edit-latency [--rows N] [--rounds N] [--write in-place|atomic] [--out-dir DIR]` opens a
+real window in a child process, rewrites its stylesheet and reports how long it takes until the new
+color is composed on the screen, split into intervals that add up to the total:
+
+1. the file written to the watcher reporting it;
+2. the watcher's report to the frame's first measured work (the event loop waking up, reading and
+   parsing the file);
+3. the frame itself: restyle, layout, raster and the present call;
+4. the present call returning to the compositor presenting the frame.
+
+All of it is on the QPC clock. The window process prints each frame's watcher stamp, start and end
+(through the profiler's frame sink); the compositor's time comes from DXGI desktop duplication, which
+stamps every frame it presents. A GDI pixel read was rejected: each read costs one display frame, so
+it could not say when the frame was presented. `--write atomic` writes a temporary file and renames
+it, as many editors do. The first edit after the window opens is reported apart. `--unchanged`
+rewrites the same stylesheet while waiting for a color that never comes: every edit must time out, which
+shows the tool does not report a latency for nothing.
+
+It needs Windows, a release build with `--features profiling`, and a desktop session nobody is using:
+the window is kept on top and one pixel of it is watched, so something covering it, or a second monitor
+it straddles, breaks the run (it says so). The pixel is read on the monitor that holds the window.
+
+What it does not see: display scan-out and panel response, and GPU time. The engine's own share is the
+headless `css_reload_100_rows` and `css_reload_1k_rows` workloads (parse, install, update, paint after a
+stylesheet swap that changes layout); they build the accessibility tree too, which the window does not
+unless a screen reader is attached.
+
 ## What it does not measure
 
-The workloads run in a headless window: update, layout, paint and the
-accessibility tree, all CPU work. Presentation and GPU time are not included
-and are measured separately. Results are for the machine in the report; compare
+The other workloads run in a headless window: update, layout, paint and the
+accessibility tree, all CPU work. Presentation and GPU time are not included in
+them; `edit-latency` above covers presentation to the compositor for a
+stylesheet edit only. Results are for the machine in the report; compare
 only runs from the same machine.
 
 ## Recorded baselines
@@ -158,5 +188,18 @@ engine improves.
   overlapping panels 34.2 ms, and at a display scale of 2 128 ms against 14.7 translucent; `filter:
   blur(8px)` on the element costs 41.2 ms and the color filter chain 22.8 ms. Between-process
   spread is 4% to 19%, so compare ratios within the report, not a single absolute figure.
+
+- `edit-latency-65e028d`: four `edit-latency` runs (1 and 1,000 rows, in-place and atomic writes, 60
+  edits each after a cold one) on a 180 Hz monitor, release with the profiler idle, on the commit that
+  adds the tool (a rebase can rewrite its hash; the tree was clean). From the file write
+  to the composed frame: 13.7 ms in place and 14.6 ms atomic for one row, 37.0 and 40.3 ms for 1,000
+  rows. The frame is 4.4 to 4.5 ms for one row and 28.5 to 28.7 for 1,000; the present call returning
+  to composition is 4.9 to 5.9 ms, about one refresh interval (5.56 ms); the file write to the
+  watcher's report is 1.3 ms in place and 2.8 to 3.1 ms atomic. One of the 60 in-place edits over
+  1,000 rows showed an intermediate color. A save reloads the stylesheet twice, not once: a 50 ms
+  sleep in the reload (not committed) added about 100 ms to the total in both write modes. Display
+  scan-out is not included.
+- `css-reload-65e028d`: the engine's share, headless, 5 processes: 9.8 ms for 100 rows and 49.0 ms for
+  1,000 (it builds the accessibility tree, which the window does not without a screen reader).
 
 Repeat a measurement on a quiet machine before trusting a small difference.
