@@ -24,8 +24,9 @@ use crate::composition::{
     Composition, find_window, keep_on_top, make_process_dpi_aware, qpc, qpc_frequency,
 };
 use crate::edit_chain::{
-    ChildFrame, EditLatencyReport, Rgb, chain, color_for_round, format_frame_line,
-    parse_frame_line, render, same_color, stylesheet, summarize_samples,
+    ChildFrame, EditLatencyReport, Rgb, Sample, chain, color_for_round, compare_samples,
+    format_frame_line, parse_frame_line, render, render_comparison, same_color, stylesheet,
+    summarize_samples,
 };
 use crate::report::{BuildInfo, capture_environment};
 
@@ -343,4 +344,106 @@ pub fn run(options: &Options) -> Result<(), String> {
             .map_err(|e| format!("could not write the report: {e}"))?;
     }
     Ok(())
+}
+
+pub struct AbOptions {
+    pub a: PathBuf,
+    pub b: PathBuf,
+    pub repeats: usize,
+    pub rounds: usize,
+    pub rows: usize,
+    pub atomic: bool,
+    pub threshold: f64,
+    pub out_dir: PathBuf,
+}
+
+fn build_of(exe: &Path) -> Result<BuildInfo, String> {
+    let output = Command::new(exe)
+        .arg("mode")
+        .output()
+        .map_err(|e| format!("could not run {}: {e}", exe.display()))?;
+    Ok(BuildInfo::parse(
+        String::from_utf8_lossy(&output.stdout).trim(),
+    ))
+}
+
+/// Alternates two builds of this tool, each measuring its own window, and
+/// compares every interval of the pooled edits. The order flips each repeat so
+/// warm-up and thermal drift affect both builds alike.
+pub fn ab(options: &AbOptions) -> Result<(), String> {
+    let mode = if options.atomic { "atomic" } else { "in-place" };
+    let report_name = format!("edit-latency-{}-rows-{mode}.json", options.rows);
+    let (mut a_samples, mut b_samples): (Vec<Sample>, Vec<Sample>) = (Vec::new(), Vec::new());
+    let (mut a_timeouts, mut b_timeouts) = (0, 0);
+    let mut intermediate = [0usize; 2];
+    for repeat in 0..options.repeats {
+        for turn in 0..2 {
+            let side = if repeat % 2 == 0 { turn } else { 1 - turn };
+            let exe = if side == 0 { &options.a } else { &options.b };
+            let dir = options
+                .out_dir
+                .join(format!("{}-{repeat}", ["a", "b"][side]));
+            eprintln!(
+                "round {} of {}: build {}",
+                repeat + 1,
+                options.repeats,
+                ["A", "B"][side]
+            );
+            let status = Command::new(exe)
+                .arg("edit-latency")
+                .args(["--rounds", &options.rounds.to_string()])
+                .args(["--rows", &options.rows.to_string()])
+                .args(["--write", mode])
+                .arg("--out-dir")
+                .arg(&dir)
+                .stdout(Stdio::null())
+                .status()
+                .map_err(|e| format!("could not run {}: {e}", exe.display()))?;
+            if !status.success() {
+                return Err(format!("{} failed: {status}", exe.display()));
+            }
+            let text = std::fs::read_to_string(dir.join(&report_name))
+                .map_err(|e| format!("no report from {}: {e}", exe.display()))?;
+            let report: EditLatencyReport = serde_json::from_str(&text)
+                .map_err(|e| format!("unreadable report from {}: {e}", exe.display()))?;
+            let (samples, timeouts) = if side == 0 {
+                (&mut a_samples, &mut a_timeouts)
+            } else {
+                (&mut b_samples, &mut b_timeouts)
+            };
+            samples.extend(report.samples);
+            *timeouts += report.timeouts;
+            intermediate[side] += report.edits_with_an_intermediate_frame;
+        }
+    }
+
+    let (a_build, b_build) = (build_of(&options.a)?, build_of(&options.b)?);
+    let comparisons = compare_samples(&a_samples, &b_samples, options.threshold);
+    let mut text = render_comparison("A", "B", &comparisons, options.threshold);
+    text.push_str(&format!(
+        "\n- A: `{}`{} and B: `{}`{}, {} rows, {mode} writes, {} repeats of {} edits each ({} and {} edits pooled)\n",
+        a_build.commit,
+        if a_build.uncommitted_changes { " (uncommitted changes)" } else { "" },
+        b_build.commit,
+        if b_build.uncommitted_changes { " (uncommitted changes)" } else { "" },
+        options.rows,
+        options.repeats,
+        options.rounds,
+        a_samples.len(),
+        b_samples.len(),
+    ));
+    text.push_str(&format!(
+        "- Edits that timed out: A {a_timeouts}, B {b_timeouts}; that showed an intermediate frame: A {}, B {}\n",
+        intermediate[0], intermediate[1]
+    ));
+    println!("{text}");
+    std::fs::create_dir_all(&options.out_dir)
+        .map_err(|e| format!("could not create {}: {e}", options.out_dir.display()))?;
+    std::fs::write(
+        options
+            .out_dir
+            .join(format!("edit-latency-ab-{}-rows-{mode}.md", options.rows)),
+        &text,
+    )
+    .map_err(|e| format!("could not write the comparison: {e}"))
 }

@@ -18,6 +18,8 @@ florui-bench: reproducible performance baselines
   florui-bench phases NAME [--ops N] [--out FILE.md]   (where a frame's time goes, from the profiler)
   florui-bench edit-latency [--rows N] [--rounds N] [--write in-place|atomic] [--out-dir DIR]
                                           (stylesheet save to composed frame, Windows; needs --features profiling)
+  florui-bench edit-latency-ab --a EXE --b EXE [--repeats N] [--rounds N] [--rows N] [--write in-place|atomic] [--threshold 0.05] [--out-dir DIR]
+                                          (alternates two builds of edit-latency and compares every interval)
   florui-bench overhead [--out FILE.md]   (what one profiler span and counter cost in each mode)
   florui-bench mode                       (this build's profile and profiler mode)
   florui-bench measure NAME [--heap]      (one process's measurement; used by the commands above)
@@ -254,6 +256,32 @@ fn edit_latency_command(args: &[String]) -> Result<(), String> {
     })
 }
 
+#[cfg(windows)]
+fn edit_latency_ab_command(args: &[String]) -> Result<(), String> {
+    let atomic = match option(args, "--write").as_deref() {
+        None | Some("in-place") => false,
+        Some("atomic") => true,
+        Some(other) => return Err(format!("--write is in-place or atomic, not {other}")),
+    };
+    florui_bench::edit_latency::ab(&florui_bench::edit_latency::AbOptions {
+        a: PathBuf::from(option(args, "--a").ok_or("edit-latency-ab needs --a EXE")?),
+        b: PathBuf::from(option(args, "--b").ok_or("edit-latency-ab needs --b EXE")?),
+        repeats: number(args, "--repeats", 3)?,
+        rounds: number(args, "--rounds", 40)?,
+        rows: number(args, "--rows", 1)?,
+        atomic,
+        threshold: number(args, "--threshold", 0.05)?,
+        out_dir: PathBuf::from(
+            option(args, "--out-dir").unwrap_or_else(|| "edit-latency-ab".into()),
+        ),
+    })
+}
+
+#[cfg(not(windows))]
+fn edit_latency_ab_command(_: &[String]) -> Result<(), String> {
+    edit_latency_command(&[])
+}
+
 /// The window process `edit-latency` starts; not meant to be run by hand.
 #[cfg(windows)]
 fn edit_latency_window_command(args: &[String]) -> Result<(), String> {
@@ -289,6 +317,7 @@ fn main() -> ExitCode {
         Some("overhead") => overhead_command(&args[1..]),
         Some("phases") => phases_command(&args[1..]),
         Some("edit-latency") => edit_latency_command(&args[1..]),
+        Some("edit-latency-ab") => edit_latency_ab_command(&args[1..]),
         Some("edit-latency-window") => edit_latency_window_command(&args[1..]),
         Some("mode") => {
             println!("{}", florui_bench::report::BuildInfo::this_build().line());

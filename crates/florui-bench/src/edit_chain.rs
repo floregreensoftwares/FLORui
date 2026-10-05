@@ -151,20 +151,22 @@ pub struct EditLatencyReport {
     pub samples: Vec<Sample>,
 }
 
+type Pick = fn(&Sample) -> f64;
+
+const COLUMNS: [(&str, Pick); 5] = [
+    ("file write to watcher report", |s| s.write_to_event_ms),
+    ("watcher report to frame start", |s| s.event_to_frame_ms),
+    ("frame (restyle, layout, raster, present call)", |s| {
+        s.frame_ms
+    }),
+    ("present call returned to composed", |s| {
+        s.present_to_composed_ms
+    }),
+    ("total, file write to composed", |s| s.total_ms),
+];
+
 pub fn summarize_samples(samples: &[Sample]) -> Vec<IntervalSummary> {
-    type Pick = fn(&Sample) -> f64;
-    let columns: [(&str, Pick); 5] = [
-        ("file write to watcher report", |s| s.write_to_event_ms),
-        ("watcher report to frame start", |s| s.event_to_frame_ms),
-        ("frame (restyle, layout, raster, present call)", |s| {
-            s.frame_ms
-        }),
-        ("present call returned to composed", |s| {
-            s.present_to_composed_ms
-        }),
-        ("total, file write to composed", |s| s.total_ms),
-    ];
-    columns
+    COLUMNS
         .iter()
         .filter_map(|(name, pick)| {
             let values: Vec<f64> = samples.iter().map(pick).collect();
@@ -174,6 +176,74 @@ pub fn summarize_samples(samples: &[Sample]) -> Vec<IntervalSummary> {
             })
         })
         .collect()
+}
+
+/// One interval of two sample sets, `a` the baseline and `b` the candidate.
+#[derive(Debug, Clone)]
+pub struct IntervalComparison {
+    pub name: String,
+    pub a_median_ms: f64,
+    pub b_median_ms: f64,
+    pub comparison: Option<stats::Comparison>,
+}
+
+pub fn compare_samples(a: &[Sample], b: &[Sample], threshold: f64) -> Vec<IntervalComparison> {
+    COLUMNS
+        .iter()
+        .filter_map(|(name, pick)| {
+            let (a, b): (Vec<f64>, Vec<f64>) =
+                (a.iter().map(pick).collect(), b.iter().map(pick).collect());
+            Some(IntervalComparison {
+                name: (*name).to_string(),
+                a_median_ms: stats::summarize(&a)?.median,
+                b_median_ms: stats::summarize(&b)?.median,
+                comparison: stats::compare(&a, &b, threshold),
+            })
+        })
+        .collect()
+}
+
+pub fn render_comparison(
+    a_label: &str,
+    b_label: &str,
+    comparisons: &[IntervalComparison],
+    threshold: f64,
+) -> String {
+    let mut out = format!("# Edit to present: {b_label} against {a_label}\n\n");
+    out.push_str(&format!(
+        "- A change counts when it exceeds {:.0}% and its 95% bootstrap interval excludes zero.\n\n",
+        threshold * 100.0
+    ));
+    out.push_str(
+        "| Interval | A median (ms) | B median (ms) | B - A (ms) | Change | 95% interval | Verdict |\n\
+         | --- | ---: | ---: | ---: | ---: | ---: | --- |\n",
+    );
+    for c in comparisons {
+        let (change, interval, verdict) = match &c.comparison {
+            Some(cmp) => (
+                format!("{:+.1}%", cmp.relative_change * 100.0),
+                format!(
+                    "{:+.1}% to {:+.1}%",
+                    cmp.interval.0 * 100.0,
+                    cmp.interval.1 * 100.0
+                ),
+                match cmp.verdict {
+                    stats::Verdict::Faster => "faster",
+                    stats::Verdict::Slower => "slower",
+                    stats::Verdict::NoDifference => "no difference",
+                },
+            ),
+            None => ("n/a".into(), "n/a".into(), "n/a"),
+        };
+        out.push_str(&format!(
+            "| {} | {:.2} | {:.2} | {:+.2} | {change} | {interval} | {verdict} |\n",
+            c.name,
+            c.a_median_ms,
+            c.b_median_ms,
+            c.b_median_ms - c.a_median_ms
+        ));
+    }
+    out
 }
 
 pub fn render(report: &EditLatencyReport) -> String {
@@ -300,6 +370,47 @@ mod tests {
     #[test]
     fn the_stylesheet_carries_the_color_the_screen_is_compared_against() {
         assert!(stylesheet((200, 30, 30)).contains("background-color: #c81e1e"));
+    }
+
+    fn sample_with_frame(frame_ms: f64) -> Sample {
+        Sample {
+            write_to_event_ms: 1.0,
+            event_to_frame_ms: 2.0,
+            frame_ms,
+            present_to_composed_ms: 5.0,
+            total_ms: 8.0 + frame_ms,
+        }
+    }
+
+    #[test]
+    fn a_comparison_names_the_interval_that_moved_and_leaves_the_others_alone() {
+        let jitter = |base: f64, i: usize| base + (i % 5) as f64 * 0.1;
+        let a: Vec<Sample> = (0..40)
+            .map(|i| sample_with_frame(jitter(10.0, i)))
+            .collect();
+        let b: Vec<Sample> = (0..40)
+            .map(|i| sample_with_frame(jitter(20.0, i)))
+            .collect();
+
+        let comparisons = compare_samples(&a, &b, 0.05);
+        let verdict = |name: &str| {
+            comparisons
+                .iter()
+                .find(|c| c.name.starts_with(name))
+                .and_then(|c| c.comparison.as_ref())
+                .map(|c| c.verdict)
+        };
+
+        assert_eq!(verdict("frame"), Some(stats::Verdict::Slower));
+        assert_eq!(verdict("total"), Some(stats::Verdict::Slower));
+        assert_eq!(
+            verdict("watcher report"),
+            Some(stats::Verdict::NoDifference)
+        );
+        assert_eq!(verdict("present call"), Some(stats::Verdict::NoDifference));
+        let table = render_comparison("a", "b", &comparisons, 0.05);
+        assert!(table.contains("| slower |"), "{table}");
+        assert!(table.contains("+10."), "{table}");
     }
 
     #[test]
