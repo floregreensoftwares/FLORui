@@ -1,0 +1,21 @@
+use florui_test::{Harness, by_class};
+use {{crate}}::app::{App, AppProps};
+
+const CSS: &str = include_str!("../src/app.css");
+
+#[test]
+fn clicking_the_button_counts() {
+    let mut mounted = Harness::new(|| App(AppProps {}))
+        .css(CSS)
+        .viewport(320.0, 200.0)
+        .mount();
+
+    let count = mounted.get(by_class("count"));
+    assert_eq!(mounted.text(count), "Clicked 0 times");
+
+    let button = mounted.get(by_class("increment"));
+    mounted.click(button);
+
+    let count = mounted.get(by_class("count"));
+    assert_eq!(mounted.text(count), "Clicked 1 times");
+}
