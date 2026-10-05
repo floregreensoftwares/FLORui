@@ -1,0 +1,21 @@
+{
+  "id": "min-size-clamp",
+  "description": "A min-width keeps a shrinking flex item from going below it, and a min-width larger than max-width wins over it.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": { "width_css_px": 200, "height_css_px": 70, "device_pixel_ratio": 1.0 },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "css": ".row { display: flex; width: 200px; height: 40px; } .a { width: 150px; min-width: 120px; background-color: #2f7d6c; } .b { width: 150px; background-color: #808080; } .c { max-width: 50px; min-width: 80px; height: 20px; background-color: #c0392b; }",
+    "children": [
+      { "tag": "div", "class": "row", "css": "", "children": [
+        { "tag": "div", "class": "a", "css": "" },
+        { "tag": "div", "class": "b", "css": "" }
+      ] },
+      { "tag": "div", "class": "c", "css": "" }
+    ]
+  },
+  "classification": { "kind": "exact" }
+}

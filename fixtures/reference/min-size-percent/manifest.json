@@ -1,0 +1,22 @@
+{
+  "id": "min-size-percent",
+  "description": "A percentage min-width/min-height resolves against a definite containing block, and a percentage min-height against an auto-height one is ignored.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": { "width_css_px": 200, "height_css_px": 120, "device_pixel_ratio": 1.0 },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "css": ".fixed { width: 200px; height: 100px; } .m { width: 10px; height: 10px; min-width: 50%; min-height: 50%; background-color: #2f7d6c; } .auto { width: 200px; } .i { height: 10px; min-height: 50%; background-color: #c0392b; }",
+    "children": [
+      { "tag": "div", "class": "fixed", "css": "", "children": [
+        { "tag": "div", "class": "m", "css": "" }
+      ] },
+      { "tag": "div", "class": "auto", "css": "", "children": [
+        { "tag": "div", "class": "i", "css": "" }
+      ] }
+    ]
+  },
+  "classification": { "kind": "exact" }
+}

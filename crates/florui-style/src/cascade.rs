@@ -332,6 +332,13 @@ pub struct ComputedStyle {
     pub max_width: Option<f32>,
     /// See [`Self::max_width`].
     pub max_height: Option<f32>,
+    /// `None` means `auto`; a percentage is kept unresolved, like
+    /// [`Self::inset`], because its basis is the containing block that only
+    /// layout knows. For a flex item `auto` is the content-based minimum,
+    /// which the layout engine applies itself.
+    pub min_width: Option<LengthPercentage>,
+    /// See [`Self::min_width`].
+    pub min_height: Option<LengthPercentage>,
     /// Each edge is `None` for an explicit `auto` (enabling the usual
     /// auto-margin centering behavior), `Some(0.0)` when nothing set it.
     pub margin: Edges<Option<f32>>,
@@ -568,6 +575,8 @@ impl ComputedStyle {
             height: _,
             max_width: _,
             max_height: _,
+            min_width: _,
+            min_height: _,
             margin: _,
             padding: _,
             font_size: _,
@@ -1773,6 +1782,47 @@ mod tests {
 
         let (arena, computed) = styles(&tree, ".a { max-width: none; }", &InteractionState::new());
         assert_eq!(computed[&arena.roots()[0]].max_width, None);
+    }
+
+    #[test]
+    fn min_size_keeps_lengths_and_percentages_and_treats_auto_as_none() {
+        let tree: Element = view! { <div class="a" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".a { min-width: 120px; min-height: 25%; }",
+            &InteractionState::new(),
+        );
+        let style = &computed[&arena.roots()[0]];
+        assert_eq!(
+            style.min_width,
+            Some(LengthPercentage {
+                length: 120.0,
+                percentage: 0.0
+            })
+        );
+        assert_eq!(
+            style.min_height,
+            Some(LengthPercentage {
+                length: 0.0,
+                percentage: 0.25
+            })
+        );
+
+        let (arena, computed) = styles(
+            &tree,
+            ".a { min-width: calc(50% + 10px); }",
+            &InteractionState::new(),
+        );
+        assert_eq!(
+            computed[&arena.roots()[0]].min_width,
+            Some(LengthPercentage {
+                length: 10.0,
+                percentage: 0.5
+            })
+        );
+
+        let (arena, computed) = styles(&tree, ".a { min-width: auto; }", &InteractionState::new());
+        assert_eq!(computed[&arena.roots()[0]].min_width, None);
     }
 
     #[test]
