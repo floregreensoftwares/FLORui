@@ -70,6 +70,26 @@ The fixture must follow the same limited format. A desktop session is required t
 
 Only `dev` is currently implemented. The CLI also declares `new`, `test`, `compare`, and `build`, but these commands are placeholders and return an error.
 
+## Format on save
+
+`florui fmt --stdin-filepath <path>` reads a Rust source file from stdin, prints only the formatted source to stdout and sends every diagnostic to stderr (exit code 2 on failure, so an editor keeps the buffer as it was). The path selects the `rustfmt.toml` and the edition of the package that owns the file.
+
+In VS Code, with the [Custom Local Formatters](https://marketplace.visualstudio.com/items?itemName=jkillian.custom-local-formatters) extension:
+
+```jsonc
+{
+  "customLocalFormatters.formatters": [
+    { "command": "florui fmt --stdin-filepath ${file}", "languages": ["rust"] }
+  ],
+  "[rust]": {
+    "editor.defaultFormatter": "jkillian.custom-local-formatters",
+    "editor.formatOnSave": true
+  }
+}
+```
+
+Checked on Windows with VS Code and version 0.2.0 of that extension: saving a file with an unformatted `view!` reformats it using the project's `rustfmt.toml`, and a file that does not parse is saved unchanged with the formatter's error shown. The command is run through the shell, so `florui` must be on `PATH`. Other editors and `rust-analyzer`'s `overrideCommand` (which does not pass the file path) were not tried.
+
 ## Direction
 
 - **CSS fidelity:** implement style, layout, text, and painting with explicit compatibility coverage and reproducible visual comparisons.
