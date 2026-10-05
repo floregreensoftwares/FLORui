@@ -123,7 +123,14 @@ impl std::error::Error for FormatError {}
 /// other's work (confirmed empirically: `rustfmt` leaves an unrecognized
 /// macro's own token stream completely untouched, so ordering this
 /// crate's own pass before `rustfmt` is safe).
-pub fn format_source(original_source: &str, edition: &str) -> Result<FormatOutcome, FormatError> {
+///
+/// `config_dir` is where `rustfmt` looks for `rustfmt.toml` (normally the
+/// formatted file's own directory); `None` uses the process's.
+pub fn format_source(
+    original_source: &str,
+    edition: &str,
+    config_dir: Option<&Path>,
+) -> Result<FormatOutcome, FormatError> {
     // Every byte offset this function computes (spans, splice ranges,
     // line/indent lookups) must agree with whatever string they're
     // taken against. Rather than track two parallel line-ending
@@ -175,7 +182,7 @@ pub fn format_source(original_source: &str, edition: &str) -> Result<FormatOutco
         rewritten.replace_range(range, &replacement);
     }
 
-    let mut output = run_rustfmt(&rewritten, edition).map_err(FormatError::Rustfmt)?;
+    let mut output = run_rustfmt(&rewritten, edition, config_dir).map_err(FormatError::Rustfmt)?;
     if uses_crlf {
         output = output.replace('\n', "\r\n");
     }
@@ -402,14 +409,21 @@ fn slice(source: &str, span: proc_macro2::Span) -> &str {
 /// Runs the real `rustfmt` binary over `source` via stdin/stdout —
 /// never a hand-rolled Rust printer for anything outside a `view!` body,
 /// per this crate's own doc.
-fn run_rustfmt(source: &str, edition: &str) -> Result<String, String> {
+fn run_rustfmt(source: &str, edition: &str, config_dir: Option<&Path>) -> Result<String, String> {
     use std::io::Write;
 
-    let mut child = Command::new("rustfmt")
+    let mut command = Command::new("rustfmt");
+    command
         .args(["--emit", "stdout", "--quiet", "--edition", edition])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    // rustfmt looks its configuration up from the working directory when
+    // the source comes over stdin.
+    if let Some(dir) = config_dir {
+        command.current_dir(dir);
+    }
+    let mut child = command
         .spawn()
         .map_err(|error| format!("could not run rustfmt: {error}"))?;
 
@@ -445,7 +459,20 @@ mod tests {
     use super::*;
 
     fn format(source: &str) -> FormatOutcome {
-        format_source(source, "2024").expect("well-formed test input should always format")
+        format_source(source, "2024", None).expect("well-formed test input should always format")
+    }
+
+    #[test]
+    fn rustfmt_reads_the_configuration_of_the_given_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("rustfmt.toml"), "hard_tabs = true\n").unwrap();
+        let source = "fn f() {\n    let x = 1;\n}\n";
+
+        let configured = format_source(source, "2024", Some(dir.path())).unwrap();
+        let plain = format_source(source, "2024", None).unwrap();
+
+        assert_eq!(configured.output, "fn f() {\n\tlet x = 1;\n}\n");
+        assert_eq!(plain.output, source);
     }
 
     #[test]

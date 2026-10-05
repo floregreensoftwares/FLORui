@@ -14,10 +14,16 @@ pub struct Options {
     /// own no-argument form.
     pub paths: Vec<PathBuf>,
     pub check: bool,
+    /// Format stdin as if it were this file: its directory selects the
+    /// `rustfmt` configuration and its package the edition.
+    pub stdin_filepath: Option<PathBuf>,
 }
 
 pub fn run(options: Options) -> ExitCode {
-    let workspace = workspace_metadata();
+    if let Some(path) = &options.stdin_filepath {
+        return run_stdin(path, options.check);
+    }
+    let workspace = workspace_metadata(None);
     let edition = workspace
         .as_ref()
         .map(|meta| meta.edition.clone())
@@ -76,7 +82,11 @@ pub fn run(options: Options) -> ExitCode {
                 return ExitCode::from(2);
             }
         };
-        match florui_fmt::format_source(&original, &edition) {
+        match florui_fmt::format_source(
+            &original,
+            &edition,
+            path.parent().filter(|dir| !dir.as_os_str().is_empty()),
+        ) {
             Ok(outcome) => planned.push(Planned {
                 path: path.clone(),
                 original,
@@ -207,13 +217,28 @@ struct WorkspaceMetadata {
     /// spurious reformatting this crate would otherwise misreport as
     /// this tool's own decision rather than an edition mismatch.
     edition: String,
+    /// Each package's directory and edition, for resolving a single file.
+    packages: Vec<(PathBuf, String)>,
 }
 
-fn workspace_metadata() -> Option<WorkspaceMetadata> {
-    let output = ChildCommand::new("cargo")
-        .args(["metadata", "--format-version", "1", "--no-deps"])
-        .output()
-        .ok()?;
+impl WorkspaceMetadata {
+    fn edition_for(&self, file: &Path) -> &str {
+        self.packages
+            .iter()
+            .filter(|(dir, _)| file.starts_with(dir))
+            .max_by_key(|(dir, _)| dir.components().count())
+            .map_or(self.edition.as_str(), |(_, edition)| edition.as_str())
+    }
+}
+
+/// Resolved from `dir` when given, otherwise from the working directory.
+fn workspace_metadata(dir: Option<&Path>) -> Option<WorkspaceMetadata> {
+    let mut command = ChildCommand::new("cargo");
+    command.args(["metadata", "--format-version", "1", "--no-deps"]);
+    if let Some(dir) = dir {
+        command.current_dir(dir);
+    }
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -222,15 +247,90 @@ fn workspace_metadata() -> Option<WorkspaceMetadata> {
         .get("workspace_root")
         .and_then(serde_json::Value::as_str)
         .map(PathBuf::from)?;
-    let edition = metadata
+    let package_list = metadata
         .get("packages")
-        .and_then(serde_json::Value::as_array)
+        .and_then(serde_json::Value::as_array);
+    let edition_of = |package: &serde_json::Value| {
+        package
+            .get("edition")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    let edition = package_list
         .and_then(|packages| packages.first())
-        .and_then(|package| package.get("edition"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("2021")
-        .to_string();
-    Some(WorkspaceMetadata { root, edition })
+        .and_then(edition_of)
+        .unwrap_or_else(|| "2021".to_string());
+    let packages = package_list
+        .into_iter()
+        .flatten()
+        .filter_map(|package| {
+            let manifest = package.get("manifest_path")?.as_str()?;
+            let dir = Path::new(manifest).parent()?.to_path_buf();
+            Some((dir, edition_of(package)?))
+        })
+        .collect();
+    Some(WorkspaceMetadata {
+        root,
+        edition,
+        packages,
+    })
+}
+
+/// Formats stdin as `path` and writes only the formatted source to stdout, so
+/// an editor can replace the buffer with it; every diagnostic goes to stderr.
+fn run_stdin(path: &Path, check: bool) -> ExitCode {
+    use std::io::{Read, Write};
+
+    let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    if !florui_fmt::is_formattable(&path) {
+        eprintln!("florui fmt: {} is not a Rust source file", path.display());
+        return ExitCode::from(2);
+    }
+    let mut source = String::new();
+    if let Err(error) = std::io::stdin().read_to_string(&mut source) {
+        eprintln!("florui fmt: could not read stdin as UTF-8 text: {error}");
+        return ExitCode::from(2);
+    }
+
+    // The file may be unsaved, so resolve from the nearest directory that exists.
+    let config_dir = path.ancestors().skip(1).find(|dir| dir.is_dir());
+    let edition = workspace_metadata(config_dir)
+        .map(|meta| meta.edition_for(&path).to_string())
+        .unwrap_or_else(|| "2021".to_string());
+
+    let outcome = match florui_fmt::format_source(&source, &edition, config_dir) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            eprintln!("florui fmt: {}: {error}", path.display());
+            return ExitCode::from(2);
+        }
+    };
+    for skipped in &outcome.skipped {
+        eprintln!(
+            "skipped {}:{}: {}",
+            path.display(),
+            skipped.line,
+            skipped.reason
+        );
+    }
+    if check {
+        return if outcome.output == source {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
+    }
+    let mut stdout = std::io::stdout().lock();
+    match stdout
+        .write_all(outcome.output.as_bytes())
+        .and_then(|()| stdout.flush())
+    {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("florui fmt: could not write stdout: {error}");
+            ExitCode::from(2)
+        }
+    }
 }
 
 #[cfg(test)]
