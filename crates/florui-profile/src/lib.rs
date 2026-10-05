@@ -241,6 +241,10 @@ pub struct FrameProfile {
     pub spans: Vec<SpanRecord>,
     /// Spans beyond [`MAX_SPANS_PER_FRAME`] that were timed but not kept.
     pub dropped_spans: u32,
+    /// When the file watcher reported the stylesheet change that made this
+    /// frame, on the clock [`now`] reads. It is the watcher's report, not the
+    /// moment the file was written.
+    pub stylesheet_reload: Option<Duration>,
 }
 
 impl FrameProfile {
@@ -286,6 +290,7 @@ struct Recorder {
     dropped: u32,
     frames: VecDeque<FrameProfile>,
     next_index: u64,
+    stylesheet_reload: Option<Duration>,
 }
 
 thread_local! {
@@ -363,6 +368,20 @@ pub fn count(counter: Counter, amount: u64) {
         let mut r = r.borrow_mut();
         r.frame_start.get_or_insert_with(now);
         r.counters[counter.index()] += amount;
+    });
+}
+
+/// Marks the frame being measured as the result of a stylesheet reload whose
+/// file event the watcher reported at `at` (the clock [`now`] reads). If
+/// several arrive before the frame ends, the earliest is kept.
+pub fn note_stylesheet_reload(at: Duration) {
+    if !ENABLED || !RECORDING.with(Cell::get) {
+        return;
+    }
+    RECORDER.with(|r| {
+        let mut r = r.borrow_mut();
+        let earliest = r.stylesheet_reload.map_or(at, |seen| seen.min(at));
+        r.stylesheet_reload = Some(earliest);
     });
 }
 
@@ -468,6 +487,7 @@ pub fn finish_frame(causes: Vec<Cause>) {
                 .collect(),
             spans: std::mem::take(&mut r.spans),
             dropped_spans: std::mem::take(&mut r.dropped),
+            stylesheet_reload: r.stylesheet_reload.take(),
         };
         r.next_index += 1;
         r.totals = Default::default();
@@ -501,6 +521,55 @@ mod tests {
         }
         finish_frame(Vec::new());
         assert!(frames().is_empty());
+    }
+
+    #[test]
+    fn a_reload_mark_belongs_to_the_next_frame_only() {
+        start(false);
+        let at = Duration::from_millis(7);
+        note_stylesheet_reload(at);
+        {
+            let _span = span(Phase::Cascade);
+        }
+        finish_frame(Vec::new());
+        {
+            let _span = span(Phase::Cascade);
+        }
+        finish_frame(Vec::new());
+
+        let frames = frames();
+        assert_eq!(frames[0].stylesheet_reload, Some(at));
+        assert_eq!(frames[1].stylesheet_reload, None);
+    }
+
+    #[test]
+    fn the_earliest_of_several_reload_marks_is_kept() {
+        start(false);
+        note_stylesheet_reload(Duration::from_millis(9));
+        note_stylesheet_reload(Duration::from_millis(4));
+        note_stylesheet_reload(Duration::from_millis(6));
+        {
+            let _span = span(Phase::Cascade);
+        }
+        finish_frame(Vec::new());
+
+        assert_eq!(
+            frames()[0].stylesheet_reload,
+            Some(Duration::from_millis(4))
+        );
+    }
+
+    #[test]
+    fn a_reload_mark_made_while_not_recording_is_not_kept() {
+        stop();
+        note_stylesheet_reload(Duration::from_millis(3));
+        start(false);
+        {
+            let _span = span(Phase::Cascade);
+        }
+        finish_frame(Vec::new());
+
+        assert_eq!(frames()[0].stylesheet_reload, None);
     }
 
     #[test]
