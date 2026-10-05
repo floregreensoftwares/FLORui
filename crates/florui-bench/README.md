@@ -139,6 +139,12 @@ it, as many editors do. The first edit after the window opens is reported apart.
 rewrites the same stylesheet while waiting for a color that never comes: every edit must time out, which
 shows the tool does not report a latency for nothing.
 
+`florui-bench edit-latency-ab --a EXE --b EXE [--repeats N] [--rounds N] [--rows N] [--write ...]`
+compares two builds: it alternates them (flipping the order each repeat), each measuring its own
+window, pools the edits and gives the same 5% and bootstrap-interval verdict as `ab` for every
+interval. Run it first with the same build on both sides: with 60 edits a side the noise on the frame
+is around 10%, so only a larger change can be told apart.
+
 It needs Windows, a release build with `--features profiling`, and a desktop session nobody is using:
 the window is kept on top and one pixel of it is watched, so something covering it, or a second monitor
 it straddles, breaks the run (it says so). The pixel is read on the monitor that holds the window.
