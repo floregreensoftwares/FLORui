@@ -547,6 +547,13 @@ fn watch_css_file(
     Ok(watcher)
 }
 
+/// Whether `read` differs from the stylesheet text last installed. A second
+/// event for the same save reads the same text, and installing it again would
+/// repeat the whole update for nothing.
+fn is_new_stylesheet(installed: Option<&str>, read: &str) -> bool {
+    installed != Some(read)
+}
+
 pub(crate) fn layout_viewport(scale: ViewportScale) -> Size<AvailableSpace> {
     Size {
         width: AvailableSpace::Definite(scale.logical.width),
@@ -1100,6 +1107,9 @@ struct WindowState {
     /// Only set for a window built via [`WindowSpec::with_css_reload`] —
     /// [`Self::reload_css`] is a no-op without it.
     css_path: Option<PathBuf>,
+    /// The text of the stylesheet [`Self::reload_css`] last installed, so a
+    /// second file event for the same save is recognised and skipped.
+    applied_css: Option<String>,
     /// Kept alive only to keep watching; dropping it stops delivery.
     _css_watcher: Option<RecommendedWatcher>,
     /// Kept alive only to keep this window's drop target registered;
@@ -1686,12 +1696,23 @@ impl WindowState {
         let Some(path) = self.css_path.clone() else {
             return;
         };
-        let loaded = std::fs::read_to_string(&path)
-            .map_err(RunError::CssFile)
-            .and_then(|css| florui_style::parse_stylesheet(&css).map_err(RunError::Stylesheet));
-        match loaded {
+        let text = match std::fs::read_to_string(&path) {
+            // One save reaches the watcher as two events moments apart; the
+            // second finds what the first already installed.
+            Ok(text) if !is_new_stylesheet(self.applied_css.as_deref(), &text) => return,
+            Ok(text) => text,
+            Err(error) => {
+                eprintln!(
+                    "florui-platform: stylesheet reload failed, keeping last good version: {}",
+                    RunError::CssFile(error)
+                );
+                return;
+            }
+        };
+        match florui_style::parse_stylesheet(&text).map_err(RunError::Stylesheet) {
             Ok(rules) => {
                 self.runtime.set_rules(rules);
+                self.applied_css = Some(text);
                 florui_profile::note_stylesheet_reload(reported_at);
                 println!(
                     "florui-platform: stylesheet reloaded from {}",
@@ -2004,6 +2025,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 gpu_losses: 0,
                 next_animation_wake: None,
                 css_path: spec.css_path,
+                applied_css: None,
                 _css_watcher: css_watcher,
                 _drag_drop: drag_drop_registration,
                 theme_preference,
@@ -2367,6 +2389,27 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stylesheet_is_reinstalled_only_when_its_text_changed() {
+        assert!(is_new_stylesheet(None, ".a {}"), "nothing installed yet");
+        assert!(
+            !is_new_stylesheet(Some(".a {}"), ".a {}"),
+            "the same save, read twice"
+        );
+        assert!(
+            is_new_stylesheet(Some(".a {}"), ".a { color: red; }"),
+            "an edit"
+        );
+        assert!(
+            is_new_stylesheet(Some(".a { color: red; }"), ""),
+            "a half-written file is read, then the finished one replaces it"
+        );
+        assert!(
+            is_new_stylesheet(Some(""), ".a { color: red; }"),
+            "and an emptied file is a real change too"
+        );
+    }
 
     #[test]
     fn window_options_default_respects_reduced_motion() {
