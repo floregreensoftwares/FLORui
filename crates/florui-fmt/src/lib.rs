@@ -51,7 +51,7 @@
 //! Explicit format-skip regions, CRLF-specific handling, and the full
 //! acceptance-fixture matrix (raw strings, lifetimes, generics inside
 //! `{expr}` bodies interacting with the width-fitting heuristic, and so
-//! on) are open — this is a real, working first slice, not a claim of
+//! on) are open — this is a real, working first version, not a claim of
 //! complete grammar coverage.
 
 use std::ops::Range;
