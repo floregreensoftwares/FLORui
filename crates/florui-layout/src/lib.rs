@@ -11,12 +11,11 @@
 //! is not implemented yet, even though Taffy itself already supports it —
 //! `florui-style` has no `grid-*` properties to translate from.
 //!
-//! `width`/`height` are content-box, explicitly, since that is real CSS's
-//! actual default (before any reset stylesheet opts into border-box) —
-//! Taffy's own default is border-box and silently relying on that would
-//! make an explicit size shrink to fit its own padding instead of the
-//! padding adding to it. `florui-style` has no `box-sizing` property to
-//! override this yet.
+//! `width`/`height` follow `box-sizing`: content-box by default, which is real
+//! CSS's actual default and padding adding to a declared size (Taffy's own
+//! default is border-box, so the box sizing is always set explicitly), and
+//! border-box when the style says so, where padding and border are carved out
+//! of the declared size instead.
 //!
 //! A leaf node (no element children) with its own direct text is measured
 //! via [`florui_text`] — real shaping, not a guess — and that intrinsic
@@ -54,10 +53,10 @@
 use std::collections::HashMap;
 
 use florui_style::{
-    AnimationTimeline, Arena, ComputedStyle, ContentAlignment, ContentBoxSize,
-    Display as StyleDisplay, FlexDirection as StyleFlexDirection, FlexWrap as StyleFlexWrap,
-    InlineItem as StyleInlineItem, InteractionState, ItemAlignment, NodeId,
-    Position as StylePosition, RoundedRect, Rule, Viewport,
+    AnimationTimeline, Arena, BoxSizing as StyleBoxSizing, ComputedStyle, ContentAlignment,
+    ContentBoxSize, Display as StyleDisplay, FlexDirection as StyleFlexDirection,
+    FlexWrap as StyleFlexWrap, InlineItem as StyleInlineItem, InteractionState, ItemAlignment,
+    NodeId, Position as StylePosition, RoundedRect, Rule, Viewport,
 };
 use taffy::prelude::*;
 use taffy::{Baselines, compute_leaf_layout};
@@ -423,8 +422,6 @@ fn measure_inline_block_intrinsic_size(
     } else {
         font.measure(font_family, text, font_size, font_weight)
     };
-    let content_width = style.and_then(|s| s.width).unwrap_or(measured.width);
-    let content_height = style.and_then(|s| s.height).unwrap_or(measured.height);
     let (padding_x, padding_y) = style.map_or((0.0, 0.0), |s| {
         (
             s.padding.left + s.padding.right,
@@ -437,9 +434,26 @@ fn measure_inline_block_intrinsic_size(
             s.border.top.width + s.border.bottom.width,
         )
     });
+    // A declared size measures the content box, or the whole box under
+    // `border-box` (it then cannot be smaller than its own padding and
+    // border); an undeclared one is the text's, plus the padding and border.
+    let border_box = style.is_some_and(|s| s.box_sizing == StyleBoxSizing::BorderBox);
+    let outer = |declared: Option<f32>, measured: f32, chrome: f32| match declared {
+        Some(size) if border_box => size.max(chrome),
+        Some(size) => size + chrome,
+        None => measured + chrome,
+    };
     (
-        content_width + padding_x + border_x,
-        content_height + padding_y + border_y,
+        outer(
+            style.and_then(|s| s.width),
+            measured.width,
+            padding_x + border_x,
+        ),
+        outer(
+            style.and_then(|s| s.height),
+            measured.height,
+            padding_y + border_y,
+        ),
     )
 }
 
@@ -1358,6 +1372,13 @@ fn build_node(
     Ok(taffy_ids[&root])
 }
 
+fn to_taffy_box_sizing(value: StyleBoxSizing) -> BoxSizing {
+    match value {
+        StyleBoxSizing::ContentBox => BoxSizing::ContentBox,
+        StyleBoxSizing::BorderBox => BoxSizing::BorderBox,
+    }
+}
+
 fn to_taffy_style(style: Option<&ComputedStyle>) -> taffy::Style {
     let Some(style) = style else {
         return taffy::Style {
@@ -1368,11 +1389,10 @@ fn to_taffy_style(style: Option<&ComputedStyle>) -> taffy::Style {
 
     taffy::Style {
         display: to_display(style.display),
-        // Real CSS's actual default (before any reset stylesheet opts into
-        // border-box) is content-box: padding adds to a declared width/
-        // height rather than being carved out of it. Taffy's own default is
-        // border-box, so this must be set explicitly to match.
-        box_sizing: BoxSizing::ContentBox,
+        // Real CSS's default is content-box: padding and border add to a
+        // declared width/height rather than being carved out of it. Taffy's
+        // own default is border-box, so this is always set explicitly.
+        box_sizing: to_taffy_box_sizing(style.box_sizing),
         size: Size {
             width: to_dimension(style.width),
             height: to_dimension(style.height),
@@ -1423,11 +1443,9 @@ fn to_taffy_style(style: Option<&ComputedStyle>) -> taffy::Style {
             top: LengthPercentage::length(style.padding.top),
             bottom: LengthPercentage::length(style.padding.bottom),
         },
-        // Content-box math already distinguishes padding from an explicit
-        // size (see this function's own `box_sizing` note above); border
-        // gets the same treatment — a `border-width` adds to a declared
-        // width/height rather than being carved out of it, real CSS's
-        // content-box default for both.
+        // Border follows the same `box_sizing` as padding: under content-box a
+        // `border-width` adds to a declared width/height, under border-box it
+        // is carved out of it.
         border: Rect {
             left: LengthPercentage::length(style.border.left.width),
             right: LengthPercentage::length(style.border.right.width),
@@ -2903,6 +2921,98 @@ mod tests {
             layouts[&node].height, 120.0,
             "100 declared + 20 padding-top"
         );
+    }
+
+    /// `box-sizing: border-box` puts padding and border inside a declared
+    /// size; the same stylesheet without it adds them (the test above).
+    #[test]
+    fn border_box_keeps_padding_and_border_inside_the_declared_size() {
+        let tree: Element = view! { <div class="card" /> };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".card { box-sizing: border-box; width: 100px; height: 60px; padding: 20px; \
+                     border-width: 4px; border-style: solid; border-color: #000000; }",
+        );
+        let node = arena.roots()[0];
+        assert_eq!(layouts[&node].width, 100.0);
+        assert_eq!(layouts[&node].height, 60.0);
+    }
+
+    #[test]
+    fn border_box_cannot_shrink_a_box_below_its_own_padding_and_border() {
+        let tree: Element = view! { <div class="card" /> };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".card { box-sizing: border-box; width: 10px; height: 10px; padding: 12px; }",
+        );
+        let node = arena.roots()[0];
+        assert_eq!(
+            layouts[&node].width, 24.0,
+            "12 + 12 of padding is the floor"
+        );
+        assert_eq!(layouts[&node].height, 24.0);
+    }
+
+    #[test]
+    fn box_sizing_is_per_node_and_does_not_reach_the_children() {
+        let tree: Element = view! {
+            <div class="outer">
+                <div class="inner" />
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".outer { box-sizing: border-box; width: 100px; padding: 10px; } \
+             .inner { width: 50px; height: 20px; padding: 5px; }",
+        );
+        let outer = arena.roots()[0];
+        let inner = arena.children(outer)[0];
+        assert_eq!(layouts[&outer].width, 100.0);
+        assert_eq!(
+            layouts[&inner].width, 60.0,
+            "the child is still content-box"
+        );
+    }
+
+    #[test]
+    fn an_inline_block_in_border_box_cannot_shrink_below_its_padding_and_border() {
+        let tree = Element::node(
+            "p",
+            vec![],
+            vec![Element::node(
+                "button",
+                vec![("class".to_string(), "tiny".to_string())],
+                vec![Element::text("here")],
+            )],
+        );
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".tiny { box-sizing: border-box; width: 10px; height: 10px; padding: 12px; \n                      border-width: 0px; }",
+        );
+        let button = arena.children(arena.roots()[0])[0];
+        assert_close(layouts[&button].width, 24.0);
+        assert_close(layouts[&button].height, 24.0);
+    }
+
+    #[test]
+    fn an_inline_block_follows_border_box_too() {
+        let tree = Element::node(
+            "p",
+            vec![],
+            vec![Element::node(
+                "button",
+                vec![("class".to_string(), "fixed".to_string())],
+                vec![Element::text("here")],
+            )],
+        );
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".fixed { box-sizing: border-box; width: 80px; height: 30px; padding: 6px; \
+                      border-width: 2px; border-style: solid; border-color: #000000; }",
+        );
+        let button = arena.children(arena.roots()[0])[0];
+        assert_close(layouts[&button].width, 80.0);
+        assert_close(layouts[&button].height, 30.0);
     }
 
     #[test]
