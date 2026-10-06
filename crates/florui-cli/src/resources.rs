@@ -516,7 +516,7 @@ pub struct ExecutableResources {
 
 /// The version-information strings this tool writes, which are the ones read
 /// back.
-pub const VERSION_KEYS: [&str; 7] = [
+pub const VERSION_KEYS: [&str; 8] = [
     "ProductName",
     "CompanyName",
     "FileDescription",
@@ -524,6 +524,7 @@ pub const VERSION_KEYS: [&str; 7] = [
     "ProductVersion",
     "OriginalFilename",
     "InternalName",
+    "LegalCopyright",
 ];
 
 /// Reads the version information and the icon group out of `executable` as a

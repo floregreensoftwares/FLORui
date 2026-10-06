@@ -393,6 +393,7 @@ fn expected_strings(report: &Value, file: &str) -> Option<Vec<(&'static str, Opt
         ("ProductVersion", get("product_version")),
         ("OriginalFilename", get("original_filename")),
         ("InternalName", get("internal_name")),
+        ("LegalCopyright", get("legal_copyright")),
     ])
 }
 
