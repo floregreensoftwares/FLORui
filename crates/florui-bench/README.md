@@ -208,4 +208,21 @@ engine improves.
 - `css-reload-65e028d`: the engine's share, headless, 5 processes: 9.8 ms for 100 rows and 49.0 ms for
   1,000 (it builds the accessibility tree, which the window does not without a screen reader).
 
+- `reload-flash-d6470ea`: whether a reload shows a half-read stylesheet or fails to read it. Six cases
+  of 250 edits each (one row with 1, 20 and 100 KB of rules, in place and atomic, and 1,000 rows with
+  20 KB in place), each on two builds: `current/`, the reload before the change that skips a
+  reload whose text is already installed (the window reloaded twice per save), and `deduplicated/`,
+  the reload with it, which is what `grow/main` has now. The binaries were built from the tool in this change before it was committed. No edit
+  of the 1,506 on either build showed a color that was neither the old nor the new one, and none went to
+  another color again after showing the new one; no reload failed, in place or atomic (where the
+  first event is a `Remove`). Together with the four earlier 60-edit runs that is one intermediate
+  color in 3,252 edits, in a 1,000-row page with a tiny stylesheet, and it was not reproduced; its
+  cause is unknown. Reloads per edit: 502 to 518 for 251 edits on `current`, 251 on `deduplicated`.
+  The interval from the watcher's report to the frame's first work grows with the stylesheet (one
+  row, in place, deduplicated: 3.6 ms at 1 KB, 18.8 at 20 KB, 22.3 at 100 KB), so reading and parsing
+  the file is where a large stylesheet's time goes; the profiler has no span for it and these runs do
+  not split it further. Median totals, current against deduplicated, without an interval (this is two
+  runs, not an `ab`): 1 KB 15.9 and 14.9 ms, 20 KB 35.7 and 31.6, 100 KB 55.6 and 44.9, and 1,000 rows
+  with 20 KB 56.6 and 45.9.
+
 Repeat a measurement on a quiet machine before trusting a small difference.
