@@ -179,7 +179,7 @@ pub(crate) fn hash_reader(mut reader: impl Read) -> std::io::Result<FileHashes> 
     })
 }
 
-fn hash_file(path: &Path) -> std::io::Result<FileHashes> {
+pub(crate) fn hash_file(path: &Path) -> std::io::Result<FileHashes> {
     hash_reader(fs::File::open(path)?)
 }
 

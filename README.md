@@ -90,6 +90,14 @@ The report also says whether the artifact includes the developer tooling: the in
 
 On Windows the staged executables also carry the application's identity, written into the copy (the file cargo produced is left alone, and its hashes are recorded as `built`). The version information comes from the configuration: `app.name`, `app.description`, `bundle.publisher` and `app.version`, whole, prerelease and build metadata included. The icon is `app.icons.windows`, else `app.icons.source`, an SVG or a PNG, written at 16, 24, 32, 48, 64, 128 and 256 pixels with transparent edges kept. A PNG is never enlarged: a 64 pixel PNG gives the sizes up to 64 and a warning, and one under 16 pixels is refused. A source that is not square is centered on a transparent square, not cropped. An icon that is declared but cannot be converted fails the build before anything is staged. The same icon is staged as `icon.ico`, and `report.json` lists its source, the source's SHA-256 and the sizes generated or left out. Without a declared icon the executable keeps the default one. The native icon is never used for the Web build. On other hosts the report says no resources were written. Installers, signing, the Windows application manifest and the macOS and Linux icon formats are not part of it yet.
 
+### Check a build
+
+```sh
+florui doctor --target native --artifacts target/florui-build/<package>/native [--strict] [--json]
+```
+
+reads an existing staged output without building, changing or running anything, and checks it against its `report.json` and against the project as it is now: `artifacts.files` (every listed file has the recorded size and hashes, nothing else is in the directory, and no name leaves it), `artifacts.exposure` (included developer tooling is a warning that `--strict` turns into a failure), `artifacts.resources` (the version information and icon are read from the executable itself, not from the report), `artifacts.identity` (the name, identifier and version the build was made with against the configuration now) and `artifacts.provenance` (the commit, a clean tree and the lockfile). A missing or unreadable report fails; evidence a check cannot get, such as a build made outside a git repository, is reported as unknown, never as a pass. Without `--artifacts` none of these checks is reported. Web output is not checked yet.
+
 Run `florui --help` for the other commands.
 
 ## Run the tests

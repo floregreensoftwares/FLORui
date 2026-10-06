@@ -28,6 +28,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
+mod artifacts;
+
 const SCHEMA_VERSION: u32 = 1;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -103,6 +105,8 @@ pub struct Options {
     pub graphics: bool,
     pub presentation: bool,
     pub distribution: bool,
+    /// A staged native build output to check, never to build.
+    pub artifacts: Option<std::path::PathBuf>,
     pub json: bool,
     pub strict: bool,
 }
@@ -129,6 +133,20 @@ pub fn run(options: Options) -> ExitCode {
                         &probe,
                         &run_bounded_probe(INTERNAL_PRESENTATION_PROBE_FLAG),
                     ));
+                }
+            }
+            if let Some(given) = &options.artifacts {
+                match env::current_dir() {
+                    Ok(cwd) => checks.extend(artifacts::checks(
+                        &artifacts::resolve_dir(&cwd, given),
+                        &cwd,
+                        options.package.as_deref(),
+                        options.environment.as_deref(),
+                    )),
+                    Err(error) => checks.push(check_unknown(
+                        "artifacts.report",
+                        format!("could not determine the current directory: {error}"),
+                    )),
                 }
             }
             if options.distribution {
@@ -171,6 +189,21 @@ pub fn run(options: Options) -> ExitCode {
                     expected: None,
                     evidence: "graphics/presentation probing is only implemented for --target \
                                 native"
+                        .to_string(),
+                    reason: None,
+                    remediation: None,
+                });
+            }
+            if options.artifacts.is_some() {
+                checks.push(Check {
+                    id: "artifacts.unsupported_target",
+                    category: "artifacts",
+                    status: Status::Skipped,
+                    required: false,
+                    observed: None,
+                    expected: None,
+                    evidence: "output checks are only implemented for --target native; Web output \
+                               validation arrives with the Web target"
                         .to_string(),
                     reason: None,
                     remediation: None,

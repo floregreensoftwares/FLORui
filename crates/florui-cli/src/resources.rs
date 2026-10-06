@@ -499,6 +499,125 @@ pub fn apply(_executable: &Path, _payload: &Payload<'_>) -> Result<(), String> {
     Err("native executable resources are only written on Windows hosts".to_string())
 }
 
+/// What an executable on disk carries, read without running it.
+#[derive(Debug, Default, PartialEq)]
+pub struct ExecutableResources {
+    /// The strings of the version information that are present.
+    pub version_strings: std::collections::BTreeMap<String, String>,
+    /// The number of images in the application icon, `None` when it has none.
+    pub icon_entries: Option<usize>,
+}
+
+/// The version-information strings this tool writes, which are the ones read
+/// back.
+pub const VERSION_KEYS: [&str; 7] = [
+    "ProductName",
+    "CompanyName",
+    "FileDescription",
+    "FileVersion",
+    "ProductVersion",
+    "OriginalFilename",
+    "InternalName",
+];
+
+/// Reads the version information and the icon group out of `executable` as a
+/// data file: nothing in it is executed.
+#[cfg(windows)]
+pub fn read_back(executable: &Path) -> Result<ExecutableResources, String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::FreeLibrary;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+    };
+    use windows_sys::Win32::System::LibraryLoader::{
+        FindResourceW, LOAD_LIBRARY_AS_DATAFILE, LoadLibraryExW, LoadResource, LockResource,
+        SizeofResource,
+    };
+
+    const RT_GROUP_ICON: usize = 14;
+
+    let path: Vec<u16> = executable
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let mut resources = ExecutableResources::default();
+    // SAFETY: `path` is NUL-terminated and outlives every call; the module is
+    // released before returning; the version buffer is sized by the API's own
+    // answer and the pointers `VerQueryValueW` returns point into it while it
+    // is alive; resource memory is copied before the module is released.
+    unsafe {
+        let module = LoadLibraryExW(
+            path.as_ptr(),
+            std::ptr::null_mut(),
+            LOAD_LIBRARY_AS_DATAFILE,
+        );
+        if module.is_null() {
+            return Err(format!(
+                "could not open {} as a data file: {}",
+                executable.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+        let group = FindResourceW(module, 1 as _, RT_GROUP_ICON as _);
+        if !group.is_null() {
+            let loaded = LoadResource(module, group);
+            let size = SizeofResource(module, group) as usize;
+            let data = LockResource(loaded) as *const u8;
+            if size >= 6 && !data.is_null() {
+                let header = std::slice::from_raw_parts(data, 6);
+                resources.icon_entries = Some(u16::from_le_bytes([header[4], header[5]]) as usize);
+            }
+        }
+        FreeLibrary(module);
+
+        let mut handle = 0;
+        let size = GetFileVersionInfoSizeW(path.as_ptr(), &mut handle);
+        if size == 0 {
+            return Ok(resources);
+        }
+        let mut buffer = vec![0u8; size as usize];
+        if GetFileVersionInfoW(path.as_ptr(), 0, size, buffer.as_mut_ptr().cast()) == 0 {
+            return Err(format!(
+                "could not read the version information of {}: {}",
+                executable.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+        for key in VERSION_KEYS {
+            let block: Vec<u16> = format!("\\StringFileInfo\\040904b0\\{key}")
+                .encode_utf16()
+                .chain(Some(0))
+                .collect();
+            let mut value: *mut core::ffi::c_void = std::ptr::null_mut();
+            let mut length = 0u32;
+            if VerQueryValueW(
+                buffer.as_ptr().cast(),
+                block.as_ptr(),
+                &mut value,
+                &mut length,
+            ) == 0
+            {
+                continue;
+            }
+            let units = std::slice::from_raw_parts(value as *const u16, length as usize);
+            let end = units
+                .iter()
+                .position(|unit| *unit == 0)
+                .unwrap_or(units.len());
+            resources
+                .version_strings
+                .insert(key.to_string(), String::from_utf16_lossy(&units[..end]));
+        }
+    }
+    Ok(resources)
+}
+
+#[cfg(not(windows))]
+pub fn read_back(_executable: &Path) -> Result<ExecutableResources, String> {
+    Err("executable resources are only read on Windows hosts".to_string())
+}
+
 /// Where the managed `.ico` goes inside the staging directory.
 pub fn ico_path(staging: &Path) -> PathBuf {
     staging.join("icon.ico")
