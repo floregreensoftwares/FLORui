@@ -174,3 +174,23 @@ fn a_cargo_failure_still_lets_the_other_suite_report() {
     assert!(all.contains("cargo: failed"), "{all}");
     assert!(all.contains("visual: skipped"), "{all}");
 }
+
+#[test]
+fn the_chromium_environment_variable_reaches_the_visual_suite() {
+    let dir = tempfile::tempdir().unwrap();
+    workspace(dir.path());
+    write(dir.path(), "fixtures/reference/one/manifest.json", "{}");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_florui"))
+        .args(["test", "--package", "good", "--suite", "visual"])
+        .current_dir(dir.path())
+        .env_remove("CARGO_TARGET_DIR")
+        .env("FLORUI_CHROMIUM", dir.path().join("no-such-chromium"))
+        .output()
+        .unwrap();
+
+    let all = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{all}");
+    assert!(all.contains("could not launch Chromium"), "{all}");
+    assert!(!all.contains("no Chromium found"), "{all}");
+}
