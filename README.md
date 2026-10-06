@@ -78,6 +78,23 @@ writes `my-app/` with a component, its stylesheet, a window entry, a `florui dev
 
 The generated `Cargo.toml` depends on the Florui crates by version, as if they were published. They are not yet, so the project does not resolve from crates.io today. The generated project was built and tested against this checkout by patching the crates to local paths; that check is the ignored test `the_generated_project_builds_and_passes_its_own_test` in `florui-cli`.
 
+## Editor support for `florui.config.toml`
+
+```sh
+florui schema --write
+```
+
+writes `florui.config.schema.json`, a JSON Schema (draft-07) for the configuration, into the project next to `florui.config.toml` (`florui schema` alone prints it; `--write <PATH>` names the file). It is generated from the same typed definition the parser reads, so it lists the same keys, types and values, and every key carries the explanation shown on hover. Rules that need code, such as an SPDX license expression, a URL or a window size that must not exceed another, are still checked when the configuration is read, with their line and column; the schema describes them in each key's text.
+
+To use it, start the configuration with a comment naming the file, which Taplo and the Even Better TOML extension for VS Code read:
+
+```toml
+#:schema ./florui.config.schema.json
+schema_version = 1
+```
+
+No schema URL is published, so the association is a relative path and the copy belongs to the project; run `florui schema --write` again after upgrading Florui to refresh it. It was checked in VS Code with Even Better TOML 0.21.2 (Taplo's engine): an unknown key, a wrong type and a value outside an enum are underlined with the schema's messages, hovering a key shows its explanation, completing a key inside a table, including nested ones such as `[environments.development.app.icons]` and tables named by a map key, offers the keys that table defines with their text (inside an array of tables such as `[[app.activation.file_associations]]` the extension offers no keys, which it also does not for a trivial schema), and the values of an enum are offered with theirs; the example application's configuration and the `florui new` template raise no diagnostics. The extension appears to keep a schema it has already read, so after refreshing the file an editor window may need to be reloaded to see the new one.
+
 ## Build a release
 
 ```sh

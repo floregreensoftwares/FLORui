@@ -28,6 +28,7 @@ mod doctor;
 mod fmt;
 mod new;
 mod resources;
+mod schema_cmd;
 mod test_cmd;
 
 #[derive(Parser)]
@@ -189,6 +190,15 @@ enum Command {
         #[arg(long)]
         strict: bool,
     },
+    /// Prints the JSON Schema editors read for `florui.config.toml`, or
+    /// writes it next to the project's configuration so an editor can be
+    /// pointed at it with `#:schema ./florui.config.schema.json`.
+    Schema {
+        /// Write the schema instead of printing it: into the project's
+        /// directory, or to PATH when one is given.
+        #[arg(long, value_name = "PATH", num_args = 0..=1)]
+        write: Option<Option<PathBuf>>,
+    },
     /// Reformats `view!`-containing `.rs` files — see `fmt`'s own module
     /// doc for exactly what this does and does not reformat.
     Fmt {
@@ -293,6 +303,10 @@ fn main() -> ExitCode {
             artifacts,
             json,
             strict,
+        }),
+        Command::Schema { write } => schema_cmd::run(schema_cmd::Options {
+            package: cli.package,
+            write,
         }),
         Command::Fmt {
             paths,
