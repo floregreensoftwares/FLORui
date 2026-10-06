@@ -146,3 +146,58 @@ fn workspace_version_inheritance_missing_is_a_hard_error_end_to_end() {
         other => panic!("expected Semantic, got {other:?}"),
     }
 }
+
+#[test]
+fn resolving_a_workspace_member_does_not_create_a_lockfile() {
+    let root = tempfile::tempdir().unwrap();
+    scaffold_workspace_root(root.path(), &["a", "b"], None);
+    scaffold_package(root.path(), "a", "version = \"0.1.0\"");
+    let b = scaffold_package(root.path(), "b", "version = \"0.1.0\"");
+
+    resolve_cargo_project(&b, None).unwrap();
+    resolve_cargo_project(root.path(), Some("a")).unwrap();
+
+    assert!(
+        !root.path().join("Cargo.lock").exists(),
+        "resolving the project wrote a Cargo.lock"
+    );
+}
+
+#[test]
+fn resolving_a_single_package_does_not_create_a_lockfile() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("src")).unwrap();
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname = \"solo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(root.path().join("src/lib.rs"), "").unwrap();
+
+    let facts = resolve_cargo_project(&root.path().join("src"), None).unwrap();
+
+    assert_eq!(facts.package_name, "solo");
+    assert!(
+        !root.path().join("Cargo.lock").exists(),
+        "resolving the project wrote a Cargo.lock"
+    );
+}
+
+#[test]
+fn a_package_that_is_also_the_workspace_root_resolves_from_a_nested_directory() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("src/nested")).unwrap();
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[package]\nname = \"rootpkg\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\nmembers = [\"member\"]\n",
+    )
+    .unwrap();
+    std::fs::write(root.path().join("src/lib.rs"), "").unwrap();
+    scaffold_package(root.path(), "member", "version = \"0.1.0\"");
+
+    let from_root_package = resolve_cargo_project(&root.path().join("src/nested"), None).unwrap();
+    let from_member = resolve_cargo_project(&root.path().join("member/src"), None).unwrap();
+
+    assert_eq!(from_root_package.package_name, "rootpkg");
+    assert_eq!(from_member.package_name, "member");
+}
