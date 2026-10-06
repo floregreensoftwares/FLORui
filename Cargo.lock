@@ -1767,6 +1767,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "clap",
+ "florui-assets",
  "florui-config",
  "florui-conformance",
  "florui-devtools",
@@ -1778,6 +1779,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "windows-sys 0.60.2",
  "winit",
 ]
 

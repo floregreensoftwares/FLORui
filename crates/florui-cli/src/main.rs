@@ -26,6 +26,7 @@ mod compare_select;
 mod doctor;
 mod fmt;
 mod new;
+mod resources;
 mod test_cmd;
 
 #[derive(Parser)]
