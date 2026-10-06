@@ -1514,6 +1514,8 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         color,
         width: to_optional_length(&position.width),
         height: to_optional_length(&position.height),
+        width_percent: to_size_percentage(&position.width),
+        height_percent: to_size_percentage(&position.height),
         max_width: to_max_length(&position.max_width),
         max_height: to_max_length(&position.max_height),
         min_width: to_min_size(&position.min_width),
@@ -2339,6 +2341,20 @@ fn to_min_size(
     use style::values::generics::length::GenericSize;
     match value {
         GenericSize::LengthPercentage(lp) => Some(to_length_percentage(&lp.0)),
+        _ => None,
+    }
+}
+
+/// The fraction of a `width`/`height` that is a plain percentage, for layout
+/// to resolve against the containing block.
+fn to_size_percentage(
+    value: &style::values::generics::length::GenericSize<
+        style::values::generics::NonNegative<style::values::computed::LengthPercentage>,
+    >,
+) -> Option<f32> {
+    use style::values::generics::length::GenericSize;
+    match value {
+        GenericSize::LengthPercentage(lp) => lp.0.to_percentage().map(|percentage| percentage.0),
         _ => None,
     }
 }

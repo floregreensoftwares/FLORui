@@ -339,6 +339,12 @@ pub struct ComputedStyle {
     pub width: Option<f32>,
     /// `None` means `auto`; see [`Self::width`].
     pub height: Option<f32>,
+    /// The fraction (`68%` is `0.68`) when `width` is a plain percentage
+    /// of the containing block, which only layout can resolve; `width` is
+    /// then `None`.
+    pub width_percent: Option<f32>,
+    /// See [`Self::width_percent`].
+    pub height_percent: Option<f32>,
     /// `None` means `none`, or a value that is not a plain length; see
     /// [`Self::width`]. Only lengths clamp.
     pub max_width: Option<f32>,
@@ -587,6 +593,8 @@ impl ComputedStyle {
             // registry reads, so it is not copied.
             width: _,
             height: _,
+            width_percent: _,
+            height_percent: _,
             max_width: _,
             max_height: _,
             min_width: _,
@@ -2212,6 +2220,31 @@ mod tests {
             "flex items shrink by default in real CSS"
         );
         assert_eq!(computed[&node].flex_basis, None, "auto by default");
+    }
+
+    #[test]
+    fn a_percentage_size_is_kept_as_a_fraction_and_a_length_is_not() {
+        let tree: Element = view! {
+            <div>
+                <div class="pct" />
+                <div class="len" />
+                <div class="mixed" />
+            </div>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".pct { width: 68%; height: 100%; } .len { width: 10px; height: 20px; }              .mixed { width: calc(50% + 4px); }",
+            &InteractionState::new(),
+        );
+        let [pct, len, mixed] = arena.children(arena.roots()[0]) else {
+            panic!("three children");
+        };
+        let (pct, len, mixed) = (&computed[pct], &computed[len], &computed[mixed]);
+        assert_eq!((pct.width, pct.width_percent), (None, Some(0.68)));
+        assert_eq!((pct.height, pct.height_percent), (None, Some(1.0)));
+        assert_eq!((len.width, len.width_percent), (Some(10.0), None));
+        assert_eq!((len.height, len.height_percent), (Some(20.0), None));
+        assert_eq!((mixed.width, mixed.width_percent), (None, None));
     }
 
     #[test]

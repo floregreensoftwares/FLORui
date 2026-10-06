@@ -1033,7 +1033,9 @@ fn measure_leaf(
 
     let wrap_width = known_dimensions.width.or(match available_space.width {
         AvailableSpace::Definite(width) => Some(width),
-        AvailableSpace::MinContent | AvailableSpace::MaxContent => None,
+        // Min-content is the longest unbreakable word: break at every chance.
+        AvailableSpace::MinContent => Some(0.0),
+        AvailableSpace::MaxContent => None,
     });
 
     match context {
@@ -1394,8 +1396,8 @@ fn to_taffy_style(style: Option<&ComputedStyle>) -> taffy::Style {
         // own default is border-box, so this is always set explicitly.
         box_sizing: to_taffy_box_sizing(style.box_sizing),
         size: Size {
-            width: to_dimension(style.width),
-            height: to_dimension(style.height),
+            width: to_size_dimension(style.width, style.width_percent),
+            height: to_size_dimension(style.height, style.height_percent),
         },
         min_size: Size {
             width: to_min_size_dimension(style.min_width),
@@ -1507,6 +1509,14 @@ fn to_dimension(value: Option<f32>) -> Dimension {
     match value {
         Some(length) => Dimension::length(length),
         None => Dimension::auto(),
+    }
+}
+
+fn to_size_dimension(length: Option<f32>, percent: Option<f32>) -> Dimension {
+    match (length, percent) {
+        (Some(length), _) => Dimension::length(length),
+        (None, Some(percent)) => Dimension::percent(percent),
+        (None, None) => Dimension::auto(),
     }
 }
 
@@ -4440,7 +4450,7 @@ mod tests {
     fn a_flex_item_too_narrow_for_its_own_text_reports_a_min_content_cause() {
         let tree: Element = view! {
             <div class="row">
-                <span class="text">{"a rather long run of unbreakable text"}</span>
+                <span class="text">{"anunbreakablerunoftextwithoutspaces"}</span>
             </div>
         };
         let (arena, styles, layouts) = layout_with_styles(
@@ -4464,6 +4474,72 @@ mod tests {
                 );
             }
             other => panic!("expected a MinContentClampedWidth cause, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_percentage_width_and_height_resolve_against_the_containing_block() {
+        let tree: Element = view! {
+            <div class="bar"><div class="fill"></div></div>
+        };
+        let (arena, _styles, layouts) = layout_with_styles(
+            &tree,
+            ".bar { width: 200px; height: 8px; } .fill { width: 68%; height: 100%; }",
+        );
+        let bar = arena.roots()[0];
+        let fill = arena.children(bar)[0];
+
+        assert_close(layouts[&fill].width, 136.0);
+        assert_close(layouts[&fill].height, 8.0);
+    }
+
+    #[test]
+    fn a_flex_item_shrinks_to_its_longest_word_and_wraps_the_rest() {
+        let tree: Element = view! {
+            <div class="row">
+                <div class="a">{"Recent"}</div>
+                <div class="b">
+                    <span>{"Bruno shared Brand assets with Design"}</span>
+                </div>
+            </div>
+        };
+        let (arena, _styles, layouts) = layout_with_styles(
+            &tree,
+            ".row { display: flex; width: 300px; gap: 10px; } \
+             .a { flex-grow: 2; flex-basis: 0; } \
+             .b { display: flex; flex-direction: column; flex-grow: 1; flex-basis: 0; }",
+        );
+        let row = arena.roots()[0];
+        let a = arena.children(row)[0];
+        let b = arena.children(row)[1];
+
+        assert_close(layouts[&a].width, 290.0 * 2.0 / 3.0);
+        assert_close(layouts[&b].width, 290.0 / 3.0);
+        let text = arena.children(b)[0];
+        assert!(
+            layouts[&text].height > 40.0,
+            "the text wraps to its narrow column instead of overflowing it: {}",
+            layouts[&text].height
+        );
+    }
+
+    #[test]
+    fn flex_items_with_a_zero_basis_share_the_row_equally_whatever_their_text() {
+        let tree: Element = view! {
+            <div class="row">
+                <div class="card"><span>{"+128 this week"}</span></div>
+                <div class="card"><span>{"4 new"}</span></div>
+                <div class="card"><span>{"auto-clears in 9d"}</span></div>
+            </div>
+        };
+        let (arena, _styles, layouts) = layout_with_styles(
+            &tree,
+            ".row { display: flex; width: 300px; gap: 10px; } \
+             .card { display: flex; flex-direction: column; flex-grow: 1; flex-basis: 0; }",
+        );
+        let row = arena.roots()[0];
+        for card in arena.children(row) {
+            assert_close(layouts[card].width, 280.0 / 3.0);
         }
     }
 
@@ -4550,7 +4626,7 @@ mod tests {
     fn a_grid_item_too_wide_for_its_own_text_reports_a_track_cause() {
         let tree: Element = view! {
             <div class="grid">
-                <span class="text">{"a rather long run of unbreakable text"}</span>
+                <span class="text">{"anunbreakablerunoftextwithoutspaces"}</span>
             </div>
         };
         let (arena, styles, layouts) = layout_with_styles(
@@ -4776,14 +4852,10 @@ mod tests {
             );
         }
 
-        /// A percentage `width` declared inside a matched `@container`
-        /// block resolves exactly the same way the identical percentage
-        /// would unconditionally (today: falls back to filling the parent
-        /// — see the previous test's own doc for the pre-existing,
-        /// out-of-scope reason). Container queries don't change or
-        /// regress that existing behavior.
+        /// A percentage `width` declared inside a matched `@container` block
+        /// resolves against the parent, the same as it would unconditionally.
         #[test]
-        fn a_percentage_inside_a_matched_container_behaves_the_same_as_unconditionally() {
+        fn a_percentage_inside_a_matched_container_resolves_against_the_parent() {
             let tree: Element = view! {
                 <div class="box">
                     <div class="card" />
@@ -4800,7 +4872,7 @@ mod tests {
             let (arena, _styles, layouts) = compute_with_style_for(&tree, css, root);
             let card = arena.children(arena.roots()[0])[0];
 
-            assert_eq!(layouts[&card].width, 500.0);
+            assert_eq!(layouts[&card].width, 250.0);
         }
 
         /// A stylesheet with zero `@container` blocks must take the cheap

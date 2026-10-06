@@ -1,0 +1,52 @@
+{
+  "id": "percent-size",
+  "description": "A width and height given as percentages resolve against the containing block",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 240,
+    "height_css_px": 120,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "wrap",
+    "css": ".wrap { display: flex; flex-direction: row; gap: 12px; width: 240px; padding: 10px; box-sizing: border-box; background-color: #223; } .bar { width: 100px; height: 12px; background-color: #556; } .fill { width: 68%; height: 100%; background-color: #4c8; } .box { width: 100px; height: 80px; background-color: #556; } .half { width: 50%; height: 50%; background-color: #e85; } .border { box-sizing: border-box; width: 50%; height: 100%; border: 4px solid #fff; background-color: #48c; }",
+    "children": [
+      {
+        "tag": "div",
+        "class": "bar",
+        "css": "",
+        "children": [
+          {
+            "tag": "div",
+            "class": "fill",
+            "css": ""
+          }
+        ]
+      },
+      {
+        "tag": "div",
+        "class": "box",
+        "css": "",
+        "children": [
+          {
+            "tag": "div",
+            "class": "half",
+            "css": ""
+          },
+          {
+            "tag": "div",
+            "class": "border",
+            "css": ""
+          }
+        ]
+      }
+    ]
+  },
+  "classification": {
+    "kind": "exact"
+  }
+}

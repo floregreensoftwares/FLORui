@@ -1,0 +1,50 @@
+{
+  "id": "flex-min-content-wrap",
+  "description": "A flex item with a zero basis is as narrow as its share of the row, so its text wraps at the longest word instead of overflowing",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 300,
+    "height_css_px": 160,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "row",
+    "css": ".row { display: flex; flex-direction: row; gap: 10px; width: 300px; font-size: 14px; color: #fff; } .a { flex-grow: 2; flex-basis: 0; background-color: #446; padding: 10px; } .b { display: flex; flex-direction: column; flex-grow: 1; flex-basis: 0; background-color: #644; padding: 10px; }",
+    "children": [
+      {
+        "tag": "div",
+        "class": "a",
+        "text": "Recent",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "b",
+        "css": "",
+        "children": [
+          {
+            "tag": "span",
+            "text": "Bruno shared Brand assets with Design",
+            "css": ""
+          },
+          {
+            "tag": "span",
+            "text": "1 h ago",
+            "css": ""
+          }
+        ]
+      }
+    ]
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 8,
+    "geometry_tolerance_px": 1,
+    "channel_tolerance": 0,
+    "reason": "Geometry matches Chromium within 0.4px; the remaining difference is text antialiasing (about 5% of pixels measured), as in the other fixtures that render text."
+  }
+}
