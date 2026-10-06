@@ -29,6 +29,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde_json::{Value, json};
 
 mod artifacts;
+mod distribution;
 
 const SCHEMA_VERSION: u32 = 1;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -150,21 +151,17 @@ pub fn run(options: Options) -> ExitCode {
                 }
             }
             if options.distribution {
-                checks.push(Check {
-                    id: "distribution.packaging",
-                    category: "distribution",
-                    status: Status::Unknown,
-                    required: false,
-                    observed: None,
-                    expected: None,
-                    evidence: "no packaging/signing pipeline exists in this CLI yet".to_string(),
-                    reason: Some(
-                        "distribution diagnostics are not implemented yet, not a property of \
-                         this environment"
-                            .to_string(),
-                    ),
-                    remediation: None,
-                });
+                match env::current_dir() {
+                    Ok(cwd) => checks.extend(distribution::checks(
+                        &cwd,
+                        options.package.as_deref(),
+                        options.environment.as_deref(),
+                    )),
+                    Err(error) => checks.push(check_unknown(
+                        "distribution.project",
+                        format!("could not determine the current directory: {error}"),
+                    )),
+                }
             }
         }
         "web" => {

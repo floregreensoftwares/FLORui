@@ -202,3 +202,207 @@ fn an_invalid_bundle_value_stops_the_build_before_cargo_runs() {
         "cargo ran: {all}"
     );
 }
+
+// ------------------------------------------------------------------- doctor
+
+fn doctor(dir: &Path, args: &[&str]) -> (Output, Value) {
+    let output = Command::new(env!("CARGO_BIN_EXE_florui"))
+        .args(["doctor", "--json"])
+        .args(args)
+        .current_dir(dir)
+        .env_remove("CARGO_TARGET_DIR")
+        .output()
+        .unwrap();
+    let json = serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|error| panic!("stdout is not JSON ({error}): {}", text(&output)));
+    (output, json)
+}
+
+fn check<'a>(report: &'a Value, id: &str) -> &'a Value {
+    report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["id"] == id)
+        .unwrap_or_else(|| panic!("no check {id} in {report}"))
+}
+
+fn status(report: &Value, id: &str) -> String {
+    check(report, id)["status"].as_str().unwrap().to_string()
+}
+
+fn distribution_ids(report: &Value) -> Vec<String> {
+    report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|check| check["category"] == "distribution")
+        .map(|check| check["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="#c81e3c"/></svg>"##;
+
+const COMPLETE: &str = "schema_version = 1\n\n[app]\nname = \"Garden\"\nidentifier = \"com.example.garden\"\n\n[app.icons]\nsource = \"icon.svg\"\n\n[bundle]\npublisher = \"Floregreen\"\ncopyright = \"Copyright 2026 Garden\"\nlicense = \"MIT OR Apache-2.0\"\nlicense_file = \"LICENSE-MIT\"\ncategory = \"productivity\"\nhomepage = \"https://example.com/garden\"\n";
+
+fn complete_project(dir: &Path) {
+    project(dir, "", Some(COMPLETE));
+    write(dir, "LICENSE-MIT", "The MIT License\n");
+    write(dir, "icon.svg", SVG);
+}
+
+#[test]
+fn a_complete_project_passes_every_distribution_check_and_the_installer_is_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    complete_project(dir.path());
+
+    let (output, report) = doctor(dir.path(), &["--distribution", "--strict"]);
+
+    assert_eq!(output.status.code(), Some(0), "{report}");
+    for id in [
+        "distribution.identifier",
+        "distribution.version",
+        "distribution.publisher",
+        "distribution.license",
+        "distribution.license_file",
+        "distribution.copyright",
+        "distribution.category",
+        "distribution.homepage",
+        "distribution.icon",
+    ] {
+        assert_eq!(status(&report, id), "pass", "{id}: {}", check(&report, id));
+    }
+    assert_eq!(status(&report, "distribution.installer"), "skipped");
+    assert!(!distribution_ids(&report).contains(&"distribution.packaging".to_string()));
+}
+
+#[test]
+fn nothing_is_written_and_nothing_is_reported_without_the_flag() {
+    let dir = tempfile::tempdir().unwrap();
+    complete_project(dir.path());
+    // `cargo metadata`, which resolves the project, writes a missing lockfile
+    // by itself; start from one so what is checked is doctor's own writing.
+    let lock = Command::new("cargo")
+        .arg("generate-lockfile")
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(lock.status.success(), "{}", text(&lock));
+    let before: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+
+    let (_, with) = doctor(dir.path(), &["--distribution"]);
+    let (_, without) = doctor(dir.path(), &[]);
+
+    assert!(!distribution_ids(&with).is_empty());
+    assert!(distribution_ids(&without).is_empty(), "{without}");
+    let after: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(before, after, "doctor created something");
+}
+
+#[test]
+fn a_bare_project_fails_on_the_identifier_and_warns_on_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    project(dir.path(), "", None);
+
+    let (output, report) = doctor(dir.path(), &["--distribution"]);
+
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    assert_eq!(status(&report, "distribution.identifier"), "fail");
+    for id in [
+        "distribution.publisher",
+        "distribution.license",
+        "distribution.license_file",
+        "distribution.copyright",
+        "distribution.icon",
+    ] {
+        assert_eq!(status(&report, id), "warning", "{id}");
+    }
+    assert_eq!(status(&report, "distribution.category"), "not_applicable");
+    assert_eq!(status(&report, "distribution.version"), "pass");
+}
+
+#[test]
+fn warnings_alone_pass_and_strict_turns_them_into_a_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    project(
+        dir.path(),
+        "",
+        Some("schema_version = 1\n[app]\nidentifier = \"com.example.garden\"\n"),
+    );
+
+    let (lenient, _) = doctor(dir.path(), &["--distribution"]);
+    let (strict, _) = doctor(dir.path(), &["--distribution", "--strict"]);
+
+    assert_eq!(lenient.status.code(), Some(0));
+    assert_eq!(strict.status.code(), Some(1));
+}
+
+#[test]
+fn an_invalid_identifier_a_missing_license_file_and_a_broken_icon_fail() {
+    let dir = tempfile::tempdir().unwrap();
+    project(
+        dir.path(),
+        "",
+        Some(
+            &COMPLETE
+                .replace("com.example.garden", "garden")
+                .replace("LICENSE-MIT", "MISSING"),
+        ),
+    );
+    write(dir.path(), "icon.svg", "<svg");
+
+    let (output, report) = doctor(dir.path(), &["--distribution"]);
+
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    assert_eq!(status(&report, "distribution.identifier"), "fail");
+    assert_eq!(status(&report, "distribution.license_file"), "fail");
+    assert_eq!(status(&report, "distribution.icon"), "fail");
+}
+
+#[test]
+fn a_version_that_does_not_map_to_a_windows_version_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    project(
+        dir.path(),
+        "",
+        Some(&COMPLETE.replace(
+            "name = \"Garden\"\n",
+            "name = \"Garden\"\nversion = \"1.70000.0\"\n",
+        )),
+    );
+    write(dir.path(), "icon.svg", SVG);
+    write(dir.path(), "LICENSE-MIT", "x");
+
+    let (output, report) = doctor(dir.path(), &["--distribution"]);
+
+    assert_eq!(status(&report, "distribution.version"), "fail", "{report}");
+    assert_eq!(output.status.code(), Some(1));
+}
+
+#[test]
+fn outside_a_project_the_distribution_checks_are_not_applicable() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let (_, report) = doctor(dir.path(), &["--distribution"]);
+
+    assert_eq!(status(&report, "distribution.project"), "not_applicable");
+}
+
+#[test]
+fn the_web_target_keeps_its_unsupported_report() {
+    let dir = tempfile::tempdir().unwrap();
+    complete_project(dir.path());
+
+    let (_, report) = doctor(dir.path(), &["--target", "web", "--distribution"]);
+
+    assert_eq!(
+        status(&report, "distribution.unsupported_target"),
+        "skipped"
+    );
+}
