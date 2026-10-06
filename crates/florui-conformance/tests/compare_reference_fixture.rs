@@ -72,8 +72,16 @@ fn run_fixture(name: &str) {
     )
     .expect("engine render should succeed");
 
-    let pixel_report = compare_pixels(&capture.image, &engine.image, &PixelDiffOptions::default())
-        .expect("dimensions should match");
+    let tolerance = fixture.manifest.classification.channel_tolerance();
+    let pixel_report = compare_pixels(
+        &capture.image,
+        &engine.image,
+        &PixelDiffOptions {
+            channel_tolerance: tolerance,
+            alpha_tolerance: tolerance,
+        },
+    )
+    .expect("dimensions should match");
     // Per-fixture, not a single constant: measured live against Chromium,
     // most fixtures land at or under 1.0px of their own accord (each
     // engine's own float rounding in text shaping/line-height math), but

@@ -202,6 +202,7 @@ mod tests {
         let tolerant = Classification::Tolerant {
             threshold_percent: 1.0,
             geometry_tolerance_px: 1.5,
+            channel_tolerance: 0,
             reason: "known antialiasing difference".to_owned(),
         };
         assert_eq!(classify(&tolerant, &pixels, &geometry), Outcome::Pass);
