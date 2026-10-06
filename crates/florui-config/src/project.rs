@@ -34,6 +34,12 @@ pub struct CargoProjectFacts {
     pub package_version: String,
     pub example_targets: Vec<String>,
     pub legacy_dev_example: Option<LocatedValue<String>>,
+    /// The package's own Cargo `license` (an SPDX expression), if any.
+    pub license: Option<String>,
+    /// The package's own Cargo `license-file`, as written in its manifest.
+    pub license_file: Option<PathBuf>,
+    /// The package's own Cargo `homepage`, if any.
+    pub homepage: Option<String>,
 }
 
 #[derive(Debug)]
@@ -273,6 +279,9 @@ pub fn parse_cargo_project_facts(
         package_version,
         example_targets,
         legacy_dev_example: None,
+        license: cargo_string(package, "license"),
+        license_file: cargo_string(package, "license_file").map(PathBuf::from),
+        homepage: cargo_string(package, "homepage"),
     })
 }
 
@@ -307,6 +316,15 @@ struct CargoDevProbe {
 /// [`crate::resolve::check_workspace_inheritance`] is the one that
 /// actually needs to surface a manifest parse problem, and only when
 /// `{ workspace = true }` is actually requested.
+/// A non-empty string key of a `cargo metadata` package entry.
+fn cargo_string(package: &Value, key: &str) -> Option<String> {
+    package
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+}
+
 fn extract_legacy_dev_example(manifest_text: &str) -> Option<LocatedValue<String>> {
     let probe: CargoManifestProbe = toml::from_str(manifest_text).ok()?;
     let spanned = probe.package?.metadata?.florui?.dev?.example?;

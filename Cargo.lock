@@ -1789,6 +1789,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "spdx",
  "tempfile",
  "toml",
 ]
@@ -4929,6 +4930,15 @@ dependencies = [
  "web-sys",
  "windows-sys 0.61.2",
  "x11rb",
+]
+
+[[package]]
+name = "spdx"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3e17e880bafaeb362a7b751ec46bdc5b61445a188f80e0606e68167cd540fa3"
+dependencies = [
+ "smallvec",
 ]
 
 [[package]]

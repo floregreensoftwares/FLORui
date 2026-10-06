@@ -165,6 +165,17 @@ pub enum DecorationsSetting {
 #[derive(Debug, Clone, Default)]
 pub struct BundleConfig {
     pub publisher: Option<String>,
+    pub copyright: Option<String>,
+    /// A valid SPDX expression: configured, else the package's Cargo
+    /// `license`.
+    pub license: Option<String>,
+    /// Resolved relative to `florui.config.toml`'s own directory: configured,
+    /// else the package's Cargo `license-file`.
+    pub license_file: Option<PathBuf>,
+    pub category: Option<String>,
+    /// An absolute http(s) URL: configured, else the package's Cargo
+    /// `homepage`.
+    pub homepage: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
