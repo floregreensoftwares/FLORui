@@ -85,18 +85,24 @@ impl std::fmt::Display for ProjectResolutionError {
 
 impl std::error::Error for ProjectResolutionError {}
 
-/// Shells out to `cargo metadata` from `cwd` (no `--no-deps` -- that would
-/// leave `resolve.root` null even when `cwd` resolves unambiguously) and
-/// the resolved package's own `Cargo.toml`, then resolves both into one
+/// Shells out to `cargo metadata --no-deps` from `cwd` and reads the
+/// resolved package's own `Cargo.toml`, then resolves both into one
 /// [`CargoProjectFacts`]. `cwd` is explicit rather than inherited from the
 /// process so this is actually testable against a real temporary
 /// workspace without mutating global process state.
+///
+/// `--no-deps` is deliberate: nothing here needs the dependency graph, and
+/// without it cargo writes a missing `Cargo.lock` as a side effect of
+/// resolving, which a command that must not change the project (`doctor`)
+/// cannot afford, and it would also make this lookup depend on the registry
+/// index. It leaves `resolve.root` null, so the package `cwd` belongs to is
+/// found the way cargo itself finds it: the nearest `Cargo.toml` above `cwd`.
 pub fn resolve_cargo_project(
     cwd: &Path,
     explicit_package: Option<&str>,
 ) -> Result<CargoProjectFacts, ProjectResolutionError> {
     let output = Command::new("cargo")
-        .args(["metadata", "--format-version", "1"])
+        .args(["metadata", "--format-version", "1", "--no-deps"])
         .current_dir(cwd)
         .output()
         .map_err(|err| {
@@ -109,9 +115,12 @@ pub fn resolve_cargo_project(
             String::from_utf8_lossy(&output.stderr)
         )));
     }
-    let metadata: Value = serde_json::from_slice(&output.stdout).map_err(|err| {
+    let mut metadata: Value = serde_json::from_slice(&output.stdout).map_err(|err| {
         ProjectResolutionError::Metadata(format!("could not parse cargo metadata output: {err}"))
     })?;
+    if let Some(root) = package_id_at(&metadata, cwd) {
+        metadata["resolve"] = serde_json::json!({ "root": root });
+    }
     let partial = parse_cargo_project_facts(&metadata, explicit_package)?;
 
     let manifest_text = std::fs::read_to_string(&partial.manifest_path).map_err(|err| {
@@ -307,15 +316,6 @@ struct CargoDevProbe {
     example: Option<toml::Spanned<String>>,
 }
 
-/// Pulls `[package.metadata.florui.dev].example` out of a `Cargo.toml`'s
-/// raw text, with its span -- not from `cargo metadata`'s JSON, which
-/// carries no spans. Not `deny_unknown_fields`: a real `Cargo.toml` has
-/// many fields this probe doesn't care about. A manifest this probe can't
-/// even parse (which would mean cargo itself couldn't have resolved this
-/// project) yields `None` rather than propagating a parse error here --
-/// [`crate::resolve::check_workspace_inheritance`] is the one that
-/// actually needs to surface a manifest parse problem, and only when
-/// `{ workspace = true }` is actually requested.
 /// A non-empty string key of a `cargo metadata` package entry.
 fn cargo_string(package: &Value, key: &str) -> Option<String> {
     package
@@ -325,6 +325,52 @@ fn cargo_string(package: &Value, key: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The id of the workspace member whose manifest is the nearest `Cargo.toml`
+/// at or above `cwd`, which is the package cargo itself would build from
+/// there. `None` when that manifest is a virtual workspace root (it has no
+/// package) or no member owns it.
+fn package_id_at(metadata: &Value, cwd: &Path) -> Option<String> {
+    let nearest = cwd
+        .ancestors()
+        .map(|dir| dir.join("Cargo.toml"))
+        .find(|manifest| manifest.is_file())?;
+    let nearest = std::fs::canonicalize(nearest).ok()?;
+    let members: Vec<&str> = metadata
+        .get("workspace_members")?
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    metadata
+        .get("packages")?
+        .as_array()?
+        .iter()
+        .filter(|package| {
+            package
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| members.contains(&id))
+        })
+        .find(|package| {
+            package
+                .get("manifest_path")
+                .and_then(Value::as_str)
+                .and_then(|path| std::fs::canonicalize(path).ok())
+                .is_some_and(|manifest| manifest == nearest)
+        })
+        .and_then(|package| package.get("id")?.as_str())
+        .map(str::to_owned)
+}
+
+/// Pulls `[package.metadata.florui.dev].example` out of a `Cargo.toml`'s
+/// raw text, with its span -- not from `cargo metadata`'s JSON, which
+/// carries no spans. Not `deny_unknown_fields`: a real `Cargo.toml` has
+/// many fields this probe doesn't care about. A manifest this probe can't
+/// even parse (which would mean cargo itself couldn't have resolved this
+/// project) yields `None` rather than propagating a parse error here --
+/// [`crate::resolve::check_workspace_inheritance`] is the one that
+/// actually needs to surface a manifest parse problem, and only when
+/// `{ workspace = true }` is actually requested.
 fn extract_legacy_dev_example(manifest_text: &str) -> Option<LocatedValue<String>> {
     let probe: CargoManifestProbe = toml::from_str(manifest_text).ok()?;
     let spanned = probe.package?.metadata?.florui?.dev?.example?;
