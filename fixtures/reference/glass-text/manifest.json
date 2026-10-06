@@ -1,0 +1,53 @@
+{
+  "id": "glass-text",
+  "description": "Text under a glass panel is blurred with the backdrop; text above it stays sharp.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 220,
+    "height_css_px": 120,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "scene",
+    "css": ".scene { position: relative; width: 220px; height: 120px; background-color: #1b1b2f; overflow: hidden; } .s1 { position: absolute; left: 0px; top: 0px; width: 110px; height: 120px; background-color: #ff5a5f; } .s2 { position: absolute; left: 110px; top: 0px; width: 110px; height: 120px; background-color: #2ec4b6; } .under { position: absolute; left: 20px; top: 20px; font-size: 28px; font-weight: 700; color: #ffffff; } .glass { position: absolute; left: 14px; top: 14px; width: 192px; height: 52px; border-radius: 14px; background-color: rgba(255, 255, 255, 0.14); backdrop-filter: blur(5px); } .over { position: absolute; left: 24px; top: 78px; font-size: 18px; color: #ffffff; }",
+    "children": [
+      {
+        "tag": "div",
+        "class": "s1",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "s2",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "under",
+        "text": "Under glass",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "glass",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "over",
+        "text": "Above the backdrop",
+        "css": ""
+      }
+    ]
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 8,
+    "channel_tolerance": 8,
+    "reason": "Chromium and this engine build a Gaussian blur differently (kernel shape and rounding), so a pixel in the blurred area differs by a few levels of 255 and a pixel at a steep colour edge by more. Measured against desktop Chrome: 4.1% differ by more than 8 levels, almost all of them the glyph edges of the text (Chromium and this engine antialias text differently, as in div-default), 30% by any amount, max 162 on a glyph edge. channel_tolerance 8 stops the harmless rounding from counting; the percentage left is the steep edges. With the backdrop blur read past the panel edge as transparent instead of mirrored (the defect this fixture found), about 30% of the pixels differed by more than that."
+  }
+}

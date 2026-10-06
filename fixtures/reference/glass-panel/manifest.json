@@ -1,0 +1,46 @@
+{
+  "id": "glass-panel",
+  "description": "A translucent rounded panel with a light border and a shadow, blurring and saturating the colored shapes behind it: the basic glass surface.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 200,
+    "height_css_px": 140,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "scene",
+    "css": ".scene { position: relative; width: 200px; height: 140px; background-color: #1b1b2f; overflow: hidden; } .s1 { position: absolute; left: 10px; top: 10px; width: 90px; height: 90px; background-color: #ff5a5f; border-radius: 45px; } .s2 { position: absolute; left: 80px; top: 50px; width: 100px; height: 70px; background-color: #2ec4b6; } .s3 { position: absolute; left: 20px; top: 90px; width: 70px; height: 40px; background-color: #ffd166; } .glass { position: absolute; left: 40px; top: 30px; width: 120px; height: 80px; border-radius: 20px; background-color: rgba(255, 255, 255, 0.18); border: 1px solid rgba(255, 255, 255, 0.4); box-shadow: 0px 8px 24px 0px rgba(0, 0, 0, 0.35); backdrop-filter: blur(8px) saturate(1.5); }",
+    "children": [
+      {
+        "tag": "div",
+        "class": "s1",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "s2",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "s3",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "glass",
+        "css": ""
+      }
+    ]
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 2,
+    "channel_tolerance": 8,
+    "reason": "Chromium and this engine build a Gaussian blur differently (kernel shape and rounding), so a pixel in the blurred area differs by a few levels of 255 and a pixel at a steep colour edge by more. Measured against desktop Chrome: 0.54% of pixels differ by more than 8 levels (43% by any amount, mean error 0.8, max 26), geometry an exact match. channel_tolerance 8 stops the harmless rounding from counting; the percentage left is the steep edges. With the backdrop blur read past the panel edge as transparent instead of mirrored (the defect this fixture found), about 30% of the pixels differed by more than that."
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "id": "glass-overlap",
+  "description": "Two overlapping glass panels over colored shapes: the second one's backdrop already contains the first one's blurred, tinted result, and the first keeps its own blur where the second does not cover it.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 220,
+    "height_css_px": 150,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "scene",
+    "css": ".scene { position: relative; width: 220px; height: 150px; background-color: #1b1b2f; overflow: hidden; } .s1 { position: absolute; left: 10px; top: 14px; width: 100px; height: 100px; background-color: #ff5a5f; border-radius: 50px; } .s2 { position: absolute; left: 100px; top: 40px; width: 100px; height: 80px; background-color: #2ec4b6; } .s3 { position: absolute; left: 30px; top: 100px; width: 120px; height: 36px; background-color: #ffd166; } .a { position: absolute; left: 24px; top: 24px; width: 110px; height: 70px; border-radius: 18px; background-color: rgba(255, 255, 255, 0.16); backdrop-filter: blur(6px) saturate(1.4); } .b { position: absolute; left: 84px; top: 56px; width: 110px; height: 70px; border-radius: 18px; background-color: rgba(255, 255, 255, 0.16); backdrop-filter: blur(6px) saturate(1.4); }",
+    "children": [
+      {
+        "tag": "div",
+        "class": "s1",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "s2",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "s3",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "a",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "b",
+        "css": ""
+      }
+    ]
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 1,
+    "channel_tolerance": 8,
+    "reason": "Chromium and this engine build a Gaussian blur differently (kernel shape and rounding), so a pixel in the blurred area differs by a few levels of 255 and a pixel at a steep colour edge by more. Measured against desktop Chrome: 0.25% differ by more than 8 levels (20% by any amount, mean error 0.4, max 28). channel_tolerance 8 stops the harmless rounding from counting; the percentage left is the steep edges. With the backdrop blur read past the panel edge as transparent instead of mirrored (the defect this fixture found), about 30% of the pixels differed by more than that."
+  }
+}
