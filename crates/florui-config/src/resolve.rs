@@ -10,7 +10,7 @@ use crate::error::{
 use crate::location::{LineIndex, SourceLocation};
 use crate::project::{CargoProjectFacts, config_file_path, parse_package_version};
 use crate::resolved::{
-    ActivationConfig, AppConfig, BundleConfig, DecorationsSetting, DevConfig, FieldProvenance,
+    ActivationConfig, AppConfig, DecorationsSetting, DevConfig, FieldProvenance,
     FileAssociationConfig, IconsConfig, LocaleConfig, LocalesConfig, Provenance, ResolvedConfig,
     Target, WebConfig, WebIconsConfig, WindowConfig, WindowPersistenceConfig,
 };
@@ -202,6 +202,10 @@ pub fn resolve(
                 },
             });
         }
+    }
+
+    if let Some(bundle) = raw.as_ref().and_then(|c| c.bundle.as_ref()) {
+        crate::bundle::validate(bundle, &config_path, lines.as_ref().unwrap(), &mut errors);
     }
 
     if let Some(web) = raw.as_ref().and_then(|c| c.web.as_ref()) {
@@ -456,7 +460,15 @@ pub fn resolve(
         "bundle.publisher",
         &mut provenance,
     );
-    let bundle = BundleConfig { publisher };
+    let bundle = crate::bundle::resolve(
+        raw_bundle,
+        publisher,
+        facts,
+        icons_dir,
+        lines.as_ref(),
+        &mut provenance,
+        &mut diagnostics,
+    );
 
     let example = match new_dev_example {
         Some(spanned) => {
@@ -1413,6 +1425,9 @@ mod tests {
             package_version: "0.1.0".to_owned(),
             example_targets: Vec::new(),
             legacy_dev_example: None,
+            license: None,
+            license_file: None,
+            homepage: None,
         }
     }
 
@@ -1807,6 +1822,197 @@ mod tests {
         write(dir.path(), "florui.config.toml", "schema_version = 1\n");
         let resolution = resolve(&facts(dir.path(), ""), None, None).unwrap();
         assert_eq!(resolution.config.web.base_path, "/");
+    }
+
+    fn bundle_provenance(resolution: &Resolution, name: &str) -> Provenance {
+        resolution
+            .provenance
+            .iter()
+            .find(|p| p.field == name)
+            .unwrap_or_else(|| panic!("no provenance for {name}"))
+            .provenance
+            .clone()
+    }
+
+    fn bundle_errors(dir: &Path, bundle: &str) -> Vec<String> {
+        write(
+            dir,
+            "florui.config.toml",
+            &format!("schema_version = 1\n[bundle]\n{bundle}"),
+        );
+        match resolve(&facts(dir, ""), None, None).unwrap_err() {
+            ConfigError::Semantic(errors) => errors.iter().map(ToString::to_string).collect(),
+            other => panic!("expected Semantic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_bundle_field_resolves_with_its_location() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "LICENSE-MIT", "MIT");
+        write(
+            dir.path(),
+            "florui.config.toml",
+            "schema_version = 1\n[bundle]\npublisher = \"Floregreen\"\ncopyright = \"Copyright 2026 Garden\"\nlicense = \"MIT OR Apache-2.0\"\nlicense_file = \"LICENSE-MIT\"\ncategory = \"productivity\"\nhomepage = \"https://example.com/garden\"\n",
+        );
+
+        let resolution = resolve(&facts(dir.path(), ""), None, None).unwrap();
+
+        let bundle = &resolution.config.bundle;
+        assert_eq!(bundle.copyright.as_deref(), Some("Copyright 2026 Garden"));
+        assert_eq!(bundle.license.as_deref(), Some("MIT OR Apache-2.0"));
+        assert_eq!(bundle.license_file, Some(dir.path().join("LICENSE-MIT")));
+        assert_eq!(bundle.category.as_deref(), Some("productivity"));
+        assert_eq!(
+            bundle.homepage.as_deref(),
+            Some("https://example.com/garden")
+        );
+        match bundle_provenance(&resolution, "bundle.license") {
+            Provenance::ConfigFile(Some(location)) => assert_eq!(location.line, 5),
+            other => panic!("expected a config location, got {other:?}"),
+        }
+        assert!(
+            resolution.diagnostics.is_empty(),
+            "{:?}",
+            resolution.diagnostics
+        );
+    }
+
+    #[test]
+    fn a_silent_configuration_inherits_cargo_license_file_and_homepage() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "NOTICE", "notice");
+        let mut package = facts(dir.path(), "");
+        package.license = Some("Apache-2.0".to_owned());
+        package.license_file = Some(PathBuf::from("NOTICE"));
+        package.homepage = Some("https://cargo.example".to_owned());
+
+        let resolution = resolve(&package, None, None).unwrap();
+
+        let bundle = &resolution.config.bundle;
+        assert_eq!(bundle.license.as_deref(), Some("Apache-2.0"));
+        assert_eq!(bundle.license_file, Some(dir.path().join("NOTICE")));
+        assert_eq!(bundle.homepage.as_deref(), Some("https://cargo.example"));
+        for name in ["bundle.license", "bundle.license_file", "bundle.homepage"] {
+            assert_eq!(
+                bundle_provenance(&resolution, name),
+                Provenance::CargoManifest
+            );
+        }
+        assert_eq!(
+            bundle_provenance(&resolution, "bundle.copyright"),
+            Provenance::BuiltinDefault
+        );
+    }
+
+    #[test]
+    fn a_configured_value_wins_over_cargo_and_nothing_else_is_inherited() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "florui.config.toml",
+            "schema_version = 1\n[bundle]\nlicense = \"MIT\"\nhomepage = \"https://config.example\"\n",
+        );
+        let mut package = facts(dir.path(), "");
+        package.license = Some("Apache-2.0".to_owned());
+        package.homepage = Some("https://cargo.example".to_owned());
+
+        let resolution = resolve(&package, None, None).unwrap();
+
+        let bundle = &resolution.config.bundle;
+        assert_eq!(bundle.license.as_deref(), Some("MIT"));
+        assert_eq!(bundle.homepage.as_deref(), Some("https://config.example"));
+        assert!(matches!(
+            bundle_provenance(&resolution, "bundle.license"),
+            Provenance::ConfigFile(Some(_))
+        ));
+        assert_eq!(bundle.copyright, None);
+        assert_eq!(bundle.category, None);
+    }
+
+    #[test]
+    fn an_invalid_cargo_value_is_a_warning_and_is_not_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut package = facts(dir.path(), "");
+        package.license = Some("MIT/Apache-2.0".to_owned());
+        package.homepage = Some("not a url".to_owned());
+
+        let resolution = resolve(&package, None, None).unwrap();
+
+        assert_eq!(resolution.config.bundle.license, None);
+        assert_eq!(resolution.config.bundle.homepage, None);
+        let fields: Vec<&str> = resolution.diagnostics.iter().map(|d| d.field).collect();
+        assert!(fields.contains(&"bundle.license") && fields.contains(&"bundle.homepage"));
+    }
+
+    #[test]
+    fn an_invalid_license_names_the_field_and_the_line() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let errors = bundle_errors(dir.path(), "license = \"Aache-2.0\"\n");
+
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(
+            errors[0].contains("bundle.license") && errors[0].contains("SPDX"),
+            "{errors:?}"
+        );
+        assert!(errors[0].contains(":3:"), "{errors:?}");
+    }
+
+    #[test]
+    fn each_bad_bundle_value_is_reported_with_its_own_error() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let errors = bundle_errors(
+            dir.path(),
+            "copyright = \"\"\ncategory = \"Productivity\"\nhomepage = \"https://u:p@example.com\"\nlicense_file = \"../LICENSE\"\nlicense = \"MIT OR\"\n",
+        );
+
+        assert_eq!(errors.len(), 5, "{errors:?}");
+        for field in [
+            "copyright",
+            "category",
+            "homepage",
+            "license_file",
+            "license",
+        ] {
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| e.contains(&format!("bundle.{field} "))),
+                "{field}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_license_file_is_a_warning_not_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "florui.config.toml",
+            "schema_version = 1\n[bundle]\nlicense_file = \"LICENSE-MIT\"\n",
+        );
+
+        let resolution = resolve(&facts(dir.path(), ""), None, None).unwrap();
+
+        assert!(resolution.diagnostics.iter().any(|d| {
+            d.code == "config.bundle_license_file_present" && d.message.contains("LICENSE-MIT")
+        }));
+    }
+
+    #[test]
+    fn an_unknown_bundle_key_is_still_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "florui.config.toml",
+            "schema_version = 1\n[bundle]\nrepository = \"https://example.com\"\n",
+        );
+
+        let error = resolve(&facts(dir.path(), ""), None, None).unwrap_err();
+
+        assert!(error.to_string().contains("repository"), "{error}");
     }
 
     #[test]

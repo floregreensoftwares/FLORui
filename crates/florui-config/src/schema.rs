@@ -178,6 +178,15 @@ pub(crate) enum RawDecorations {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawBundle {
     pub(crate) publisher: Option<String>,
+    pub(crate) copyright: Option<Spanned<String>>,
+    /// An SPDX expression. Falls back to the package's Cargo `license`.
+    pub(crate) license: Option<Spanned<String>>,
+    /// Relative to the configuration file. Falls back to the package's
+    /// Cargo `license-file`.
+    pub(crate) license_file: Option<Spanned<String>>,
+    pub(crate) category: Option<Spanned<String>>,
+    /// Falls back to the package's Cargo `homepage`.
+    pub(crate) homepage: Option<Spanned<String>>,
 }
 
 #[derive(Deserialize, Debug)]

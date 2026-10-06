@@ -12,6 +12,7 @@
 //! and named `[environments.<name>]` overlays (scoped to `app.identifier`,
 //! `app.name`, `app.description`, and `app.icons.*`).
 
+mod bundle;
 mod error;
 mod location;
 mod project;

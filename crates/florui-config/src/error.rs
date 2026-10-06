@@ -113,6 +113,12 @@ pub enum SemanticConfigError {
         location: SourceLocation,
         reason: FileAssociationError,
     },
+    InvalidBundleField {
+        config_path: PathBuf,
+        field: &'static str,
+        location: SourceLocation,
+        reason: String,
+    },
     InvalidDefaultLocale {
         config_path: PathBuf,
         requested: String,
@@ -247,6 +253,16 @@ impl fmt::Display for SemanticConfigError {
             } => write!(
                 f,
                 "{}:{location}: app.activation.file_associations entry is invalid: {reason}",
+                config_path.display()
+            ),
+            SemanticConfigError::InvalidBundleField {
+                config_path,
+                field,
+                location,
+                reason,
+            } => write!(
+                f,
+                "{}:{location}: bundle.{field} {reason}",
                 config_path.display()
             ),
             SemanticConfigError::InvalidDefaultLocale {
