@@ -51,7 +51,7 @@ pub struct FrameReport {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ReloadReport {
     /// Watcher report to the frame's first measured work: the event loop
-    /// waking up, reading and parsing the file.
+    /// waking up. Reading and parsing the file are measured work of the frame.
     pub to_frame_ms: f64,
     pub frame_ms: f64,
     /// Watcher report to the present call returning.
@@ -91,7 +91,9 @@ fn depth_of(phase: Phase) -> u8 {
         | Phase::Acquire
         | Phase::Submit
         | Phase::Flip => 1,
-        Phase::Update
+        Phase::StylesheetRead
+        | Phase::StylesheetParse
+        | Phase::Update
         | Phase::Restyle
         | Phase::PaintParts
         | Phase::Accessibility
@@ -280,12 +282,13 @@ pub fn draw(ui: &mut egui::Ui, model: &ProfileModel) -> Option<ProfileAction> {
         if let Some(reload) = &frame.reload {
             ui.monospace(format!(
                 "stylesheet reload: {:.2} ms from the file event to the frame, \
-                 {:.2} ms frame, {:.2} ms until present returned",
+                 {:.2} ms frame (reading the file included), {:.2} ms until present returned",
                 reload.to_frame_ms, reload.frame_ms, reload.to_present_ms
             ));
             ui.label(
                 "From the watcher's report, not the file write, to the present call \
-                 returning, not the screen.",
+                 returning, not the screen. Opening a file that was just saved can wait on \
+                 the operating system (an antivirus scan, for one): see stylesheet-read below.",
             );
         }
         ui.separator();
@@ -530,6 +533,34 @@ mod tests {
         assert_eq!(report.to_frame_ms, 10.0);
         assert_eq!(report.frame_ms, 10.0);
         assert_eq!(report.to_present_ms, 20.0);
+    }
+
+    #[test]
+    fn reading_and_parsing_the_stylesheet_are_phases_of_their_own_in_the_frame() {
+        let mut f = frame(1, 40);
+        f.phases.insert(
+            0,
+            PhaseTotal {
+                phase: Phase::StylesheetRead,
+                calls: 1,
+                total: ms(19),
+            },
+        );
+        f.phases.insert(
+            1,
+            PhaseTotal {
+                phase: Phase::StylesheetParse,
+                calls: 1,
+                total: ms(1),
+            },
+        );
+
+        let lines = build(&[f], &[], true, None).frame.unwrap().phases;
+
+        assert_eq!(lines[0].name, "stylesheet-read");
+        assert_eq!((lines[0].depth, lines[0].ms), (0, 19.0));
+        assert_eq!(lines[1].name, "stylesheet-parse");
+        assert_eq!(lines[1].depth, 0);
     }
 
     #[test]

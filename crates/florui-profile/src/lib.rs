@@ -30,6 +30,12 @@ pub const MAX_SPANS_PER_FRAME: usize = 4096;
 /// with them; every phase's total is inclusive of anything nested in it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Phase {
+    /// Opening and reading the stylesheet file for a reload. Opening a file that
+    /// was just saved can wait on the operating system, for instance on an
+    /// antivirus scan, so this is not always the framework's time.
+    StylesheetRead,
+    /// Parsing the stylesheet text of a reload.
+    StylesheetParse,
     /// One re-render of the tree against the viewport: everything below until
     /// `Observers`.
     Update,
@@ -74,7 +80,9 @@ pub enum Phase {
 }
 
 impl Phase {
-    pub const ALL: [Phase; 19] = [
+    pub const ALL: [Phase; 21] = [
+        Phase::StylesheetRead,
+        Phase::StylesheetParse,
         Phase::Update,
         Phase::Restyle,
         Phase::Render,
@@ -98,6 +106,8 @@ impl Phase {
 
     pub fn name(self) -> &'static str {
         match self {
+            Phase::StylesheetRead => "stylesheet-read",
+            Phase::StylesheetParse => "stylesheet-parse",
             Phase::Update => "update",
             Phase::Restyle => "restyle",
             Phase::Render => "render",
@@ -613,6 +623,29 @@ mod tests {
         finish_frame(Vec::new());
 
         assert_eq!(frames()[0].stylesheet_reload, None);
+    }
+
+    #[test]
+    fn reading_and_parsing_a_stylesheet_start_the_frame_they_belong_to() {
+        start(false);
+        let before = now();
+        {
+            let _span = span(Phase::StylesheetRead);
+            busy(2);
+        }
+        {
+            let _span = span(Phase::StylesheetParse);
+        }
+        {
+            let _span = span(Phase::Update);
+        }
+        finish_frame(Vec::new());
+
+        let frame = &frames()[0];
+        let names: Vec<&str> = frame.phases.iter().map(|p| p.phase.name()).collect();
+        assert_eq!(names, ["stylesheet-read", "stylesheet-parse", "update"]);
+        assert!(frame.start >= before && frame.start <= before + Duration::from_millis(1));
+        assert!(frame.total(Phase::StylesheetRead) >= Duration::from_millis(2));
     }
 
     #[test]

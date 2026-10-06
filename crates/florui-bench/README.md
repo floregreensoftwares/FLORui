@@ -126,10 +126,16 @@ real window in a child process, rewrites its stylesheet and reports how long it 
 color is composed on the screen, split into intervals that add up to the total:
 
 1. the file written to the watcher reporting it;
-2. the watcher's report to the frame's first measured work (the event loop waking up, reading and
-   parsing the file);
-3. the frame itself: restyle, layout, raster and the present call;
+2. the watcher's report to the frame's first measured work (the event loop waking up);
+3. the frame itself: reading and parsing the stylesheet, restyle, layout, raster and the present
+   call;
 4. the present call returning to the compositor presenting the frame.
+
+Reading and parsing the stylesheet became measured phases of the frame (`stylesheet-read` and
+`stylesheet-parse`) after the reports recorded below were taken: those reports count them in
+interval 2, so the two intervals do not compare across that change (the total does). Reading is the
+phase that can wait on the operating system, so it is the one to look at when a large stylesheet
+reloads slowly.
 
 All of it is on the QPC clock. The window process prints each frame's watcher stamp, start and end
 (through the profiler's frame sink); the compositor's time comes from DXGI desktop duplication, which

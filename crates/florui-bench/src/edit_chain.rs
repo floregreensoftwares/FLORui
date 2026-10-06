@@ -70,9 +70,11 @@ pub struct Sample {
     /// The file written to the watcher reporting it.
     pub write_to_event_ms: f64,
     /// The watcher's report to the frame's first measured work: the event loop
-    /// waking up, reading and parsing the file.
+    /// waking up. Reading and parsing the file belong to the frame since the
+    /// profiler measures them; reports from before that count them here.
     pub event_to_frame_ms: f64,
-    /// The frame: restyle, layout, raster and the present call.
+    /// The frame: reading and parsing the stylesheet, restyle, layout, raster
+    /// and the present call.
     pub frame_ms: f64,
     /// The present call returning to the compositor presenting the frame.
     /// Negative when the compositor presented before the call returned.
@@ -193,9 +195,10 @@ type Pick = fn(&Sample) -> f64;
 const COLUMNS: [(&str, Pick); 5] = [
     ("file write to watcher report", |s| s.write_to_event_ms),
     ("watcher report to frame start", |s| s.event_to_frame_ms),
-    ("frame (restyle, layout, raster, present call)", |s| {
-        s.frame_ms
-    }),
+    (
+        "frame (read, parse, restyle, layout, raster, present call)",
+        |s| s.frame_ms,
+    ),
     ("present call returned to composed", |s| {
         s.present_to_composed_ms
     }),
