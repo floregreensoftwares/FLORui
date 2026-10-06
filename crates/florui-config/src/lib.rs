@@ -14,6 +14,7 @@
 
 mod bundle;
 mod error;
+mod json_schema;
 mod location;
 mod project;
 mod resolve;
@@ -24,6 +25,7 @@ pub use error::{
     ActivationError, ConfigError, Diagnostic, FileAssociationError, SemanticConfigError, Severity,
     WindowSizeError, WorkspaceInheritanceError,
 };
+pub use json_schema::{SCHEMA_FILE_NAME, json_schema, json_schema_pretty};
 pub use location::SourceLocation;
 pub use project::{
     CargoProjectFacts, ProjectResolutionError, config_file_path, parse_cargo_project_facts,

@@ -10,7 +10,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
-use toml::Spanned;
+use crate::schema::Spanned;
 
 use crate::error::{Diagnostic, SemanticConfigError, Severity};
 use crate::location::LineIndex;
