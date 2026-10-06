@@ -160,13 +160,31 @@ headless `css_reload_100_rows` and `css_reload_1k_rows` workloads (parse, instal
 stylesheet swap that changes layout); they build the accessibility tree too, which the window does not
 unless a screen reader is attached.
 
+## Presenting a frame
+
+`florui-bench present [--sizes WxH,WxH] [--frames N] [--warmup N] [--out-dir DIR]` opens a real window
+in a child process at each size (800x600, 1920x1080 and 3840x2160 by default), repaints it every
+refresh with an animation, and prints the median of each phase of presenting from the profiler's frame
+sink once the window has warmed up: `upload`, `acquire`, `submit`, `flip`, the whole `present`, and
+`raster` and `update` beside them. The window's client area is read back, so a window the system made
+another size is reported as that size, and a window that fell back to the software presenter is said
+to have no upload, acquire, submit or flip, only the whole present.
+
+It needs Windows, a release build with `--features profiling`, and a desktop session nobody is
+using, like `edit-latency`. `acquire` is a wait for the surface and not work; in these runs it is near
+0.01 ms because the host schedules an animation's frames on its own 16 ms timer (read in the code),
+so it does not show what a faster repaint would wait for. The GPU's own work in a present is not in
+the table: measured apart with timestamp queries on the same adapter it is 0.007 ms at 800x600 and
+about 0.11 ms at 4K (issue 233), which is why per-frame GPU timing was not built.
+
 ## What it does not measure
 
 The other workloads run in a headless window: update, layout, paint and the
-accessibility tree, all CPU work. Presentation and GPU time are not included in
-them; `edit-latency` above covers presentation to the compositor for a
-stylesheet edit only. Results are for the machine in the report; compare
-only runs from the same machine.
+accessibility tree, all CPU work. Presentation is not included in them;
+`edit-latency` above covers presentation to the compositor for a stylesheet
+edit only, and `present` the cost of the present call by window size. GPU
+execution time is not measured per frame (see above). Results are for the
+machine in the report; compare only runs from the same machine.
 
 ## Recorded baselines
 
@@ -237,5 +255,15 @@ engine improves.
   same for any program that reads a file as it is saved. Median totals, current against deduplicated, without an interval (this is two
   runs, not an `ab`): 1 KB 15.9 and 14.9 ms, 20 KB 35.7 and 31.6, 100 KB 55.6 and 44.9, and 1,000 rows
   with 20 KB 56.6 and 45.9.
+
+- `present-a799ebf`: three runs of `present` (400 frames after 80 of warm-up per size) on the
+  development machine, an NVIDIA GeForce RTX 5060 and a window the system gave exactly the size asked
+  for, release with the profiler idle. Medians of the three, in milliseconds: upload 0.26 at 800x600
+  (0.48 megapixels), 0.75 at 1920x1080 (2.07) and 3.9 at 3840x2160 (8.29), that is 0.36 to 0.54 ms
+  per megapixel; the whole present 0.76, 1.27 and 4.6; submit 0.2 to 0.3 and flip 0.23 to 0.3 at every
+  size; raster 0.7, 2.7 and 12.7, so the present costs a little more than painting at 800x600, about
+  half of it at 1920x1080 and about a third at 4K. The runs differ from each other by less than 2% in upload at each size. Only the
+  adapter with the display attached was tried: not an integrated GPU, not the software presenter, not
+  the DirectComposition path of transparent windows.
 
 Repeat a measurement on a quiet machine before trusting a small difference.
