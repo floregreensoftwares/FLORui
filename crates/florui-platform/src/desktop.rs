@@ -1696,7 +1696,11 @@ impl WindowState {
         let Some(path) = self.css_path.clone() else {
             return;
         };
-        let text = match std::fs::read_to_string(&path) {
+        let read = {
+            let _span = florui_profile::span(florui_profile::Phase::StylesheetRead);
+            std::fs::read_to_string(&path)
+        };
+        let text = match read {
             // One save reaches the watcher as two events moments apart; the
             // second finds what the first already installed.
             Ok(text) if !is_new_stylesheet(self.applied_css.as_deref(), &text) => return,
@@ -1709,7 +1713,11 @@ impl WindowState {
                 return;
             }
         };
-        match florui_style::parse_stylesheet(&text).map_err(RunError::Stylesheet) {
+        let parsed = {
+            let _span = florui_profile::span(florui_profile::Phase::StylesheetParse);
+            florui_style::parse_stylesheet(&text)
+        };
+        match parsed.map_err(RunError::Stylesheet) {
             Ok(rules) => {
                 self.runtime.set_rules(rules);
                 self.applied_css = Some(text);
