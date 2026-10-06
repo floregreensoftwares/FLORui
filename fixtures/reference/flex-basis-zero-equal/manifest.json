@@ -1,0 +1,96 @@
+{
+  "id": "flex-basis-zero-equal",
+  "description": "Flex items with a zero basis and different text share the row equally",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 400,
+    "height_css_px": 120,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "row",
+    "css": ".row { display: flex; flex-direction: row; gap: 10px; width: 400px; font-size: 14px; } .card { display: flex; flex-direction: column; flex-grow: 1; flex-basis: 0; padding: 10px; background-color: #446; color: #fff; } .big { font-size: 24px; }",
+    "children": [
+      {
+        "tag": "div",
+        "class": "card",
+        "css": "",
+        "children": [
+          {
+            "tag": "span",
+            "text": "Files",
+            "css": ""
+          },
+          {
+            "tag": "span",
+            "class": "big",
+            "text": "12,408",
+            "css": ""
+          },
+          {
+            "tag": "span",
+            "text": "+128 this week",
+            "css": ""
+          }
+        ]
+      },
+      {
+        "tag": "div",
+        "class": "card",
+        "css": "",
+        "children": [
+          {
+            "tag": "span",
+            "text": "Shared",
+            "css": ""
+          },
+          {
+            "tag": "span",
+            "class": "big",
+            "text": "46",
+            "css": ""
+          },
+          {
+            "tag": "span",
+            "text": "4 new",
+            "css": ""
+          }
+        ]
+      },
+      {
+        "tag": "div",
+        "class": "card",
+        "css": "",
+        "children": [
+          {
+            "tag": "span",
+            "text": "Trash",
+            "css": ""
+          },
+          {
+            "tag": "span",
+            "class": "big",
+            "text": "312 MB",
+            "css": ""
+          },
+          {
+            "tag": "span",
+            "text": "auto-clears in 9d",
+            "css": ""
+          }
+        ]
+      }
+    ]
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 12,
+    "geometry_tolerance_px": 1,
+    "channel_tolerance": 0,
+    "reason": "Geometry matches Chromium within 0.1px; the remaining difference is text antialiasing (about 9% of pixels measured), as in the other fixtures that render text."
+  }
+}
