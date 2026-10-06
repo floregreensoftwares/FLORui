@@ -19,11 +19,13 @@ use florui_conformance::run_history::{
     self, BaselineSelector, DeltaStatus, FixtureOutcome, RunManifest, RunReport, RunStatus,
 };
 use florui_devtools::diagnostics::{dim_text, failure, success};
+use test_cmd::{Suite, SuiteOutcome};
 
 mod build;
 mod doctor;
 mod fmt;
 mod new;
+mod test_cmd;
 
 #[derive(Parser)]
 #[command(name = "florui", about = "Florui project CLI")]
@@ -73,8 +75,19 @@ enum Command {
         #[arg(long, conflicts_with = "fixture")]
         example: Option<String>,
     },
-    /// Run the Cargo test suite plus the visual/geometry reference fixtures.
-    Test,
+    /// Runs the selected package's Cargo tests (never the whole workspace)
+    /// and the reference fixtures against Chromium, then prints which suites
+    /// passed, failed or were skipped. Arguments after `--` go to
+    /// `cargo test`.
+    Test {
+        /// Which suites to run. Asking for `visual` by name fails when its
+        /// fixtures or Chromium are missing; under `all` it is reported as
+        /// skipped.
+        #[arg(long, value_enum, default_value = "all")]
+        suite: Suite,
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
     /// Compare a reference fixture's Chromium capture against Florui's own render.
     Compare {
         /// Directory containing the fixture's manifest.json, HTML, and CSS.
@@ -196,7 +209,7 @@ fn main() -> ExitCode {
             None => run_dev_example(cli.package, example, cli.environment),
         },
         Command::New { name } => new::run(&name),
-        Command::Test => run_test(),
+        Command::Test { suite, args } => run_test(cli.package, suite, args),
         Command::Compare {
             fixture,
             chromium,
@@ -979,56 +992,66 @@ fn run_compare_all(
     }
 }
 
-fn run_test() -> ExitCode {
-    println!("{}", dim_text("running cargo test --workspace..."));
-    let cargo_ok = match std::process::Command::new("cargo")
-        .args(["test", "--workspace"])
+fn run_test(package: Option<String>, suite: Suite, extra: Vec<String>) -> ExitCode {
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(err) => return fail(format!("could not read the current directory: {err}")),
+    };
+    let facts = match florui_config::resolve_cargo_project(&cwd, package.as_deref()) {
+        Ok(facts) => facts,
+        Err(err) => return fail(err.to_string()),
+    };
+
+    let mut results = Vec::new();
+    if suite.includes_cargo() {
+        results.push(("cargo", run_cargo_suite(&facts, &extra)));
+    }
+    if suite.includes_visual() {
+        results.push(("visual", run_visual_suite(&facts, suite)));
+    }
+    test_cmd::summarize(&results)
+}
+
+fn run_cargo_suite(facts: &florui_config::CargoProjectFacts, extra: &[String]) -> SuiteOutcome {
+    let args = test_cmd::cargo_args(&facts.package_name, extra);
+    println!("{}", dim_text(&format!("running cargo {}", args.join(" "))));
+    match ChildCommand::new("cargo")
+        .args(&args)
+        .current_dir(&facts.package_root)
         .status()
     {
-        Ok(status) => status.success(),
-        Err(err) => {
-            eprintln!("{}", failure(&format!("could not run cargo test: {err}")));
-            false
-        }
-    };
-    println!();
-    if cargo_ok {
-        println!("{}", success("✔ cargo test --workspace"));
-    } else {
-        println!("{}", failure("✘ cargo test --workspace"));
+        Ok(status) if status.success() => SuiteOutcome::Passed,
+        Ok(status) => SuiteOutcome::Failed(format!("cargo test {status}")),
+        Err(err) => SuiteOutcome::Failed(format!("could not run cargo test: {err}")),
     }
+}
 
-    let fixtures = discover_reference_fixtures(Path::new("fixtures/reference"));
+fn run_visual_suite(facts: &florui_config::CargoProjectFacts, requested: Suite) -> SuiteOutcome {
+    let unavailable = |reason: String| SuiteOutcome::unavailable(requested, Suite::Visual, reason);
+    let fixtures_root = test_cmd::fixtures_root(&facts.workspace_root);
+    let fixtures = discover_reference_fixtures(&fixtures_root);
     if fixtures.is_empty() {
-        return if cargo_ok {
-            ExitCode::SUCCESS
-        } else {
-            ExitCode::FAILURE
-        };
+        return unavailable(format!(
+            "no reference fixtures in {}",
+            fixtures_root.display()
+        ));
     }
-
-    println!();
     let Some(chromium) = resolve_chromium(None) else {
-        println!(
-            "{}",
-            dim_text(
-                "skipping the visual/geometry suite: no Chromium found (run scripts/fetch-chromium.ps1, or pass --chromium/FLORUI_CHROMIUM to `florui compare` directly)"
-            )
+        return unavailable(
+            "no Chromium found: run scripts/fetch-chromium.ps1 or set FLORUI_CHROMIUM".to_string(),
         );
-        return if cargo_ok {
-            ExitCode::SUCCESS
-        } else {
-            ExitCode::FAILURE
-        };
     };
 
-    let out_dir = PathBuf::from("target/florui-conformance");
+    println!();
+    let out_dir = facts.target_dir.join("florui-conformance");
     if let Err(err) = std::fs::create_dir_all(&out_dir) {
-        return fail(format!("could not create {}: {err}", out_dir.display()));
+        return SuiteOutcome::Failed(format!("could not create {}: {err}", out_dir.display()));
     }
     let out_dir = match out_dir.canonicalize() {
         Ok(path) => path,
-        Err(err) => return fail(format!("could not resolve {}: {err}", out_dir.display())),
+        Err(err) => {
+            return SuiteOutcome::Failed(format!("could not resolve {}: {err}", out_dir.display()));
+        }
     };
     let profile_dir = out_dir.join(format!("chrome-profile-{}", std::process::id()));
 
@@ -1039,15 +1062,15 @@ fn run_test() -> ExitCode {
         launch_timeout: Duration::from_secs(30),
     }) {
         Ok(driver) => driver,
-        Err(err) => return fail(format!("could not launch Chromium: {err}")),
+        Err(err) => return SuiteOutcome::Failed(format!("could not launch Chromium: {err}")),
     };
 
-    let mut visual_ok = true;
+    let mut failed = 0;
     for fixture_path in &fixtures {
         match compare_fixture(&driver, fixture_path, &out_dir, &chromium) {
             Ok(result) => {
                 if result.outcome == Outcome::Fail {
-                    visual_ok = false;
+                    failed += 1;
                 }
                 print_compare_result(&result);
             }
@@ -1056,17 +1079,17 @@ fn run_test() -> ExitCode {
                     "{}",
                     failure(&format!("✘ {}: {err}", fixture_path.display()))
                 );
-                visual_ok = false;
+                failed += 1;
             }
         }
     }
     drop(driver);
     cleanup_profile(&profile_dir, false);
 
-    if cargo_ok && visual_ok {
-        ExitCode::SUCCESS
+    if failed == 0 {
+        SuiteOutcome::Passed
     } else {
-        ExitCode::FAILURE
+        SuiteOutcome::Failed(format!("{failed} of {} fixtures", fixtures.len()))
     }
 }
 
