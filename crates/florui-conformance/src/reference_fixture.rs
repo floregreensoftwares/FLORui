@@ -100,6 +100,14 @@ pub enum Classification {
         /// crate's own module doc, not a fixture-specific guess.
         #[serde(default = "default_geometry_tolerance_px")]
         geometry_tolerance_px: f64,
+        /// How far a pixel's channels may differ from the reference, in
+        /// 0-255 units, before the pixel counts as differing. Defaults to 0,
+        /// where any difference counts. A blur is built differently by each
+        /// engine (kernel shape, rounding), so a fixture of one sets a few
+        /// levels here and lets `threshold_percent` stay small: that is a far
+        /// better guard than a high percentage of pixels that differ by 1.
+        #[serde(default)]
+        channel_tolerance: u8,
         reason: String,
     },
 }
@@ -112,6 +120,16 @@ impl Classification {
                 geometry_tolerance_px,
                 ..
             } => *geometry_tolerance_px,
+        }
+    }
+
+    /// See `Tolerant`'s `channel_tolerance`; an exact fixture allows none.
+    pub fn channel_tolerance(&self) -> u8 {
+        match self {
+            Classification::Exact => 0,
+            Classification::Tolerant {
+                channel_tolerance, ..
+            } => *channel_tolerance,
         }
     }
 }
@@ -295,5 +313,17 @@ mod tests {
         };
         assert_eq!(viewport.width_physical_px(), 640);
         assert_eq!(viewport.height_physical_px(), 480);
+    }
+
+    #[test]
+    fn channel_tolerance_defaults_to_none_and_is_read_when_declared() {
+        let parse = |json: &str| serde_json::from_str::<Classification>(json).unwrap();
+        let without = parse(r#"{"kind":"tolerant","threshold_percent":1.0,"reason":"r"}"#);
+        let with = parse(
+            r#"{"kind":"tolerant","threshold_percent":1.0,"channel_tolerance":8,"reason":"r"}"#,
+        );
+        assert_eq!(without.channel_tolerance(), 0);
+        assert_eq!(with.channel_tolerance(), 8);
+        assert_eq!(Classification::Exact.channel_tolerance(), 0);
     }
 }

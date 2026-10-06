@@ -673,8 +673,16 @@ fn compare_fixture(
     )
     .map_err(|err| format!("engine render failed: {err}"))?;
 
-    let pixel_report = compare_pixels(&capture.image, &engine.image, &PixelDiffOptions::default())
-        .map_err(|err| err.to_string())?;
+    let tolerance = fixture.manifest.classification.channel_tolerance();
+    let pixel_report = compare_pixels(
+        &capture.image,
+        &engine.image,
+        &PixelDiffOptions {
+            channel_tolerance: tolerance,
+            alpha_tolerance: tolerance,
+        },
+    )
+    .map_err(|err| err.to_string())?;
     let geometry_report = compare_geometry(
         capture.element_box_css_px,
         engine.element_box_css_px,
