@@ -1257,17 +1257,31 @@ fn paint_spinner(
     arrow(buffer, mid + 5.5 * s, false, color(SpinnerHover::Down));
 }
 
+/// `functions` with each blur radius in the canvas's own pixels. A filter's
+/// lengths are CSS pixels; the canvas of a HiDPI window is physical, so a
+/// `blur(8px)` is 16 canvas pixels at a scale factor of 2. Brightness,
+/// contrast and saturate are unitless and unchanged.
+fn scaled_filters(functions: &[FilterFunction], scale_factor: f32) -> Vec<FilterFunction> {
+    functions
+        .iter()
+        .map(|function| match *function {
+            FilterFunction::Blur(radius) => FilterFunction::Blur(radius * scale_factor),
+            other => other,
+        })
+        .collect()
+}
+
 /// Total padding `filters`' own combined blur reach needs on every side
 /// — zero for `brightness`/`contrast`/`saturate`, which are pointwise
 /// and never read a neighboring pixel. Matched exhaustively (no wildcard
 /// arm) so a future [`FilterFunction`] variant fails to compile here
 /// until someone classifies its own extent, rather than silently
 /// contributing zero padding for a filter that actually needs some.
-fn filter_inflation(filters: &[FilterFunction]) -> f32 {
+fn filter_inflation(filters: &[FilterFunction], scale_factor: f32) -> f32 {
     filters
         .iter()
         .map(|function| match function {
-            FilterFunction::Blur(radius) => blur::kernel_radius(*radius) as f32,
+            FilterFunction::Blur(radius) => blur::kernel_radius(*radius * scale_factor) as f32,
             FilterFunction::Brightness(_)
             | FilterFunction::Contrast(_)
             | FilterFunction::Saturate(_) => 0.0,
@@ -1425,7 +1439,7 @@ fn subtree_extent(
             child_opacity < 1.0 || !child_transform.is_identity() || child_has_filter;
 
         let (cx0, cy0, cx1, cy1) = if child_is_group {
-            let filter_pad = child_style.map_or(0.0, |s| filter_inflation(&s.filter));
+            let filter_pad = child_style.map_or(0.0, |s| filter_inflation(&s.filter, scale_factor));
             let (fx0, fy0, fx1, fy1) = (
                 child_extent.0 - filter_pad,
                 child_extent.1 - filter_pad,
@@ -1574,7 +1588,7 @@ fn group_extent(
     };
 
     let own_filter = styles.get(&node).map_or(&[][..], |s| &s.filter[..]);
-    let pad = filter_inflation(own_filter);
+    let pad = filter_inflation(own_filter, scale_factor);
     let (x0, y0, x1, y1) = (x0 - pad, y0 - pad, x1 + pad, y1 + pad);
 
     // 1c: clamp to what could possibly be seen — `target`'s own visible
@@ -1761,7 +1775,7 @@ fn paint_group(
     );
 
     let filter = styles.get(&node).map_or(&[][..], |s| &s.filter[..]);
-    apply_filters(&mut group.pixmap, filter);
+    apply_filters(&mut group.pixmap, &scaled_filters(filter, scale_factor));
 
     let paint = PixmapPaint {
         opacity,
@@ -1870,6 +1884,7 @@ fn apply_backdrop_filter(
     buffer: &mut Surface,
     outline: &RoundedRect,
     functions: &[FilterFunction],
+    scale_factor: f32,
     clip: Option<&Mask>,
 ) {
     if functions.is_empty() {
@@ -1908,7 +1923,23 @@ fn apply_backdrop_filter(
     let Some(mut backdrop) = buffer.pixmap.clone_rect(region) else {
         return;
     };
-    apply_filters(&mut backdrop, functions);
+    // A blur reads past the pixels it writes; over a backdrop that is cut to
+    // the panel those would be transparent and the panel's edges would fade
+    // toward nothing, so the cut is extended by mirroring first.
+    let functions = &scaled_filters(functions, scale_factor);
+    let margin = blur_margin(functions);
+    let filtered = (margin > 0)
+        .then(|| {
+            let (width, height) = (backdrop.width(), backdrop.height());
+            let mut padded = mirror_padded(&backdrop, margin)?;
+            apply_filters(&mut padded, functions);
+            cropped(&padded, margin, width, height)
+        })
+        .flatten();
+    match filtered {
+        Some(filtered) => backdrop = filtered,
+        None => apply_filters(&mut backdrop, functions),
+    }
     // Replace, weighted by the mask: `BlendMode::Source` with a mask would
     // scale the source itself, clearing the pixels outside it instead of
     // leaving them alone.
@@ -1930,6 +1961,76 @@ fn apply_backdrop_filter(
             };
         }
     }
+}
+
+/// How far a chain's blurs reach beyond the pixels they read: the Gaussian
+/// kernel's own radius, summed over the chain (each blur reads what the
+/// previous one produced).
+fn blur_margin(functions: &[FilterFunction]) -> u32 {
+    functions
+        .iter()
+        .map(|function| match *function {
+            FilterFunction::Blur(radius) if radius > 0.0 => blur::kernel_radius(radius),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Where `index` falls when the `size` pixels of an edge are mirrored
+/// outward, the edge pixel itself included (`-1` reads `0`, `-2` reads `1`),
+/// the way a backdrop is extended before it is blurred.
+fn mirrored(index: i64, size: i64) -> i64 {
+    let period = 2 * size;
+    let wrapped = index.rem_euclid(period);
+    if wrapped >= size {
+        period - 1 - wrapped
+    } else {
+        wrapped
+    }
+}
+
+/// `source` with `margin` pixels added on every side, each filled by mirroring
+/// the nearest edge. A backdrop is blurred over this instead of over
+/// transparent surroundings, which would fade its edges toward nothing.
+fn mirror_padded(source: &Pixmap, margin: u32) -> Option<Pixmap> {
+    let (width, height) = (source.width() as usize, source.height() as usize);
+    let margin_px = margin as usize;
+    let padded_width = width + 2 * margin_px;
+    let padded_height = height + 2 * margin_px;
+    let mut padded = Pixmap::new(padded_width as u32, padded_height as u32)?;
+    let pixels = source.pixels();
+    let edge = |index: usize| mirrored(index as i64 - margin_px as i64, width as i64) as usize;
+    let left: Vec<usize> = (0..margin_px).map(edge).collect();
+    let right: Vec<usize> = (margin_px + width..padded_width).map(edge).collect();
+    for (row, destination) in padded
+        .pixels_mut()
+        .chunks_exact_mut(padded_width)
+        .enumerate()
+    {
+        let source_row = mirrored(row as i64 - margin_px as i64, height as i64) as usize;
+        let source_row = &pixels[source_row * width..(source_row + 1) * width];
+        let (head, rest) = destination.split_at_mut(margin_px);
+        let (middle, tail) = rest.split_at_mut(width);
+        middle.copy_from_slice(source_row);
+        for (pixel, &column) in head.iter_mut().zip(&left) {
+            *pixel = source_row[column];
+        }
+        for (pixel, &column) in tail.iter_mut().zip(&right) {
+            *pixel = source_row[column];
+        }
+    }
+    Some(padded)
+}
+
+/// The `width` x `height` pixels of `padded` that sit `margin` in from its
+/// corner.
+fn cropped(padded: &Pixmap, margin: u32, width: u32, height: u32) -> Option<Pixmap> {
+    padded.clone_rect(IntRect::from_xywh(
+        margin as i32,
+        margin as i32,
+        width,
+        height,
+    )?)
 }
 
 /// `from` blended toward `to` by `weight / 255`, channel by channel on
@@ -2205,7 +2306,7 @@ fn paint_node(
         let rounded = !outline.is_square();
 
         let backdrop_filter: &[FilterFunction] = style.map_or(&[][..], |s| &s.backdrop_filter[..]);
-        apply_backdrop_filter(buffer, &outline, backdrop_filter, clip);
+        apply_backdrop_filter(buffer, &outline, backdrop_filter, scale_factor, clip);
 
         let border = style.map_or(NO_BORDER, |s| s.border);
         let box_shadow: &[florui_style::BoxShadow] = style.map_or(&[][..], |s| &s.box_shadow[..]);
@@ -7642,6 +7743,113 @@ mod tests {
             &layouts,
             1.0,
         )
+    }
+
+    #[test]
+    fn a_backdrop_blur_continues_the_colors_to_the_panels_edge_instead_of_fading() {
+        // A uniform red backdrop blurs to the same red everywhere, the edge
+        // included: the blur reads past the edge by mirroring it, not as
+        // transparent pixels that would pull the panel toward the canvas.
+        let buffer = backdrop_over_red_buffer("backdrop-filter: blur(6px);");
+        for (x, y) in [(0, 0), (19, 0), (0, 19), (19, 19), (0, 10), (10, 0)] {
+            assert_eq!(
+                pixel_rgb(&buffer, x, y),
+                [0xff, 0, 0],
+                "the panel's edge pixel at ({x}, {y}) faded"
+            );
+        }
+    }
+
+    #[test]
+    fn mirroring_reflects_an_edge_outward_with_the_edge_pixel_included() {
+        // Four pixels: -1 reads 0, -2 reads 1, 4 reads 3, 5 reads 2.
+        assert_eq!(mirrored(-1, 4), 0);
+        assert_eq!(mirrored(-2, 4), 1);
+        assert_eq!(mirrored(0, 4), 0);
+        assert_eq!(mirrored(3, 4), 3);
+        assert_eq!(mirrored(4, 4), 3);
+        assert_eq!(mirrored(5, 4), 2);
+        // Further out than one reflection keeps bouncing between the edges.
+        assert_eq!(mirrored(8, 4), 0);
+        assert_eq!(mirrored(-5, 4), 3);
+    }
+
+    /// Red on the left and blue on the right, a `blur(4px)` panel over both,
+    /// painted at `scale` (every box in canvas pixels, as a HiDPI window
+    /// passes them).
+    fn blurred_red_and_blue(scale: f32) -> Canvas {
+        let tree: Element = view! {
+            <div class="back">
+                <div class="left"></div>
+                <div class="right"></div>
+                <div class="glass"></div>
+            </div>
+        };
+        let css = ".left { background-color: #ff0000; } .right { background-color: #0000ff; } \
+                   .glass { backdrop-filter: blur(4px); }";
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let back = arena.roots()[0];
+        let children = arena.children(back);
+        let (width, height) = (60.0 * scale, 20.0 * scale);
+        let mut layouts = HashMap::new();
+        let mut place = |node, x: f32, w: f32| {
+            layouts.insert(
+                node,
+                BoxLayout {
+                    x,
+                    y: 0.0,
+                    width: w,
+                    height,
+                },
+            );
+        };
+        place(back, 0.0, width);
+        place(children[0], 0.0, width / 2.0);
+        place(children[1], width / 2.0, width / 2.0);
+        place(children[2], 0.0, width);
+        let mut font = Font::load_embedded();
+        paint_to_buffer(
+            &mut font,
+            width as u32,
+            height as u32,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            scale,
+        )
+    }
+
+    /// How many pixels of the middle row are neither the pure red nor the
+    /// pure blue: the width of the blurred seam.
+    fn seam_width(buffer: &Canvas) -> u32 {
+        let y = buffer.height() / 2;
+        (0..buffer.width())
+            .filter(|&x| {
+                let [red, _, blue] = pixel_rgb(buffer, x, y);
+                red > 8 && red < 247 && blue > 8 && blue < 247
+            })
+            .count() as u32
+    }
+
+    #[test]
+    fn a_backdrop_blur_is_in_css_pixels_so_a_scaled_canvas_blurs_over_twice_as_many() {
+        let at_one = seam_width(&blurred_red_and_blue(1.0));
+        let at_two = seam_width(&blurred_red_and_blue(2.0));
+        assert!(at_one >= 4, "the seam at scale 1 is {at_one} pixels wide");
+        assert!(
+            at_two as f32 >= at_one as f32 * 1.6,
+            "at scale 2 the seam is {at_two} pixels wide against {at_one} at scale 1: the blur \
+             radius was not scaled to the canvas"
+        );
     }
 
     #[test]

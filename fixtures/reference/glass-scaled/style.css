@@ -1,0 +1,5 @@
+.scene { position: relative; width: 200px; height: 140px; background-color: #1b1b2f; overflow: hidden; }
+.s1 { position: absolute; left: 10px; top: 10px; width: 90px; height: 90px; background-color: #ff5a5f; border-radius: 45px; }
+.s2 { position: absolute; left: 80px; top: 50px; width: 100px; height: 70px; background-color: #2ec4b6; }
+.s3 { position: absolute; left: 20px; top: 90px; width: 70px; height: 40px; background-color: #ffd166; }
+.glass { position: absolute; left: 40px; top: 30px; width: 120px; height: 80px; border-radius: 20px; background-color: rgba(255, 255, 255, 0.18); border: 1px solid rgba(255, 255, 255, 0.4); backdrop-filter: blur(8px) saturate(1.5); }
