@@ -1,0 +1,346 @@
+{
+  "environment": {
+    "commit": "a799ebf6e2d87889ce2c4f373e647a312a2d6b42",
+    "uncommitted_changes": false,
+    "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+    "os": "Microsoft Windows [versão 10.0.26100.9457]",
+    "cpu": "Intel64 Family 6 Model 79 Stepping 1, GenuineIntel",
+    "logical_cores": 28,
+    "power_plan": "GUID do Esquema de Energia: 381b4222-f694-41f0-9685-ff5bb260df2e  (Equilibrado)",
+    "profile": "release",
+    "profiler": "idle",
+    "captured_at_unix_seconds": 1791250781
+  },
+  "results": [
+    {
+      "requested": [
+        800,
+        600
+      ],
+      "actual": [
+        800,
+        600
+      ],
+      "frames": 400,
+      "gpu_presenter": true,
+      "columns": [
+        {
+          "name": "upload (copy into a GPU texture)",
+          "summary": {
+            "samples": 400,
+            "min": 0.211,
+            "median": 0.26,
+            "mean": 0.28486500000000037,
+            "p95": 0.48904999999999993,
+            "p99": 0.53308,
+            "mad": 0.023999999999999994
+          }
+        },
+        {
+          "name": "acquire (waits for the display)",
+          "summary": {
+            "samples": 400,
+            "min": 0.009,
+            "median": 0.012,
+            "mean": 0.014534999999999958,
+            "p95": 0.025049999999999954,
+            "p99": 0.033039999999999965,
+            "mad": 0.002
+          }
+        },
+        {
+          "name": "submit",
+          "summary": {
+            "samples": 400,
+            "min": 0.16,
+            "median": 0.214,
+            "mean": 0.2395875000000002,
+            "p95": 0.424,
+            "p99": 0.45301,
+            "mad": 0.024999999999999994
+          }
+        },
+        {
+          "name": "flip",
+          "summary": {
+            "samples": 400,
+            "min": 0.182,
+            "median": 0.236,
+            "mean": 0.2636974999999999,
+            "p95": 0.454,
+            "p99": 0.49914999999999987,
+            "mad": 0.024500000000000008
+          }
+        },
+        {
+          "name": "present, all of the four",
+          "summary": {
+            "samples": 400,
+            "min": 0.602,
+            "median": 0.7585,
+            "mean": 0.8387049999999994,
+            "p95": 1.4421999999999997,
+            "p99": 1.54707,
+            "mad": 0.0625
+          }
+        },
+        {
+          "name": "raster",
+          "summary": {
+            "samples": 400,
+            "min": 0.571,
+            "median": 0.686,
+            "mean": 0.7429900000000008,
+            "p95": 1.2692999999999997,
+            "p99": 1.33,
+            "mad": 0.05099999999999999
+          }
+        },
+        {
+          "name": "update",
+          "summary": {
+            "samples": 400,
+            "min": 0.664,
+            "median": 0.858,
+            "mean": 1.0399249999999998,
+            "p95": 2.0004499999999994,
+            "p99": 2.250759999999999,
+            "mad": 0.10449999999999998
+          }
+        },
+        {
+          "name": "frame, first work to present returned",
+          "summary": {
+            "samples": 400,
+            "min": 1.892,
+            "median": 2.34,
+            "mean": 2.6284525,
+            "p95": 4.4931,
+            "p99": 4.7143500000000005,
+            "mad": 0.1995
+          }
+        }
+      ]
+    },
+    {
+      "requested": [
+        1920,
+        1080
+      ],
+      "actual": [
+        1920,
+        1080
+      ],
+      "frames": 400,
+      "gpu_presenter": true,
+      "columns": [
+        {
+          "name": "upload (copy into a GPU texture)",
+          "summary": {
+            "samples": 400,
+            "min": 0.626,
+            "median": 0.745,
+            "mean": 0.79584,
+            "p95": 1.56,
+            "p99": 1.61301,
+            "mad": 0.039500000000000035
+          }
+        },
+        {
+          "name": "acquire (waits for the display)",
+          "summary": {
+            "samples": 400,
+            "min": 0.01,
+            "median": 0.013,
+            "mean": 0.014679999999999976,
+            "p95": 0.027,
+            "p99": 0.03100999999999999,
+            "mad": 0.0010000000000000009
+          }
+        },
+        {
+          "name": "submit",
+          "summary": {
+            "samples": 400,
+            "min": 0.162,
+            "median": 0.211,
+            "mean": 0.225705,
+            "p95": 0.3831499999999999,
+            "p99": 0.44709999999999994,
+            "mad": 0.019000000000000017
+          }
+        },
+        {
+          "name": "flip",
+          "summary": {
+            "samples": 400,
+            "min": 0.182,
+            "median": 0.233,
+            "mean": 0.2530349999999999,
+            "p95": 0.4424499999999996,
+            "p99": 0.55214,
+            "mad": 0.02200000000000002
+          }
+        },
+        {
+          "name": "present, all of the four",
+          "summary": {
+            "samples": 400,
+            "min": 1.024,
+            "median": 1.2295,
+            "mean": 1.3242024999999995,
+            "p95": 2.4901,
+            "p99": 2.64404,
+            "mad": 0.06399999999999995
+          }
+        },
+        {
+          "name": "raster",
+          "summary": {
+            "samples": 400,
+            "min": 2.355,
+            "median": 2.696,
+            "mean": 2.879957499999999,
+            "p95": 4.98145,
+            "p99": 5.21219,
+            "mad": 0.08200000000000007
+          }
+        },
+        {
+          "name": "update",
+          "summary": {
+            "samples": 400,
+            "min": 0.669,
+            "median": 0.824,
+            "mean": 0.9148550000000006,
+            "p95": 1.80005,
+            "p99": 1.86403,
+            "mad": 0.0655
+          }
+        },
+        {
+          "name": "frame, first work to present returned",
+          "summary": {
+            "samples": 400,
+            "min": 4.213,
+            "median": 4.737500000000001,
+            "mean": 5.125419999999995,
+            "p95": 8.733049999999976,
+            "p99": 9.663499999999999,
+            "mad": 0.13950000000000085
+          }
+        }
+      ]
+    },
+    {
+      "requested": [
+        3840,
+        2160
+      ],
+      "actual": [
+        3840,
+        2160
+      ],
+      "frames": 400,
+      "gpu_presenter": true,
+      "columns": [
+        {
+          "name": "upload (copy into a GPU texture)",
+          "summary": {
+            "samples": 400,
+            "min": 3.099,
+            "median": 3.8994999999999997,
+            "mean": 3.947990000000003,
+            "p95": 4.6396999999999995,
+            "p99": 5.503599999999995,
+            "mad": 0.24950000000000028
+          }
+        },
+        {
+          "name": "acquire (waits for the display)",
+          "summary": {
+            "samples": 400,
+            "min": 0.016,
+            "median": 0.02,
+            "mean": 0.020387499999999954,
+            "p95": 0.03,
+            "p99": 0.036,
+            "mad": 0.0010000000000000009
+          }
+        },
+        {
+          "name": "submit",
+          "summary": {
+            "samples": 400,
+            "min": 0.225,
+            "median": 0.291,
+            "mean": 0.2994149999999997,
+            "p95": 0.3783499999999997,
+            "p99": 0.48213999999999985,
+            "mad": 0.019999999999999962
+          }
+        },
+        {
+          "name": "flip",
+          "summary": {
+            "samples": 400,
+            "min": 0.226,
+            "median": 0.296,
+            "mean": 0.31232749999999954,
+            "p95": 0.406,
+            "p99": 0.5622399999999999,
+            "mad": 0.02699999999999997
+          }
+        },
+        {
+          "name": "present, all of the four",
+          "summary": {
+            "samples": 400,
+            "min": 3.7,
+            "median": 4.596,
+            "mean": 4.644119999999998,
+            "p95": 5.377,
+            "p99": 6.547439999999999,
+            "mad": 0.28649999999999975
+          }
+        },
+        {
+          "name": "raster",
+          "summary": {
+            "samples": 400,
+            "min": 11.343,
+            "median": 12.7155,
+            "mean": 12.973137500000005,
+            "p95": 14.137649999999997,
+            "p99": 21.050199999999997,
+            "mad": 0.6150000000000011
+          }
+        },
+        {
+          "name": "update",
+          "summary": {
+            "samples": 400,
+            "min": 0.801,
+            "median": 1.0205,
+            "mean": 1.1623475000000008,
+            "p95": 2.0167499999999987,
+            "p99": 2.9678599999999973,
+            "mad": 0.08250000000000002
+          }
+        },
+        {
+          "name": "frame, first work to present returned",
+          "summary": {
+            "samples": 400,
+            "min": 16.384,
+            "median": 18.4945,
+            "mean": 18.789752500000006,
+            "p95": 21.051399999999997,
+            "p99": 29.517899999999997,
+            "mad": 0.8909999999999982
+          }
+        }
+      ]
+    }
+  ]
+}
