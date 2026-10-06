@@ -66,10 +66,21 @@ fn builds_the_package_stages_the_executable_and_reports_hashes_that_match_the_fi
     let staged_exe = staged(dir.path(), "app").join(format!("app{EXE}"));
     let built = std::fs::read(dir.path().join("target/release").join(format!("app{EXE}"))).unwrap();
     let copy = std::fs::read(&staged_exe).unwrap();
-    assert_eq!(copy, built, "the staged file is not what cargo built");
+    // On Windows the copy also carries the application's version information;
+    // what cargo produced is recorded separately and is never touched.
+    if cfg!(windows) {
+        assert_ne!(copy, built, "the copy carries no resources");
+    } else {
+        assert_eq!(copy, built, "the staged file is not what cargo built");
+    }
 
     let report = report(dir.path(), "app");
-    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["schema_version"], 2);
+    let built_sha: String = Sha256::digest(&built)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(report["files"][0]["built"]["sha256"], built_sha.as_str());
     assert_eq!(report["outcome"], "built");
     assert_eq!(report["package"]["name"], "app");
     assert_eq!(report["application"]["environment"], "production");

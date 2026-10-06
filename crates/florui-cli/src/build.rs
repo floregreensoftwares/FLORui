@@ -19,6 +19,8 @@ use sha2::{Digest, Sha256};
 
 use florui_devtools::diagnostics::{dim_text, failure, success, warning};
 
+use crate::resources;
+
 pub struct Options {
     pub package: Option<String>,
     pub environment: Option<String>,
@@ -145,7 +147,7 @@ pub(crate) fn exposure(units: &[Unit]) -> Exposure {
 
 // --------------------------------------------------------------------- hashes
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub(crate) struct FileHashes {
     pub bytes: u64,
     pub sha256: String,
@@ -211,24 +213,71 @@ fn fresh_directory(dir: &Path) -> std::io::Result<()> {
 #[derive(Debug, Serialize)]
 struct StagedFile {
     file: String,
+    /// The hashes of the staged file, after any resources were written.
     #[serde(flatten)]
     hashes: FileHashes,
+    /// What cargo produced, for an executable that was changed after the build.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    built: Option<FileHashes>,
 }
 
-fn stage(executables: &[PathBuf], dir: &Path) -> std::io::Result<Vec<StagedFile>> {
+/// What goes into each staged executable: the identity, and the icon when one
+/// is declared. Only present on a host that can write executable resources.
+struct NativeResources<'a> {
+    identity: resources::Identity<'a>,
+    icon: Option<&'a resources::Icon>,
+}
+
+/// Copies the executables, writes the resources into the copies (never the
+/// files cargo produced) and hashes both. Returns the version information
+/// written into each executable.
+fn stage(
+    executables: &[PathBuf],
+    dir: &Path,
+    native: Option<&NativeResources<'_>>,
+) -> Result<(Vec<StagedFile>, Vec<resources::VersionFields>), String> {
     let mut staged = Vec::new();
+    let mut versions = Vec::new();
     for source in executables {
         let name = source
             .file_name()
-            .ok_or_else(|| std::io::Error::other("an executable has no file name"))?;
+            .ok_or_else(|| "an executable has no file name".to_string())?;
+        let file = name.to_string_lossy().into_owned();
         let destination = dir.join(name);
-        fs::copy(source, &destination)?;
+        fs::copy(source, &destination).map_err(|error| error.to_string())?;
+        let built = hash_file(&destination).map_err(|error| error.to_string())?;
+        let Some(native) = native else {
+            staged.push(StagedFile {
+                file,
+                hashes: built.clone(),
+                built: Some(built),
+            });
+            continue;
+        };
+        let fields = resources::version_fields(&native.identity, &file);
+        let payload = resources::Payload {
+            icon: native.icon.map(|icon| icon.entries.as_slice()),
+            version: resources::version_resource(&fields)?,
+        };
+        resources::apply(&destination, &payload)?;
+        versions.push(fields);
         staged.push(StagedFile {
-            file: name.to_string_lossy().into_owned(),
-            hashes: hash_file(&destination)?,
+            file,
+            hashes: hash_file(&destination).map_err(|error| error.to_string())?,
+            built: Some(built),
         });
     }
-    Ok(staged)
+    if let Some(icon) = native.and_then(|native| native.icon) {
+        let path = resources::ico_path(dir);
+        fs::write(&path, resources::ico_file(&icon.entries))
+            .map_err(|error| format!("could not write {}: {error}", path.display()))?;
+        staged.push(StagedFile {
+            file: "icon.ico".to_string(),
+            hashes: hash_file(&path).map_err(|error| error.to_string())?,
+            built: None,
+        });
+    }
+    Ok((staged, versions))
 }
 
 // --------------------------------------------------------------------- report
@@ -251,6 +300,7 @@ struct Report {
     florui_cli_version: &'static str,
     built_at_unix_seconds: u64,
     exposure: Exposure,
+    resources: resources::ResourcesReport,
     files: Vec<StagedFile>,
     notes: Vec<&'static str>,
 }
@@ -352,6 +402,18 @@ pub fn run(options: Options) -> ExitCode {
         return fail(format!("could not prepare {}: {error}", staging.display()));
     }
 
+    // Converted before the build, so a declared icon that cannot be used
+    // fails fast and never ends in an artifact with the wrong branding.
+    let icon = match resources::declared_icon(&resolution.config.app.icons) {
+        Some((declared_as, path)) if cfg!(windows) => {
+            match resources::generate_icon(declared_as, path, &facts.package_root) {
+                Ok(icon) => Some(icon),
+                Err(error) => return fail(error),
+            }
+        }
+        _ => None,
+    };
+
     println!(
         "{}",
         dim_text(&format!(
@@ -392,9 +454,37 @@ pub fn run(options: Options) -> ExitCode {
             facts.package_name
         ));
     }
-    let files = match stage(&executables, &staging) {
-        Ok(files) => files,
+    let native = cfg!(windows).then(|| NativeResources {
+        identity: resources::Identity {
+            name: &resolution.config.app.name,
+            description: resolution.config.app.description.as_deref(),
+            publisher: resolution.config.bundle.publisher.as_deref(),
+            version: &resolution.config.app.version,
+        },
+        icon: icon.as_ref(),
+    });
+    let (files, versions) = match stage(&executables, &staging, native.as_ref()) {
+        Ok(staged) => staged,
         Err(error) => return fail(format!("could not stage the executables: {error}")),
+    };
+    let resources_report = match &icon {
+        Some(icon) => resources::ResourcesReport {
+            status: "applied",
+            warnings: icon.warnings.clone(),
+            icon: Some(icon.asset.clone()),
+            version_info: versions,
+            notes: Vec::new(),
+        },
+        None if native.is_some() => resources::ResourcesReport {
+            status: "applied",
+            icon: None,
+            version_info: versions,
+            warnings: Vec::new(),
+            notes: vec![
+                "no icon is declared in app.icons.windows or app.icons.source: the executable has the default icon",
+            ],
+        },
+        None => resources::unsupported_host(),
     };
 
     let exposure = exposure(&built.units);
@@ -409,14 +499,16 @@ pub fn run(options: Options) -> ExitCode {
 
     let rustc = run_tool("rustc", &["-vV"], None).unwrap_or_default();
     let included = exposure.status == "included";
+    let resource_warnings = !resources_report.warnings.is_empty();
     let outcome = match (included, options.strict) {
+        (false, _) if resource_warnings => "built_with_warnings",
         (false, _) => "built",
         (true, false) => "built_with_warnings",
         (true, true) => "rejected",
     };
     let git_commit = run_tool("git", &["rev-parse", "HEAD"], Some(&facts.package_root));
     let report = Report {
-        schema_version: 1,
+        schema_version: 2,
         outcome,
         florui_target: "native",
         package: PackageInfo {
@@ -448,6 +540,7 @@ pub fn run(options: Options) -> ExitCode {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs()),
         exposure,
+        resources: resources_report,
         files,
         notes: NOTES.to_vec(),
     };
@@ -473,6 +566,18 @@ pub fn run(options: Options) -> ExitCode {
         "{}",
         dim_text(&format!("report: {}", report_path.display()))
     );
+    if let Some(icon) = &report.resources.icon {
+        println!(
+            "{}",
+            dim_text(&format!(
+                "icon from {} ({}), sizes {:?}",
+                icon.source, icon.declared_as, icon.sizes
+            ))
+        );
+    }
+    for line in &report.resources.warnings {
+        println!("{}", warning(line));
+    }
     match outcome {
         "built" => {
             println!(
@@ -488,10 +593,15 @@ pub fn run(options: Options) -> ExitCode {
                     warning(&format!("developer tooling included: {line}"))
                 );
             }
+            let because = if included {
+                "developer tooling included"
+            } else {
+                "warnings"
+            };
             println!(
                 "{}",
                 success(&format!(
-                    "built {} (native, release) with developer tooling included",
+                    "built {} (native, release) with {because}",
                     facts.package_name
                 ))
             );
