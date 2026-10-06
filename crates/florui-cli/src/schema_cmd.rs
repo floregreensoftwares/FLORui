@@ -8,6 +8,8 @@ use std::process::ExitCode;
 use florui_devtools::diagnostics::{dim_text, failure, success};
 
 pub struct Options {
+    /// The schema of `florui.locales.toml` instead of `florui.config.toml`.
+    pub locales: bool,
     pub package: Option<String>,
     /// `None` prints the schema; `Some(None)` writes it into the project;
     /// `Some(Some(path))` writes it to `path`.
@@ -42,7 +44,19 @@ fn fail(message: impl std::fmt::Display) -> ExitCode {
 }
 
 pub fn run(options: Options) -> ExitCode {
-    let schema = florui_config::json_schema_pretty();
+    let (schema, file_name, described) = if options.locales {
+        (
+            florui_config::locales_json_schema_pretty(),
+            florui_config::LOCALES_SCHEMA_FILE_NAME,
+            "florui.locales.toml",
+        )
+    } else {
+        (
+            florui_config::json_schema_pretty(),
+            florui_config::SCHEMA_FILE_NAME,
+            "florui.config.toml",
+        )
+    };
     let Some(target) = options.write else {
         print!("{schema}");
         return ExitCode::SUCCESS;
@@ -57,7 +71,7 @@ pub fn run(options: Options) -> ExitCode {
                 }
             };
             match florui_config::resolve_cargo_project(&cwd, options.package.as_deref()) {
-                Ok(facts) => facts.package_root.join(florui_config::SCHEMA_FILE_NAME),
+                Ok(facts) => facts.package_root.join(file_name),
                 Err(error) => {
                     return fail(format!(
                         "{error}; run this inside a project, or name the file with --write <PATH>"
@@ -80,9 +94,9 @@ pub fn run(options: Options) -> ExitCode {
     println!(
         "{}",
         dim_text(&format!(
-            "point an editor at it with `#:schema ./{}` on the first line of florui.config.toml",
+            "point an editor at it with `#:schema ./{}` on the first line of {described}",
             path.file_name().map_or_else(
-                || florui_config::SCHEMA_FILE_NAME.to_string(),
+                || file_name.to_string(),
                 |name| name.to_string_lossy().into_owned()
             )
         ))

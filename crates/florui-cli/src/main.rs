@@ -190,10 +190,14 @@ enum Command {
         #[arg(long)]
         strict: bool,
     },
-    /// Prints the JSON Schema editors read for `florui.config.toml`, or
+    /// Prints the JSON Schema editors read for `florui.config.toml` (or, with
+    /// `--locales`, for `florui.locales.toml`), or
     /// writes it next to the project's configuration so an editor can be
     /// pointed at it with `#:schema ./florui.config.schema.json`.
     Schema {
+        /// The schema of `florui.locales.toml` instead of `florui.config.toml`.
+        #[arg(long)]
+        locales: bool,
         /// Write the schema instead of printing it: into the project's
         /// directory, or to PATH when one is given.
         #[arg(long, value_name = "PATH", num_args = 0..=1)]
@@ -304,7 +308,8 @@ fn main() -> ExitCode {
             json,
             strict,
         }),
-        Command::Schema { write } => schema_cmd::run(schema_cmd::Options {
+        Command::Schema { locales, write } => schema_cmd::run(schema_cmd::Options {
+            locales,
             package: cli.package,
             write,
         }),
