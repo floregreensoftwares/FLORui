@@ -174,6 +174,11 @@ enum Command {
         /// Report packaging/distribution diagnostics.
         #[arg(long)]
         distribution: bool,
+        /// Check an existing native build output (the directory `florui build`
+        /// staged) against its report and the current project, without building
+        /// or changing anything.
+        #[arg(long, value_name = "DIR")]
+        artifacts: Option<PathBuf>,
         /// Emit a single JSON document on stdout instead of human-readable
         /// lines.
         #[arg(long)]
@@ -274,6 +279,7 @@ fn main() -> ExitCode {
             graphics,
             presentation,
             distribution,
+            artifacts,
             json,
             strict,
         } => doctor::run(doctor::Options {
@@ -283,6 +289,7 @@ fn main() -> ExitCode {
             graphics,
             presentation,
             distribution,
+            artifacts,
             json,
             strict,
         }),
