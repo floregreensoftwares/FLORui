@@ -11,8 +11,9 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use florui::Element;
@@ -25,8 +26,8 @@ use crate::composition::{
 };
 use crate::edit_chain::{
     ChildFrame, EditLatencyReport, Rgb, Sample, chain, color_for_round, compare_samples,
-    format_frame_line, parse_frame_line, render, render_comparison, same_color, stylesheet,
-    summarize_samples,
+    format_frame_line, is_reload_report, parse_frame_line, reload_failure, render,
+    render_comparison, same_color, stylesheet, summarize_samples,
 };
 use crate::report::{BuildInfo, capture_environment};
 
@@ -113,6 +114,8 @@ pub struct Options {
     /// Rewrite the same stylesheet while waiting for a color that never comes,
     /// to show every edit then times out instead of reporting a latency.
     pub unchanged: bool,
+    /// Kilobytes of rules in the stylesheet that is rewritten.
+    pub css_kb: usize,
     pub out_dir: Option<PathBuf>,
 }
 
@@ -200,6 +203,22 @@ fn wait_for_color(
     })
 }
 
+/// Watches the pixel for `time` once the new color has shown, and says whether
+/// the screen went to a different color again: a second reload that read a
+/// file in the middle of a write.
+fn regressed_after(screen: &Composition, target: Rgb, time: Duration) -> Result<bool, String> {
+    let until = Instant::now() + time;
+    while Instant::now() < until {
+        if screen
+            .next(2)?
+            .is_some_and(|presented| !same_color(presented.color, target))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub fn run(options: &Options) -> Result<(), String> {
     if !florui_profile::ENABLED {
         return Err(NEEDS_PROFILING.into());
@@ -216,7 +235,7 @@ pub fn run(options: &Options) -> Result<(), String> {
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
     let css = dir.join("app.css");
-    write_stylesheet(&css, &stylesheet(color_for_round(0)), false)?;
+    write_stylesheet(&css, &stylesheet(color_for_round(0), options.css_kb), false)?;
 
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut child = Command::new(exe)
@@ -225,27 +244,51 @@ pub fn run(options: &Options) -> Result<(), String> {
         .args(["--rows", &options.rows.to_string()])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("could not start the window process: {e}"))?;
     let stdout = child
         .stdout
         .take()
         .ok_or("the window process has no stdout")?;
+    let session_stderr = child.stderr.take();
     let pid = child.id();
     let _session = Session { child, dir };
 
+    let stderr = session_stderr.ok_or("the window process has no stderr")?;
+
+    let reloads = Arc::new(AtomicUsize::new(0));
+    let failures = Arc::new(Mutex::new(Vec::<String>::new()));
     let (sender, frames) = mpsc::channel();
-    std::thread::spawn(move || {
-        let reported = BufReader::new(stdout)
-            .lines()
-            .map_while(Result::ok)
-            .filter_map(|line| parse_frame_line(&line));
-        for frame in reported {
-            if sender.send(frame).is_err() {
-                break;
+    {
+        let reloads = Arc::clone(&reloads);
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if is_reload_report(&line) {
+                    reloads.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                let sent = parse_frame_line(&line).map(|frame| sender.send(frame));
+                if sent.is_some_and(|result| result.is_err()) {
+                    break;
+                }
             }
-        }
-    });
+        });
+    }
+    {
+        let failures = Arc::clone(&failures);
+        std::thread::spawn(move || {
+            let failed = BufReader::new(stderr)
+                .lines()
+                .map_while(Result::ok)
+                .filter_map(|line| reload_failure(&line));
+            for reason in failed {
+                if let Ok(mut failures) = failures.lock() {
+                    failures.push(reason);
+                }
+            }
+        });
+    }
 
     let started = Instant::now();
     let window = loop {
@@ -271,11 +314,12 @@ pub fn run(options: &Options) -> Result<(), String> {
     let mut samples = Vec::new();
     let mut timeouts = 0;
     let mut with_intermediate = 0;
+    let mut regressed = 0;
     for round in 0..=options.rounds {
         settle(&screen, &frames, Duration::from_millis(400))?;
         let old = color_for_round(round);
         let target = color_for_round(round + 1);
-        let text = stylesheet(if options.unchanged { old } else { target });
+        let text = stylesheet(if options.unchanged { old } else { target }, options.css_kb);
         let mut seen = Vec::new();
 
         let t0 = qpc();
@@ -296,6 +340,9 @@ pub fn run(options: &Options) -> Result<(), String> {
             timeouts += 1;
             continue;
         };
+        if regressed_after(&screen, target, Duration::from_millis(120))? {
+            regressed += 1;
+        }
         let settled_at = Instant::now();
         let sample = loop {
             drain(&frames, &mut seen);
@@ -328,6 +375,10 @@ pub fn run(options: &Options) -> Result<(), String> {
         cold,
         intervals: summarize_samples(&samples),
         edits_with_an_intermediate_frame: with_intermediate,
+        edits_that_regressed_after_the_new_color: regressed,
+        css_kilobytes: options.css_kb,
+        reloads: reloads.load(Ordering::Relaxed),
+        reload_failures: failures.lock().map(|f| f.clone()).unwrap_or_default(),
         timeouts,
         samples,
     };
@@ -336,7 +387,10 @@ pub fn run(options: &Options) -> Result<(), String> {
     if let Some(out_dir) = &options.out_dir {
         std::fs::create_dir_all(out_dir)
             .map_err(|e| format!("could not create {}: {e}", out_dir.display()))?;
-        let stem = format!("edit-latency-{}-rows-{}", options.rows, report.write_mode);
+        let stem = format!(
+            "edit-latency-{}-rows-{}kb-{}",
+            options.rows, options.css_kb, report.write_mode
+        );
         let json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
         std::fs::write(out_dir.join(format!("{stem}.json")), json)
             .map_err(|e| format!("could not write the report: {e}"))?;
@@ -354,6 +408,7 @@ pub struct AbOptions {
     pub rows: usize,
     pub atomic: bool,
     pub threshold: f64,
+    pub css_kb: usize,
     pub out_dir: PathBuf,
 }
 
@@ -372,7 +427,14 @@ fn build_of(exe: &Path) -> Result<BuildInfo, String> {
 /// warm-up and thermal drift affect both builds alike.
 pub fn ab(options: &AbOptions) -> Result<(), String> {
     let mode = if options.atomic { "atomic" } else { "in-place" };
-    let report_name = format!("edit-latency-{}-rows-{mode}.json", options.rows);
+    // A build from before the stylesheet size was an option names its report without it.
+    let report_names = [
+        format!(
+            "edit-latency-{}-rows-{}kb-{mode}.json",
+            options.rows, options.css_kb
+        ),
+        format!("edit-latency-{}-rows-{mode}.json", options.rows),
+    ];
     let (mut a_samples, mut b_samples): (Vec<Sample>, Vec<Sample>) = (Vec::new(), Vec::new());
     let (mut a_timeouts, mut b_timeouts) = (0, 0);
     let mut intermediate = [0usize; 2];
@@ -394,6 +456,7 @@ pub fn ab(options: &AbOptions) -> Result<(), String> {
                 .args(["--rounds", &options.rounds.to_string()])
                 .args(["--rows", &options.rows.to_string()])
                 .args(["--write", mode])
+                .args(["--css-kb", &options.css_kb.to_string()])
                 .arg("--out-dir")
                 .arg(&dir)
                 .stdout(Stdio::null())
@@ -402,8 +465,10 @@ pub fn ab(options: &AbOptions) -> Result<(), String> {
             if !status.success() {
                 return Err(format!("{} failed: {status}", exe.display()));
             }
-            let text = std::fs::read_to_string(dir.join(&report_name))
-                .map_err(|e| format!("no report from {}: {e}", exe.display()))?;
+            let text = report_names
+                .iter()
+                .find_map(|name| std::fs::read_to_string(dir.join(name)).ok())
+                .ok_or_else(|| format!("no report from {}", exe.display()))?;
             let report: EditLatencyReport = serde_json::from_str(&text)
                 .map_err(|e| format!("unreadable report from {}: {e}", exe.display()))?;
             let (samples, timeouts) = if side == 0 {

@@ -16,9 +16,9 @@ florui-bench: reproducible performance baselines
   florui-bench compare BASELINE.json CANDIDATE.json [--threshold 0.05] [--out FILE.md]
   florui-bench ab --a EXE --b EXE [--rounds N] [--filter A,B] [--no-heap] [--threshold 0.05] [--alarm 0.10] [--out-dir DIR]
   florui-bench phases NAME [--ops N] [--out FILE.md]   (where a frame's time goes, from the profiler)
-  florui-bench edit-latency [--rows N] [--rounds N] [--write in-place|atomic] [--out-dir DIR]
+  florui-bench edit-latency [--rows N] [--rounds N] [--write in-place|atomic] [--css-kb N] [--out-dir DIR]
                                           (stylesheet save to composed frame, Windows; needs --features profiling)
-  florui-bench edit-latency-ab --a EXE --b EXE [--repeats N] [--rounds N] [--rows N] [--write in-place|atomic] [--threshold 0.05] [--out-dir DIR]
+  florui-bench edit-latency-ab --a EXE --b EXE [--repeats N] [--rounds N] [--rows N] [--write in-place|atomic] [--css-kb N] [--threshold 0.05] [--out-dir DIR]
                                           (alternates two builds of edit-latency and compares every interval)
   florui-bench overhead [--out FILE.md]   (what one profiler span and counter cost in each mode)
   florui-bench mode                       (this build's profile and profiler mode)
@@ -252,6 +252,7 @@ fn edit_latency_command(args: &[String]) -> Result<(), String> {
         rounds: number(args, "--rounds", 40)?,
         atomic,
         unchanged: flag(args, "--unchanged"),
+        css_kb: number(args, "--css-kb", 0)?,
         out_dir: option(args, "--out-dir").map(PathBuf::from),
     })
 }
@@ -271,6 +272,7 @@ fn edit_latency_ab_command(args: &[String]) -> Result<(), String> {
         rows: number(args, "--rows", 1)?,
         atomic,
         threshold: number(args, "--threshold", 0.05)?,
+        css_kb: number(args, "--css-kb", 0)?,
         out_dir: PathBuf::from(
             option(args, "--out-dir").unwrap_or_else(|| "edit-latency-ab".into()),
         ),

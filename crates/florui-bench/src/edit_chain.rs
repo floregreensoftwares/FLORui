@@ -22,6 +22,18 @@ pub struct ChildFrame {
     pub end: i64,
 }
 
+/// Whether `line` from the window's stdout reports a successful reload. The
+/// text is the platform's own message, so a change there has to change this.
+pub fn is_reload_report(line: &str) -> bool {
+    line.contains("stylesheet reloaded")
+}
+
+/// The reason in a line from the window's stderr that reports a failed reload.
+pub fn reload_failure(line: &str) -> Option<String> {
+    let (_, reason) = line.split_once("reload failed, keeping last good version:")?;
+    Some(reason.trim().to_string())
+}
+
 pub fn format_frame_line(frame: &ChildFrame) -> String {
     let reload = frame
         .reload
@@ -118,14 +130,26 @@ pub fn same_color(a: Rgb, b: Rgb) -> bool {
     a.0.abs_diff(b.0) <= 2 && a.1.abs_diff(b.1) <= 2 && a.2.abs_diff(b.2) <= 2
 }
 
+/// Bytes in one filler rule of [`stylesheet`], about.
+const FILLER_RULE_BYTES: usize = 58;
+
 /// The window's stylesheet with `color` as the page background; the sampled
-/// pixel sits where only the page background is drawn.
-pub fn stylesheet(color: Rgb) -> String {
-    format!(
+/// pixel sits where only the page background is drawn. `kilobytes` of rules
+/// nothing uses come first and the color rule is last, so a file cut short by a
+/// read in the middle of a write is missing it and the window shows it.
+pub fn stylesheet(color: Rgb, kilobytes: usize) -> String {
+    let mut text = String::from(".row { padding: 4px 8px; }\n");
+    for i in 0..kilobytes * 1024 / FILLER_RULE_BYTES {
+        text.push_str(&format!(
+            ".filler{i} {{ margin: 1px; padding: 2px; color: #123456; }}\n"
+        ));
+    }
+    text.push_str(&format!(
         ".page {{ background-color: {}; min-height: 100vh; font-family: sans-serif; \
-         color: #ffffff; }}\n.row {{ padding: 4px 8px; }}\n",
+         color: #ffffff; }}\n",
         hex(color)
-    )
+    ));
+    text
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -146,6 +170,19 @@ pub struct EditLatencyReport {
     /// Edits after which the screen showed a color that was neither the old nor
     /// the new one.
     pub edits_with_an_intermediate_frame: usize,
+    /// Edits after which, once the new color showed, the screen went to a
+    /// different one again.
+    #[serde(default)]
+    pub edits_that_regressed_after_the_new_color: usize,
+    /// Kilobytes of rules in the stylesheet that was rewritten.
+    #[serde(default)]
+    pub css_kilobytes: usize,
+    /// Stylesheet reloads the window reported, successful ones.
+    #[serde(default)]
+    pub reloads: usize,
+    /// What the window said when a reload failed, one entry per failure.
+    #[serde(default)]
+    pub reload_failures: Vec<String>,
     /// Edits whose new color never appeared in time.
     pub timeouts: usize,
     pub samples: Vec<Sample>,
@@ -257,6 +294,22 @@ pub fn render(report: &EditLatencyReport) -> String {
         report.timeouts,
         report.edits_with_an_intermediate_frame
     ));
+    let edits = report.samples.len() + usize::from(report.cold.is_some());
+    out.push_str(&format!(
+        "- {} KB of stylesheet; {} reloads for {} edits, {} reload failures; {} edits went to another color after showing the new one\n",
+        report.css_kilobytes,
+        report.reloads,
+        edits,
+        report.reload_failures.len(),
+        report.edits_that_regressed_after_the_new_color
+    ));
+    let mut failures = std::collections::BTreeMap::<&str, usize>::new();
+    for failure in &report.reload_failures {
+        *failures.entry(failure.as_str()).or_default() += 1;
+    }
+    for (message, count) in failures {
+        out.push_str(&format!("  - {count} x {message}\n"));
+    }
     out.push_str(&format!(
         "- {} on {}, {}, {}\n",
         report.environment.profile,
@@ -302,6 +355,22 @@ mod tests {
 
     fn frame(reload: Option<i64>, start: i64, end: i64) -> ChildFrame {
         ChildFrame { reload, start, end }
+    }
+
+    #[test]
+    fn a_reload_and_a_failed_reload_are_told_apart_from_other_output() {
+        let ok = "florui-platform: stylesheet reloaded from C:\\app\\app.css";
+        let failed = "florui-platform: stylesheet reload failed, keeping last good version: \
+                      could not read the stylesheet: file not found";
+
+        assert!(is_reload_report(ok));
+        assert!(!is_reload_report(failed));
+        assert_eq!(reload_failure(ok), None);
+        assert_eq!(
+            reload_failure(failed).as_deref(),
+            Some("could not read the stylesheet: file not found")
+        );
+        assert_eq!(reload_failure("frame reload=- start=1 end=2"), None);
     }
 
     #[test]
@@ -369,7 +438,26 @@ mod tests {
 
     #[test]
     fn the_stylesheet_carries_the_color_the_screen_is_compared_against() {
-        assert!(stylesheet((200, 30, 30)).contains("background-color: #c81e1e"));
+        assert!(stylesheet((200, 30, 30), 0).contains("background-color: #c81e1e"));
+    }
+
+    #[test]
+    fn a_sized_stylesheet_is_about_that_big_and_ends_with_the_color_rule() {
+        let text = stylesheet((200, 30, 30), 20);
+
+        let wanted = 20 * 1024;
+        assert!(
+            text.len().abs_diff(wanted) < wanted / 10,
+            "{} bytes for 20 KB",
+            text.len()
+        );
+        let last = text.lines().last().unwrap();
+        assert!(last.contains(".page") && last.contains("#c81e1e"), "{last}");
+        assert!(
+            florui_style::parse_stylesheet(&text).is_ok(),
+            "the padding is real CSS"
+        );
+        assert!(!stylesheet((200, 30, 30), 0).contains("filler"));
     }
 
     fn sample_with_frame(frame_ms: f64) -> Sample {
