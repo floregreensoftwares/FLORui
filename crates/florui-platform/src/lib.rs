@@ -86,6 +86,9 @@ mod desktop;
 mod host_observer;
 
 #[cfg(feature = "desktop")]
+mod stylesheet_reload;
+
+#[cfg(feature = "desktop")]
 mod frame;
 
 #[cfg(feature = "desktop")]
