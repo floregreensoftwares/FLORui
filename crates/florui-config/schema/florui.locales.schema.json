@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": {
+    "$ref": "#/definitions/Locale"
+  },
+  "definitions": {
+    "Locale": {
+      "additionalProperties": false,
+      "description": "The application's name and description in one language.",
+      "properties": {
+        "description": {
+          "description": "The description in this language. Falls back to `app.description`.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The product name in this language. Falls back to `app.name`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "description": "The application's name and description in other languages, one table per locale tag such as `en` or `pt-BR`. Used instead of `[app.locales]` in florui.config.toml; declaring both is an error.",
+  "title": "florui.locales.toml",
+  "type": "object"
+}

@@ -13,29 +13,43 @@
 //! invented.
 
 use schemars::generate::SchemaSettings;
+use std::collections::BTreeMap;
+
 use serde_json::{Map, Value};
 
-use crate::schema::{RawConfig, SUPPORTED_SCHEMA_VERSION};
+use crate::schema::{RawConfig, RawLocale, SUPPORTED_SCHEMA_VERSION};
 
 /// The conventional file name for a project's local copy of the schema.
 pub const SCHEMA_FILE_NAME: &str = "florui.config.schema.json";
 
-/// The schema as a JSON value (draft-07, which editors with TOML support
-/// read).
-pub fn json_schema() -> Value {
+/// The same for the locales file (`florui.locales.toml`), whose entries are
+/// the `[app.locales]` of the configuration kept in a file of their own.
+pub const LOCALES_SCHEMA_FILE_NAME: &str = "florui.locales.schema.json";
+
+fn generate<T: schemars::JsonSchema>(title: &str, description: &str) -> Value {
     let generator = SchemaSettings::draft07().into_generator();
-    let schema = generator.into_root_schema_for::<RawConfig>();
+    let schema = generator.into_root_schema_for::<T>();
     let mut value = serde_json::to_value(&schema).expect("a generated schema is valid JSON");
     simplify(&mut value);
     if let Value::Object(root) = &mut value {
+        root.insert("title".to_string(), Value::String(title.to_string()));
         root.insert(
             "description".to_string(),
-            Value::String(
-                "Configuration of one Florui application: its identity, window defaults, \
-                 distribution metadata and per-environment overrides."
-                    .to_string(),
-            ),
+            Value::String(description.to_string()),
         );
+    }
+    value
+}
+
+/// The schema as a JSON value (draft-07, which editors with TOML support
+/// read).
+pub fn json_schema() -> Value {
+    let mut value = generate::<RawConfig>(
+        "florui.config.toml",
+        "Configuration of one Florui application: its identity, window defaults, distribution \
+         metadata and per-environment overrides.",
+    );
+    if let Value::Object(root) = &mut value {
         root.insert(
             "x-florui-schema-version".to_string(),
             Value::from(SUPPORTED_SCHEMA_VERSION),
@@ -44,13 +58,33 @@ pub fn json_schema() -> Value {
     value
 }
 
+/// The schema of `florui.locales.toml`: a table per locale tag, such as `en`
+/// or `pt-BR`, each with the application's name and description in that
+/// language.
+pub fn locales_json_schema() -> Value {
+    generate::<BTreeMap<String, RawLocale>>(
+        "florui.locales.toml",
+        "The application's name and description in other languages, one table per locale tag \
+         such as `en` or `pt-BR`. Used instead of `[app.locales]` in florui.config.toml; \
+         declaring both is an error.",
+    )
+}
+
+fn pretty(value: &Value) -> String {
+    let mut text = serde_json::to_string_pretty(value).expect("a generated schema is valid JSON");
+    text.push('\n');
+    text
+}
+
 /// The schema as the text of the committed file: two-space indentation and a
 /// trailing newline.
 pub fn json_schema_pretty() -> String {
-    let mut text =
-        serde_json::to_string_pretty(&json_schema()).expect("a generated schema is valid JSON");
-    text.push('\n');
-    text
+    pretty(&json_schema())
+}
+
+/// The locales schema as the text of its committed file.
+pub fn locales_json_schema_pretty() -> String {
+    pretty(&locales_json_schema())
 }
 
 /// Rewrites what `schemars` emits into what a TOML file and an editor mean:
