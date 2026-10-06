@@ -47,6 +47,7 @@ use crate::gpu::{self, GpuPresenter};
 use crate::host_observer::{HostObserver, SharedObserver};
 use crate::input::{Input, InputHost, InputState, KeyInput};
 use crate::single_instance::{self, HandoffOutcome, InstanceRole};
+use crate::stylesheet_reload;
 use crate::window_controls::{InputMode, ScreenRect, WindowControls};
 use crate::window_state::{self, WindowPersistence};
 
@@ -545,13 +546,6 @@ fn watch_css_file(
     })?;
     watcher.watch(parent, RecursiveMode::NonRecursive)?;
     Ok(watcher)
-}
-
-/// Whether `read` differs from the stylesheet text last installed. A second
-/// event for the same save reads the same text, and installing it again would
-/// repeat the whole update for nothing.
-fn is_new_stylesheet(installed: Option<&str>, read: &str) -> bool {
-    installed != Some(read)
 }
 
 pub(crate) fn layout_viewport(scale: ViewportScale) -> Size<AvailableSpace> {
@@ -1688,37 +1682,18 @@ impl WindowState {
     /// Re-reads and re-parses the watched CSS file (see
     /// [`WindowSpec::with_css_reload`]), swaps it into the running
     /// [`UiRuntime`] via [`UiRuntime::set_rules`] — never rebuilding the
-    /// tree, so every `Signal` keeps its value — and repaints. A failure
-    /// (bad syntax, a save-in-progress truncated read) is reported and the
-    /// last good stylesheet keeps rendering, the same recovery contract
-    /// the native inspector's own fixture preview already established.
+    /// tree, so every `Signal` keeps its value — and repaints. A file that
+    /// cannot be read is reported and the last good stylesheet keeps
+    /// rendering. A text never fails to parse (see [`stylesheet_reload`]): a
+    /// save in progress installs what of it parsed until the finished text
+    /// replaces it.
     fn reload_css(&mut self, reported_at: std::time::Duration) {
         let Some(path) = self.css_path.clone() else {
             return;
         };
-        let read = {
-            let _span = florui_profile::span(florui_profile::Phase::StylesheetRead);
-            std::fs::read_to_string(&path)
-        };
-        let text = match read {
-            // One save reaches the watcher as two events moments apart; the
-            // second finds what the first already installed.
-            Ok(text) if !is_new_stylesheet(self.applied_css.as_deref(), &text) => return,
-            Ok(text) => text,
-            Err(error) => {
-                eprintln!(
-                    "florui-platform: stylesheet reload failed, keeping last good version: {}",
-                    RunError::CssFile(error)
-                );
-                return;
-            }
-        };
-        let parsed = {
-            let _span = florui_profile::span(florui_profile::Phase::StylesheetParse);
-            florui_style::parse_stylesheet(&text)
-        };
-        match parsed.map_err(RunError::Stylesheet) {
-            Ok(rules) => {
+        match stylesheet_reload::load(&path, self.applied_css.as_deref()) {
+            stylesheet_reload::Reload::Unchanged => {}
+            stylesheet_reload::Reload::Install { rules, text } => {
                 self.runtime.set_rules(rules);
                 self.applied_css = Some(text);
                 florui_profile::note_stylesheet_reload(reported_at);
@@ -1728,9 +1703,9 @@ impl WindowState {
                 );
                 self.update_and_request_redraw();
             }
-            Err(error) => {
+            stylesheet_reload::Reload::Failed(reason) => {
                 eprintln!(
-                    "florui-platform: stylesheet reload failed, keeping last good version: {error}"
+                    "florui-platform: stylesheet reload failed, keeping last good version: {reason}"
                 );
             }
         }
@@ -2397,27 +2372,6 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_stylesheet_is_reinstalled_only_when_its_text_changed() {
-        assert!(is_new_stylesheet(None, ".a {}"), "nothing installed yet");
-        assert!(
-            !is_new_stylesheet(Some(".a {}"), ".a {}"),
-            "the same save, read twice"
-        );
-        assert!(
-            is_new_stylesheet(Some(".a {}"), ".a { color: red; }"),
-            "an edit"
-        );
-        assert!(
-            is_new_stylesheet(Some(".a { color: red; }"), ""),
-            "a half-written file is read, then the finished one replaces it"
-        );
-        assert!(
-            is_new_stylesheet(Some(""), ".a { color: red; }"),
-            "and an emptied file is a real change too"
-        );
-    }
 
     #[test]
     fn window_options_default_respects_reduced_motion() {
