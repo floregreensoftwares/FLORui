@@ -1,9 +1,9 @@
-/* The layout applies content-box sizing whatever box-sizing says, so the 24px padding is taken off by hand. */
 .page {
   display: flex;
   flex-direction: column;
   padding: 24px;
-  min-height: calc(100vh - 48px);
+  min-height: 100vh;
+  box-sizing: border-box;
   font-family: sans-serif;
   color: #f0f0f0;
 }
