@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::{Mutex, MutexGuard};
 
 fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
@@ -86,10 +87,21 @@ fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     files
 }
 
+/// One browser at a time: several launching together under a loaded runner
+/// miss the launch timeout, and what is being tested is the command, not the
+/// browser's start-up under load.
+static BROWSER: Mutex<()> = Mutex::new(());
+
+fn one_browser_at_a_time() -> MutexGuard<'static, ()> {
+    BROWSER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 macro_rules! need_chrome {
     () => {
         match chrome() {
-            Some(path) => path,
+            Some(path) => (path, one_browser_at_a_time()),
             None => {
                 eprintln!("skipped: no Chrome (set FLORUI_CHROMIUM)");
                 return;
@@ -119,7 +131,7 @@ fn an_unknown_fixture_name_fails_and_lists_the_available_ones() {
 
 #[test]
 fn a_name_selects_one_fixture_from_a_nested_directory_and_output_goes_to_the_project_target() {
-    let chromium = need_chrome!();
+    let (chromium, _browser) = need_chrome!();
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path());
     let nested = dir.path().join("src");
@@ -146,7 +158,7 @@ fn a_name_selects_one_fixture_from_a_nested_directory_and_output_goes_to_the_pro
 
 #[test]
 fn no_selection_compares_every_fixture_and_counts_them() {
-    let chromium = need_chrome!();
+    let (chromium, _browser) = need_chrome!();
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path());
 
@@ -159,7 +171,7 @@ fn no_selection_compares_every_fixture_and_counts_them() {
 
 #[test]
 fn a_failing_fixture_exits_1_and_the_fixture_is_left_untouched() {
-    let chromium = need_chrome!();
+    let (chromium, _browser) = need_chrome!();
     let dir = tempfile::tempdir().unwrap();
     workspace(dir.path());
     // Chromium moves the box, Florui's render of the manifest does not.
