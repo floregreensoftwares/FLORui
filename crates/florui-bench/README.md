@@ -219,9 +219,16 @@ engine improves.
   color in 3,252 edits, in a 1,000-row page with a tiny stylesheet, and it was not reproduced; its
   cause is unknown. Reloads per edit: 502 to 518 for 251 edits on `current`, 251 on `deduplicated`.
   The interval from the watcher's report to the frame's first work grows with the stylesheet (one
-  row, in place, deduplicated: 3.6 ms at 1 KB, 18.8 at 20 KB, 22.3 at 100 KB), so reading and parsing
-  the file is where a large stylesheet's time goes; the profiler has no span for it and these runs do
-  not split it further. Median totals, current against deduplicated, without an interval (this is two
+  row, in place, deduplicated: 3.6 ms at 1 KB, 18.8 at 20 KB, 22.3 at 100 KB). It is not the
+  engine's work: with temporary timers in the reload (not committed), the real-window flow gave a
+  median of 2.9, 19.3 and 22.7 ms for `read_to_string` alone, against 6 to 180 us to parse, 20 us to
+  1.5 ms to install the rules and 1 to 9 ms for the first update. A program that writes a file and
+  opens it straight away, without Florui, saw 16.9, 22.6 and 28.9 ms for the open of a 1, 20 and
+  100 KB file (the read itself 0.1 ms), 0.12 ms for a second open and 0.15 to 0.18 ms after a pause.
+  The machine had real-time and on-access antivirus protection on, which fits the open of a
+  just-written file waiting on a scan; that was not tested, since excluding a folder means changing a
+  security setting, so the cause is an inference. The stall is outside the framework and is the
+  same for any program that reads a file as it is saved. Median totals, current against deduplicated, without an interval (this is two
   runs, not an `ab`): 1 KB 15.9 and 14.9 ms, 20 KB 35.7 and 31.6, 100 KB 55.6 and 44.9, and 1,000 rows
   with 20 KB 56.6 and 45.9.
 
