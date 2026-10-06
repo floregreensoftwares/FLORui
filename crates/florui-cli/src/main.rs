@@ -85,6 +85,10 @@ enum Command {
         /// skipped.
         #[arg(long, value_enum, default_value = "all")]
         suite: Suite,
+        /// Path to a Chromium-family binary; without it the pinned Chromium
+        /// is used.
+        #[arg(long, env = "FLORUI_CHROMIUM")]
+        chromium: Option<PathBuf>,
         #[arg(last = true)]
         args: Vec<String>,
     },
@@ -201,7 +205,11 @@ fn main() -> ExitCode {
             None => run_dev_example(cli.package, example, cli.environment),
         },
         Command::New { name } => new::run(&name),
-        Command::Test { suite, args } => run_test(cli.package, suite, args),
+        Command::Test {
+            suite,
+            chromium,
+            args,
+        } => run_test(cli.package, suite, chromium, args),
         Command::Compare {
             fixture,
             chromium,
@@ -967,7 +975,12 @@ fn run_compare_all(
     }
 }
 
-fn run_test(package: Option<String>, suite: Suite, extra: Vec<String>) -> ExitCode {
+fn run_test(
+    package: Option<String>,
+    suite: Suite,
+    chromium: Option<PathBuf>,
+    extra: Vec<String>,
+) -> ExitCode {
     let cwd = match std::env::current_dir() {
         Ok(cwd) => cwd,
         Err(err) => return fail(format!("could not read the current directory: {err}")),
@@ -982,7 +995,7 @@ fn run_test(package: Option<String>, suite: Suite, extra: Vec<String>) -> ExitCo
         results.push(("cargo", run_cargo_suite(&facts, &extra)));
     }
     if suite.includes_visual() {
-        results.push(("visual", run_visual_suite(&facts, suite)));
+        results.push(("visual", run_visual_suite(&facts, suite, chromium)));
     }
     test_cmd::summarize(&results)
 }
@@ -1001,7 +1014,11 @@ fn run_cargo_suite(facts: &florui_config::CargoProjectFacts, extra: &[String]) -
     }
 }
 
-fn run_visual_suite(facts: &florui_config::CargoProjectFacts, requested: Suite) -> SuiteOutcome {
+fn run_visual_suite(
+    facts: &florui_config::CargoProjectFacts,
+    requested: Suite,
+    chromium: Option<PathBuf>,
+) -> SuiteOutcome {
     let unavailable = |reason: String| SuiteOutcome::unavailable(requested, Suite::Visual, reason);
     let fixtures_root = test_cmd::fixtures_root(&facts.workspace_root);
     let fixtures = discover_reference_fixtures(&fixtures_root);
@@ -1011,7 +1028,7 @@ fn run_visual_suite(facts: &florui_config::CargoProjectFacts, requested: Suite) 
             fixtures_root.display()
         ));
     }
-    let Some(chromium) = resolve_chromium(None) else {
+    let Some(chromium) = resolve_chromium(chromium) else {
         return unavailable(
             "no Chromium found: run scripts/fetch-chromium.ps1 or set FLORUI_CHROMIUM".to_string(),
         );
