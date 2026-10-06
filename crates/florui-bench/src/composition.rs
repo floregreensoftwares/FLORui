@@ -25,8 +25,8 @@ use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, HWND_TOPMOST,
-    IsWindowVisible, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
+    EnumWindows, GetClientRect, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+    HWND_TOPMOST, IsWindowVisible, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
 };
 use windows::core::{BOOL, Interface, PCWSTR};
 
@@ -291,4 +291,15 @@ pub fn keep_on_top(window: &Window) {
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         )
     };
+}
+
+/// The window's client area in physical pixels, which is the size of the
+/// surface it presents to.
+pub fn client_size(window: &Window) -> Option<(u32, u32)> {
+    let mut rect = RECT::default();
+    unsafe { GetClientRect(window.hwnd, &mut rect) }.ok()?;
+    Some((
+        u32::try_from(rect.right - rect.left).ok()?,
+        u32::try_from(rect.bottom - rect.top).ok()?,
+    ))
 }
