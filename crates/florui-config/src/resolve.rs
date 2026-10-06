@@ -14,6 +14,7 @@ use crate::resolved::{
     FileAssociationConfig, IconsConfig, LocaleConfig, LocalesConfig, Provenance, ResolvedConfig,
     Target, WebConfig, WebIconsConfig, WindowConfig, WindowPersistenceConfig,
 };
+use crate::schema::Spanned;
 use crate::schema::{
     RawActivation, RawApp, RawConfig, RawDecorations, RawEnvironmentOverlay,
     RawEnvironmentOverlayApp, RawIcons, RawLocale, RawVersion, RawWeb, RawWindow,
@@ -21,7 +22,6 @@ use crate::schema::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use toml::Spanned;
 
 #[derive(Debug)]
 pub struct Resolution {
@@ -560,7 +560,7 @@ fn environment_optional_string_field(
 }
 
 fn spanned_size_field(
-    raw: Option<&toml::Spanned<f64>>,
+    raw: Option<&Spanned<f64>>,
     name: &'static str,
     lines: Option<&LineIndex<'_>>,
     provenance: &mut Vec<FieldProvenance>,
@@ -581,7 +581,7 @@ fn spanned_size_field(
 }
 
 fn validate_window_size(
-    raw: Option<&toml::Spanned<f64>>,
+    raw: Option<&Spanned<f64>>,
     field_name: &'static str,
     config_path: &Path,
     lines: &LineIndex<'_>,
@@ -622,8 +622,8 @@ fn resolve_icons(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> IconsConfig {
     let checks_assets = matches!(target, Some(Target::Native));
-    let mut resolve_one = |overlay_raw: Option<&toml::Spanned<String>>,
-                           base_raw: Option<&toml::Spanned<String>>,
+    let mut resolve_one = |overlay_raw: Option<&Spanned<String>>,
+                           base_raw: Option<&Spanned<String>>,
                            name: &'static str,
                            code: &'static str| {
         let (spanned, from_environment) = match overlay_raw {
@@ -811,7 +811,7 @@ fn resolve_web(
 
     let checks_assets = matches!(target, Some(Target::Web));
     let raw_icons = raw.and_then(|w| w.icons.as_ref());
-    let mut resolve_one = |raw: Option<&toml::Spanned<String>>,
+    let mut resolve_one = |raw: Option<&Spanned<String>>,
                            name: &'static str,
                            code: &'static str| match raw {
         Some(spanned) => {

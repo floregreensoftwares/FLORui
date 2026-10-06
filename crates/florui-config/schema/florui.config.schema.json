@@ -1,0 +1,387 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "Activation": {
+      "additionalProperties": false,
+      "description": "How the application is started again by the system: a second launch, a URL, or a file.",
+      "properties": {
+        "file_associations": {
+          "description": "File types the application opens.",
+          "items": {
+            "$ref": "#/definitions/FileAssociation"
+          },
+          "type": "array"
+        },
+        "single_instance": {
+          "description": "Whether a second launch is handed to the running instance instead of starting another.",
+          "type": "boolean"
+        },
+        "url_schemes": {
+          "description": "URL schemes the application handles, without the `://`, for example `garden`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "App": {
+      "additionalProperties": false,
+      "description": "The application's identity.",
+      "properties": {
+        "activation": {
+          "$ref": "#/definitions/Activation",
+          "description": "Single-instance behavior, URL schemes and file associations."
+        },
+        "default_locale": {
+          "description": "The locale used when the requested one is not declared. Defaults to `en`. It must be one of the declared locales.",
+          "type": "string"
+        },
+        "description": {
+          "description": "A one-line description of the application.",
+          "type": "string"
+        },
+        "icons": {
+          "$ref": "#/definitions/Icons",
+          "description": "The application icon, per platform."
+        },
+        "identifier": {
+          "description": "A stable reverse-domain identity such as `com.example.app`. It scopes the application's data, instance coordination and window persistence, and is required for a distributable application. Changing it changes the installation's identity.",
+          "type": "string"
+        },
+        "locales": {
+          "additionalProperties": {
+            "$ref": "#/definitions/Locale"
+          },
+          "description": "The application's name and description in other languages, keyed by locale tag such as `pt-BR`. Mutually exclusive with `locales_file`.",
+          "type": "object"
+        },
+        "locales_file": {
+          "description": "Path, relative to this file, of a TOML file that supplies the locales instead of declaring them here. A `florui.locales.toml` next to this file is used when this is omitted. Mutually exclusive with `locales`.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The product name shown to users. Defaults to the Cargo package name.",
+          "type": "string"
+        },
+        "version": {
+          "$ref": "#/definitions/AppVersion",
+          "description": "The application's version: a version string, or `{ workspace = true }` to take the workspace package's version. Defaults to the Cargo package's version."
+        }
+      },
+      "type": "object"
+    },
+    "AppVersion": {
+      "description": "A version string, or { workspace = true } to take the workspace package's version.",
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "workspace": {
+              "const": true
+            }
+          },
+          "required": [
+            "workspace"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Bundle": {
+      "additionalProperties": false,
+      "description": "Distribution metadata written into a native build.",
+      "properties": {
+        "category": {
+          "description": "A lowercase category token such as `productivity`.",
+          "type": "string"
+        },
+        "copyright": {
+          "description": "A one-line copyright notice, written into the executable's version information.",
+          "type": "string"
+        },
+        "homepage": {
+          "description": "The application's home page: an absolute http or https URL without credentials. Falls back to the package's Cargo `homepage`.",
+          "type": "string"
+        },
+        "license": {
+          "description": "An SPDX license expression such as `MIT OR Apache-2.0`. Falls back to the package's Cargo `license`.",
+          "type": "string"
+        },
+        "license_file": {
+          "description": "Path, relative to this file and inside the package, of the file with the license text. It is staged beside the executable as the notice. Falls back to the package's Cargo `license-file`.",
+          "type": "string"
+        },
+        "publisher": {
+          "description": "The company or person that publishes the application, shown in the executable's properties.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Decorations": {
+      "description": "Who draws the window frame.",
+      "enum": [
+        "system",
+        "custom"
+      ],
+      "type": "string",
+      "x-taplo": {
+        "docs": {
+          "enumValues": [
+            "The operating system's own frame.",
+            "A frame the application draws itself."
+          ]
+        }
+      }
+    },
+    "Dev": {
+      "additionalProperties": false,
+      "description": "What `florui dev` runs.",
+      "properties": {
+        "example": {
+          "description": "The Cargo example `florui dev` builds and runs.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "EnvironmentOverlay": {
+      "additionalProperties": false,
+      "description": "One environment's overrides. Only what scopes an installation's identity can be overridden: `app.identifier`, `app.name`, `app.description` and `app.icons`.",
+      "properties": {
+        "app": {
+          "$ref": "#/definitions/EnvironmentOverlayApp",
+          "description": "The identity fields this environment overrides."
+        }
+      },
+      "type": "object"
+    },
+    "EnvironmentOverlayApp": {
+      "additionalProperties": false,
+      "description": "The `[app]` fields an environment can override.",
+      "properties": {
+        "description": {
+          "description": "Replaces `app.description` in this environment.",
+          "type": "string"
+        },
+        "icons": {
+          "$ref": "#/definitions/Icons",
+          "description": "Replaces the icons in this environment, field by field."
+        },
+        "identifier": {
+          "description": "Replaces `app.identifier` in this environment. Environments that should install side by side need distinct identifiers.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Replaces `app.name` in this environment.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "FileAssociation": {
+      "additionalProperties": false,
+      "description": "One file type the application opens.",
+      "properties": {
+        "description": {
+          "description": "What these files are, as a person would say it.",
+          "type": "string"
+        },
+        "extension": {
+          "description": "The file extension, without the dot. Each extension may be declared once.",
+          "type": "string"
+        },
+        "identity": {
+          "description": "A stable name for this association, distinct from the extension, that survives a renamed extension or description across releases. Each identity may be declared once.",
+          "type": "string"
+        },
+        "mime_type": {
+          "description": "The MIME type of these files.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "extension",
+        "identity"
+      ],
+      "type": "object"
+    },
+    "Icons": {
+      "additionalProperties": false,
+      "description": "Icon sources. SVG and PNG are supported; paths are relative to this file.",
+      "properties": {
+        "linux": {
+          "description": "The icon for Linux, overriding `source`.",
+          "type": "string"
+        },
+        "macos": {
+          "description": "The icon for macOS, overriding `source`.",
+          "type": "string"
+        },
+        "source": {
+          "description": "The icon used on every platform that has no override of its own.",
+          "type": "string"
+        },
+        "windows": {
+          "description": "The icon for Windows, overriding `source`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Locale": {
+      "additionalProperties": false,
+      "description": "The application's name and description in one language.",
+      "properties": {
+        "description": {
+          "description": "The description in this language. Falls back to `app.description`.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The product name in this language. Falls back to `app.name`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Web": {
+      "additionalProperties": false,
+      "description": "Browser metadata for the Web target. It never inherits the native window's title or the native icons.",
+      "properties": {
+        "base_path": {
+          "description": "The URL path the site is deployed under, starting with `/`. Defaults to `/`.",
+          "type": "string"
+        },
+        "description": {
+          "description": "The page description. Defaults to `app.description`.",
+          "type": "string"
+        },
+        "icons": {
+          "$ref": "#/definitions/WebIcons",
+          "description": "The icons browsers show for the site."
+        },
+        "title": {
+          "description": "The page title. Defaults to `app.name`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "WebIcons": {
+      "additionalProperties": false,
+      "description": "The icons of the Web target. Neither falls back to the native icon.",
+      "properties": {
+        "apple_touch_icon": {
+          "description": "Path, relative to this file, of the touch icon: a PNG.",
+          "type": "string"
+        },
+        "favicon": {
+          "description": "Path, relative to this file, of the favicon: an SVG, PNG or ICO that is copied as it is.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "Window": {
+      "additionalProperties": false,
+      "description": "Defaults for the primary window. A window created in code can override them.",
+      "properties": {
+        "decorations": {
+          "$ref": "#/definitions/Decorations",
+          "description": "Who draws the window frame. Defaults to `system`."
+        },
+        "height": {
+          "description": "The initial height in logical pixels. Must be positive.",
+          "type": "number"
+        },
+        "min_height": {
+          "description": "The smallest height the window can be resized to, in logical pixels. Must not exceed `height`.",
+          "type": "number"
+        },
+        "min_width": {
+          "description": "The smallest width the window can be resized to, in logical pixels. Must not exceed `width`.",
+          "type": "number"
+        },
+        "persistence": {
+          "$ref": "#/definitions/WindowPersistence",
+          "description": "Remembering the window's size and position between runs."
+        },
+        "title": {
+          "description": "The window title. Defaults to `app.name`.",
+          "type": "string"
+        },
+        "transparent": {
+          "description": "Whether the window can be see-through. Defaults to `false`.",
+          "type": "boolean"
+        },
+        "width": {
+          "description": "The initial width in logical pixels. Must be positive.",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "WindowPersistence": {
+      "additionalProperties": false,
+      "description": "Remembering the window between runs.",
+      "properties": {
+        "enabled": {
+          "description": "Whether the window's size and position are saved and restored. Defaults to `false`.",
+          "type": "boolean"
+        },
+        "key": {
+          "description": "The name this window's saved state is stored under. Defaults to `main`.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "description": "Configuration of one Florui application: its identity, window defaults, distribution metadata and per-environment overrides.",
+  "properties": {
+    "app": {
+      "$ref": "#/definitions/App",
+      "description": "The application's identity: name, version, icons, activation and translated names."
+    },
+    "bundle": {
+      "$ref": "#/definitions/Bundle",
+      "description": "Distribution metadata written into a build."
+    },
+    "dev": {
+      "$ref": "#/definitions/Dev",
+      "description": "What `florui dev` runs."
+    },
+    "environments": {
+      "additionalProperties": {
+        "$ref": "#/definitions/EnvironmentOverlay"
+      },
+      "description": "Named overrides of the application's identity, chosen with `--environment <name>`: for example a `development` environment with its own identifier so it installs next to the production one.",
+      "type": "object"
+    },
+    "schema_version": {
+      "const": 1,
+      "description": "The version of this file format. Always 1 for now; a different value is rejected before anything else is read.",
+      "type": "integer"
+    },
+    "web": {
+      "$ref": "#/definitions/Web",
+      "description": "Browser metadata for the Web target, independent of the native application's window and icons."
+    },
+    "window": {
+      "$ref": "#/definitions/Window",
+      "description": "Defaults for the application's primary window."
+    }
+  },
+  "required": [
+    "schema_version"
+  ],
+  "title": "florui.config.toml",
+  "type": "object",
+  "x-florui-schema-version": 1
+}
