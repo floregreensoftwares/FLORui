@@ -78,6 +78,16 @@ writes `my-app/` with a component, its stylesheet, a window entry, a `florui dev
 
 The generated `Cargo.toml` depends on the Florui crates by version, as if they were published. They are not yet, so the project does not resolve from crates.io today. The generated project was built and tested against this checkout by patching the crates to local paths; that check is the ignored test `the_generated_project_builds_and_passes_its_own_test` in `florui-cli`.
 
+## Build a release
+
+```sh
+florui build --target native [--package NAME] [--strict]
+```
+
+builds only the selected package (not the whole workspace) in release mode and stages its executables in a fresh `target/florui-build/<package>/native/`, with a `report.json` beside them: the package and application identity, the toolchain, the git commit and whether the tree was dirty, the `Cargo.lock` hash, and each file's size, SHA-256 and BLAKE3.
+
+The report also says whether the artifact includes the developer tooling: the inspector crate, or the `profiling` and `source-locations` features of the Florui crates. That is read from what `cargo` compiled for this build, so it is evidence about the dependency graph and not a scan of the executable, and an executable stays inspectable whatever was left out. Included tooling is a warning; `--strict` rejects it with exit code 2 and still writes the report. The build is not claimed to be reproducible. Icons, installers and signing are not part of it yet.
+
 Run `florui --help` for the other commands.
 
 ## Format on save
