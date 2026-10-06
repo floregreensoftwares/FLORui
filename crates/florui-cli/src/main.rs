@@ -22,6 +22,7 @@ use florui_devtools::diagnostics::{dim_text, failure, success};
 use test_cmd::{Suite, SuiteOutcome};
 
 mod build;
+mod compare_select;
 mod doctor;
 mod fmt;
 mod new;
@@ -92,17 +93,26 @@ enum Command {
         #[arg(last = true)]
         args: Vec<String>,
     },
-    /// Compare a reference fixture's Chromium capture against Florui's own render.
+    /// Compares reference fixtures' Chromium captures against Florui's own
+    /// render and writes the images and a report for each. Only reads the
+    /// fixtures: nothing here ever updates an expected result.
     Compare {
-        /// Directory containing the fixture's manifest.json, HTML, and CSS.
-        #[arg(long, default_value = "fixtures/reference/div-default")]
-        fixture: PathBuf,
+        /// A fixture to compare: its name under `fixtures/reference` at the
+        /// workspace root, or the path of a directory with a manifest.json.
+        /// Repeatable; every fixture when none is given.
+        #[arg(long)]
+        fixture: Vec<String>,
         /// Path to a Chromium-family binary (Chrome, Chromium, or Edge).
         #[arg(long, env = "FLORUI_CHROMIUM")]
         chromium: Option<PathBuf>,
-        /// Directory to write report.json and image artifacts under.
-        #[arg(long, default_value = "target/florui-conformance")]
-        out_dir: PathBuf,
+        /// Directory to write report.json and image artifacts under
+        /// (default: `florui-conformance` in the project's target directory).
+        #[arg(long)]
+        out_dir: Option<PathBuf>,
+        /// Open the artifacts of each failing fixture (or of the only
+        /// fixture selected) in the file manager.
+        #[arg(long)]
+        open: bool,
         /// Run Chromium with a visible window instead of headless.
         #[arg(long)]
         headed: bool,
@@ -222,9 +232,18 @@ fn main() -> ExitCode {
             fixture,
             chromium,
             out_dir,
+            open,
             headed,
             keep_profile,
-        } => run_compare(fixture, chromium, out_dir, headed, keep_profile),
+        } => run_compare(CompareRequest {
+            package: cli.package,
+            fixtures: fixture,
+            chromium,
+            out_dir,
+            open,
+            headed,
+            keep_profile,
+        }),
         Command::CompareAll {
             fixtures_root,
             chromium,
@@ -740,14 +759,38 @@ fn print_compare_result(result: &CompareResult) {
     }
 }
 
-fn run_compare(
-    fixture_path: PathBuf,
+struct CompareRequest {
+    package: Option<String>,
+    fixtures: Vec<String>,
     chromium: Option<PathBuf>,
-    out_dir: PathBuf,
+    out_dir: Option<PathBuf>,
+    open: bool,
     headed: bool,
     keep_profile: bool,
-) -> ExitCode {
-    let Some(chromium) = resolve_chromium(chromium) else {
+}
+
+fn run_compare(request: CompareRequest) -> ExitCode {
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(err) => return fail(format!("could not read the current directory: {err}")),
+    };
+    // Fixtures and output belong to the project, not to wherever the command
+    // was started. A fixture given as a path works outside any project.
+    let (workspace_root, target_dir) =
+        match florui_config::resolve_cargo_project(&cwd, request.package.as_deref()) {
+            Ok(facts) => (facts.workspace_root, facts.target_dir),
+            Err(_) if !request.fixtures.is_empty() => (cwd.clone(), cwd.join("target")),
+            Err(err) => return fail(err.to_string()),
+        };
+    let fixtures_root = workspace_root.join("fixtures").join("reference");
+    let available = discover_reference_fixtures(&fixtures_root);
+    let fixtures = match compare_select::select(&fixtures_root, &available, &request.fixtures, &cwd)
+    {
+        Ok(fixtures) => fixtures,
+        Err(err) => return fail(err),
+    };
+
+    let Some(chromium) = resolve_chromium(request.chromium) else {
         eprintln!("{}", failure("no Chromium binary configured"));
         eprintln!(
             "run scripts/fetch-chromium.ps1 to fetch the pinned build, or pass --chromium <path> / set FLORUI_CHROMIUM, e.g.:"
@@ -763,11 +806,14 @@ fn run_compare(
     // back to the real default profile, which then refuses remote
     // debugging outright ("non-default data directory" required). An
     // absolute path avoids that entirely.
+    let out_dir = request
+        .out_dir
+        .unwrap_or_else(|| target_dir.join("florui-conformance"));
     if let Err(err) = std::fs::create_dir_all(&out_dir) {
         return fail(format!("could not create {}: {err}", out_dir.display()));
     }
     let out_dir = match out_dir.canonicalize() {
-        Ok(path) => path,
+        Ok(path) => compare_select::plain(path),
         Err(err) => return fail(format!("could not resolve {}: {err}", out_dir.display())),
     };
     let profile_dir = out_dir.join(format!("chrome-profile-{}", std::process::id()));
@@ -775,30 +821,68 @@ fn run_compare(
     let driver = match ChromiumDriver::launch(ChromiumOptions {
         executable: chromium.clone(),
         user_data_dir: profile_dir.clone(),
-        headless: !headed,
+        headless: !request.headed,
         launch_timeout: Duration::from_secs(30),
     }) {
         Ok(driver) => driver,
         Err(err) => return fail(format!("could not launch Chromium: {err}")),
     };
 
-    let result = compare_fixture(&driver, &fixture_path, &out_dir, &chromium);
+    let mut results = Vec::new();
+    for fixture_path in &fixtures {
+        results.push((
+            fixture_path,
+            compare_fixture(&driver, fixture_path, &out_dir, &chromium),
+        ));
+    }
     // Chrome holds the profile directory open until the process exits, so
     // the driver (and the browser it owns) must be dropped before any
     // attempt to remove that directory, or the removal silently fails.
     drop(driver);
-    cleanup_profile(&profile_dir, keep_profile);
+    cleanup_profile(&profile_dir, request.keep_profile);
 
-    match result {
-        Ok(result) => {
-            let exit = match result.outcome {
-                Outcome::Pass => ExitCode::SUCCESS,
-                Outcome::Fail => ExitCode::FAILURE,
-            };
-            print_compare_result(&result);
-            exit
+    let mut failed = 0;
+    let only_one = results.len() == 1;
+    for (fixture_path, result) in &results {
+        match result {
+            Ok(result) => {
+                print_compare_result(result);
+                let differs = result.outcome == Outcome::Fail;
+                if differs {
+                    failed += 1;
+                } else {
+                    println!(
+                        "{}",
+                        dim_text(&format!("artifacts in {}", result.artifacts_dir.display()))
+                    );
+                }
+                if request.open
+                    && (differs || only_one)
+                    && let Err(err) = compare_select::open_directory(&result.artifacts_dir)
+                {
+                    eprintln!("{}", failure(&err));
+                }
+            }
+            Err(err) => {
+                println!(
+                    "{}",
+                    failure(&format!("✘ {}: {err}", fixture_path.display()))
+                );
+                failed += 1;
+            }
         }
-        Err(err) => fail(err),
+    }
+    if results.len() > 1 {
+        println!(
+            "{} of {} fixtures match",
+            results.len() - failed,
+            results.len()
+        );
+    }
+    if failed == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
 

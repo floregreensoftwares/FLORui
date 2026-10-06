@@ -98,6 +98,14 @@ florui test [--package NAME] [--suite cargo|visual|all] [-- <cargo test args>]
 
 runs `cargo test -p <package>` for the selected package (never the whole workspace; arguments after `--` go to `cargo test`) and, under `all`, the reference fixtures in `fixtures/reference` at the workspace root against Chromium. It ends with one line per suite: `passed`, `failed` or `skipped`. Under `all` the fixtures are skipped, and reported as skipped, when the workspace has none or no Chromium is found (`scripts/fetch-chromium.ps1` or `FLORUI_CHROMIUM`); `--suite visual` fails in that case instead, so a suite asked for by name never counts as passed without running. The exit code is 1 when any suite failed.
 
+## Compare against Chromium
+
+```sh
+florui compare [--fixture NAME_OR_PATH]... [--chromium PATH] [--out-dir DIR] [--open]
+```
+
+renders the reference fixtures in Chromium and in Florui and writes, for each, the two images, their difference, overlays and a `report.json` under `target/florui-conformance/<fixture>/` of the project. A fixture is named by its directory under `fixtures/reference` at the workspace root or given as a path; with none named, all are compared in one browser launch. The Chromium is `--chromium`, `FLORUI_CHROMIUM`, or the pinned build from `scripts/fetch-chromium.ps1`. Every result prints where its artifacts are; `--open` opens a failing fixture's folder (or the only fixture's) in the file manager on Windows. The command only reads the fixtures: it never updates an expected result. The exit code is 1 when any fixture differs. `compare-all` records a run history instead.
+
 ## Format on save
 
 `florui fmt --stdin-filepath <path>` reads a Rust source file from stdin, prints only the formatted source to stdout and sends every diagnostic to stderr (exit code 2 on failure, so an editor keeps the buffer as it was). The path selects the `rustfmt.toml` and the edition of the package that owns the file.
