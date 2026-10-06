@@ -144,12 +144,28 @@ pub fn run(name: &str) -> ExitCode {
     }
 }
 
+/// Every file of a new project, rendered: the templates, and the editor
+/// schema for `florui.config.toml` (generated, so it is always the one this
+/// `florui` understands; the generated configuration names it in its first
+/// line).
+fn files(name: &str) -> Vec<(&'static str, String)> {
+    FILES
+        .iter()
+        .map(|(relative, template)| (*relative, render(template, name)))
+        .chain(std::iter::once((
+            florui_config::SCHEMA_FILE_NAME,
+            florui_config::json_schema_pretty(),
+        )))
+        .collect()
+}
+
 /// Creates `parent/name` and returns the files written.
 pub fn scaffold(parent: &Path, name: &str) -> Result<Vec<PathBuf>, NewError> {
     validate_name(name)?;
     let root = parent.join(name);
+    let files = files(name);
 
-    let conflicts: Vec<PathBuf> = FILES
+    let conflicts: Vec<PathBuf> = files
         .iter()
         .map(|(relative, _)| root.join(relative))
         .filter(|path| path.symlink_metadata().is_ok())
@@ -162,9 +178,8 @@ pub fn scaffold(parent: &Path, name: &str) -> Result<Vec<PathBuf>, NewError> {
     }
 
     let mut written = Vec::new();
-    for (relative, template) in FILES {
+    for (relative, contents) in &files {
         let path = root.join(relative);
-        let contents = render(template, name);
         let result = path
             .parent()
             .map_or(Ok(()), fs::create_dir_all)

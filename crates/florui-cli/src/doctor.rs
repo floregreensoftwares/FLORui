@@ -30,6 +30,7 @@ use serde_json::{Value, json};
 
 mod artifacts;
 mod distribution;
+mod editor_schema;
 
 const SCHEMA_VERSION: u32 = 1;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -608,6 +609,10 @@ fn project_checks_at(
         config_exists,
         config_target,
         &resolution,
+    ));
+    checks.push(editor_schema::editor_schema_check(
+        config_exists,
+        &facts.package_root,
     ));
 
     checks

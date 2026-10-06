@@ -74,7 +74,7 @@ The fixture must follow the same limited format. A desktop session is required t
 cargo run -p florui-cli -- new my-app
 ```
 
-writes `my-app/` with a component, its stylesheet, a window entry, a `florui dev` entry that reloads the CSS, a test that clicks the button, and a `florui.config.toml`. Existing files are never overwritten: any collision is listed and nothing is written.
+writes `my-app/` with a component, its stylesheet, a window entry, a `florui dev` entry that reloads the CSS, a test that clicks the button, and a `florui.config.toml` that names its editor schema, with that `florui.config.schema.json` beside it (see "Editor support" below). Existing files are never overwritten: any collision is listed and nothing is written.
 
 The generated `Cargo.toml` depends on the Florui crates by version, as if they were published. They are not yet, so the project does not resolve from crates.io today. The generated project was built and tested against this checkout by patching the crates to local paths; that check is the ignored test `the_generated_project_builds_and_passes_its_own_test` in `florui-cli`.
 
@@ -93,7 +93,7 @@ To use it, start the configuration with a comment naming the file, which Taplo a
 schema_version = 1
 ```
 
-No schema URL is published, so the association is a relative path and the copy belongs to the project; run `florui schema --write` again after upgrading Florui to refresh it. It was checked in VS Code with Even Better TOML 0.21.2 (Taplo's engine): an unknown key, a wrong type and a value outside an enum are underlined with the schema's messages, hovering a key shows its explanation, completing a key inside a table, including nested ones such as `[environments.development.app.icons]` and tables named by a map key, offers the keys that table defines with their text (inside an array of tables such as `[[app.activation.file_associations]]` the extension offers no keys, which it also does not for a trivial schema), and the values of an enum are offered with theirs; the example application's configuration and the `florui new` template raise no diagnostics. The extension appears to keep a schema it has already read, so after refreshing the file an editor window may need to be reloaded to see the new one.
+No schema URL is published, so the association is a relative path and the copy belongs to the project: `florui new` writes it and the line, and `florui doctor` has a `config.editor_schema` check that warns when the copy is not the one the installed Florui generates (written by another version, or edited); run `florui schema --write` again after upgrading Florui to refresh it. It was checked in VS Code with Even Better TOML 0.21.2 (Taplo's engine): an unknown key, a wrong type and a value outside an enum are underlined with the schema's messages, hovering a key shows its explanation, completing a key inside a table, including nested ones such as `[environments.development.app.icons]` and tables named by a map key, offers the keys that table defines with their text (inside an array of tables such as `[[app.activation.file_associations]]` the extension offers no keys, which it also does not for a trivial schema), and the values of an enum are offered with theirs; the example application's configuration and the `florui new` template raise no diagnostics. The extension appears to keep a schema it has already read, so after refreshing the file an editor window may need to be reloaded to see the new one.
 
 ## Build a release
 
