@@ -26,6 +26,7 @@ pub struct Identity<'a> {
     pub name: &'a str,
     pub description: Option<&'a str>,
     pub publisher: Option<&'a str>,
+    pub copyright: Option<&'a str>,
     pub version: &'a str,
 }
 
@@ -56,6 +57,7 @@ pub struct VersionFields {
     pub product_name: String,
     pub file_description: String,
     pub company_name: Option<String>,
+    pub legal_copyright: Option<String>,
     pub file_version: String,
     pub product_version: String,
     pub original_filename: String,
@@ -316,6 +318,7 @@ pub fn version_fields(identity: &Identity<'_>, file_name: &str) -> VersionFields
         product_name: identity.name.to_string(),
         file_description: identity.description.unwrap_or(identity.name).to_string(),
         company_name: identity.publisher.map(str::to_string),
+        legal_copyright: identity.copyright.map(str::to_string),
         file_version: identity.version.to_string(),
         product_version: identity.version.to_string(),
         original_filename: file_name.to_string(),
@@ -406,6 +409,9 @@ pub fn version_resource(fields: &VersionFields) -> Result<Vec<u8>, String> {
     ];
     if let Some(company) = &fields.company_name {
         strings.push(("CompanyName", company));
+    }
+    if let Some(copyright) = &fields.legal_copyright {
+        strings.push(("LegalCopyright", copyright));
     }
     strings.sort_by_key(|(key, _)| *key);
     let entries: Vec<Vec<u8>> = strings
@@ -833,6 +839,7 @@ mod tests {
             name: "Garden",
             description: None,
             publisher: Some("Floregreen"),
+            copyright: Some("Copyright 2026 Floregreen"),
             version: "1.2.3-rc.1+build5",
         };
         let fields = version_fields(&identity, "garden.exe");
@@ -892,6 +899,7 @@ mod tests {
             name: "Garden",
             description: Some("A workspace"),
             publisher: Some("Floregreen"),
+            copyright: Some("Copyright 2026 Floregreen"),
             version: "1.2.3-rc.1+build5",
         };
         let fields = version_fields(&identity, "garden.exe");
@@ -920,6 +928,7 @@ mod tests {
             name: "Garden",
             description: None,
             publisher: None,
+            copyright: None,
             version: "1.0.0",
         };
         let resource = version_resource(&version_fields(&identity, "garden.exe")).unwrap();

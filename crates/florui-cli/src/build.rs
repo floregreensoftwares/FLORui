@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 
 use florui_devtools::diagnostics::{dim_text, failure, success, warning};
 
+use crate::distribution;
 use crate::resources;
 
 pub struct Options {
@@ -301,6 +302,7 @@ struct Report {
     built_at_unix_seconds: u64,
     exposure: Exposure,
     resources: resources::ResourcesReport,
+    distribution: distribution::DistributionReport,
     files: Vec<StagedFile>,
     notes: Vec<&'static str>,
 }
@@ -413,6 +415,14 @@ pub fn run(options: Options) -> ExitCode {
         }
         _ => None,
     };
+    // The same for a declared license file, which is staged as the notice.
+    let notice = match &resolution.config.bundle.license_file {
+        Some(path) => match distribution::read_notice(path) {
+            Ok(notice) => Some(notice),
+            Err(error) => return fail(error),
+        },
+        None => None,
+    };
 
     println!(
         "{}",
@@ -459,14 +469,45 @@ pub fn run(options: Options) -> ExitCode {
             name: &resolution.config.app.name,
             description: resolution.config.app.description.as_deref(),
             publisher: resolution.config.bundle.publisher.as_deref(),
+            copyright: resolution.config.bundle.copyright.as_deref(),
             version: &resolution.config.app.version,
         },
         icon: icon.as_ref(),
     });
-    let (files, versions) = match stage(&executables, &staging, native.as_ref()) {
+    if let Some(notice) = &notice
+        && executables.iter().any(|exe| {
+            exe.file_name()
+                .is_some_and(|name| name.to_string_lossy() == notice.file_name)
+        })
+    {
+        return fail(format!(
+            "bundle.license_file: {} has the name of an executable of this package",
+            notice.file_name
+        ));
+    }
+    let (mut files, versions) = match stage(&executables, &staging, native.as_ref()) {
         Ok(staged) => staged,
         Err(error) => return fail(format!("could not stage the executables: {error}")),
     };
+    if let Some(notice) = &notice {
+        let path = staging.join(&notice.file_name);
+        let staged = fs::write(&path, &notice.bytes)
+            .and_then(|()| hash_file(&path))
+            .map(|hashes| StagedFile {
+                file: notice.file_name.clone(),
+                hashes,
+                built: None,
+            });
+        match staged {
+            Ok(file) => files.push(file),
+            Err(error) => {
+                return fail(format!(
+                    "could not stage the license notice {}: {error}",
+                    notice.file_name
+                ));
+            }
+        }
+    }
     let resources_report = match &icon {
         Some(icon) => resources::ResourcesReport {
             status: "applied",
@@ -541,6 +582,11 @@ pub fn run(options: Options) -> ExitCode {
             .map_or(0, |elapsed| elapsed.as_secs()),
         exposure,
         resources: resources_report,
+        distribution: distribution::report(
+            &resolution.config.bundle,
+            &resolution.provenance,
+            notice.as_ref(),
+        ),
         files,
         notes: NOTES.to_vec(),
     };

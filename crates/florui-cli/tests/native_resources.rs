@@ -23,7 +23,7 @@ const RT_VERSION: usize = 16;
 
 const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="#c81e3c"/></svg>"##;
 
-const CONFIG: &str = "schema_version = 1\n\n[app]\nname = \"Garden\"\nidentifier = \"com.example.garden\"\ndescription = \"A workspace for ideas\"\n\n[app.icons]\nsource = \"icon.svg\"\n\n[bundle]\npublisher = \"Floregreen\"\n";
+const CONFIG: &str = "schema_version = 1\n\n[app]\nname = \"Garden\"\nidentifier = \"com.example.garden\"\ndescription = \"A workspace for ideas\"\n\n[app.icons]\nsource = \"icon.svg\"\n\n[bundle]\npublisher = \"Floregreen\"\ncopyright = \"Copyright 2026 Floregreen\"\n";
 
 fn write(dir: &Path, relative: &str, text: &str) {
     let path = dir.join(relative);
@@ -158,6 +158,10 @@ fn the_staged_executable_carries_the_declared_icon_and_identity_and_cargos_file_
         Some("Floregreen")
     );
     assert_eq!(
+        version_string(&exe, "LegalCopyright").as_deref(),
+        Some("Copyright 2026 Floregreen")
+    );
+    assert_eq!(
         version_string(&exe, "FileDescription").as_deref(),
         Some("A workspace for ideas")
     );
@@ -283,6 +287,11 @@ fn without_a_declared_icon_the_executable_has_identity_but_the_default_icon() {
         version_string(&exe, "CompanyName"),
         None,
         "a publisher must not be invented"
+    );
+    assert_eq!(
+        version_string(&exe, "LegalCopyright"),
+        None,
+        "a copyright must not be invented"
     );
     let text = std::fs::read_to_string(staged(dir.path()).join("report.json")).unwrap();
     let report: serde_json::Value = serde_json::from_str(&text).unwrap();
