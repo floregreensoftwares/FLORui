@@ -20,6 +20,8 @@ florui-bench: reproducible performance baselines
                                           (stylesheet save to composed frame, Windows; needs --features profiling)
   florui-bench edit-latency-ab --a EXE --b EXE [--repeats N] [--rounds N] [--rows N] [--write in-place|atomic] [--css-kb N] [--threshold 0.05] [--out-dir DIR]
                                           (alternates two builds of edit-latency and compares every interval)
+  florui-bench present [--sizes WxH,WxH] [--frames N] [--warmup N] [--out-dir DIR]
+                                          (what showing a frame costs by window size, Windows; needs --features profiling)
   florui-bench overhead [--out FILE.md]   (what one profiler span and counter cost in each mode)
   florui-bench mode                       (this build's profile and profiler mode)
   florui-bench measure NAME [--heap]      (one process's measurement; used by the commands above)
@@ -284,6 +286,36 @@ fn edit_latency_ab_command(_: &[String]) -> Result<(), String> {
     edit_latency_command(&[])
 }
 
+#[cfg(windows)]
+fn present_command(args: &[String]) -> Result<(), String> {
+    florui_bench::present_run::run(&florui_bench::present_run::Options {
+        sizes: florui_bench::present::parse_sizes(
+            &option(args, "--sizes").unwrap_or_else(|| "800x600,1920x1080,3840x2160".into()),
+        )?,
+        frames: number(args, "--frames", 300)?,
+        warmup: number(args, "--warmup", 60)?,
+        out_dir: option(args, "--out-dir").map(PathBuf::from),
+    })
+}
+
+/// The window process `present` starts; not meant to be run by hand.
+#[cfg(windows)]
+fn present_window_command(args: &[String]) -> Result<(), String> {
+    let size = option(args, "--size").ok_or("present-window needs --size WxH")?;
+    let (width, height) = florui_bench::present::parse_size(&size)?;
+    florui_bench::present_run::run_window(width, height)
+}
+
+#[cfg(not(windows))]
+fn present_command(_: &[String]) -> Result<(), String> {
+    Err("present measures a Windows desktop and is not available on this system".into())
+}
+
+#[cfg(not(windows))]
+fn present_window_command(_: &[String]) -> Result<(), String> {
+    present_command(&[])
+}
+
 /// The window process `edit-latency` starts; not meant to be run by hand.
 #[cfg(windows)]
 fn edit_latency_window_command(args: &[String]) -> Result<(), String> {
@@ -321,6 +353,8 @@ fn main() -> ExitCode {
         Some("edit-latency") => edit_latency_command(&args[1..]),
         Some("edit-latency-ab") => edit_latency_ab_command(&args[1..]),
         Some("edit-latency-window") => edit_latency_window_command(&args[1..]),
+        Some("present") => present_command(&args[1..]),
+        Some("present-window") => present_window_command(&args[1..]),
         Some("mode") => {
             println!("{}", florui_bench::report::BuildInfo::this_build().line());
             Ok(())

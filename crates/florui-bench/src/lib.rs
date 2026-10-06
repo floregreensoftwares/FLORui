@@ -13,6 +13,9 @@ pub mod edit_latency;
 pub mod effects;
 pub mod overhead;
 pub mod phases;
+pub mod present;
+#[cfg(windows)]
+pub mod present_run;
 pub mod reload;
 pub mod report;
 pub mod runner;
