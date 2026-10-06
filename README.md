@@ -80,6 +80,14 @@ The generated `Cargo.toml` depends on the Florui crates by version, as if they w
 
 Run `florui --help` for the other commands.
 
+## Run the tests
+
+```sh
+florui test [--package NAME] [--suite cargo|visual|all] [-- <cargo test args>]
+```
+
+runs `cargo test -p <package>` for the selected package (never the whole workspace; arguments after `--` go to `cargo test`) and, under `all`, the reference fixtures in `fixtures/reference` at the workspace root against Chromium. It ends with one line per suite: `passed`, `failed` or `skipped`. Under `all` the fixtures are skipped, and reported as skipped, when the workspace has none or no Chromium is found (`scripts/fetch-chromium.ps1` or `FLORUI_CHROMIUM`); `--suite visual` fails in that case instead, so a suite asked for by name never counts as passed without running. The exit code is 1 when any suite failed.
+
 ## Format on save
 
 `florui fmt --stdin-filepath <path>` reads a Rust source file from stdin, prints only the formatted source to stdout and sends every diagnostic to stderr (exit code 2 on failure, so an editor keeps the buffer as it was). The path selects the `rustfmt.toml` and the edition of the package that owns the file.
