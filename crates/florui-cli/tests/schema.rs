@@ -116,3 +116,41 @@ fn writing_outside_a_project_without_a_path_says_what_to_do() {
         text(&output)
     );
 }
+
+#[test]
+fn the_locales_schema_prints_as_the_library_generates_it() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let output = schema(dir.path(), &["--locales"]);
+
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output));
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        florui_config::locales_json_schema_pretty()
+    );
+}
+
+#[test]
+fn writing_the_locales_schema_uses_its_own_file_name_beside_the_other() {
+    let dir = tempfile::tempdir().unwrap();
+    project(dir.path());
+
+    let locales = schema(dir.path(), &["--locales", "--write"]);
+    let config = schema(dir.path(), &["--write"]);
+
+    assert_eq!(locales.status.code(), Some(0), "{}", text(&locales));
+    assert!(
+        text(&locales).contains("florui.locales.toml"),
+        "{}",
+        text(&locales)
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(florui_config::LOCALES_SCHEMA_FILE_NAME)).unwrap(),
+        florui_config::locales_json_schema_pretty()
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(florui_config::SCHEMA_FILE_NAME)).unwrap(),
+        florui_config::json_schema_pretty()
+    );
+    assert_eq!(config.status.code(), Some(0));
+}
