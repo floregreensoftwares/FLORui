@@ -249,6 +249,13 @@ fn complete_project(dir: &Path) {
     project(dir, "", Some(COMPLETE));
     write(dir, "LICENSE-MIT", "The MIT License\n");
     write(dir, "icon.svg", SVG);
+    // A complete project has its lockfile; doctor warns about a missing one.
+    let lock = Command::new("cargo")
+        .arg("generate-lockfile")
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(lock.status.success(), "{}", text(&lock));
 }
 
 #[test]
@@ -280,14 +287,6 @@ fn a_complete_project_passes_every_distribution_check_and_the_installer_is_skipp
 fn nothing_is_written_and_nothing_is_reported_without_the_flag() {
     let dir = tempfile::tempdir().unwrap();
     complete_project(dir.path());
-    // `cargo metadata`, which resolves the project, writes a missing lockfile
-    // by itself; start from one so what is checked is doctor's own writing.
-    let lock = Command::new("cargo")
-        .arg("generate-lockfile")
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    assert!(lock.status.success(), "{}", text(&lock));
     let before: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .map(|e| e.unwrap().file_name())
