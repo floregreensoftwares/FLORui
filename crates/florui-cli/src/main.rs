@@ -5,7 +5,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, Subcommand};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use serde::Serialize;
 
 use florui_conformance::driver::{ChromiumDriver, ChromiumOptions};
 use florui_conformance::engine::render_fixture;
@@ -21,6 +20,7 @@ use florui_conformance::run_history::{
 };
 use florui_devtools::diagnostics::{dim_text, failure, success};
 
+mod build;
 mod doctor;
 mod fmt;
 mod new;
@@ -116,10 +116,18 @@ enum Command {
         #[arg(long, default_value = "auto")]
         baseline: String,
     },
-    /// Produce a release artifact for a supported target.
+    /// Builds the selected package in release mode, stages its executables in
+    /// `target/florui-build/<package>/native/` and writes `report.json` there:
+    /// the toolchain, source, lockfile, each file's hashes and which developer
+    /// tooling the artifact was built with. Exits 2 under `--strict` when it
+    /// includes any.
     Build {
         #[arg(long, default_value = "native")]
         target: String,
+        /// Reject an artifact that includes developer tooling instead of
+        /// reporting it as a warning.
+        #[arg(long)]
+        strict: bool,
     },
     /// Report real, observed evidence about the local environment and
     /// (when resolvable) the current project — see `doctor`'s own module
@@ -202,7 +210,24 @@ fn main() -> ExitCode {
             output,
             baseline,
         } => run_compare_all(fixtures_root, chromium, output, baseline),
-        Command::Build { target } => run_build(target),
+        Command::Build { target, strict } => {
+            if target != "native" {
+                eprintln!(
+                    "{}",
+                    failure(&format!("target \"{target}\" is not supported yet"))
+                );
+                eprintln!(
+                    "only \"native\" is currently supported; the web target has its own separate milestone"
+                );
+                ExitCode::FAILURE
+            } else {
+                build::run(build::Options {
+                    package: cli.package,
+                    environment: cli.environment,
+                    strict,
+                })
+            }
+        }
         Command::Doctor {
             target,
             graphics,
@@ -1043,84 +1068,6 @@ fn run_test() -> ExitCode {
     } else {
         ExitCode::FAILURE
     }
-}
-
-#[derive(Serialize)]
-struct BuildReport {
-    florui_target: String,
-    profile: String,
-    rustc_version: String,
-    built_at_unix_seconds: u64,
-}
-
-fn rustc_version() -> String {
-    std::process::Command::new("rustc")
-        .arg("--version")
-        .output()
-        .ok()
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .map(|version| version.trim().to_owned())
-        .unwrap_or_else(|| "unknown".to_owned())
-}
-
-fn run_build(target: String) -> ExitCode {
-    if target != "native" {
-        eprintln!(
-            "{}",
-            failure(&format!("target \"{target}\" is not supported yet"))
-        );
-        eprintln!(
-            "only \"native\" is currently supported; the web target has its own separate milestone"
-        );
-        return ExitCode::FAILURE;
-    }
-
-    println!(
-        "{}",
-        dim_text("building native artifact (cargo build --release --workspace)...")
-    );
-    let status = match std::process::Command::new("cargo")
-        .args(["build", "--release", "--workspace"])
-        .status()
-    {
-        Ok(status) => status,
-        Err(err) => return fail(format!("could not run cargo build: {err}")),
-    };
-    if !status.success() {
-        return fail(format!("cargo build exited with {status}"));
-    }
-
-    let report = BuildReport {
-        florui_target: target.clone(),
-        profile: "release".to_owned(),
-        rustc_version: rustc_version(),
-        built_at_unix_seconds: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-    };
-    let out_dir = PathBuf::from("target/florui-build");
-    if let Err(err) = std::fs::create_dir_all(&out_dir) {
-        return fail(format!("could not create {}: {err}", out_dir.display()));
-    }
-    let report_path = out_dir.join("report.json");
-    let json = match serde_json::to_string_pretty(&report) {
-        Ok(json) => json,
-        Err(err) => return fail(format!("could not encode build report: {err}")),
-    };
-    if let Err(err) = std::fs::write(&report_path, json) {
-        return fail(format!("could not write {}: {err}", report_path.display()));
-    }
-
-    println!(
-        "{}",
-        success(&format!("✔ built target \"{target}\" (release)"))
-    );
-    println!(
-        "{}",
-        dim_text(&format!("build report: {}", report_path.display()))
-    );
-    ExitCode::SUCCESS
 }
 
 #[cfg(test)]
