@@ -1518,6 +1518,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         max_height: to_max_length(&position.max_height),
         min_width: to_min_size(&position.min_width),
         min_height: to_min_size(&position.min_height),
+        box_sizing: to_box_sizing(position.box_sizing),
         margin: Edges {
             top: to_optional_margin(&margin.margin_top),
             right: to_optional_margin(&margin.margin_right),
@@ -2314,6 +2315,17 @@ fn to_max_length(
     match value {
         GenericMaxSize::LengthPercentage(lp) => lp.0.to_length().map(|length| length.px()),
         _ => None,
+    }
+}
+
+/// `box-sizing`: Stylo's keyword enum into this crate's own.
+fn to_box_sizing(
+    value: style::properties::longhands::box_sizing::computed_value::T,
+) -> crate::cascade::BoxSizing {
+    use style::properties::longhands::box_sizing::computed_value::T;
+    match value {
+        T::BorderBox => crate::cascade::BoxSizing::BorderBox,
+        T::ContentBox => crate::cascade::BoxSizing::ContentBox,
     }
 }
 

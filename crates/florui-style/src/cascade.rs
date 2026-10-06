@@ -316,6 +316,18 @@ pub enum FilterFunction {
     Saturate(f32),
 }
 
+/// `box-sizing`: what a declared `width` or `height` measures. Not
+/// inherited; the initial value, and real CSS's default, is `content-box`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BoxSizing {
+    /// The declared size is the content box; padding and border add to it.
+    #[default]
+    ContentBox,
+    /// The declared size includes padding and border; the content box is
+    /// what is left of it.
+    BorderBox,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     pub background_color: Rgba,
@@ -339,6 +351,8 @@ pub struct ComputedStyle {
     pub min_width: Option<LengthPercentage>,
     /// See [`Self::min_width`].
     pub min_height: Option<LengthPercentage>,
+    /// See [`BoxSizing`]. Does not inherit.
+    pub box_sizing: BoxSizing,
     /// Each edge is `None` for an explicit `auto` (enabling the usual
     /// auto-margin centering behavior), `Some(0.0)` when nothing set it.
     pub margin: Edges<Option<f32>>,
@@ -577,6 +591,7 @@ impl ComputedStyle {
             max_height: _,
             min_width: _,
             min_height: _,
+            box_sizing: _,
             margin: _,
             padding: _,
             font_size: _,
@@ -1782,6 +1797,43 @@ mod tests {
 
         let (arena, computed) = styles(&tree, ".a { max-width: none; }", &InteractionState::new());
         assert_eq!(computed[&arena.roots()[0]].max_width, None);
+    }
+
+    #[test]
+    fn box_sizing_is_content_box_unless_a_style_says_border_box_and_does_not_inherit() {
+        let tree: Element = view! {
+            <div class="outer">
+                <div class="inner" />
+            </div>
+        };
+        let (arena, computed) = styles(&tree, "", &InteractionState::new());
+        assert_eq!(
+            computed[&arena.roots()[0]].box_sizing,
+            BoxSizing::ContentBox
+        );
+
+        let (arena, computed) = styles(
+            &tree,
+            ".outer { box-sizing: border-box; }",
+            &InteractionState::new(),
+        );
+        let outer = arena.roots()[0];
+        assert_eq!(computed[&outer].box_sizing, BoxSizing::BorderBox);
+        assert_eq!(
+            computed[&arena.children(outer)[0]].box_sizing,
+            BoxSizing::ContentBox,
+            "box-sizing does not inherit"
+        );
+
+        let (arena, computed) = styles(
+            &tree,
+            ".outer { box-sizing: border-box; } .outer { box-sizing: content-box; }",
+            &InteractionState::new(),
+        );
+        assert_eq!(
+            computed[&arena.roots()[0]].box_sizing,
+            BoxSizing::ContentBox
+        );
     }
 
     #[test]
