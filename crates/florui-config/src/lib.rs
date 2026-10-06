@@ -25,7 +25,10 @@ pub use error::{
     ActivationError, ConfigError, Diagnostic, FileAssociationError, SemanticConfigError, Severity,
     WindowSizeError, WorkspaceInheritanceError,
 };
-pub use json_schema::{SCHEMA_FILE_NAME, json_schema, json_schema_pretty};
+pub use json_schema::{
+    LOCALES_SCHEMA_FILE_NAME, SCHEMA_FILE_NAME, json_schema, json_schema_pretty,
+    locales_json_schema, locales_json_schema_pretty,
+};
 pub use location::SourceLocation;
 pub use project::{
     CargoProjectFacts, ProjectResolutionError, config_file_path, parse_cargo_project_facts,
