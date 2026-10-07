@@ -405,3 +405,50 @@ fn the_web_target_keeps_its_unsupported_report() {
         "skipped"
     );
 }
+
+#[test]
+fn the_locale_check_says_which_languages_are_written_and_which_cannot_be() {
+    let none = tempfile::tempdir().unwrap();
+    project(
+        none.path(),
+        "",
+        Some("schema_version = 1\n[app]\nidentifier = \"com.example.garden\"\n"),
+    );
+    let (_, report) = doctor(none.path(), &["--distribution"]);
+    assert_eq!(status(&report, "distribution.locales"), "not_applicable");
+
+    let mapped = tempfile::tempdir().unwrap();
+    project(
+        mapped.path(),
+        "",
+        Some(
+            "schema_version = 1\n[app]\nidentifier = \"com.example.garden\"\n[app.locales.pt-BR]\nname = \"Jardim\"\n",
+        ),
+    );
+    let (_, report) = doctor(mapped.path(), &["--distribution"]);
+    assert_eq!(status(&report, "distribution.locales"), "pass", "{report}");
+    let evidence = report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == "distribution.locales")
+        .unwrap()["evidence"]
+        .as_str()
+        .unwrap();
+    assert!(evidence.contains("pt-BR (0416)"), "{evidence}");
+
+    let unmapped = tempfile::tempdir().unwrap();
+    project(
+        unmapped.path(),
+        "",
+        Some(
+            "schema_version = 1\n[app]\nidentifier = \"com.example.garden\"\n[app.locales.tlh]\nname = \"Beq\"\n",
+        ),
+    );
+    let (_, report) = doctor(unmapped.path(), &["--distribution"]);
+    assert_eq!(
+        status(&report, "distribution.locales"),
+        "warning",
+        "{report}"
+    );
+}

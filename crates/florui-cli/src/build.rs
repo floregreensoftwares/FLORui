@@ -464,6 +464,7 @@ pub fn run(options: Options) -> ExitCode {
             facts.package_name
         ));
     }
+    let locales = resources::declared_locales(&resolution.config.app);
     let native = cfg!(windows).then(|| NativeResources {
         identity: resources::Identity {
             name: &resolution.config.app.name,
@@ -471,6 +472,8 @@ pub fn run(options: Options) -> ExitCode {
             publisher: resolution.config.bundle.publisher.as_deref(),
             copyright: resolution.config.bundle.copyright.as_deref(),
             version: &resolution.config.app.version,
+            default_locale: &resolution.config.app.locales.default_locale,
+            locales: &locales,
         },
         icon: icon.as_ref(),
     });
@@ -508,10 +511,27 @@ pub fn run(options: Options) -> ExitCode {
             }
         }
     }
+    // A locale that could not be written into the executable is a warning, not
+    // a silent omission.
+    let locale_warnings: Vec<String> = versions
+        .first()
+        .map(|version| {
+            version
+                .localized
+                .iter()
+                .filter_map(|locale| locale.reason.clone())
+                .collect()
+        })
+        .unwrap_or_default();
     let resources_report = match &icon {
         Some(icon) => resources::ResourcesReport {
             status: "applied",
-            warnings: icon.warnings.clone(),
+            warnings: icon
+                .warnings
+                .iter()
+                .cloned()
+                .chain(locale_warnings.iter().cloned())
+                .collect(),
             icon: Some(icon.asset.clone()),
             version_info: versions,
             notes: Vec::new(),
@@ -520,7 +540,7 @@ pub fn run(options: Options) -> ExitCode {
             status: "applied",
             icon: None,
             version_info: versions,
-            warnings: Vec::new(),
+            warnings: locale_warnings,
             notes: vec![
                 "no icon is declared in app.icons.windows or app.icons.source: the executable has the default icon",
             ],

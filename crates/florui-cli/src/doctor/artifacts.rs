@@ -397,6 +397,37 @@ fn expected_strings(report: &Value, file: &str) -> Option<Vec<(&'static str, Opt
     ])
 }
 
+/// The (language, name, description) of each string table the build wrote
+/// into `file`: the default locale's first, then every other embedded one.
+fn expected_locales<'a>(report: &'a Value, file: &str) -> Vec<(&'a str, &'a str, &'a str)> {
+    let Some(entry) = report
+        .get("resources")
+        .and_then(|resources| resources.get("version_info"))
+        .and_then(Value::as_array)
+        .and_then(|entries| {
+            entries
+                .iter()
+                .find(|entry| text(entry, &["original_filename"]) == Some(file))
+        })
+    else {
+        return Vec::new();
+    };
+    entry
+        .get("localized")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|locale| locale.get("embedded").and_then(Value::as_bool) == Some(true))
+        .filter_map(|locale| {
+            Some((
+                locale.get("language_id")?.as_str()?,
+                locale.get("product_name")?.as_str()?,
+                locale.get("file_description")?.as_str()?,
+            ))
+        })
+        .collect()
+}
+
 fn resources_check(report: &Value, dir: &Path) -> Check {
     let status = text(report, &["resources", "status"]);
     match status {
@@ -468,6 +499,35 @@ fn resources_check(report: &Value, dir: &Path) -> Check {
                     wanted.map_or("nothing".to_string(), |value| format!("\"{value}\"")),
                 ));
             }
+        }
+        // Every locale the build says it embedded is read back from its own
+        // string table, in the order the build wrote them.
+        let written: Vec<(&str, &str, &str)> = expected_locales(report, name);
+        for (language, product, description) in &written {
+            match found.localized.iter().find(|(id, ..)| id == language) {
+                None => problems.push(format!(
+                    "{name}: the string table for language {language} is missing"
+                )),
+                Some((_, found_product, found_description)) => {
+                    for (what, wanted, actual) in [
+                        ("ProductName", product, found_product),
+                        ("FileDescription", description, found_description),
+                    ] {
+                        if wanted != actual {
+                            problems.push(format!(
+                                "{name}: {what} for language {language} is \"{actual}\" but the build wrote \"{wanted}\""
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        if !written.is_empty() && found.localized.len() != written.len() {
+            problems.push(format!(
+                "{name}: the executable has {} string table(s) but the build wrote {}",
+                found.localized.len(),
+                written.len()
+            ));
         }
         if found.icon_entries != expected_icon_entries {
             problems.push(format!(

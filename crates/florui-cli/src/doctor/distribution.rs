@@ -116,6 +116,7 @@ pub(super) fn checks(cwd: &Path, package: Option<&str>, environment: Option<&str
             &resolution,
         ),
     ];
+    checks.push(locales_check(&resolution));
     checks.push(icon_check(&resolution, &facts));
     checks.push(check(
         "distribution.installer",
@@ -261,6 +262,65 @@ fn license_file_check(resolution: &Resolution) -> Check {
                 Some("point bundle.license_file at a readable text file inside the package"),
             ),
         },
+    }
+}
+
+/// Whether each declared locale can be written into a Windows executable.
+fn locales_check(resolution: &Resolution) -> Check {
+    let app = &resolution.config.app;
+    if app.locales.locales.is_empty() {
+        return check(
+            "distribution.locales",
+            false,
+            Status::NotApplicable,
+            "no [app.locales] is declared: the executable shows app.name and app.description in \
+             every language"
+                .to_string(),
+            None,
+        );
+    }
+    let locales = resources::declared_locales(app);
+    let identity = resources::Identity {
+        name: &app.name,
+        description: app.description.as_deref(),
+        publisher: None,
+        copyright: None,
+        version: "0.0.0",
+        default_locale: &app.locales.default_locale,
+        locales: &locales,
+    };
+    let fields = resources::version_fields(&identity, "app.exe");
+    let problems: Vec<&str> = fields
+        .localized
+        .iter()
+        .filter_map(|locale| locale.reason.as_deref())
+        .collect();
+    if problems.is_empty() {
+        let written: Vec<String> = fields
+            .localized
+            .iter()
+            .filter_map(|locale| Some(format!("{} ({})", locale.tag, locale.language_id.as_ref()?)))
+            .collect();
+        check(
+            "distribution.locales",
+            false,
+            Status::Pass,
+            format!(
+                "the name and description are written for {}",
+                written.join(", ")
+            ),
+            None,
+        )
+    } else {
+        check(
+            "distribution.locales",
+            false,
+            Status::Warning,
+            problems.join("; "),
+            Some(
+                "declare a locale tag Windows has a language for, such as `pt-BR`, or accept that its strings stay out of the executable",
+            ),
+        )
     }
 }
 

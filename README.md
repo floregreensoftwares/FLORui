@@ -123,6 +123,18 @@ reads an existing staged output without building, changing or running anything, 
 
 A build writes the copyright into the executable's version information and stages the license file beside the executables under its own name, listed with its hashes. A Windows executable has no place for the license, category or homepage, so `report.json` records each of them (with where it came from) as not represented instead of dropping it. `florui doctor --target native --distribution` checks all of it offline: the identifier is a reverse-domain name, the version maps to a Windows version, the license is declared and valid, the license file is readable, the icon converts, and what is missing is a warning. It also says that no installer or signing format is supported yet.
 
+### Localized names
+
+`[app.locales.<tag>]` (or `florui.locales.toml`) gives each language its own `name` and `description`, with
+`app.default_locale` as the fallback. A Windows build writes one string table per locale into the
+executable's version information, the default locale's first, so the name and description shown for a
+language are its own; identifiers, versions and the publisher never change with language. A tag is mapped to
+a Windows language for a fixed list of common ones (`en`, `pt-BR`, `es`, `fr`, `de`, `ja`, `zh-CN`, ...); a tag
+without a mapping, or one that maps to a language another locale already uses, is not written, and
+`florui build` and `florui doctor --distribution` say so instead of dropping it silently. `florui doctor
+--artifacts` reads every table back from the executable. This is identity localization, not an application
+translation framework, and other targets are not covered yet.
+
 Run `florui --help` for the other commands.
 
 ## Run the tests
