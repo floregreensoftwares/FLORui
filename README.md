@@ -117,6 +117,22 @@ florui doctor --target native --artifacts target/florui-build/<package>/native [
 
 reads an existing staged output without building, changing or running anything, and checks it against its `report.json` and against the project as it is now: `artifacts.files` (every listed file has the recorded size and hashes, nothing else is in the directory, and no name leaves it), `artifacts.exposure` (included developer tooling is a warning that `--strict` turns into a failure), `artifacts.resources` (the version information and icon are read from the executable itself, not from the report), `artifacts.identity` (the name, identifier and version the build was made with against the configuration now) and `artifacts.provenance` (the commit, a clean tree and the lockfile). A missing or unreadable report fails; evidence a check cannot get, such as a build made outside a git repository, is reported as unknown, never as a pass. Without `--artifacts` none of these checks is reported. Web output is not checked yet.
 
+### Private symbols
+
+The deployable directory holds the executables and `report.json` and nothing that explains them. On Windows the build copies
+each executable's symbols (`.pdb`) to `target/florui-build/<package>/diagnostics`, beside that directory and not in it,
+and records in the report what they are bound to: the executable's final SHA-256 and the identity (GUID and age) the linker
+wrote into both. Nothing references them from the shipped files and nothing uploads them. The report names no path of the
+machine that built it, and the executable carries only the symbol file's name.
+
+The binding is checked, not assumed. The build keeps the symbols only if the system's symbol loader, given the executable and
+the kept directory alone, finds them and resolves `main`; a build that produces no symbols says so. `florui doctor
+--artifacts` runs the same check later: it fails when a symbol file is in the deployable directory, when the kept file or the
+executable is not the one recorded, or when the symbols belong to another build (even if the report was edited to agree), and it
+reports unknown, never a pass, when the kept directory is not there. This proves the symbols belong to the executable and
+resolve a known function, not that every crash can be symbolized, and it does not make the executable uninspectable. Other
+platforms are not covered yet.
+
 ### Distribution metadata
 
 `[bundle]` in `florui.config.toml` takes `publisher`, `copyright`, `license` (an SPDX expression), `license_file` (relative to the file, inside the package), `category` (a lowercase token) and `homepage` (an http or https URL). `license`, `license_file` and `homepage` fall back to the package's Cargo `license`, `license-file` and `homepage` when not set; a configured value always wins and nothing else is inherited. An invalid value is an error with its line and column.

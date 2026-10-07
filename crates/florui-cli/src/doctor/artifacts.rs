@@ -98,6 +98,13 @@ pub(super) fn checks(
                     None,
                 ),
                 check(
+                    "artifacts.diagnostics",
+                    false,
+                    Status::Unknown,
+                    no_report.clone(),
+                    None,
+                ),
+                check(
                     "artifacts.provenance",
                     false,
                     Status::Unknown,
@@ -115,8 +122,171 @@ pub(super) fn checks(
         exposure_check(&report),
         resources_check(&report, dir),
         identity_check(&report, project.as_ref(), environment),
+        diagnostics_check(&report, dir),
         provenance_check(&report, project.as_ref()),
     ]
+}
+
+/// The private symbols kept for the executables: none of them in the
+/// deployable directory, and the ones kept bound to the executables they
+/// explain. The symbols are loaded against the executable alone, with the
+/// retained directory as the only place to look.
+fn diagnostics_check(report: &Value, dir: &Path) -> Check {
+    const ID: &str = "artifacts.diagnostics";
+    let leaked: Vec<String> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| crate::diagnostics::is_private_file(name))
+        .collect();
+    if !leaked.is_empty() {
+        return check(
+            ID,
+            false,
+            Status::Fail,
+            format!(
+                "private diagnostic files are in the deployable directory: {}",
+                leaked.join(", ")
+            ),
+            Some("deploy only what the report lists; symbols belong in the diagnostics directory beside it".to_string()),
+        );
+    }
+    let Some(block) = report.get("diagnostics") else {
+        return check(
+            ID,
+            false,
+            Status::Unknown,
+            "the report has no record of diagnostic output (an older report, or a build that predates it)".to_string(),
+            Some("run `florui build --target native` again".to_string()),
+        );
+    };
+    match text(block, &["status"]) {
+        Some("retained") => {}
+        Some("unsupported_host") => {
+            return check(
+                ID,
+                false,
+                Status::Skipped,
+                "symbols are only retained for Windows builds so far".to_string(),
+                None,
+            );
+        }
+        _ => {
+            let why = block
+                .get("warnings")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                })
+                .filter(|text| !text.is_empty())
+                .unwrap_or_else(|| "the build produced no symbols".to_string());
+            return check(
+                ID,
+                false,
+                Status::Warning,
+                format!(
+                    "no symbols were retained, so a crash in the executables cannot be symbolized ({why})"
+                ),
+                None,
+            );
+        }
+    }
+    let Some(diagnostics_dir) = dir.parent().map(|parent| parent.join("diagnostics")) else {
+        return check(
+            ID,
+            false,
+            Status::Unknown,
+            "the output directory has no parent to look in".to_string(),
+            None,
+        );
+    };
+    let files: Vec<&Value> = block
+        .get("files")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .collect();
+    let mut problems = Vec::new();
+    let mut unknown = Vec::new();
+    for entry in &files {
+        let (Some(file), Some(executable)) = (text(entry, &["file"]), text(entry, &["executable"]))
+        else {
+            continue;
+        };
+        let (Ok(file), Ok(executable)) = (plain_name(file), plain_name(executable)) else {
+            problems.push("the report names a file outside its directories".to_string());
+            continue;
+        };
+        let kept = diagnostics_dir.join(file);
+        if !kept.is_file() {
+            unknown.push(format!(
+                "{file} is not in {}: the symbols are private and are not copied with the output",
+                display_redacted(&diagnostics_dir)
+            ));
+            continue;
+        }
+        let recorded = text(entry, &["sha256"]).unwrap_or("");
+        match crate::build::hash_file(&kept) {
+            Ok(hashes) if hashes.sha256 == recorded => {}
+            _ => {
+                problems.push(format!(
+                    "{file} is not the symbol file the build kept (its SHA-256 differs)"
+                ));
+                continue;
+            }
+        }
+        let staged = dir.join(executable);
+        match crate::build::hash_file(&staged) {
+            Ok(hashes) if text(entry, &["executable_sha256"]) == Some(hashes.sha256.as_str()) => {}
+            _ => {
+                problems.push(format!(
+                    "{executable} is not the executable these symbols were bound to"
+                ));
+                continue;
+            }
+        }
+        match crate::diagnostics::inspect(&staged, &diagnostics_dir) {
+            Ok(info)
+                if info.matched
+                    && Some(info.guid.as_str()) == text(entry, &["guid"])
+                    && Some(u64::from(info.age)) == entry.get("age").and_then(Value::as_u64)
+                    && info.resolves_main => {}
+            Ok(info) if !info.matched => problems.push(format!(
+                "{file} does not belong to {executable}: the symbol loader found no matching symbols"
+            )),
+            Ok(_) => problems.push(format!(
+                "{file} is bound to a different build of {executable} than the one recorded, or does not resolve it"
+            )),
+            Err(reason) => unknown.push(format!("could not check {file} against {executable}: {reason}")),
+        }
+    }
+    if !problems.is_empty() {
+        check(
+            ID,
+            false,
+            Status::Fail,
+            problems.join("; "),
+            Some("run `florui build --target native` again, and keep the diagnostics directory with the output it was built with".to_string()),
+        )
+    } else if !unknown.is_empty() {
+        check(ID, false, Status::Unknown, unknown.join("; "), None)
+    } else {
+        check(
+            ID,
+            false,
+            Status::Pass,
+            format!(
+                "{} symbol file(s) kept outside the deployable directory resolve their executables on their own",
+                files.len()
+            ),
+            None,
+        )
+    }
 }
 
 pub(super) fn read_report(path: &Path) -> Result<Value, String> {

@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 
 use florui_devtools::diagnostics::{dim_text, failure, success, warning};
 
+use crate::diagnostics;
 use crate::distribution;
 use crate::resources;
 
@@ -188,6 +189,12 @@ pub(crate) fn hash_file(path: &Path) -> std::io::Result<FileHashes> {
 
 /// The directory the executables of `package` are staged in: inside the
 /// project's target directory, so it cannot point anywhere else.
+/// Where the symbols of `package`'s executables are kept: beside the
+/// deployable directory, never inside it.
+fn diagnostics_dir(target_dir: &Path, package: &str) -> Result<PathBuf, String> {
+    staging_dir(target_dir, package).map(|staging| staging.with_file_name("diagnostics"))
+}
+
 fn staging_dir(target_dir: &Path, package: &str) -> Result<PathBuf, String> {
     let mut components = Path::new(package).components();
     let is_one_plain_name = matches!(
@@ -303,6 +310,7 @@ struct Report {
     exposure: Exposure,
     resources: resources::ResourcesReport,
     distribution: distribution::DistributionReport,
+    diagnostics: diagnostics::DiagnosticsReport,
     files: Vec<StagedFile>,
     notes: Vec<&'static str>,
 }
@@ -403,6 +411,18 @@ pub fn run(options: Options) -> ExitCode {
     if let Err(error) = fresh_directory(&staging) {
         return fail(format!("could not prepare {}: {error}", staging.display()));
     }
+    let diagnostics_directory = match diagnostics_dir(&facts.target_dir, &facts.package_name) {
+        Ok(dir) => dir,
+        Err(error) => return fail(error),
+    };
+    if let Err(error) = fresh_directory(&diagnostics_directory) {
+        return fail(format!(
+            "could not prepare {}: {error}",
+            diagnostics_directory.display()
+        ));
+    }
+    // The directory is only worth having when something is kept in it.
+    let _ = fs::remove_dir(&diagnostics_directory);
 
     // Converted before the build, so a declared icon that cannot be used
     // fails fast and never ends in an artifact with the wrong branding.
@@ -523,6 +543,17 @@ pub fn run(options: Options) -> ExitCode {
                 .collect()
         })
         .unwrap_or_default();
+    let staged_hashes: std::collections::BTreeMap<String, String> = files
+        .iter()
+        .filter(|file| file.built.is_some())
+        .map(|file| (file.file.clone(), file.hashes.sha256.clone()))
+        .collect();
+    let diagnostics_report = diagnostics::retain(
+        &executables,
+        &staging,
+        &diagnostics_directory,
+        &staged_hashes,
+    );
     let resources_report = match &icon {
         Some(icon) => resources::ResourcesReport {
             status: "applied",
@@ -607,6 +638,7 @@ pub fn run(options: Options) -> ExitCode {
             &resolution.provenance,
             notice.as_ref(),
         ),
+        diagnostics: diagnostics_report,
         files,
         notes: NOTES.to_vec(),
     };
@@ -642,6 +674,19 @@ pub fn run(options: Options) -> ExitCode {
         );
     }
     for line in &report.resources.warnings {
+        println!("{}", warning(line));
+    }
+    for file in &report.diagnostics.files {
+        println!(
+            "{}",
+            dim_text(&format!(
+                "symbols {} kept privately in {} (not part of the deployable directory)",
+                file.file,
+                diagnostics_directory.display()
+            ))
+        );
+    }
+    for line in &report.diagnostics.warnings {
         println!("{}", warning(line));
     }
     match outcome {

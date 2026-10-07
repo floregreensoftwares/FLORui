@@ -23,6 +23,7 @@ use test_cmd::{Suite, SuiteOutcome};
 
 mod build;
 mod compare_select;
+mod diagnostics;
 mod distribution;
 mod doctor;
 mod fmt;
