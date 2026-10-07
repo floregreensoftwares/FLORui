@@ -141,6 +141,50 @@ florui compare [--fixture NAME_OR_PATH]... [--chromium PATH] [--out-dir DIR] [--
 
 renders the reference fixtures in Chromium and in Florui and writes, for each, the two images, their difference, overlays and a `report.json` under `target/florui-conformance/<fixture>/` of the project. A fixture is named by its directory under `fixtures/reference` at the workspace root or given as a path; with none named, all are compared in one browser launch. The Chromium is `--chromium`, `FLORUI_CHROMIUM`, or the pinned build from `scripts/fetch-chromium.ps1`. Every result prints where its artifacts are; `--open` opens a failing fixture's folder (or the only fixture's) in the file manager on Windows. The command only reads the fixtures: it never updates an expected result. The exit code is 1 when any fixture differs. `compare-all` records a run history instead.
 
+## Glass
+
+Glass is built from supported CSS: a translucent `background-color`, a `border`, a `box-shadow` and
+`backdrop-filter` (`blur`, `brightness`, `contrast`, `saturate`), over what is painted behind. The panel's
+edge is handled the way Chromium handles it (the backdrop is mirrored there, so a blur does not fade
+toward the panel's border), and filter lengths are CSS pixels at any display scale. These are compared
+against Chromium in the reference fixtures.
+
+An advanced material is opt-in and does not change the meaning of any CSS property. On a node that
+also has a `backdrop-filter`:
+
+```css
+.panel {
+  backdrop-filter: blur(8px) saturate(1.5);
+  --florui-glass: refract;
+  --florui-glass-refraction: 12px;   /* peak displacement at the edge */
+  --florui-glass-edge: 24px;         /* width of the lensing band, inward from the edge */
+  --florui-glass-light-angle: 315deg;
+  --florui-glass-light-strength: 0.5;
+  --florui-glass-quality: full;      /* full, reduced or off */
+}
+```
+
+What is behind the node is refracted along its rounded edge, then run through the `backdrop-filter`,
+then the node's own background and border paint over it, then the rim light is added. The displacement
+is never more than the requested refraction, the width of the band or 32 CSS pixels; a request above
+that is cut and counted (`glass-clamped` in the profile), and `florui_paint::glass_effective` gives the
+values that will be used so an interface can state them. `--florui-glass-quality: off` is exactly the
+basic glass, and a value that cannot be honored gives no material with a stated reason. Like any custom
+property these inherit, so a child that must not refract says `--florui-glass: none`. The full contract is
+in the docs of `florui-paint`'s `material` module.
+
+`cargo run --example glass_showcase -p florui-example-app` shows opaque, glass and advanced modes over a
+moving backdrop, with the blur, refraction and quality adjustable and the effective settings on screen;
+`-- --freeze 1500` stops animation time for reproducible captures. The advanced material has reviewed
+reference scenes of its own (they are Florui's renders, not Chromium's, which has no such material) and is
+compared against a fresh render while the backdrop moves and the panel changes.
+
+Declared coverage and limits: verified on Windows only. The renderer is CPU raster, so the material needs
+no GPU and its cost is CPU time (see "The glass material" in `florui-bench`'s README for measurements on
+one machine). A window made translucent shows the desktop through it, but the desktop behind it is not
+blurred; operating-system materials are not part of this. No claim is made of matching any other
+system's glass.
+
 ## Format on save
 
 `florui fmt --stdin-filepath <path>` reads a Rust source file from stdin, prints only the formatted source to stdout and sends every diagnostic to stderr (exit code 2 on failure, so an editor keeps the buffer as it was). The path selects the `rustfmt.toml` and the edition of the package that owns the file.
