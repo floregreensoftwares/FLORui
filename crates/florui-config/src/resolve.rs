@@ -10,15 +10,15 @@ use crate::error::{
 use crate::location::{LineIndex, SourceLocation};
 use crate::project::{CargoProjectFacts, config_file_path, parse_package_version};
 use crate::resolved::{
-    ActivationConfig, AppConfig, DecorationsSetting, DevConfig, FieldProvenance,
+    ActivationConfig, AppConfig, DecorationsSetting, DefaultRequest, DevConfig, FieldProvenance,
     FileAssociationConfig, IconsConfig, LocaleConfig, LocalesConfig, Provenance, ResolvedConfig,
     Target, WebConfig, WebIconsConfig, WindowConfig, WindowPersistenceConfig,
 };
 use crate::schema::Spanned;
 use crate::schema::{
     RawActivation, RawApp, RawConfig, RawDecorations, RawEnvironmentOverlay,
-    RawEnvironmentOverlayApp, RawIcons, RawLocale, RawVersion, RawWeb, RawWindow,
-    SUPPORTED_SCHEMA_VERSION, SchemaVersionProbe,
+    RawEnvironmentOverlayApp, RawFileAssociation, RawIcons, RawLocale, RawVersion, RawWeb,
+    RawWindow, SUPPORTED_SCHEMA_VERSION, SchemaVersionProbe,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -218,6 +218,44 @@ pub fn resolve(
         let config_lines = lines.as_ref().unwrap();
         if let Some(activation) = app.activation.as_ref() {
             validate_activation(activation, &config_path, config_lines, &mut errors);
+            validate_default_requests(
+                activation.request_default.as_ref(),
+                activation
+                    .url_schemes
+                    .as_ref()
+                    .map(|s| s.get_ref().as_slice()),
+                activation.file_associations.as_deref(),
+                &config_path,
+                config_lines,
+                &mut errors,
+            );
+        }
+        // An environment's own activation is checked like the base, and its
+        // `request_default` against what that environment effectively declares.
+        for overlay in raw_environments
+            .into_iter()
+            .flat_map(|e| e.get_ref().values())
+        {
+            let Some(own) = overlay.app.as_ref().and_then(|a| a.activation.as_ref()) else {
+                continue;
+            };
+            validate_activation(own, &config_path, config_lines, &mut errors);
+            let base = app.activation.as_ref();
+            validate_default_requests(
+                own.request_default
+                    .as_ref()
+                    .or_else(|| base.and_then(|b| b.request_default.as_ref())),
+                own.url_schemes
+                    .as_ref()
+                    .or_else(|| base.and_then(|b| b.url_schemes.as_ref()))
+                    .map(|s| s.get_ref().as_slice()),
+                own.file_associations
+                    .as_deref()
+                    .or_else(|| base.and_then(|b| b.file_associations.as_deref())),
+                &config_path,
+                config_lines,
+                &mut errors,
+            );
         }
         validate_locales(
             app,
@@ -350,6 +388,8 @@ pub fn resolve(
 
     let activation = resolve_activation(
         raw_app.and_then(|a| a.activation.as_ref()),
+        selected_overlay.and_then(|(_, o)| o.activation.as_ref()),
+        selected_overlay.map(|(name, _)| name),
         lines.as_ref(),
         &mut provenance,
     );
@@ -935,6 +975,64 @@ fn validate_activation(
     }
 }
 
+/// Checks each `request_default` entry against what is declared: a scheme as
+/// written, or `.extension` for a file association, each at most once.
+fn validate_default_requests(
+    request: Option<&Spanned<Vec<String>>>,
+    schemes: Option<&[String]>,
+    associations: Option<&[RawFileAssociation]>,
+    config_path: &Path,
+    lines: &LineIndex<'_>,
+    errors: &mut Vec<SemanticConfigError>,
+) {
+    let Some(request) = request else { return };
+    let location = lines.locate_start(request.span());
+    let mut seen = BTreeSet::new();
+    let mut problem = |reason: ActivationError| {
+        errors.push(SemanticConfigError::InvalidActivation {
+            config_path: config_path.to_owned(),
+            location,
+            reason,
+        });
+    };
+    for entry in request.get_ref() {
+        if !seen.insert(entry.to_ascii_lowercase()) {
+            problem(ActivationError::DuplicateDefaultRequest {
+                entry: entry.clone(),
+            });
+            continue;
+        }
+        match entry.strip_prefix('.') {
+            Some(extension) if !extension.is_empty() => {
+                let declared = associations.is_some_and(|list| {
+                    list.iter()
+                        .any(|a| a.extension.get_ref().eq_ignore_ascii_case(extension))
+                });
+                if !declared {
+                    problem(ActivationError::UnknownDefaultRequest {
+                        entry: entry.clone(),
+                    });
+                }
+            }
+            Some(_) => problem(ActivationError::MalformedDefaultRequest {
+                entry: entry.clone(),
+            }),
+            None if is_valid_url_scheme(entry) => {
+                let declared =
+                    schemes.is_some_and(|list| list.iter().any(|s| s.eq_ignore_ascii_case(entry)));
+                if !declared {
+                    problem(ActivationError::UnknownDefaultRequest {
+                        entry: entry.clone(),
+                    });
+                }
+            }
+            None => problem(ActivationError::MalformedDefaultRequest {
+                entry: entry.clone(),
+            }),
+        }
+    }
+}
+
 /// A URI scheme per RFC 3986: a letter, then letters/digits/`+`/`-`/`.`.
 fn is_valid_url_scheme(scheme: &str) -> bool {
     let mut chars = scheme.chars();
@@ -947,20 +1045,39 @@ fn is_valid_url_scheme(scheme: &str) -> bool {
 
 /// No OS registration, no single-instance IPC -- see
 /// `crate::schema::RawActivation`'s own doc comment.
+/// The overlay's own list, else the base's, and whether it came from the overlay.
+fn pick<'a>(
+    own: Option<&'a Spanned<Vec<String>>>,
+    inherited: Option<&'a Spanned<Vec<String>>>,
+) -> Option<(&'a Spanned<Vec<String>>, bool)> {
+    own.map(|v| (v, true)).or(inherited.map(|v| (v, false)))
+}
+
 fn resolve_activation(
-    raw: Option<&RawActivation>,
+    base: Option<&RawActivation>,
+    overlay: Option<&RawActivation>,
+    environment: Option<&str>,
     lines: Option<&LineIndex<'_>>,
     provenance: &mut Vec<FieldProvenance>,
 ) -> ActivationConfig {
-    let single_instance = match raw.and_then(|a| a.single_instance) {
-        Some(value) => {
-            provenance.push(field(
-                "app.activation.single_instance",
-                Provenance::ConfigFile(None),
-            ));
+    // An environment's own value replaces the base's, field by field.
+    let source = |from_overlay: bool| match environment {
+        Some(name) if from_overlay => Provenance::Environment(name.to_owned()),
+        _ => Provenance::ConfigFile(None),
+    };
+    let single_instance = match (
+        overlay.and_then(|a| a.single_instance),
+        base.and_then(|a| a.single_instance),
+    ) {
+        (Some(value), _) => {
+            provenance.push(field("app.activation.single_instance", source(true)));
             value
         }
-        None => {
+        (None, Some(value)) => {
+            provenance.push(field("app.activation.single_instance", source(false)));
+            value
+        }
+        (None, None) => {
             provenance.push(field(
                 "app.activation.single_instance",
                 Provenance::BuiltinDefault,
@@ -968,50 +1085,84 @@ fn resolve_activation(
             false
         }
     };
-    let url_schemes = match raw.and_then(|a| a.url_schemes.as_ref()) {
-        Some(spanned) => {
-            provenance.push(field(
-                "app.activation.url_schemes",
-                Provenance::ConfigFile(Some(lines.unwrap().locate_start(spanned.span()))),
-            ));
+    let list = |name: &'static str,
+                chosen: Option<(&Spanned<Vec<String>>, bool)>,
+                provenance: &mut Vec<FieldProvenance>| match chosen {
+        Some((spanned, from_overlay)) => {
+            let provenance_value = match source(from_overlay) {
+                Provenance::ConfigFile(_) => Provenance::ConfigFile(Some(
+                    lines
+                        .expect("a value from the file has its lines")
+                        .locate_start(spanned.span()),
+                )),
+                other => other,
+            };
+            provenance.push(field(name, provenance_value));
             spanned.get_ref().clone()
         }
         None => {
-            provenance.push(field(
-                "app.activation.url_schemes",
-                Provenance::BuiltinDefault,
-            ));
+            provenance.push(field(name, Provenance::BuiltinDefault));
             Vec::new()
         }
     };
-    let file_associations = match raw.and_then(|a| a.file_associations.as_ref()) {
-        Some(list) => {
-            provenance.push(field(
-                "app.activation.file_associations",
-                Provenance::ConfigFile(None),
-            ));
-            list.iter()
-                .map(|association| FileAssociationConfig {
-                    extension: association.extension.get_ref().clone(),
-                    mime_type: association.mime_type.clone(),
-                    description: association.description.clone(),
-                    identity: association.identity.get_ref().clone(),
-                })
-                .collect()
+    let url_schemes = list(
+        "app.activation.url_schemes",
+        pick(
+            overlay.and_then(|a| a.url_schemes.as_ref()),
+            base.and_then(|a| a.url_schemes.as_ref()),
+        ),
+        provenance,
+    );
+    let associations = match (
+        overlay.and_then(|a| a.file_associations.as_ref()),
+        base.and_then(|a| a.file_associations.as_ref()),
+    ) {
+        (Some(list), _) => {
+            provenance.push(field("app.activation.file_associations", source(true)));
+            Some(list)
         }
-        None => {
+        (None, Some(list)) => {
+            provenance.push(field("app.activation.file_associations", source(false)));
+            Some(list)
+        }
+        (None, None) => {
             provenance.push(field(
                 "app.activation.file_associations",
                 Provenance::BuiltinDefault,
             ));
-            Vec::new()
+            None
         }
     };
+    let file_associations = associations
+        .into_iter()
+        .flatten()
+        .map(|association| FileAssociationConfig {
+            extension: association.extension.get_ref().clone(),
+            mime_type: association.mime_type.clone(),
+            description: association.description.clone(),
+            identity: association.identity.get_ref().clone(),
+        })
+        .collect();
+    let request_default = list(
+        "app.activation.request_default",
+        pick(
+            overlay.and_then(|a| a.request_default.as_ref()),
+            base.and_then(|a| a.request_default.as_ref()),
+        ),
+        provenance,
+    )
+    .into_iter()
+    .map(|entry| match entry.strip_prefix('.') {
+        Some(extension) => DefaultRequest::FileExtension(extension.to_owned()),
+        None => DefaultRequest::UrlScheme(entry),
+    })
+    .collect();
 
     ActivationConfig {
         single_instance,
         url_schemes,
         file_associations,
+        request_default,
     }
 }
 
@@ -2145,6 +2296,128 @@ mod tests {
         let activation = &resolution.config.app.activation;
         assert!(activation.single_instance);
         assert_eq!(activation.url_schemes, vec!["garden".to_owned()]);
+    }
+
+    const REQUESTS: &str = "schema_version = 1\n[app.activation]\n\
+        url_schemes = [\"garden\"]\n\
+        request_default = [\"garden\", \".garden\"]\n\
+        [[app.activation.file_associations]]\n\
+        extension = \"garden\"\n\
+        identity = \"document\"\n";
+
+    fn activation_reasons(text: &str) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "florui.config.toml", text);
+        match resolve(&facts(dir.path(), ""), None, None) {
+            Err(ConfigError::Semantic(errors)) => errors
+                .iter()
+                .filter_map(|error| match error {
+                    SemanticConfigError::InvalidActivation { reason, .. } => {
+                        Some(reason.to_string())
+                    }
+                    _ => None,
+                })
+                .collect(),
+            Ok(_) => Vec::new(),
+            Err(other) => panic!("expected Semantic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_default_request_is_a_declared_scheme_or_a_declared_extension_with_a_dot() {
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "florui.config.toml", REQUESTS);
+        let resolution = resolve(&facts(dir.path(), ""), None, None).unwrap();
+        assert_eq!(
+            resolution.config.app.activation.request_default,
+            vec![
+                DefaultRequest::UrlScheme("garden".to_owned()),
+                DefaultRequest::FileExtension("garden".to_owned()),
+            ]
+        );
+        let bare = tempfile::tempdir().unwrap();
+        write(bare.path(), "florui.config.toml", "schema_version = 1\n");
+        let none = resolve(&facts(bare.path(), ""), None, None).unwrap();
+        assert!(none.config.app.activation.request_default.is_empty());
+    }
+
+    #[test]
+    fn a_default_request_for_something_not_declared_or_badly_written_is_refused() {
+        let reasons = |request: &str| {
+            activation_reasons(&format!(
+                "schema_version = 1\n[app.activation]\nurl_schemes = [\"garden\"]\n\
+                 request_default = {request}\n\
+                 [[app.activation.file_associations]]\nextension = \"garden\"\nidentity = \"doc\"\n"
+            ))
+        };
+        assert!(
+            reasons("[\"other\"]")[0].contains("not declared"),
+            "a scheme nobody declares"
+        );
+        assert!(
+            reasons("[\".nothing\"]")[0].contains("not declared"),
+            "an extension nobody declares"
+        );
+        assert!(reasons("[\".\"]")[0].contains("neither"), "a bare dot");
+        assert!(reasons("[\"1x\"]")[0].contains("neither"), "not a scheme");
+        assert!(reasons("[\"garden\", \"GARDEN\"]")[0].contains("more than once"));
+        assert_eq!(
+            reasons("[\"garden\", \".GARDEN\"]"),
+            Vec::<String>::new(),
+            "case does not matter"
+        );
+    }
+
+    #[test]
+    fn an_environment_replaces_the_activation_fields_it_names_and_the_rest_come_from_the_base() {
+        let text = format!(
+            "{REQUESTS}[environments.development.app.activation]\nurl_schemes = [\"garden-dev\"]\n\
+             request_default = [\"garden-dev\"]\n"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        write(dir.path(), "florui.config.toml", &text);
+        let selected = |name: &'static str| {
+            resolve(
+                &facts(dir.path(), ""),
+                None,
+                Some(EnvironmentSelection {
+                    name,
+                    explicit: false,
+                }),
+            )
+            .unwrap()
+            .config
+            .app
+            .activation
+        };
+        let development = selected("development");
+        assert_eq!(development.url_schemes, vec!["garden-dev".to_owned()]);
+        assert_eq!(
+            development.request_default,
+            vec![DefaultRequest::UrlScheme("garden-dev".to_owned())]
+        );
+        assert_eq!(
+            development.file_associations.len(),
+            1,
+            "a field the environment does not name is the base's"
+        );
+        let production = selected("production");
+        assert_eq!(production.url_schemes, vec!["garden".to_owned()]);
+    }
+
+    #[test]
+    fn an_environments_default_request_is_checked_against_what_it_effectively_declares() {
+        // The base declares \"garden\"; the environment replaces the schemes
+        // and inherits a request for the one it no longer declares.
+        let reasons = activation_reasons(&format!(
+            "{REQUESTS}[environments.development.app.activation]\nurl_schemes = [\"garden-dev\"]\n"
+        ));
+        assert!(
+            reasons
+                .iter()
+                .any(|r| r.contains("\"garden\"") && r.contains("not declared")),
+            "{reasons:?}"
+        );
     }
 
     #[test]
