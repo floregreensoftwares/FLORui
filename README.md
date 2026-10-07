@@ -135,6 +135,37 @@ without a mapping, or one that maps to a language another locale already uses, i
 --artifacts` reads every table back from the executable. This is identity localization, not an application
 translation framework, and other targets are not covered yet.
 
+### URL schemes and file types
+
+`[app.activation]` declares the URL schemes (`url_schemes`) and file types (`file_associations`) the application
+opens; the running application receives them as typed activation events. `florui register` is the one explicit
+step that makes Windows know them, for the current user and from the staged build (`florui build` first):
+
+```sh
+florui register [--dry-run] [--artifacts DIR] [--exe NAME] [--json]
+florui unregister [--json]
+florui doctor --registration
+```
+
+Nothing else changes an association: `dev`, `build` and `doctor` never do. Registering writes per-user keys
+(no administrator): a command for each scheme and file type that launches the staged executable with the URL or path as
+its one argument, the application's capabilities so Windows lists it in "Open with" and Settings > Apps > Default apps, and a
+record of every key and value it wrote, so `unregister` removes exactly that and leaves anything that is no longer the
+application's alone. It **never sets a default**: the application becomes a candidate and the user chooses.
+
+It refuses, before writing anything, a reserved scheme (`http`, `https`, `mailto`, `file`, `ms-*`, ...), a scheme or
+file association that another application (or another Florui identifier) already owns, a scheme registered for every user
+by something else, and an executable that is not the file the build wrote (its SHA-256 is checked against `report.json`).
+`doctor --registration` reads the same state without changing it: whether the application is registered and still as it
+was registered, whether registering would take something over, and whether two environments of the project would register
+the same scheme or file type. Environments that are installed side by side give themselves distinct ones in
+`[environments.<name>.app.activation]`.
+
+An application that wants to be the default for some of them lists them in `request_default` (a scheme, or an extension
+with a dot) as a statement of intent; each must be declared above. Asking at run time is a separate, later step in which the
+operating system's own settings page is opened for the user to decide. Verified on Windows only, per user; machine-wide
+registration, installers and other operating systems are not covered.
+
 Run `florui --help` for the other commands.
 
 ## Run the tests

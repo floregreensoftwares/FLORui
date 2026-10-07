@@ -119,7 +119,7 @@ pub(super) fn checks(
     ]
 }
 
-fn read_report(path: &Path) -> Result<Value, String> {
+pub(super) fn read_report(path: &Path) -> Result<Value, String> {
     let metadata = fs::metadata(path).map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => "there is no report.json".to_string(),
         _ => format!("could not read report.json: {error}"),
