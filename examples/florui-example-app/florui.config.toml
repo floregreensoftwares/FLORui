@@ -10,6 +10,7 @@ source = "assets/icons/app-icon.svg"
 [app.activation]
 single_instance = true
 url_schemes = ["florui-demo"]
+request_default = ["florui-demo", ".floruidemo"]
 
 [[app.activation.file_associations]]
 extension = "floruidemo"
