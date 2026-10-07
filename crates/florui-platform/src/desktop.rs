@@ -181,6 +181,10 @@ pub struct WindowOptions {
     /// [`crate::WindowPersistence`]'s own doc for the app-side resolution
     /// pattern.
     pub persistence: Option<WindowPersistence>,
+    /// `Some(seconds)` makes animations and transitions read that instant
+    /// instead of the wall clock, so a capture of a moving scene is
+    /// reproducible. `None` (the default) follows real time.
+    pub frozen_animation_time: Option<f64>,
 }
 
 /// Not `#[derive(Default)]`: every field but `respect_reduced_motion`
@@ -203,6 +207,7 @@ impl Default for WindowOptions {
             respect_reduced_motion: true,
             theme: crate::theme::ThemePreference::default(),
             persistence: None,
+            frozen_animation_time: None,
         }
     }
 }
@@ -1976,6 +1981,10 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 initial_color_scheme.is_dark(),
             );
             runtime.set_visited_links(self.visited_links.clone());
+            if let Some(seconds) = spec.options.frozen_animation_time {
+                runtime.set_manual_clock(Some(seconds));
+                runtime.update(viewport);
+            }
             let proxy = self.proxy.clone();
             runtime.on_needs_update(move || {
                 let _ = proxy.send_event(UserEvent::Dirty(window_id));
