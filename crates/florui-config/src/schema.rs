@@ -138,6 +138,10 @@ pub(crate) struct RawEnvironmentOverlayApp {
     pub(crate) description: Option<String>,
     /// Replaces the icons in this environment, field by field.
     pub(crate) icons: Option<RawIcons>,
+    /// Replaces the activation fields it names in this environment, field by
+    /// field. Environments that are installed side by side need distinct URL
+    /// schemes and file association identities, or they contend for them.
+    pub(crate) activation: Option<RawActivation>,
 }
 
 /// Browser metadata for the Web target. It never inherits the native
@@ -236,6 +240,13 @@ pub(crate) struct RawActivation {
     pub(crate) url_schemes: Option<Spanned<Vec<String>>>,
     /// File types the application opens.
     pub(crate) file_associations: Option<Vec<RawFileAssociation>>,
+    /// The schemes and file types the application may ask to be the default
+    /// handler of: a scheme as declared above (`garden`), a file type as its
+    /// extension with a dot (`.garden`). Each must be declared. This is a
+    /// statement of intent: registering the application changes no default,
+    /// and when the application asks, the user chooses in the operating
+    /// system's own settings.
+    pub(crate) request_default: Option<Spanned<Vec<String>>>,
 }
 
 /// One file type the application opens.

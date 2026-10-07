@@ -13,6 +13,13 @@
           },
           "type": "array"
         },
+        "request_default": {
+          "description": "The schemes and file types the application may ask to be the default handler of: a scheme as declared above (`garden`), a file type as its extension with a dot (`.garden`). Each must be declared. This is a statement of intent: registering the application changes no default, and when the application asks, the user chooses in the operating system's own settings.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "single_instance": {
           "description": "Whether a second launch is handed to the running instance instead of starting another.",
           "type": "boolean"
@@ -166,6 +173,10 @@
       "additionalProperties": false,
       "description": "The `[app]` fields an environment can override.",
       "properties": {
+        "activation": {
+          "$ref": "#/definitions/Activation",
+          "description": "Replaces the activation fields it names in this environment, field by field. Environments that are installed side by side need distinct URL schemes and file association identities, or they contend for them."
+        },
         "description": {
           "description": "Replaces `app.description` in this environment.",
           "type": "string"

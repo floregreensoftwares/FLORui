@@ -112,6 +112,18 @@ pub struct ActivationConfig {
     pub single_instance: bool,
     pub url_schemes: Vec<String>,
     pub file_associations: Vec<FileAssociationConfig>,
+    /// What the application may ask to be the default handler of.
+    pub request_default: Vec<DefaultRequest>,
+}
+
+/// One scheme or file type the application may ask to be the default handler
+/// of, as declared in `app.activation.request_default`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DefaultRequest {
+    /// A declared URL scheme, as written there.
+    UrlScheme(String),
+    /// A declared file extension, without the dot.
+    FileExtension(String),
 }
 
 #[derive(Debug, Clone)]

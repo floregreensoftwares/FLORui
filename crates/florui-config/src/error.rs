@@ -357,8 +357,23 @@ impl fmt::Display for SemanticConfigError {
 #[derive(Debug)]
 pub enum ActivationError {
     EmptyUrlScheme,
-    InvalidUrlSchemeCharacters { scheme: String },
-    DuplicateUrlScheme { scheme: String },
+    InvalidUrlSchemeCharacters {
+        scheme: String,
+    },
+    DuplicateUrlScheme {
+        scheme: String,
+    },
+    /// A `request_default` entry that is neither a scheme nor `.extension`.
+    MalformedDefaultRequest {
+        entry: String,
+    },
+    /// A `request_default` entry that no scheme or file association declares.
+    UnknownDefaultRequest {
+        entry: String,
+    },
+    DuplicateDefaultRequest {
+        entry: String,
+    },
 }
 
 impl fmt::Display for ActivationError {
@@ -371,6 +386,20 @@ impl fmt::Display for ActivationError {
             ),
             ActivationError::DuplicateUrlScheme { scheme } => {
                 write!(f, "\"{scheme}\" is declared more than once")
+            }
+            ActivationError::MalformedDefaultRequest { entry } => write!(
+                f,
+                "request_default entry \"{entry}\" is neither a URL scheme (`garden`) nor a file extension with a dot (`.garden`)"
+            ),
+            ActivationError::UnknownDefaultRequest { entry } => write!(
+                f,
+                "request_default entry \"{entry}\" is not declared in url_schemes or file_associations, so there is nothing to be the default handler of"
+            ),
+            ActivationError::DuplicateDefaultRequest { entry } => {
+                write!(
+                    f,
+                    "request_default entry \"{entry}\" is listed more than once"
+                )
             }
         }
     }

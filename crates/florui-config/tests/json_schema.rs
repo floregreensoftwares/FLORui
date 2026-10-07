@@ -184,6 +184,7 @@ linux = "icon.svg"
 [app.activation]
 single_instance = true
 url_schemes = ["garden"]
+request_default = ["garden", ".garden"]
 
 [[app.activation.file_associations]]
 extension = "garden"
@@ -239,6 +240,17 @@ description = "Development build"
 
 [environments.development.app.icons]
 source = "icon-dev.svg"
+
+[environments.development.app.activation]
+single_instance = true
+url_schemes = ["garden-dev"]
+request_default = ["garden-dev", ".garden-dev"]
+
+[[environments.development.app.activation.file_associations]]
+extension = "garden-dev"
+mime_type = "application/x-garden-dev"
+description = "A garden file (development)"
+identity = "garden-dev-file"
 "#;
 
 /// A document and whether the schema must accept it.
@@ -249,6 +261,23 @@ const CASES: &[(&str, &str, bool)] = &[
         "workspace version",
         "schema_version = 1\n[app]\nversion = { workspace = true }\n",
         true,
+    ),
+    (
+        "a default request for something not declared",
+        "schema_version = 1
+[app.activation]
+url_schemes = [\"garden\"]
+request_default = [\"other\"]
+",
+        true,
+    ),
+    (
+        "a default request of the wrong type",
+        "schema_version = 1
+[app.activation]
+request_default = \"garden\"
+",
+        false,
     ),
     (
         "unknown top-level key",
