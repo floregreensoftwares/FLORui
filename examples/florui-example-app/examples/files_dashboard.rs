@@ -258,7 +258,7 @@ fn app() -> Element {
         <div class="shell">
             <div class={if focused { "titlebar" } else { "titlebar inactive" }}>
                 <div class="brand-mark"></div>
-                <span class="brand-name">{"Fluxo"}</span>
+                <span class="brand-name">{"File manager"}</span>
                 <span class="crumb">{current.format()}</span>
                 <div id={WINDOW_DRAG_REGION_ID} class="drag-region" />
                 <span class="avatar">{"AN"}</span>
