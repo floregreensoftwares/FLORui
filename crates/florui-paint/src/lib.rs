@@ -1934,23 +1934,7 @@ fn apply_backdrop_filter(
     {
         backdrop = refracted;
     }
-    // A blur reads past the pixels it writes; over a backdrop that is cut to
-    // the panel those would be transparent and the panel's edges would fade
-    // toward nothing, so the cut is extended by mirroring first.
-    let functions = &scaled_filters(functions, scale_factor);
-    let margin = blur_margin(functions);
-    let filtered = (margin > 0)
-        .then(|| {
-            let (width, height) = (backdrop.width(), backdrop.height());
-            let mut padded = mirror_padded(&backdrop, margin)?;
-            apply_filters(&mut padded, functions);
-            cropped(&padded, margin, width, height)
-        })
-        .flatten();
-    match filtered {
-        Some(filtered) => backdrop = filtered,
-        None => apply_filters(&mut backdrop, functions),
-    }
+    let backdrop = filtered_backdrop(backdrop, &scaled_filters(functions, scale_factor));
     // Replace, weighted by the mask: `BlendMode::Source` with a mask would
     // scale the source itself, clearing the pixels outside it instead of
     // leaving them alone.
@@ -1972,6 +1956,39 @@ fn apply_backdrop_filter(
             };
         }
     }
+}
+
+/// Runs `functions` over `backdrop`.
+///
+/// A blur reads past the pixels it writes; over a backdrop that is cut to the
+/// panel those would be transparent and the panel's edges would fade toward
+/// nothing, so the cut is extended by mirroring first. The filters after the
+/// last blur look at one pixel at a time, so they run on the part that is
+/// kept, not on the margin that was only there to be blurred; the result is
+/// the same.
+fn filtered_backdrop(mut backdrop: Pixmap, functions: &[FilterFunction]) -> Pixmap {
+    let margin = blur_margin(functions);
+    let after_blur = functions
+        .iter()
+        .rposition(|function| matches!(function, FilterFunction::Blur(radius) if *radius > 0.0))
+        .map_or(0, |last| last + 1);
+    let (until_blur, after_blur) = functions.split_at(after_blur);
+    let filtered = (margin > 0)
+        .then(|| {
+            let (width, height) = (backdrop.width(), backdrop.height());
+            let mut padded = mirror_padded(&backdrop, margin)?;
+            apply_filters(&mut padded, until_blur);
+            cropped(&padded, margin, width, height)
+        })
+        .flatten();
+    match filtered {
+        Some(filtered) => {
+            backdrop = filtered;
+            apply_filters(&mut backdrop, after_blur);
+        }
+        None => apply_filters(&mut backdrop, functions),
+    }
+    backdrop
 }
 
 /// What the glass material will actually do for a request, in CSS pixels:
@@ -2225,6 +2242,23 @@ fn blur_pixmap_in_place(pixmap: &mut Pixmap, width: u32, height: u32, radius_px:
     if radius_px <= 0.0 {
         return;
     }
+    // A wide blur is three box passes per axis, whose cost does not grow
+    // with the radius; a narrow one is the exact kernel below. Either way every
+    // premultiplied channel is blurred the same, so the color of a pixel never
+    // exceeds its alpha except by a rounding step, which is cut back.
+    if blur::box_blur_rgba_in_place(pixmap.data_mut(), width, height, radius_px) {
+        for pixel in pixmap.pixels_mut() {
+            let alpha = pixel.alpha();
+            *pixel = PremultipliedColorU8::from_rgba(
+                pixel.red().min(alpha),
+                pixel.green().min(alpha),
+                pixel.blue().min(alpha),
+                alpha,
+            )
+            .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+        }
+        return;
+    }
     let pixel_count = (width as usize) * (height as usize);
     let mut channels = [
         vec![0u8; pixel_count],
@@ -2306,7 +2340,33 @@ fn map_unpremultiplied(
 /// toward its own Rec.-601-ish luma at `1 - factor` and keeping the rest
 /// at `factor` — `factor` `1.0` is a no-op, `0.0` is grayscale, and above
 /// `1.0` oversaturates.
+///
+/// The mix is linear in the color channels, so it is done on the premultiplied
+/// values as they are (the alpha scales both sides of it), with no division,
+/// and each result is cut to `0..=alpha`, which is the same bound as
+/// `0..=255` on the straight color.
 fn saturate_premultiplied(pixel: PremultipliedColorU8, factor: f32) -> PremultipliedColorU8 {
+    let alpha = pixel.alpha();
+    if alpha == 0 {
+        return pixel;
+    }
+    let (r, g, b) = (
+        pixel.red() as f32,
+        pixel.green() as f32,
+        pixel.blue() as f32,
+    );
+    let luma = 0.213 * r + 0.715 * g + 0.072 * b;
+    let ceiling = alpha as f32;
+    let mix = |channel: f32| ((luma + (channel - luma) * factor).clamp(0.0, ceiling) + 0.5) as u8;
+    PremultipliedColorU8::from_rgba(mix(r), mix(g), mix(b), alpha)
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT)
+}
+
+/// The earlier form of [`saturate_premultiplied`], which divides by alpha
+/// to the straight color and back, kept as the oracle the division-free one is
+/// compared with.
+#[cfg(test)]
+fn saturate_by_unpremultiplying(pixel: PremultipliedColorU8, factor: f32) -> PremultipliedColorU8 {
     let alpha = pixel.alpha();
     if alpha == 0 {
         return pixel;
@@ -8457,6 +8517,82 @@ mod tests {
                 10.0,
             )
         });
+    }
+
+    #[test]
+    fn saturating_without_dividing_gives_the_same_pixels_as_unpremultiplying() {
+        let mut worst = 0u8;
+        let mut differing = 0u32;
+        let mut total = 0u32;
+        for alpha in (1..=255u16).step_by(2) {
+            for r in (0..=alpha).step_by(17) {
+                for g in (0..=alpha).step_by(23) {
+                    for b in (0..=alpha).step_by(29) {
+                        let pixel =
+                            PremultipliedColorU8::from_rgba(r as u8, g as u8, b as u8, alpha as u8)
+                                .expect("premultiplied");
+                        for factor in [0.0f32, 0.4, 1.0, 1.5, 3.0] {
+                            let (new, old) = (
+                                saturate_premultiplied(pixel, factor),
+                                saturate_by_unpremultiplying(pixel, factor),
+                            );
+                            total += 1;
+                            let d = new
+                                .red()
+                                .abs_diff(old.red())
+                                .max(new.green().abs_diff(old.green()))
+                                .max(new.blue().abs_diff(old.blue()))
+                                .max(new.alpha().abs_diff(old.alpha()));
+                            if d > 0 {
+                                differing += 1;
+                            }
+                            worst = worst.max(d);
+                            assert!(
+                                new.red() <= new.alpha()
+                                    && new.green() <= new.alpha()
+                                    && new.blue() <= new.alpha()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert!(worst <= 1, "the largest difference is {worst}");
+        assert!(
+            f64::from(differing) < f64::from(total) * 0.02,
+            "{differing} of {total} pixels differ by a rounding step"
+        );
+    }
+
+    #[test]
+    fn a_filter_after_the_blur_gives_the_same_pixels_whether_or_not_it_sees_the_margin() {
+        let mut backdrop = Pixmap::new(80, 60).expect("a pixmap");
+        for (index, pixel) in backdrop.pixels_mut().iter_mut().enumerate() {
+            let (x, y) = (index % 80, index / 80);
+            let (r, g, b) = if (x / 15 + y / 15) % 2 == 0 {
+                (230, 40, 70)
+            } else {
+                (30, 200, 160)
+            };
+            *pixel = PremultipliedColorU8::from_rgba(r, g, b, 255).expect("opaque");
+        }
+        for chain in [
+            vec![FilterFunction::Blur(6.0), FilterFunction::Saturate(1.6)],
+            vec![FilterFunction::Saturate(1.6), FilterFunction::Blur(6.0)],
+            vec![
+                FilterFunction::Blur(4.0),
+                FilterFunction::Brightness(0.8),
+                FilterFunction::Blur(5.0),
+                FilterFunction::Contrast(1.3),
+            ],
+        ] {
+            let margin = blur_margin(&chain);
+            let mut padded = mirror_padded(&backdrop, margin).expect("padded");
+            apply_filters(&mut padded, &chain);
+            let reference = cropped(&padded, margin, 80, 60).expect("cropped");
+            let ours = filtered_backdrop(backdrop.clone(), &chain);
+            assert_eq!(ours.data(), reference.data(), "{chain:?}");
+        }
     }
 
     #[test]
