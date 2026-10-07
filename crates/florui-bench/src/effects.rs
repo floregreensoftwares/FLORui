@@ -36,6 +36,13 @@ enum Effect {
     Backdrop(u32),
     Blur(u32),
     Chain,
+    /// A backdrop blur with the refracting glass material and a rim light.
+    Glass {
+        blur: u32,
+        refraction: u32,
+        edge: u32,
+        reduced: bool,
+    },
 }
 
 impl Effect {
@@ -45,6 +52,15 @@ impl Effect {
             Effect::Backdrop(radius) => format!("backdrop-filter: blur({radius}px);"),
             Effect::Blur(radius) => format!("filter: blur({radius}px);"),
             Effect::Chain => "filter: brightness(1.2) contrast(1.3) saturate(1.5);".into(),
+            Effect::Glass {
+                blur,
+                refraction,
+                edge,
+                reduced,
+            } => format!(
+                "backdrop-filter: blur({blur}px); --florui-glass: refract;                  --florui-glass-refraction: {refraction}px; --florui-glass-edge: {edge}px;                  --florui-glass-light-strength: 0.5; --florui-glass-quality: {};",
+                if reduced { "reduced" } else { "full" }
+            ),
         }
     }
 }
@@ -181,6 +197,33 @@ fn with_effect(scene: Scene) -> Box<dyn FnMut()> {
     paint(scene, Some(baseline))
 }
 
+fn glass(blur: u32, refraction: u32, edge: u32, reduced: bool) -> Effect {
+    Effect::Glass {
+        blur,
+        refraction,
+        edge,
+        reduced,
+    }
+}
+
+/// A glass workload: it must differ from its translucent baseline and from the
+/// same scene with only the backdrop blur, so the material is what is measured.
+fn with_glass(scene: Scene, blur: u32) -> Box<dyn FnMut()> {
+    let mut basic = scene.clone();
+    for panel in &mut basic.panels {
+        panel.effect = Effect::Backdrop(blur);
+    }
+    let reference = basic.window().frame().rgba;
+    let mut win = scene.window();
+    assert_ne!(
+        win.frame().rgba,
+        reference,
+        "the material changed nothing, so the workload would measure the basic backdrop blur"
+    );
+    drop(win);
+    with_effect(scene)
+}
+
 fn one(width: u32, height: u32, effect: Effect, opaque: bool, scale_factor: f64) -> Scene {
     Scene {
         panels: vec![Panel {
@@ -273,6 +316,42 @@ pub fn all() -> Vec<Workload> {
             build: || with_effect(one(600, 400, Effect::Backdrop(8), false, 2.0)),
         },
         Workload {
+            name: "effects_glass_advanced_small",
+            description: "A translucent 200 x 150 panel with blur(8px) and the refracting material",
+            exercises: "refraction and rim light on a small panel, over the basic backdrop blur",
+            build: || with_glass(one(200, 150, glass(8, 12, 24, false), false, 1.0), 8),
+        },
+        Workload {
+            name: "effects_glass_advanced_large",
+            description: "A translucent 600 x 400 panel with blur(8px) and the refracting material",
+            exercises: "the cost the material adds to effects_backdrop_blur_8_large",
+            build: || with_glass(one(600, 400, glass(8, 12, 24, false), false, 1.0), 8),
+        },
+        Workload {
+            name: "effects_glass_advanced_wide_band",
+            description: "The 600 x 400 material panel with a 32 px band and a 24 px refraction",
+            exercises: "a wider lensing band and a larger displacement",
+            build: || with_glass(one(600, 400, glass(8, 24, 32, false), false, 1.0), 8),
+        },
+        Workload {
+            name: "effects_glass_reduced_large",
+            description: "The 600 x 400 material panel at quality reduced (nearest-pixel sampling)",
+            exercises: "the cheaper quality mode of the material",
+            build: || with_glass(one(600, 400, glass(8, 12, 24, true), false, 1.0), 8),
+        },
+        Workload {
+            name: "effects_glass_advanced_overlap3",
+            description: "Three overlapping material panels, each with blur(8px)",
+            exercises: "each panel refracts the content and the panels beneath it",
+            build: || with_glass(overlapping(glass(8, 12, 24, false), false), 8),
+        },
+        Workload {
+            name: "effects_glass_advanced_large_dpr2",
+            description: "The 600 x 400 material panel at a display scale of 2",
+            exercises: "four times the pixels for the same material",
+            build: || with_glass(one(600, 400, glass(8, 12, 24, false), false, 2.0), 8),
+        },
+        Workload {
             name: "effects_filter_blur_8",
             description: "A translucent 600 x 400 panel and its content with filter: blur(8px)",
             exercises: "an element rendered to an intermediate surface and blurred",
@@ -320,6 +399,8 @@ mod tests {
             Effect::Backdrop(24),
             Effect::Blur(8),
             Effect::Chain,
+            glass(8, 12, 24, false),
+            glass(8, 12, 24, true),
         ] {
             let scene = one(600, 400, effect, false, 1.0);
             let with = scene.window().frame().rgba;
