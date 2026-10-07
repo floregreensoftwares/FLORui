@@ -1,0 +1,57 @@
+{
+  "id": "flex-text-placement",
+  "description": "A flex container's text, and a button's, are placed by justify-content and align-items",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 360,
+    "height_css_px": 60,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "bar",
+    "css": ".bar { display: flex; flex-direction: row; gap: 6px; height: 50px; padding: 5px; background-color: #101117; color: #fff; } .btn { display: flex; flex-direction: row; justify-content: center; align-items: center; width: 46px; height: 40px; border: none; background-color: #345; color: #fff; } .plain { width: 46px; height: 40px; border: none; background-color: #543; color: #fff; } .end { display: flex; justify-content: flex-end; align-items: flex-end; width: 60px; height: 40px; background-color: #354; } .col { display: flex; flex-direction: column; justify-content: center; align-items: flex-end; width: 60px; height: 40px; background-color: #445; }",
+    "children": [
+      {
+        "tag": "button",
+        "class": "btn",
+        "text": "x",
+        "css": ""
+      },
+      {
+        "tag": "button",
+        "class": "btn",
+        "text": "[]",
+        "css": ""
+      },
+      {
+        "tag": "button",
+        "class": "plain",
+        "text": "x",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "end",
+        "text": "ab",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "col",
+        "text": "cd",
+        "css": ""
+      }
+    ]
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 1.6,
+    "geometry_tolerance_px": 1,
+    "channel_tolerance": 100,
+    "reason": "Placement matches Chromium; the remaining difference (about 1% of pixels measured) is the glyph rasterization of the two engines, and a text left unplaced measures about 2.6%."
+  }
+}

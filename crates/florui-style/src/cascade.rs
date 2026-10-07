@@ -42,6 +42,16 @@ pub struct Corners<T> {
 /// Open Sans, not a redistribution of Arial itself (proprietary, so this
 /// crate cannot embed it) and not metrically matched to it either — see
 /// `florui_text`'s own `fonts/NOTICE.md` for that tradeoff.
+/// `text-align` for left-to-right text: `justify` is `Start`, `left` and
+/// `right` are `Start` and `End`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextAlign {
+    #[default]
+    Start,
+    Center,
+    End,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FontFamily {
     #[default]
@@ -480,6 +490,8 @@ pub struct ComputedStyle {
     /// aren't tracked; this is `<a>`'s own default-stylesheet need, not a
     /// claim of full property coverage.
     pub text_decoration_underline: bool,
+    /// Inherited; see [`TextAlign`].
+    pub text_align: TextAlign,
     /// `cursor: pointer` — true only for that one keyword; every other
     /// value (including `auto`) reads `false`, the same narrow scope as
     /// [`Self::text_decoration_underline`].
@@ -587,6 +599,7 @@ impl ComputedStyle {
             box_shadow,
             opacity,
             text_decoration_underline,
+            text_align,
             cursor_pointer,
             placeholder_color,
             // Everything else may change layout, hit testing, stacking or what a
@@ -651,6 +664,7 @@ impl ComputedStyle {
         self.box_shadow.clone_from(box_shadow);
         self.opacity = *opacity;
         self.text_decoration_underline = *text_decoration_underline;
+        self.text_align = *text_align;
         self.cursor_pointer = *cursor_pointer;
         self.placeholder_color = *placeholder_color;
     }
@@ -2245,6 +2259,32 @@ mod tests {
         assert_eq!((len.width, len.width_percent), (Some(10.0), None));
         assert_eq!((len.height, len.height_percent), (Some(20.0), None));
         assert_eq!((mixed.width, mixed.width_percent), (None, None));
+    }
+
+    #[test]
+    fn text_align_inherits_and_a_button_is_centered_unless_it_says_otherwise() {
+        let tree: Element = view! {
+            <div>
+                <div class="right"><span>{"a"}</span></div>
+                <button>{"b"}</button>
+                <button class="left">{"c"}</button>
+                <p>{"d"}</p>
+            </div>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".right { text-align: right; } .left { text-align: left; }",
+            &InteractionState::new(),
+        );
+        let [right, button, left, plain] = arena.children(arena.roots()[0]) else {
+            panic!("four children");
+        };
+        let span = arena.children(*right)[0];
+        assert_eq!(computed[right].text_align, TextAlign::End);
+        assert_eq!(computed[&span].text_align, TextAlign::End, "inherited");
+        assert_eq!(computed[button].text_align, TextAlign::Center);
+        assert_eq!(computed[left].text_align, TextAlign::Start);
+        assert_eq!(computed[plain].text_align, TextAlign::Start);
     }
 
     #[test]

@@ -153,6 +153,7 @@ const CSS: &str = "
 
     button {
         display: inline-block;
+        text-align: center;
         border: 1px solid #767676;
     }
 

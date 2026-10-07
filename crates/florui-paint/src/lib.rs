@@ -65,8 +65,8 @@ use std::rc::Rc;
 
 use florui_layout::{BoxLayout, absolute_position};
 use florui_style::{
-    Arena, ComputedStyle, Display, FilterFunction, LengthPercentage, NodeId, ObjectFit, Position,
-    Rgba, RoundedRect,
+    Arena, ComputedStyle, ContentAlignment, Display, FilterFunction, FlexDirection, ItemAlignment,
+    LengthPercentage, NodeId, ObjectFit, Position, Rgba, RoundedRect, TextAlign,
 };
 use florui_text::Font;
 use rounded::RoundedRectPath;
@@ -2616,11 +2616,29 @@ fn paint_node(
             if let Some(shaped) = florui_layout::shape_inline_formatting_context(
                 font, arena, styles, node, wrap_width,
             ) {
+                let is_button = arena.tag(node) == "button";
+                let first_line = shaped
+                    .runs
+                    .first()
+                    .and_then(|r| r.glyphs.first())
+                    .map(|g| g.y);
+                let single_line = shaped
+                    .runs
+                    .iter()
+                    .flat_map(|run| &run.glyphs)
+                    .all(|glyph| Some(glyph.y) == first_line);
+                let (dx, dy) = text_offset(
+                    is_button,
+                    style,
+                    (content_width, content_height),
+                    (shaped.width * scale_factor, shaped.height * scale_factor),
+                    single_line,
+                );
                 paint_shaped_runs(
                     buffer,
                     &shaped.runs,
-                    content_x,
-                    content_y,
+                    content_x + dx,
+                    content_y + dy,
                     color,
                     scale_factor,
                     clip,
@@ -2641,6 +2659,29 @@ fn paint_node(
                 }
             }
         } else {
+            let text = arena.text_content(node);
+            let is_button = arena.tag(node) == "button";
+            let (dx, dy) = match style {
+                Some(style) if !text.is_empty() && places_its_text(is_button, Some(style)) => {
+                    let family = to_text_font_family(style.font_family);
+                    let metrics = font.measure_wrapped(
+                        family,
+                        text,
+                        style.font_size,
+                        style.font_weight,
+                        wrap_width,
+                    );
+                    let unwrapped = font.measure(family, text, style.font_size, style.font_weight);
+                    text_offset(
+                        is_button,
+                        Some(style),
+                        (content_width, content_height),
+                        (metrics.width * scale_factor, metrics.height * scale_factor),
+                        (unwrapped.width - metrics.width).abs() < 0.5,
+                    )
+                }
+                _ => (0.0, 0.0),
+            };
             paint_node_text(
                 buffer,
                 font,
@@ -2648,13 +2689,77 @@ fn paint_node(
                 node,
                 style,
                 color,
-                (content_x, content_y),
+                (content_x + dx, content_y + dy),
                 wrap_width,
                 scale_factor,
                 clip,
             );
         }
     }
+}
+
+/// Whether [`text_offset`] can move this node's text at all, so a node that
+/// never needs it is not measured.
+fn places_its_text(is_button: bool, style: Option<&ComputedStyle>) -> bool {
+    style.is_some_and(|s| {
+        is_button || s.display == Display::Flex || s.text_align != TextAlign::Start
+    })
+}
+
+/// How far a node's own text sits from the content box's corner. In a flex
+/// container the text is the only flex item, so `justify-content` and
+/// `align-items` place it. Otherwise `text-align` places a line of text
+/// horizontally (`single_line`: wrapped text keeps its lines at the start,
+/// since lines are not aligned one by one), and a `<button>` centers it
+/// vertically.
+fn text_offset(
+    is_button: bool,
+    style: Option<&ComputedStyle>,
+    (content_width, content_height): (f32, f32),
+    (text_width, text_height): (f32, f32),
+    single_line: bool,
+) -> (f32, f32) {
+    let Some(style) = style else {
+        return (0.0, 0.0);
+    };
+    let free_x = (content_width - text_width).max(0.0);
+    let free_y = (content_height - text_height).max(0.0);
+    if style.display != Display::Flex {
+        let dx = match style.text_align {
+            TextAlign::Center if single_line => free_x / 2.0,
+            TextAlign::End if single_line => free_x,
+            _ => 0.0,
+        };
+        return (dx, if is_button { free_y / 2.0 } else { 0.0 });
+    }
+    let (main_free, cross_free, row) = match style.flex_direction {
+        FlexDirection::Row | FlexDirection::RowReverse => (free_x, free_y, true),
+        FlexDirection::Column | FlexDirection::ColumnReverse => (free_y, free_x, false),
+    };
+    let reversed = matches!(
+        style.flex_direction,
+        FlexDirection::RowReverse | FlexDirection::ColumnReverse
+    );
+    let main = match style.justify_content {
+        Some(
+            ContentAlignment::Center
+            | ContentAlignment::SpaceAround
+            | ContentAlignment::SpaceEvenly,
+        ) => main_free / 2.0,
+        Some(ContentAlignment::End | ContentAlignment::FlexEnd) => main_free,
+        _ => 0.0,
+    };
+    let main = if reversed && !matches!(style.justify_content, Some(ContentAlignment::Center)) {
+        main_free - main
+    } else {
+        main
+    };
+    let cross = match style.align_items {
+        Some(ItemAlignment::Center) => cross_free / 2.0,
+        Some(ItemAlignment::End | ItemAlignment::FlexEnd) => cross_free,
+        _ => 0.0,
+    };
+    if row { (main, cross) } else { (cross, main) }
 }
 
 #[allow(clippy::too_many_arguments)]
