@@ -55,7 +55,6 @@
 
 mod blur;
 mod glyph_cache;
-#[allow(dead_code)]
 mod material;
 mod rounded;
 mod shadow_cache;
@@ -67,8 +66,9 @@ use std::rc::Rc;
 
 use florui_layout::{BoxLayout, absolute_position};
 use florui_style::{
-    Arena, ComputedStyle, ContentAlignment, Display, FilterFunction, FlexDirection, ItemAlignment,
-    LengthPercentage, NodeId, ObjectFit, Position, Rgba, RoundedRect, TextAlign,
+    Arena, ComputedStyle, ContentAlignment, Display, FilterFunction, FlexDirection, GlassMaterial,
+    GlassSpec, ItemAlignment, LengthPercentage, NodeId, ObjectFit, Position, Rgba, RoundedRect,
+    TextAlign,
 };
 use florui_text::Font;
 use rounded::RoundedRectPath;
@@ -1886,6 +1886,7 @@ fn apply_backdrop_filter(
     buffer: &mut Surface,
     outline: &RoundedRect,
     functions: &[FilterFunction],
+    glass: Option<&GlassMaterial>,
     scale_factor: f32,
     clip: Option<&Mask>,
 ) {
@@ -1925,6 +1926,14 @@ fn apply_backdrop_filter(
     let Some(mut backdrop) = buffer.pixmap.clone_rect(region) else {
         return;
     };
+    // The glass material refracts what is behind the panel before the
+    // filters run, so a blur softens the lens.
+    if let Some(params) =
+        glass.and_then(|material| material::Params::resolve(material, scale_factor))
+        && let Some(refracted) = refract_backdrop(buffer, outline, (x0, y0), &backdrop, &params)
+    {
+        backdrop = refracted;
+    }
     // A blur reads past the pixels it writes; over a backdrop that is cut to
     // the panel those would be transparent and the panel's edges would fade
     // toward nothing, so the cut is extended by mirroring first.
@@ -1963,6 +1972,95 @@ fn apply_backdrop_filter(
             };
         }
     }
+}
+
+/// `backdrop` (the surface's pixels at `(x0, y0)`, the part of the panel on
+/// the surface) refracted by the glass material, reading as far past the
+/// panel's box as the material can displace.
+fn refract_backdrop(
+    buffer: &Surface,
+    outline: &RoundedRect,
+    (x0, y0): (i32, i32),
+    backdrop: &Pixmap,
+    params: &material::Params,
+) -> Option<Pixmap> {
+    let reach = params.reach() as i32;
+    let (ex0, ey0) = ((x0 - reach).max(0), (y0 - reach).max(0));
+    let ex1 = (x0 + backdrop.width() as i32 + reach).min(buffer.width() as i32);
+    let ey1 = (y0 + backdrop.height() as i32 + reach).min(buffer.height() as i32);
+    let expanded = buffer.pixmap.clone_rect(IntRect::from_xywh(
+        ex0,
+        ey0,
+        (ex1 - ex0) as u32,
+        (ey1 - ey0) as u32,
+    )?)?;
+    let (lx, ly) = buffer.local(outline.x, outline.y);
+    let region = material::Region {
+        width: backdrop.width(),
+        height: backdrop.height(),
+        outline_width: outline.width,
+        outline_height: outline.height,
+        offset: (x0 as f32 - lx, y0 as f32 - ly),
+    };
+    let (refracted, moved) = material::refract(
+        &material::Source {
+            pixmap: &expanded,
+            panel_x: (x0 - ex0) as u32,
+            panel_y: (y0 - ey0) as u32,
+        },
+        &region,
+        outline,
+        params,
+    )?;
+    florui_profile::count(florui_profile::Counter::GlassRefractions, 1);
+    florui_profile::count(florui_profile::Counter::GlassPixelsMoved, u64::from(moved));
+    if params.clamped {
+        florui_profile::count(florui_profile::Counter::GlassClamped, 1);
+    }
+    Some(refracted)
+}
+
+/// Adds the glass material's rim light over what is painted of the panel.
+fn paint_glass_rim(
+    buffer: &mut Surface,
+    outline: &RoundedRect,
+    material: &GlassMaterial,
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
+    let Some(params) = material::Params::resolve(material, scale_factor) else {
+        return;
+    };
+    let (lx, ly) = buffer.local(outline.x, outline.y);
+    let x0 = lx.max(0.0).floor() as i32;
+    let y0 = ly.max(0.0).floor() as i32;
+    let x1 = (lx + outline.width).min(buffer.width() as f32).ceil() as i32;
+    let y1 = (ly + outline.height).min(buffer.height() as f32).ceil() as i32;
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    let region = material::Region {
+        width: (x1 - x0) as u32,
+        height: (y1 - y0) as u32,
+        outline_width: outline.width,
+        outline_height: outline.height,
+        offset: (x0 as f32 - lx, y0 as f32 - ly),
+    };
+    let stride = buffer.width() as usize;
+    let start = y0 as usize * stride + x0 as usize;
+    let coverage = |col: u32, row: u32| {
+        clip.map_or(255, |mask| {
+            mask.data()[(y0 as usize + row as usize) * stride + x0 as usize + col as usize]
+        })
+    };
+    material::add_rim_light(
+        &mut buffer.pixmap.pixels_mut()[start..],
+        stride,
+        &region,
+        outline,
+        &params,
+        coverage,
+    );
 }
 
 /// How far a chain's blurs reach beyond the pixels they read: the Gaussian
@@ -2308,7 +2406,14 @@ fn paint_node(
         let rounded = !outline.is_square();
 
         let backdrop_filter: &[FilterFunction] = style.map_or(&[][..], |s| &s.backdrop_filter[..]);
-        apply_backdrop_filter(buffer, &outline, backdrop_filter, scale_factor, clip);
+        // The material applies to a node that also has a `backdrop-filter`.
+        let glass = style
+            .filter(|_| !backdrop_filter.is_empty())
+            .and_then(|s| match &s.glass {
+                GlassSpec::Material(material) => Some(material),
+                _ => None,
+            });
+        apply_backdrop_filter(buffer, &outline, backdrop_filter, glass, scale_factor, clip);
 
         let border = style.map_or(NO_BORDER, |s| s.border);
         let box_shadow: &[florui_style::BoxShadow] = style.map_or(&[][..], |s| &s.box_shadow[..]);
@@ -2336,6 +2441,9 @@ fn paint_node(
             paint_rounded_border(buffer, &outline, border, clip);
         } else {
             paint_border(buffer, x, y, layout.width, layout.height, border, clip);
+        }
+        if let Some(material) = glass {
+            paint_glass_rim(buffer, &outline, material, scale_factor, clip);
         }
 
         let color = style.map_or(Rgba::opaque(0, 0, 0), |s| s.color);
@@ -7957,6 +8065,201 @@ mod tests {
             "at scale 2 the seam is {at_two} pixels wide against {at_one} at scale 1: the blur \
              radius was not scaled to the canvas"
         );
+    }
+
+    /// Twelve alternating red and blue stripes, 10 px wide and 80 tall, with
+    /// a 80x60 glass panel at (20, 10) styled by `glass_css`, painted at
+    /// `scale`.
+    fn glass_over_stripes(glass_css: &str, scale: f32) -> Canvas {
+        let tree: Element = view! {
+            <div class="back">
+                <div class="red"></div><div class="blue"></div>
+                <div class="red"></div><div class="blue"></div>
+                <div class="red"></div><div class="blue"></div>
+                <div class="red"></div><div class="blue"></div>
+                <div class="red"></div><div class="blue"></div>
+                <div class="red"></div><div class="blue"></div>
+                <div class="glass"></div>
+            </div>
+        };
+        let css = format!(
+            ".red {{ background-color: #ff0000; }} .blue {{ background-color: #0000ff; }} \
+             .glass {{ border-radius: 12px; {glass_css} }}"
+        );
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(&css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let back = arena.roots()[0];
+        let children = arena.children(back);
+        let mut layouts = HashMap::new();
+        let mut place = |node, x: f32, y: f32, w: f32, h: f32| {
+            layouts.insert(
+                node,
+                BoxLayout {
+                    x: x * scale,
+                    y: y * scale,
+                    width: w * scale,
+                    height: h * scale,
+                },
+            );
+        };
+        place(back, 0.0, 0.0, 120.0, 80.0);
+        for (index, stripe) in children[..12].iter().enumerate() {
+            place(*stripe, index as f32 * 10.0, 0.0, 10.0, 80.0);
+        }
+        place(children[12], 20.0, 10.0, 80.0, 60.0);
+        let mut font = Font::load_embedded();
+        paint_to_buffer(
+            &mut font,
+            (120.0 * scale) as u32,
+            (80.0 * scale) as u32,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            scale,
+        )
+    }
+
+    fn differing(a: &Canvas, b: &Canvas) -> Vec<(u32, u32)> {
+        (0..a.height())
+            .flat_map(|y| (0..a.width()).map(move |x| (x, y)))
+            .filter(|&(x, y)| a.pixel(x, y) != b.pixel(x, y))
+            .collect()
+    }
+
+    const IDENTITY_FILTER: &str = "backdrop-filter: brightness(1);";
+
+    #[test]
+    fn the_glass_material_moves_the_backdrop_only_in_the_panels_edge_band() {
+        let basic = glass_over_stripes(IDENTITY_FILTER, 1.0);
+        let refracted = glass_over_stripes(
+            &format!(
+                "{IDENTITY_FILTER} --florui-glass: refract; --florui-glass-refraction: 8px; \
+                 --florui-glass-edge: 16px;"
+            ),
+            1.0,
+        );
+        let moved = differing(&basic, &refracted);
+        assert!(moved.len() > 50, "only {} pixels moved", moved.len());
+        for (x, y) in moved {
+            let inside = (20..100).contains(&x) && (10..70).contains(&y);
+            assert!(inside, "({x}, {y}) is outside the panel");
+            let deep = (37..83).contains(&x) && (27..53).contains(&y);
+            assert!(!deep, "({x}, {y}) is deeper than the band");
+        }
+    }
+
+    #[test]
+    fn zero_refraction_and_the_off_quality_are_exactly_the_basic_glass() {
+        let basic = glass_over_stripes(IDENTITY_FILTER, 1.0);
+        for extra in [
+            "--florui-glass: refract; --florui-glass-refraction: 0px;",
+            "--florui-glass: refract; --florui-glass-quality: off; --florui-glass-light-strength: 1;",
+        ] {
+            let other = glass_over_stripes(&format!("{IDENTITY_FILTER} {extra}"), 1.0);
+            assert_eq!(differing(&basic, &other), vec![], "{extra}");
+        }
+    }
+
+    #[test]
+    fn the_material_needs_a_backdrop_filter() {
+        let plain = glass_over_stripes("", 1.0);
+        let asked = glass_over_stripes(
+            "--florui-glass: refract; --florui-glass-light-strength: 1;",
+            1.0,
+        );
+        assert_eq!(differing(&plain, &asked), vec![]);
+    }
+
+    #[test]
+    fn the_rim_light_brightens_the_side_facing_the_light_only() {
+        let unlit = glass_over_stripes(IDENTITY_FILTER, 1.0);
+        let lit = glass_over_stripes(
+            &format!(
+                "{IDENTITY_FILTER} --florui-glass: refract; --florui-glass-refraction: 0px; \
+                 --florui-glass-light-angle: 270deg; --florui-glass-light-strength: 1;"
+            ),
+            1.0,
+        );
+        let sum = |c: &Canvas, x, y| {
+            pixel_rgb(c, x, y)
+                .iter()
+                .map(|v| u32::from(*v))
+                .sum::<u32>()
+        };
+        assert!(
+            sum(&lit, 21, 40) > sum(&unlit, 21, 40),
+            "the left edge faces the light"
+        );
+        assert_eq!(
+            sum(&lit, 98, 40),
+            sum(&unlit, 98, 40),
+            "the right edge faces away"
+        );
+        assert_eq!(
+            sum(&lit, 60, 40),
+            sum(&unlit, 60, 40),
+            "the interior is not lit"
+        );
+        for (x, y) in differing(&unlit, &lit) {
+            let p = lit.pixel(x, y).expect("in range");
+            assert!(p.red() <= p.alpha() && p.green() <= p.alpha() && p.blue() <= p.alpha());
+        }
+    }
+
+    #[test]
+    fn the_glass_material_scales_with_the_canvas() {
+        // At twice the scale the same CSS lights and moves the same band, in
+        // twice the pixels: nothing lands outside the (scaled) panel.
+        let css = format!(
+            "{IDENTITY_FILTER} --florui-glass: refract; --florui-glass-refraction: 8px; \
+             --florui-glass-edge: 16px;"
+        );
+        let basic = glass_over_stripes(IDENTITY_FILTER, 2.0);
+        let refracted = glass_over_stripes(&css, 2.0);
+        let moved = differing(&basic, &refracted);
+        assert!(moved.len() > 200);
+        assert!(
+            moved
+                .iter()
+                .all(|&(x, y)| (40..200).contains(&x) && (20..140).contains(&y))
+        );
+        assert!(
+            moved
+                .iter()
+                .all(|&(x, y)| !((74..166).contains(&x) && (54..106).contains(&y)))
+        );
+    }
+
+    #[test]
+    fn a_refraction_request_above_the_limit_is_counted_as_clamped() {
+        use florui_profile::Counter;
+
+        florui_profile::start(false);
+        glass_over_stripes(
+            &format!(
+                "{IDENTITY_FILTER} --florui-glass: refract; --florui-glass-refraction: 40px; \
+                 --florui-glass-edge: 12px;"
+            ),
+            1.0,
+        );
+        glass_over_stripes(
+            &format!("{IDENTITY_FILTER} --florui-glass: refract; --florui-glass-refraction: 6px;"),
+            1.0,
+        );
+        florui_profile::finish_frame(Vec::new());
+        let frames = florui_profile::frames();
+        florui_profile::stop();
+        assert_eq!(frames[0].counter(Counter::GlassRefractions), 2);
+        assert_eq!(frames[0].counter(Counter::GlassClamped), 1);
+        assert!(frames[0].counter(Counter::GlassPixelsMoved) > 0);
     }
 
     #[test]

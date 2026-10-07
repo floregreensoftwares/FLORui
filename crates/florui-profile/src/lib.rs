@@ -161,10 +161,16 @@ pub enum Counter {
     AssetCacheHits,
     /// Images decoded because the asset cache had no live copy.
     AssetCacheMisses,
+    /// Panels whose backdrop went through the glass material's refraction.
+    GlassRefractions,
+    /// Backdrop pixels the glass material moved.
+    GlassPixelsMoved,
+    /// Glass panels whose requested refraction was cut to a limit.
+    GlassClamped,
 }
 
 impl Counter {
-    pub const ALL: [Counter; 10] = [
+    pub const ALL: [Counter; 13] = [
         Counter::NodesStyled,
         Counter::NodesLaidOut,
         Counter::NodesPainted,
@@ -175,6 +181,9 @@ impl Counter {
         Counter::ShadowBlurs,
         Counter::AssetCacheHits,
         Counter::AssetCacheMisses,
+        Counter::GlassRefractions,
+        Counter::GlassPixelsMoved,
+        Counter::GlassClamped,
     ];
 
     pub fn name(self) -> &'static str {
@@ -189,6 +198,9 @@ impl Counter {
             Counter::ShadowBlurs => "shadow-blurs",
             Counter::AssetCacheHits => "asset-cache-hits",
             Counter::AssetCacheMisses => "asset-cache-misses",
+            Counter::GlassRefractions => "glass-refractions",
+            Counter::GlassPixelsMoved => "glass-pixels-moved",
+            Counter::GlassClamped => "glass-clamped",
         }
     }
 
