@@ -1564,6 +1564,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
             values.get_inherited_ui().pointer_events,
             style::values::specified::PointerEvents::None
         ),
+        text_align: to_text_align(text.text_align),
         text_decoration_underline: values
             .get_text()
             .text_decoration_line
@@ -2342,6 +2343,15 @@ fn to_min_size(
     match value {
         GenericSize::LengthPercentage(lp) => Some(to_length_percentage(&lp.0)),
         _ => None,
+    }
+}
+
+fn to_text_align(value: style::values::computed::text::TextAlign) -> crate::TextAlign {
+    use style::values::specified::text::TextAlignKeyword as Keyword;
+    match value {
+        Keyword::Center | Keyword::MozCenter => crate::TextAlign::Center,
+        Keyword::Right | Keyword::MozRight | Keyword::End => crate::TextAlign::End,
+        _ => crate::TextAlign::Start,
     }
 }
 

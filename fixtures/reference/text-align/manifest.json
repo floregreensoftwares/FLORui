@@ -1,0 +1,63 @@
+{
+  "id": "text-align",
+  "description": "text-align places a line of text, inherited, and a button's own left alignment wins over its centered default",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 360,
+    "height_css_px": 110,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "col",
+    "css": ".col { display: flex; flex-direction: column; gap: 6px; padding: 5px; background-color: #101117; color: #fff; width: 360px; } .c { text-align: center; width: 200px; background-color: #345; } .r { text-align: right; width: 200px; background-color: #354; } .inh { text-align: center; width: 200px; background-color: #445; } .left { text-align: left; width: 200px; height: 30px; border: none; background-color: #543; color: #fff; } .mid { width: 200px; height: 30px; border: none; background-color: #534; color: #fff; }",
+    "children": [
+      {
+        "tag": "div",
+        "class": "c",
+        "text": "centered",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "r",
+        "text": "right",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "inh",
+        "css": "",
+        "children": [
+          {
+            "tag": "span",
+            "text": "inherited",
+            "css": ""
+          }
+        ]
+      },
+      {
+        "tag": "button",
+        "class": "left",
+        "text": "left",
+        "css": ""
+      },
+      {
+        "tag": "button",
+        "class": "mid",
+        "text": "mid",
+        "css": ""
+      }
+    ]
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 2.5,
+    "geometry_tolerance_px": 1,
+    "channel_tolerance": 100,
+    "reason": "Placement matches Chromium; the remaining difference (about 1.9% of pixels measured) is the glyph rasterization of the two engines, and a line left unaligned measures about 4%."
+  }
+}
