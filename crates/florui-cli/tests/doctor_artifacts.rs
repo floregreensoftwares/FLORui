@@ -157,7 +157,7 @@ fn an_untouched_build_passes_every_check_from_a_nested_directory_and_writes_noth
 
     assert_eq!(output.status.code(), Some(0), "{report}");
     let checks = artifact_checks(&report);
-    assert_eq!(checks.len(), 6, "{checks:?}");
+    assert_eq!(checks.len(), 7, "{checks:?}");
     for (id, status) in &checks {
         assert_eq!(status, "pass", "{id}: {}", check(&report, id));
     }
@@ -450,5 +450,193 @@ fn a_localized_name_that_differs_from_the_executables_is_a_failure() {
     assert!(
         evidence.contains("0416") && evidence.contains("Quintal"),
         "{evidence}"
+    );
+}
+
+fn diagnostics_status(report: &Value) -> String {
+    status(report, "artifacts.diagnostics")
+}
+
+#[test]
+fn the_symbols_are_kept_beside_the_output_and_resolve_the_executable_on_their_own() {
+    let project = build("", |_| {});
+    let kept = project
+        .dir
+        .join("target/florui-build/garden/diagnostics/garden.pdb");
+
+    assert!(kept.is_file(), "the build keeps the symbols");
+    assert!(
+        std::fs::read_dir(project.staged())
+            .unwrap()
+            .all(|entry| !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".pdb")),
+        "no symbol file is in the deployable directory"
+    );
+    let built: Value =
+        serde_json::from_slice(&std::fs::read(project.staged().join("report.json")).unwrap())
+            .unwrap();
+    let block = &built["diagnostics"];
+    assert_eq!(block["status"], "retained");
+    assert_eq!(block["directory"], "../diagnostics");
+    assert_eq!(block["files"][0]["executable"], "garden.exe");
+    assert_eq!(
+        block["files"][0]["executable_sha256"], built["files"][0]["sha256"],
+        "bound to the executable as staged"
+    );
+    assert!(
+        !std::fs::read_to_string(project.staged().join("report.json"))
+            .unwrap()
+            .contains(&project.dir.display().to_string().replace('\\', "\\\\")),
+        "the report names no path of this machine"
+    );
+    let (output, report) = doctor(&project.dir, &["--artifacts", STAGED]);
+    assert_eq!(output.status.code(), Some(0), "{report}");
+    assert_eq!(
+        diagnostics_status(&report),
+        "pass",
+        "{}",
+        check(&report, "artifacts.diagnostics")
+    );
+}
+
+#[test]
+fn symbols_that_were_moved_away_cannot_be_checked_and_say_so() {
+    let project = build("", |_| {});
+    std::fs::remove_dir_all(project.dir.join("target/florui-build/garden/diagnostics")).unwrap();
+
+    let (_, report) = doctor(&project.dir, &["--artifacts", STAGED]);
+
+    assert_eq!(
+        diagnostics_status(&report),
+        "unknown",
+        "never a pass without the evidence"
+    );
+    assert!(
+        check(&report, "artifacts.diagnostics")["evidence"]
+            .as_str()
+            .unwrap()
+            .contains("not in"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_symbol_file_of_another_build_is_refused_even_when_the_report_is_made_to_agree() {
+    let first = build("", |_| {});
+    let second = build("\n[features]\nother = []\n", |dir| {
+        write(
+            dir,
+            "src/main.rs",
+            "fn main() { println!(\"another build\"); }\n",
+        );
+    });
+    let ours = first
+        .dir
+        .join("target/florui-build/garden/diagnostics/garden.pdb");
+    let theirs = second
+        .dir
+        .join("target/florui-build/garden/diagnostics/garden.pdb");
+    std::fs::copy(&theirs, &ours).unwrap();
+    // The report is made to agree with the swapped file, so only the symbol
+    // loader's own identity check can catch it.
+    let path = first.staged().join("report.json");
+    let mut report: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let hash = {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(std::fs::read(&ours).unwrap())
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    };
+    report["diagnostics"]["files"][0]["sha256"] = Value::String(hash);
+    std::fs::write(&path, serde_json::to_string_pretty(&report).unwrap()).unwrap();
+
+    let (output, result) = doctor(&first.dir, &["--artifacts", STAGED]);
+
+    assert_eq!(
+        diagnostics_status(&result),
+        "fail",
+        "{}",
+        check(&result, "artifacts.diagnostics")
+    );
+    assert!(
+        check(&result, "artifacts.diagnostics")["evidence"]
+            .as_str()
+            .unwrap()
+            .contains("does not belong"),
+        "{result}"
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "an optional check does not fail the run"
+    );
+}
+
+#[test]
+fn a_symbol_file_in_the_deployable_directory_is_a_failure() {
+    let project = build("", |_| {});
+    std::fs::copy(
+        project
+            .dir
+            .join("target/florui-build/garden/diagnostics/garden.pdb"),
+        project.staged().join("garden.pdb"),
+    )
+    .unwrap();
+
+    let (_, report) = doctor(&project.dir, &["--artifacts", STAGED]);
+
+    assert_eq!(diagnostics_status(&report), "fail");
+    assert!(
+        check(&report, "artifacts.diagnostics")["evidence"]
+            .as_str()
+            .unwrap()
+            .contains("garden.pdb"),
+        "{report}"
+    );
+}
+
+#[test]
+fn an_executable_changed_after_the_build_is_no_longer_what_the_symbols_were_bound_to() {
+    let project = build("", |_| {});
+    let exe = project.staged().join("garden.exe");
+    let mut bytes = std::fs::read(&exe).unwrap();
+    bytes.push(0);
+    std::fs::write(&exe, bytes).unwrap();
+
+    let (_, report) = doctor(&project.dir, &["--artifacts", STAGED]);
+
+    assert_eq!(diagnostics_status(&report), "fail");
+    assert!(
+        check(&report, "artifacts.diagnostics")["evidence"]
+            .as_str()
+            .unwrap()
+            .contains("not the executable"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_symbol_file_that_was_changed_after_the_build_is_not_the_one_that_was_kept() {
+    let project = build("", |_| {});
+    let kept = project
+        .dir
+        .join("target/florui-build/garden/diagnostics/garden.pdb");
+    let mut bytes = std::fs::read(&kept).unwrap();
+    bytes.push(0);
+    std::fs::write(&kept, bytes).unwrap();
+
+    let (_, report) = doctor(&project.dir, &["--artifacts", STAGED]);
+
+    assert_eq!(diagnostics_status(&report), "fail");
+    assert!(
+        check(&report, "artifacts.diagnostics")["evidence"]
+            .as_str()
+            .unwrap()
+            .contains("SHA-256 differs"),
+        "{report}"
     );
 }
