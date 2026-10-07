@@ -28,6 +28,17 @@ pub struct Identity<'a> {
     pub publisher: Option<&'a str>,
     pub copyright: Option<&'a str>,
     pub version: &'a str,
+    /// The locale whose name and description the executable shows by default.
+    pub default_locale: &'a str,
+    /// Every declared locale, with the name and description it resolves to.
+    pub locales: &'a [LocaleIdentity],
+}
+
+/// A locale's name and description after the fallback chain.
+pub struct LocaleIdentity {
+    pub tag: String,
+    pub name: String,
+    pub description: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -52,6 +63,28 @@ pub struct IconAsset {
     pub padded_to_square: bool,
 }
 
+/// What the report says about one locale's strings.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct LocalizedFields {
+    pub tag: String,
+    /// The Windows language identifier, as four hex digits (`0416`), when the
+    /// tag has one.
+    pub language_id: Option<String>,
+    pub product_name: String,
+    pub file_description: String,
+    pub embedded: bool,
+    /// Why the strings are not in the executable.
+    pub reason: Option<String>,
+}
+
+/// One string table of the version resource.
+#[derive(Clone, Debug)]
+pub struct Table {
+    language: u16,
+    product_name: String,
+    file_description: String,
+}
+
 #[derive(Serialize, Clone)]
 pub struct VersionFields {
     pub product_name: String,
@@ -62,6 +95,11 @@ pub struct VersionFields {
     pub product_version: String,
     pub original_filename: String,
     pub internal_name: String,
+    /// Each declared locale, embedded or not.
+    pub localized: Vec<LocalizedFields>,
+    /// The tables written, the default locale's first.
+    #[serde(skip)]
+    pub tables: Vec<Table>,
 }
 
 #[derive(Serialize, Clone)]
@@ -314,9 +352,11 @@ pub fn group_icon_resource(entries: &[(u32, Vec<u8>)]) -> Vec<u8> {
 /// leading `major.minor.patch` of the version; the strings keep the whole
 /// version, prerelease and build metadata included.
 pub fn version_fields(identity: &Identity<'_>, file_name: &str) -> VersionFields {
+    let (tables, localized) = locale_tables(identity);
+    let default = &tables[0];
     VersionFields {
-        product_name: identity.name.to_string(),
-        file_description: identity.description.unwrap_or(identity.name).to_string(),
+        product_name: default.product_name.clone(),
+        file_description: default.file_description.clone(),
         company_name: identity.publisher.map(str::to_string),
         legal_copyright: identity.copyright.map(str::to_string),
         file_version: identity.version.to_string(),
@@ -326,7 +366,136 @@ pub fn version_fields(identity: &Identity<'_>, file_name: &str) -> VersionFields
             || file_name.to_string(),
             |stem| stem.to_string_lossy().into_owned(),
         ),
+        localized,
+        tables,
     }
+}
+
+/// Every locale the configuration declares, and the default one even when it
+/// declares nothing, each with the name and description its fallback chain
+/// gives.
+pub fn declared_locales(app: &florui_config::AppConfig) -> Vec<LocaleIdentity> {
+    let mut tags: Vec<&str> = app.locales.locales.keys().map(String::as_str).collect();
+    if !tags
+        .iter()
+        .any(|tag| tag.eq_ignore_ascii_case(&app.locales.default_locale))
+    {
+        tags.push(&app.locales.default_locale);
+    }
+    tags.into_iter()
+        .map(|tag| {
+            let identity = app.localized_identity(tag);
+            LocaleIdentity {
+                tag: tag.to_string(),
+                name: identity.name.to_string(),
+                description: identity.description.map(str::to_string),
+            }
+        })
+        .collect()
+}
+
+/// The Windows language identifier of a locale tag, for the languages this
+/// tool maps. `None` is a tag it does not know, which is reported and not
+/// guessed.
+pub fn windows_language_id(tag: &str) -> Option<u16> {
+    Some(match tag.to_ascii_lowercase().as_str() {
+        "en" | "en-us" => 0x0409,
+        "en-gb" => 0x0809,
+        "pt-br" | "pt" => 0x0416,
+        "pt-pt" => 0x0816,
+        "es" | "es-es" => 0x0C0A,
+        "es-mx" => 0x080A,
+        "fr" | "fr-fr" => 0x040C,
+        "de" | "de-de" => 0x0407,
+        "it" | "it-it" => 0x0410,
+        "nl" | "nl-nl" => 0x0413,
+        "sv" | "sv-se" => 0x041D,
+        "pl" | "pl-pl" => 0x0415,
+        "ru" | "ru-ru" => 0x0419,
+        "tr" | "tr-tr" => 0x041F,
+        "ja" | "ja-jp" => 0x0411,
+        "ko" | "ko-kr" => 0x0412,
+        "zh-cn" | "zh-hans" | "zh" => 0x0804,
+        "zh-tw" | "zh-hant" => 0x0404,
+        _ => return None,
+    })
+}
+
+/// The string tables to write and what the report says of every locale. The
+/// default locale's table is first (Windows falls back to the first table
+/// when no language matches); a locale whose tag has no mapping, or maps to a
+/// language already written, is reported and left out.
+fn locale_tables(identity: &Identity<'_>) -> (Vec<Table>, Vec<LocalizedFields>) {
+    let default = identity
+        .locales
+        .iter()
+        .find(|locale| locale.tag.eq_ignore_ascii_case(identity.default_locale));
+    let default_name = default.map_or(identity.name, |locale| locale.name.as_str());
+    let default_description = default
+        .and_then(|locale| locale.description.as_deref())
+        .or(identity.description)
+        .unwrap_or(default_name);
+    let default_language = windows_language_id(identity.default_locale).unwrap_or(0x0409);
+    let mut tables = vec![Table {
+        language: default_language,
+        product_name: default_name.to_string(),
+        file_description: default_description.to_string(),
+    }];
+    let mut report = Vec::new();
+    for locale in identity.locales {
+        let description = locale
+            .description
+            .as_deref()
+            .unwrap_or(&locale.name)
+            .to_string();
+        let language = windows_language_id(&locale.tag);
+        let is_default = locale.tag.eq_ignore_ascii_case(identity.default_locale);
+        let (embedded, reason) = match language {
+            // The default locale's table always exists; without a mapping it is
+            // written as US English, and that is said.
+            None if is_default => (
+                true,
+                Some(format!(
+                    "\"{}\" has no Windows language mapping, so the default strings are written as language 0409",
+                    locale.tag
+                )),
+            ),
+            None => (
+                false,
+                Some(format!(
+                    "\"{}\" has no Windows language mapping, so its name and description are not written into the executable",
+                    locale.tag
+                )),
+            ),
+            Some(_) if is_default => (true, None),
+            Some(id) if tables.iter().any(|table| table.language == id) => (
+                false,
+                Some(format!(
+                    "\"{}\" is the Windows language {id:04x}, which another locale's strings already use",
+                    locale.tag
+                )),
+            ),
+            Some(id) => {
+                tables.push(Table {
+                    language: id,
+                    product_name: locale.name.clone(),
+                    file_description: description.clone(),
+                });
+                (true, None)
+            }
+        };
+        report.push(LocalizedFields {
+            tag: locale.tag.clone(),
+            language_id: language
+                .or_else(|| is_default.then_some(default_language))
+                .map(|id| format!("{id:04x}")),
+            product_name: locale.name.clone(),
+            file_description: description,
+            embedded,
+            reason,
+        });
+    }
+    (tables, report)
 }
 
 /// `major.minor.patch.0` from the leading numbers of `version`.
@@ -399,31 +568,48 @@ pub fn version_resource(fields: &VersionFields) -> Result<Vec<u8>, String> {
         fixed.extend(value.to_le_bytes());
     }
 
-    let mut strings: Vec<(&str, &str)> = vec![
-        ("FileDescription", &fields.file_description),
-        ("FileVersion", &fields.file_version),
-        ("InternalName", &fields.internal_name),
-        ("OriginalFilename", &fields.original_filename),
-        ("ProductName", &fields.product_name),
-        ("ProductVersion", &fields.product_version),
-    ];
-    if let Some(company) = &fields.company_name {
-        strings.push(("CompanyName", company));
-    }
-    if let Some(copyright) = &fields.legal_copyright {
-        strings.push(("LegalCopyright", copyright));
-    }
-    strings.sort_by_key(|(key, _)| *key);
-    let entries: Vec<Vec<u8>> = strings
+    let tables: Vec<Vec<u8>> = fields
+        .tables
         .iter()
-        .map(|(key, value)| {
-            let words = value.encode_utf16().count() as u16 + 1;
-            node(key, words, true, &utf16(value), &[])
+        .map(|table| {
+            let mut strings: Vec<(&str, &str)> = vec![
+                ("FileDescription", &table.file_description),
+                ("FileVersion", &fields.file_version),
+                ("InternalName", &fields.internal_name),
+                ("OriginalFilename", &fields.original_filename),
+                ("ProductName", &table.product_name),
+                ("ProductVersion", &fields.product_version),
+            ];
+            if let Some(company) = &fields.company_name {
+                strings.push(("CompanyName", company));
+            }
+            if let Some(copyright) = &fields.legal_copyright {
+                strings.push(("LegalCopyright", copyright));
+            }
+            strings.sort_by_key(|(key, _)| *key);
+            let entries: Vec<Vec<u8>> = strings
+                .iter()
+                .map(|(key, value)| {
+                    let words = value.encode_utf16().count() as u16 + 1;
+                    node(key, words, true, &utf16(value), &[])
+                })
+                .collect();
+            node(
+                &format!("{:04x}04b0", table.language),
+                0,
+                true,
+                &[],
+                &entries,
+            )
         })
         .collect();
-    let table = node("040904b0", 0, true, &[], &entries);
-    let string_info = node("StringFileInfo", 0, true, &[], &[table]);
-    let translation = node("Translation", 4, false, &0x04B0_0409_u32.to_le_bytes(), &[]);
+    let string_info = node("StringFileInfo", 0, true, &[], &tables);
+    let pairs: Vec<u8> = fields
+        .tables
+        .iter()
+        .flat_map(|table| (0x04B0_0000_u32 | u32::from(table.language)).to_le_bytes())
+        .collect();
+    let translation = node("Translation", pairs.len() as u16, false, &pairs, &[]);
     let var_info = node("VarFileInfo", 0, true, &[], &[translation]);
     Ok(node(
         "VS_VERSION_INFO",
@@ -510,6 +696,9 @@ pub fn apply(_executable: &Path, _payload: &Payload<'_>) -> Result<(), String> {
 pub struct ExecutableResources {
     /// The strings of the version information that are present.
     pub version_strings: std::collections::BTreeMap<String, String>,
+    /// The product name and description of each string table, by its Windows
+    /// language identifier (four hex digits), in the order the file lists them.
+    pub localized: Vec<(String, String, String)>,
     /// The number of images in the application icon, `None` when it has none.
     pub icon_entries: Option<usize>,
 }
@@ -591,8 +780,31 @@ pub fn read_back(executable: &Path) -> Result<ExecutableResources, String> {
                 std::io::Error::last_os_error()
             ));
         }
-        for key in VERSION_KEYS {
-            let block: Vec<u16> = format!("\\StringFileInfo\\040904b0\\{key}")
+        let query = |block: &str| -> Option<String> {
+            let block: Vec<u16> = block.encode_utf16().chain(Some(0)).collect();
+            let mut value: *mut core::ffi::c_void = std::ptr::null_mut();
+            let mut length = 0u32;
+            if VerQueryValueW(
+                buffer.as_ptr().cast(),
+                block.as_ptr(),
+                &mut value,
+                &mut length,
+            ) == 0
+                || value.is_null()
+            {
+                return None;
+            }
+            let units = std::slice::from_raw_parts(value as *const u16, length as usize);
+            let end = units
+                .iter()
+                .position(|unit| *unit == 0)
+                .unwrap_or(units.len());
+            Some(String::from_utf16_lossy(&units[..end]))
+        };
+        // The `Translation` array lists the language and code page of every
+        // string table, the default one first.
+        let translations: Vec<(u16, u16)> = {
+            let block: Vec<u16> = "\\VarFileInfo\\Translation"
                 .encode_utf16()
                 .chain(Some(0))
                 .collect();
@@ -604,17 +816,33 @@ pub fn read_back(executable: &Path) -> Result<ExecutableResources, String> {
                 &mut value,
                 &mut length,
             ) == 0
+                || value.is_null()
             {
-                continue;
+                Vec::new()
+            } else {
+                std::slice::from_raw_parts(value as *const u16, length as usize / 2)
+                    .chunks_exact(2)
+                    .map(|pair| (pair[0], pair[1]))
+                    .collect()
             }
-            let units = std::slice::from_raw_parts(value as *const u16, length as usize);
-            let end = units
-                .iter()
-                .position(|unit| *unit == 0)
-                .unwrap_or(units.len());
-            resources
-                .version_strings
-                .insert(key.to_string(), String::from_utf16_lossy(&units[..end]));
+        };
+        let table = |(language, code_page): (u16, u16)| format!("{language:04x}{code_page:04x}");
+        if let Some(&first) = translations.first() {
+            for key in VERSION_KEYS {
+                if let Some(value) = query(&format!("\\StringFileInfo\\{}\\{key}", table(first))) {
+                    resources.version_strings.insert(key.to_string(), value);
+                }
+            }
+        }
+        for &pair in &translations {
+            let read = |key: &str| {
+                query(&format!("\\StringFileInfo\\{}\\{key}", table(pair))).unwrap_or_default()
+            };
+            resources.localized.push((
+                format!("{:04x}", pair.0),
+                read("ProductName"),
+                read("FileDescription"),
+            ));
         }
     }
     Ok(resources)
@@ -842,6 +1070,8 @@ mod tests {
             publisher: Some("Floregreen"),
             copyright: Some("Copyright 2026 Floregreen"),
             version: "1.2.3-rc.1+build5",
+            default_locale: "en",
+            locales: &[],
         };
         let fields = version_fields(&identity, "garden.exe");
         assert_eq!(fields.file_version, "1.2.3-rc.1+build5");
@@ -852,7 +1082,7 @@ mod tests {
 
     /// Reads the strings back out of a `VS_VERSIONINFO` the way a parser
     /// would: node lengths drive the walk, so a wrong length breaks it.
-    fn read_strings(resource: &[u8]) -> Vec<(String, String)> {
+    fn read_tables(resource: &[u8]) -> Vec<(String, Vec<(String, String)>)> {
         fn utf16_at(bytes: &[u8], start: usize) -> (String, usize) {
             let mut units = Vec::new();
             let mut at = start;
@@ -876,22 +1106,35 @@ mod tests {
         assert_eq!(total, resource.len(), "the root length covers everything");
         assert_eq!(root, "VS_VERSION_INFO");
         at += fixed_length;
-        let mut out = Vec::new();
-        let (_, _, info_key, mut cursor) = header(resource, at.next_multiple_of(4));
+        let mut out: Vec<(String, Vec<(String, String)>)> = Vec::new();
+        let (info_length, _, info_key, mut cursor) = header(resource, at.next_multiple_of(4));
+        let info_end = at.next_multiple_of(4) + info_length;
         assert_eq!(info_key, "StringFileInfo");
-        let (table_length, _, table_key, first) = header(resource, cursor);
-        assert_eq!(table_key, "040904b0");
-        let table_end = cursor + table_length;
-        cursor = first;
-        while cursor < table_end {
-            let (length, words, key, value_at) = header(resource, cursor);
-            let (value, _) = utf16_at(resource, value_at);
-            assert_eq!(value.encode_utf16().count() + 1, words, "{key}");
-            out.push((key, value));
-            cursor += length;
-            cursor = cursor.next_multiple_of(4);
+        while cursor < info_end {
+            let (table_length, _, table_key, first) = header(resource, cursor);
+            let table_end = cursor + table_length;
+            let mut entry = first;
+            let mut strings = Vec::new();
+            while entry < table_end {
+                let (length, words, key, value_at) = header(resource, entry);
+                let (value, _) = utf16_at(resource, value_at);
+                assert_eq!(value.encode_utf16().count() + 1, words, "{key}");
+                strings.push((key, value));
+                entry += length;
+                entry = entry.next_multiple_of(4);
+            }
+            out.push((table_key, strings));
+            cursor = table_end.next_multiple_of(4);
         }
         out
+    }
+
+    /// The strings of the first (default) table.
+    fn read_strings(resource: &[u8]) -> Vec<(String, String)> {
+        let mut tables = read_tables(resource);
+        let (key, strings) = tables.remove(0);
+        assert_eq!(key, "040904b0");
+        strings
     }
 
     #[test]
@@ -902,6 +1145,8 @@ mod tests {
             publisher: Some("Floregreen"),
             copyright: Some("Copyright 2026 Floregreen"),
             version: "1.2.3-rc.1+build5",
+            default_locale: "en",
+            locales: &[],
         };
         let fields = version_fields(&identity, "garden.exe");
 
@@ -931,12 +1176,191 @@ mod tests {
             publisher: None,
             copyright: None,
             version: "1.0.0",
+            default_locale: "en",
+            locales: &[],
         };
         let resource = version_resource(&version_fields(&identity, "garden.exe")).unwrap();
         assert!(
             read_strings(&resource)
                 .iter()
                 .all(|(k, _)| k != "CompanyName")
+        );
+    }
+
+    fn locale(tag: &str, name: &str, description: Option<&str>) -> LocaleIdentity {
+        LocaleIdentity {
+            tag: tag.to_string(),
+            name: name.to_string(),
+            description: description.map(str::to_string),
+        }
+    }
+
+    fn garden<'a>(default_locale: &'a str, locales: &'a [LocaleIdentity]) -> Identity<'a> {
+        Identity {
+            name: "Garden",
+            description: Some("A workspace"),
+            publisher: Some("Floregreen"),
+            copyright: None,
+            version: "1.0.0",
+            default_locale,
+            locales,
+        }
+    }
+
+    #[test]
+    fn locale_tags_map_to_windows_languages_and_unknown_ones_do_not() {
+        assert_eq!(windows_language_id("pt-BR"), Some(0x0416));
+        assert_eq!(
+            windows_language_id("PT-br"),
+            Some(0x0416),
+            "case does not matter"
+        );
+        assert_eq!(windows_language_id("en"), Some(0x0409));
+        assert_eq!(windows_language_id("ja"), Some(0x0411));
+        assert_eq!(windows_language_id("tlh"), None, "no guessing");
+    }
+
+    #[test]
+    fn each_mapped_locale_gets_a_table_with_the_default_first() {
+        let locales = [
+            locale("pt-BR", "Jardim", Some("Um espaco para ideias")),
+            locale("en", "Garden", Some("A workspace for ideas")),
+            locale("ja", "Niwa", None),
+        ];
+        let fields = version_fields(&garden("en", &locales), "garden.exe");
+        let tables = read_tables(&version_resource(&fields).unwrap());
+
+        let keys: Vec<&str> = tables.iter().map(|(key, _)| key.as_str()).collect();
+        assert_eq!(
+            keys,
+            ["040904b0", "041604b0", "041104b0"],
+            "default first, then by tag"
+        );
+        let get = |table: usize, key: &str| {
+            tables[table]
+                .1
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.as_str())
+        };
+        assert_eq!(get(0, "ProductName"), Some("Garden"));
+        assert_eq!(get(0, "FileDescription"), Some("A workspace for ideas"));
+        assert_eq!(get(1, "ProductName"), Some("Jardim"));
+        assert_eq!(get(1, "FileDescription"), Some("Um espaco para ideias"));
+        assert_eq!(
+            get(2, "FileDescription"),
+            Some("Niwa"),
+            "no description falls back to the name"
+        );
+        // What is not localized is the same in every table.
+        for table in 0..3 {
+            assert_eq!(get(table, "CompanyName"), Some("Floregreen"));
+            assert_eq!(get(table, "OriginalFilename"), Some("garden.exe"));
+        }
+        assert!(fields.localized.iter().all(|locale| locale.embedded));
+        assert_eq!(fields.product_name, "Garden");
+    }
+
+    #[test]
+    fn a_default_locale_other_than_english_leads_and_names_the_executable() {
+        let locales = [
+            locale("en", "Garden", None),
+            locale("pt-BR", "Jardim", Some("Um espaco")),
+        ];
+        let fields = version_fields(&garden("pt-BR", &locales), "garden.exe");
+        let tables = read_tables(&version_resource(&fields).unwrap());
+        assert_eq!(tables[0].0, "041604b0");
+        assert_eq!(
+            fields.product_name, "Jardim",
+            "the default locale is the report's name"
+        );
+        assert_eq!(tables.len(), 2);
+    }
+
+    #[test]
+    fn a_tag_with_no_windows_language_is_reported_and_not_written() {
+        let locales = [locale("en", "Garden", None), locale("tlh", "Beq", None)];
+        let fields = version_fields(&garden("en", &locales), "garden.exe");
+        assert_eq!(read_tables(&version_resource(&fields).unwrap()).len(), 1);
+        let unmapped = fields.localized.iter().find(|l| l.tag == "tlh").unwrap();
+        assert!(!unmapped.embedded);
+        assert_eq!(unmapped.language_id, None);
+        assert!(
+            unmapped
+                .reason
+                .as_deref()
+                .is_some_and(|r| r.contains("no Windows language"))
+        );
+    }
+
+    #[test]
+    fn two_tags_for_one_windows_language_keep_the_first_and_say_so() {
+        let locales = [locale("en", "Garden", None), locale("en-US", "Yard", None)];
+        let fields = version_fields(&garden("en", &locales), "garden.exe");
+        assert_eq!(read_tables(&version_resource(&fields).unwrap()).len(), 1);
+        let second = fields.localized.iter().find(|l| l.tag == "en-US").unwrap();
+        assert!(!second.embedded);
+        assert!(
+            second
+                .reason
+                .as_deref()
+                .is_some_and(|r| r.contains("already use"))
+        );
+    }
+
+    #[test]
+    fn an_unmapped_default_locale_is_written_as_us_english_and_says_so() {
+        let locales = [locale("tlh", "Beq", Some("Qap"))];
+        let fields = version_fields(&garden("tlh", &locales), "garden.exe");
+        let tables = read_tables(&version_resource(&fields).unwrap());
+        assert_eq!(tables[0].0, "040904b0");
+        let entry = &fields.localized[0];
+        assert!(entry.embedded);
+        assert_eq!(entry.language_id.as_deref(), Some("0409"));
+        assert!(entry.reason.is_some());
+    }
+
+    /// The real operating system reads every table back from a real
+    /// executable: the strings by language, and the default's as the first.
+    #[cfg(windows)]
+    #[test]
+    fn the_operating_system_reads_each_locale_back_from_an_executable() {
+        let dir = std::env::temp_dir().join(format!("florui-locales-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("garden.exe");
+        std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
+
+        let locales = [
+            locale("en", "Garden", Some("A workspace")),
+            locale("pt-BR", "Jardim", Some("Um espaco para ideias")),
+        ];
+        let fields = version_fields(&garden("en", &locales), "garden.exe");
+        let payload = Payload {
+            icon: None,
+            version: version_resource(&fields).unwrap(),
+        };
+        apply(&exe, &payload).unwrap();
+        let found = read_back(&exe).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(
+            found.version_strings.get("ProductName").map(String::as_str),
+            Some("Garden")
+        );
+        assert_eq!(
+            found.localized,
+            vec![
+                (
+                    "0409".to_string(),
+                    "Garden".to_string(),
+                    "A workspace".to_string()
+                ),
+                (
+                    "0416".to_string(),
+                    "Jardim".to_string(),
+                    "Um espaco para ideias".to_string()
+                ),
+            ]
         );
     }
 }

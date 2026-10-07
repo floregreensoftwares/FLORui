@@ -400,3 +400,55 @@ fn the_web_target_reports_output_checks_as_not_yet_supported() {
     assert_eq!(status(&report, "artifacts.unsupported_target"), "skipped");
     assert_eq!(artifact_checks(&report).len(), 1);
 }
+
+const LOCALIZED_CONFIG: &str = "schema_version = 1\n\n[app]\nname = \"Garden\"\nidentifier = \"com.example.garden\"\ndescription = \"A workspace\"\ndefault_locale = \"en\"\n\n[app.icons]\nsource = \"icon.svg\"\n\n[app.locales.en]\nname = \"Garden\"\ndescription = \"A workspace\"\n\n[app.locales.pt-BR]\nname = \"Jardim\"\ndescription = \"Um espaco para ideias\"\n\n[app.locales.tlh]\nname = \"Beq\"\n\n[bundle]\npublisher = \"Floregreen\"\ncopyright = \"Copyright 2026 Garden\"\n";
+
+#[test]
+fn each_locale_is_written_read_back_and_the_unmapped_one_is_reported() {
+    let project = build("", |dir| write(dir, "florui.config.toml", LOCALIZED_CONFIG));
+
+    let (output, report) = doctor(&project.dir, &["--artifacts", STAGED]);
+
+    assert_eq!(status(&report, "artifacts.resources"), "pass", "{report}");
+    assert_eq!(output.status.code(), Some(0), "{report}");
+    let built: Value =
+        serde_json::from_slice(&std::fs::read(project.staged().join("report.json")).unwrap())
+            .unwrap();
+    let info = &built["resources"]["version_info"][0];
+    let localized = info["localized"].as_array().unwrap();
+    let tag = |name: &str| localized.iter().find(|l| l["tag"] == name).unwrap();
+    assert_eq!(tag("en")["language_id"], "0409");
+    assert_eq!(tag("pt-BR")["language_id"], "0416");
+    assert_eq!(tag("pt-BR")["product_name"], "Jardim");
+    assert_eq!(tag("pt-BR")["embedded"], true);
+    assert_eq!(tag("tlh")["embedded"], false);
+    let warnings = built["resources"]["warnings"].as_array().unwrap();
+    assert!(
+        warnings.iter().any(|w| w.as_str().unwrap().contains("tlh")
+            && w.as_str().unwrap().contains("no Windows language")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn a_localized_name_that_differs_from_the_executables_is_a_failure() {
+    let project = build("", |dir| write(dir, "florui.config.toml", LOCALIZED_CONFIG));
+    let path = project.staged().join("report.json");
+    let tampered = std::fs::read_to_string(&path).unwrap().replace(
+        "\"product_name\": \"Jardim\"",
+        "\"product_name\": \"Quintal\"",
+    );
+    std::fs::write(&path, tampered).unwrap();
+
+    let (output, report) = doctor(&project.dir, &["--artifacts", STAGED]);
+
+    assert_eq!(output.status.code(), Some(1), "{report}");
+    assert_eq!(status(&report, "artifacts.resources"), "fail");
+    let evidence = check(&report, "artifacts.resources")["evidence"]
+        .as_str()
+        .unwrap();
+    assert!(
+        evidence.contains("0416") && evidence.contains("Quintal"),
+        "{evidence}"
+    );
+}
