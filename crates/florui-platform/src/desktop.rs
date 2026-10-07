@@ -1592,7 +1592,7 @@ impl WindowState {
     fn refresh_animation_schedule(&mut self) {
         self.next_animation_wake = self
             .runtime
-            .is_animating()
+            .wants_animation_frames()
             .then(|| std::time::Instant::now() + std::time::Duration::from_millis(16));
     }
 

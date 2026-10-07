@@ -838,6 +838,14 @@ impl UiRuntime {
         self.animation_timeline.is_animating()
     }
 
+    /// Whether a host should keep asking for frames because of an animation:
+    /// one is in progress *and* time can advance. A frozen clock (see
+    /// [`Self::set_manual_clock`]) never moves, so repainting would only
+    /// reproduce the same frame; the next real event still repaints.
+    pub fn wants_animation_frames(&self) -> bool {
+        self.is_animating() && self.clock_override.is_none()
+    }
+
     /// The geometry computed by the most recent [`Self::update`].
     pub fn geometry(
         &self,
@@ -1890,6 +1898,60 @@ mod tests {
             styles[&node].opacity, 1.0,
             "suppression seeded at construction must already apply to the constructor's own \
              first render (plain opacity: 1), not splice in the animation's 0.3 value"
+        );
+    }
+
+    const ENDLESS: &str = "
+        .box { animation-name: drift; animation-duration: 2s; animation-iteration-count: infinite; }
+        .still { animation-name: none; }
+        @keyframes drift { from { opacity: 0.2; } to { opacity: 1; } }
+    ";
+
+    fn endless_runtime(class: &'static str, os_reduces_motion: bool) -> UiRuntime {
+        let rules = florui_style::parse_stylesheet(ENDLESS).unwrap();
+        UiRuntime::with_rules_and_context(
+            rules,
+            move || view! { <div class={class} /> },
+            viewport(),
+            Vec::new(),
+            true,
+            os_reduces_motion,
+            false,
+        )
+    }
+
+    #[test]
+    fn an_endless_animation_asks_for_frames_until_something_stops_it() {
+        assert!(endless_runtime("box", false).wants_animation_frames());
+        // Paused by the application (the class that removes the animation):
+        // nothing is animating, so a host goes idle.
+        let paused = endless_runtime("box still", false);
+        assert!(!paused.is_animating());
+        assert!(!paused.wants_animation_frames());
+    }
+
+    #[test]
+    fn a_system_that_asks_for_reduced_motion_leaves_nothing_to_repaint() {
+        let runtime = endless_runtime("box", true);
+        assert!(!runtime.is_animating(), "suppressed from the first render");
+        assert!(!runtime.wants_animation_frames());
+    }
+
+    #[test]
+    fn a_frozen_clock_has_an_animation_but_asks_for_no_frames() {
+        let mut runtime = endless_runtime("box", false);
+        runtime.set_manual_clock(Some(1.5));
+        runtime.update(viewport());
+        assert!(runtime.is_animating(), "the animation is still there");
+        assert!(
+            !runtime.wants_animation_frames(),
+            "time cannot advance, so repainting would reproduce the same frame"
+        );
+        runtime.set_manual_clock(None);
+        runtime.update(viewport());
+        assert!(
+            runtime.wants_animation_frames(),
+            "real time resumes the frames"
         );
     }
 
