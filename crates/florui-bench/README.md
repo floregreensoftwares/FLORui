@@ -119,6 +119,30 @@ paint of the scene; the engine repaints everything, so a moving background costs
 one. The heap columns are the intermediate memory an effect needs. These are CPU times of the
 headless path: GPU time and presentation are not included.
 
+### The glass material
+
+`effects_glass_*` are the same panels with the refracting glass material on top of a
+`backdrop-filter: blur(8px)` (see "Glass" in the repository README), so each is read against its
+`effects_backdrop_blur_8_*` twin, which is the basic glass of the same area. Each asserts when it is
+built that it paints differently from that twin. One run on a 28-thread Intel Xeon (Family 6 Model 79),
+Windows 11, balanced power plan, release build, 5 processes, headless (CPU only, no presentation); warm
+median in ms, and the spread between processes in brackets:
+
+| Scene | Opaque | Translucent | Basic glass (blur 8) | Material |
+| --- | ---: | ---: | ---: | ---: |
+| 200 x 150 | | 4.7 | 10.3 (15%) | 11.6 (6%) |
+| 600 x 400 | 4.2 | 5.7 | 42.1 (14%) | 46.6 (15%) |
+| 600 x 400, 32 px band, 24 px refraction | | | | 50.2 (14%) |
+| 600 x 400, quality reduced | | | | 47.0 (10%) |
+| three overlapping 320 x 240 | | 5.5 | 43.0 (7%) | 53.0 (9%) |
+| 600 x 400 at a scale of 2 | | 14.4 | 236 (3%) | 269 (7%) |
+
+The material costs about 1 ms on the small panel, 4 to 5 ms on the large one and 33 ms at a scale of
+2, on top of a blur that is already the larger part. Differences under the spread between processes
+are not conclusions: `quality: reduced` (nearest-pixel sampling) was not measurably cheaper than
+`full` here, although it halves the time of the refraction step alone in isolation (see the module docs
+of `florui-paint`'s `material`). These are CPU times of the headless path.
+
 ## Edit to present
 
 `florui-bench edit-latency [--rows N] [--rounds N] [--write in-place|atomic] [--out-dir DIR]` opens a
