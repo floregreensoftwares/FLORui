@@ -6,18 +6,28 @@
 //! window, and the first instance's own window updates to show what it
 //! received.
 //!
+//! The page also has a button that asks the user to make this application the
+//! default for the demo's URL scheme and file type. That is the permission an
+//! application has to ask for (`[app.activation] request_default`): it opens the
+//! system's own settings page and sets nothing itself. It needs the example to be
+//! registered first (`florui register`), or the answer is "not registered".
+//!
 //! ```text
 //! cargo run --example single_instance -p florui-example-app
 //! cargo run --example single_instance -p florui-example-app -- "florui-demo://open?id=42"
 //! cargo run --example single_instance -p florui-example-app -- a.floruidemo b.floruidemo
 //! ```
 
+use std::sync::OnceLock;
+
 use florui::prelude::*;
-use florui_config::ResolvedConfig;
+use florui_config::{DefaultRequest, ResolvedConfig};
 use florui_platform::{
-    ActivationEvent, RunOutcome, SingleInstance, WindowSpec, classify_launch, run_single_instance,
-    run_windows, use_activation_events,
+    ActivationEvent, DefaultHandlerPermission, DefaultTarget, RunOutcome, SingleInstance,
+    WindowSpec, classify_launch, request_default_handler, run_single_instance, run_windows,
+    use_activation_events,
 };
+use florui_reactive::use_signal;
 
 const CSS: &str = include_str!("two_windows.css");
 
@@ -35,6 +45,32 @@ fn resolve_config() -> Option<ResolvedConfig> {
         })
         .ok()
         .map(|resolution| resolution.config)
+}
+
+/// What this application declared it may ask to be the default of, set once
+/// from the configuration before the window opens.
+static PERMISSION: OnceLock<DefaultHandlerPermission> = OnceLock::new();
+
+fn default_permission(config: &ResolvedConfig) -> Option<DefaultHandlerPermission> {
+    // The same identifier the registration is named after, not the suffixed
+    // single-instance scope.
+    let identifier = config.app.identifier.clone()?;
+    let allowed = config
+        .app
+        .activation
+        .request_default
+        .iter()
+        .map(|request| match request {
+            DefaultRequest::UrlScheme(scheme) => DefaultTarget::UrlScheme(scheme.clone()),
+            DefaultRequest::FileExtension(extension) => {
+                DefaultTarget::FileExtension(extension.clone())
+            }
+        })
+        .collect();
+    Some(DefaultHandlerPermission {
+        identifier,
+        allowed,
+    })
 }
 
 /// `None` (an ordinary, expected configuration choice, not a failure) if
@@ -89,6 +125,9 @@ fn main() {
         eprintln!("single_instance: could not resolve florui.config.toml at all -- exiting");
         return;
     };
+    if let Some(permission) = default_permission(&config) {
+        let _ = PERMISSION.set(permission);
+    }
     let launch_event = classify_own_launch(&config);
     let Some(single_instance) = resolve_single_instance(&config) else {
         eprintln!(
@@ -121,6 +160,20 @@ fn root() -> Element {
     let pending = use_activation_events()
         .map(|events| events.take_pending())
         .unwrap_or_default();
+    let answer = use_signal(|| "The default handler has not been asked for.".to_owned());
+    let ask = {
+        let answer = answer.clone();
+        move || {
+            let outcome = match PERMISSION.get() {
+                Some(permission) => request_default_handler(
+                    permission,
+                    &DefaultTarget::UrlScheme("florui-demo".to_owned()),
+                ),
+                None => florui_platform::DefaultHandlerOutcome::NotDeclared,
+            };
+            answer.set(format!("Asked for florui-demo://: {outcome:?}"));
+        }
+    };
     let hint = if pending.is_empty() {
         "No activation event received yet on this render.".to_owned()
     } else {
@@ -138,6 +191,8 @@ fn root() -> Element {
                 {"Run this example again -- plain, with a florui-demo://... URL, or with *.floruidemo file paths -- the second launch hands the classified event off instead of opening a new window."}
             </p>
             <p class="hint">{hint}</p>
+            <button onclick={ask}>{"Ask to be the default for florui-demo://"}</button>
+            <p class="hint">{answer.get()}</p>
         </div>
     }
 }

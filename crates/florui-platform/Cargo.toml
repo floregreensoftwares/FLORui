@@ -93,6 +93,8 @@ windows-sys = { version = "0.60", optional = true, features = [
     "Win32_Security_Authorization",
     "Win32_System_IO",
     "Win32_Storage_FileSystem",
+    # `default_handler`'s own dependency: looking up a registration.
+    "Win32_System_Registry",
 ] }
 # `os::windows::file_dialog`'s own dependency -- `windows-sys` has no COM
 # interface support at all (confirmed by grepping its generated source:
