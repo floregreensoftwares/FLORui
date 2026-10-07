@@ -31,6 +31,7 @@ use serde_json::{Value, json};
 mod artifacts;
 mod distribution;
 mod editor_schema;
+mod registration;
 
 const SCHEMA_VERSION: u32 = 1;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -107,10 +108,38 @@ pub struct Options {
     pub graphics: bool,
     pub presentation: bool,
     pub distribution: bool,
+    /// What the system knows of the application's URL schemes and file types.
+    pub registration: bool,
     /// A staged native build output to check, never to build.
     pub artifacts: Option<std::path::PathBuf>,
     pub json: bool,
     pub strict: bool,
+}
+
+/// The build report at `path`, for the commands that start from a staged build.
+pub(crate) fn read_build_report(path: &Path) -> Result<Value, String> {
+    artifacts::read_report(path)
+}
+
+#[cfg(windows)]
+fn registration_checks(package: Option<&str>, environment: Option<&str>) -> Vec<Check> {
+    registration::checks(package, environment, &crate::registration::CurrentUser)
+}
+
+#[cfg(not(windows))]
+fn registration_checks(_package: Option<&str>, _environment: Option<&str>) -> Vec<Check> {
+    vec![Check {
+        id: "registration.unsupported_host",
+        category: "registration",
+        status: Status::Skipped,
+        required: false,
+        observed: None,
+        expected: None,
+        evidence: "registering URL schemes and file types is only supported on Windows so far"
+            .to_string(),
+        reason: None,
+        remediation: None,
+    }]
 }
 
 pub fn run(options: Options) -> ExitCode {
@@ -150,6 +179,12 @@ pub fn run(options: Options) -> ExitCode {
                         format!("could not determine the current directory: {error}"),
                     )),
                 }
+            }
+            if options.registration {
+                checks.extend(registration_checks(
+                    options.package.as_deref(),
+                    options.environment.as_deref(),
+                ));
             }
             if options.distribution {
                 match env::current_dir() {
