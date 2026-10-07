@@ -1565,6 +1565,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
             style::values::specified::PointerEvents::None
         ),
         text_align: to_text_align(text.text_align),
+        glass: to_glass(values),
         text_decoration_underline: values
             .get_text()
             .text_decoration_line
@@ -1644,6 +1645,12 @@ struct FlorNames {
     appearance: Atom,
     resize: Atom,
     placeholder_color: Atom,
+    glass: Atom,
+    glass_refraction: Atom,
+    glass_edge: Atom,
+    glass_light_angle: Atom,
+    glass_light_strength: Atom,
+    glass_quality: Atom,
 }
 
 thread_local! {
@@ -1652,6 +1659,12 @@ thread_local! {
         appearance: Atom::from("florui-appearance"),
         resize: Atom::from("florui-resize"),
         placeholder_color: Atom::from("florui-placeholder-color"),
+        glass: Atom::from("florui-glass"),
+        glass_refraction: Atom::from("florui-glass-refraction"),
+        glass_edge: Atom::from("florui-glass-edge"),
+        glass_light_angle: Atom::from("florui-glass-light-angle"),
+        glass_light_strength: Atom::from("florui-glass-light-strength"),
+        glass_quality: Atom::from("florui-glass-quality"),
     };
 }
 
@@ -1683,6 +1696,94 @@ fn florui_property(values: &ComputedValues, name: impl Fn(&FlorNames) -> &Atom) 
 fn to_scroll_behavior_smooth(values: &ComputedValues) -> bool {
     florui_property(values, |names| &names.scroll_behavior)
         .is_some_and(|css| css.trim().eq_ignore_ascii_case("smooth"))
+}
+
+/// Reads `--florui-glass` and its parameters. Absent or not `refract` is no
+/// material. A parameter that is present but not a valid value of its kind
+/// makes the whole request invalid rather than silently using a default.
+fn to_glass(values: &ComputedValues) -> crate::GlassSpec {
+    use crate::{GlassMaterial, GlassQuality, GlassSpec};
+
+    match florui_property(values, |names| &names.glass)
+        .as_deref()
+        .map(str::trim)
+    {
+        Some("refract") => {}
+        _ => return GlassSpec::None,
+    }
+    let length =
+        |name: fn(&FlorNames) -> &Atom, default: f32, reason: &'static str| match florui_property(
+            values, name,
+        ) {
+            None => Ok(default),
+            Some(css) => parse_px(css.trim()).filter(|v| *v >= 0.0).ok_or(reason),
+        };
+    let refraction = length(
+        |n| &n.glass_refraction,
+        12.0,
+        "--florui-glass-refraction is not a length of 0 or more",
+    );
+    let edge = length(
+        |n| &n.glass_edge,
+        20.0,
+        "--florui-glass-edge is not a length of 0 or more",
+    );
+    let light_angle = match florui_property(values, |n| &n.glass_light_angle) {
+        None => Ok(315.0),
+        Some(css) => {
+            parse_deg(css.trim()).ok_or("--florui-glass-light-angle is not an angle in degrees")
+        }
+    };
+    let light_strength = match florui_property(values, |n| &n.glass_light_strength) {
+        None => Ok(0.0),
+        Some(css) => css
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .filter(|v| (0.0..=1.0).contains(v))
+            .ok_or("--florui-glass-light-strength is not a number from 0 to 1"),
+    };
+    let quality = match florui_property(values, |n| &n.glass_quality)
+        .as_deref()
+        .map(str::trim)
+    {
+        None | Some("full") => Ok(GlassQuality::Full),
+        Some("reduced") => Ok(GlassQuality::Reduced),
+        Some("off") => Ok(GlassQuality::Off),
+        Some(_) => Err("--florui-glass-quality is not full, reduced or off"),
+    };
+    match (refraction, edge, light_angle, light_strength, quality) {
+        (Ok(refraction), Ok(edge), Ok(light_angle), Ok(light_strength), Ok(quality)) => {
+            GlassSpec::Material(GlassMaterial {
+                refraction,
+                edge,
+                light_angle,
+                light_strength,
+                quality,
+            })
+        }
+        (Err(reason), ..)
+        | (_, Err(reason), ..)
+        | (_, _, Err(reason), ..)
+        | (_, _, _, Err(reason), _)
+        | (.., Err(reason)) => GlassSpec::Invalid(reason),
+    }
+}
+
+/// `12px`, or a bare `0`.
+fn parse_px(css: &str) -> Option<f32> {
+    match css.strip_suffix("px") {
+        Some(number) => number.trim().parse().ok(),
+        None => (css == "0").then_some(0.0),
+    }
+}
+
+/// `315deg`, or a bare `0`.
+fn parse_deg(css: &str) -> Option<f32> {
+    match css.strip_suffix("deg") {
+        Some(number) => number.trim().parse().ok(),
+        None => (css == "0").then_some(0.0),
+    }
 }
 
 /// Reads `--florui-appearance`.
