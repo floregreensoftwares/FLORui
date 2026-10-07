@@ -115,7 +115,8 @@ impl Params {
 
 /// The distance inward from the outline of a `width` x `height` box with
 /// circular corner `radii` (top-left, top-right, bottom-right, bottom-left),
-/// at the local point `(px, py)`, and the outward unit normal there.
+/// at the local point `(px, py)` (negative outside a rounded corner), and the
+/// outward unit normal there.
 pub(crate) fn edge_geometry(
     width: f32,
     height: f32,
@@ -156,7 +157,7 @@ pub(crate) fn edge_geometry(
                     -std::f32::consts::FRAC_1_SQRT_2,
                 )
             };
-            return ((radius - length).max(0.0), normal);
+            return (radius - length, normal);
         }
     }
     let (left, right, top, bottom) = (px, width - px, py, height - py);
@@ -170,7 +171,7 @@ pub(crate) fn edge_geometry(
     } else {
         (0.0, 1.0)
     };
-    (nearest.max(0.0), normal)
+    (nearest, normal)
 }
 
 /// The outline's corner radii as circles.
@@ -183,25 +184,39 @@ pub(crate) fn magnitude(params: &Params, distance: f32) -> f32 {
     if params.edge <= 0.0 || distance >= params.edge {
         return 0.0;
     }
-    let t = 1.0 - distance / params.edge;
+    let t = 1.0 - distance.max(0.0) / params.edge;
     params.refraction * t * t
 }
 
-/// Calls `visit` for every pixel that can lie inside the lensing band: all
-/// of them except the interior rectangle farther than the band from every
-/// edge.
-fn for_each_band_pixel(width: u32, height: u32, params: &Params, mut visit: impl FnMut(u32, u32)) {
-    let band = params.edge.ceil() as u32 + 1;
-    for row in 0..height {
-        let in_rows = row >= band && row + band < height;
-        if in_rows {
-            for col in
-                (0..band.min(width)).chain(width.saturating_sub(band).max(band.min(width))..width)
-            {
+/// Where a region of the surface sits against the node's outline.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Region {
+    pub width: u32,
+    pub height: u32,
+    /// The outline's own size.
+    pub outline_width: f32,
+    pub outline_height: f32,
+    /// The region's top-left in the outline's local coordinates.
+    pub offset: (f32, f32),
+}
+
+/// Calls `visit` for every pixel of `region` that can lie inside the lensing
+/// band: all of them except the interior farther than the band from every
+/// edge of the outline.
+fn for_each_band_pixel(region: &Region, band: f32, mut visit: impl FnMut(u32, u32)) {
+    let band = band.ceil() + 1.0;
+    let (ox, oy) = region.offset;
+    let left_end = ((band - ox - 0.5).ceil().max(0.0) as u32).min(region.width);
+    let right_start = ((region.outline_width - band - ox - 0.5).floor() + 1.0)
+        .clamp(left_end as f32, region.width as f32) as u32;
+    for row in 0..region.height {
+        let y = row as f32 + 0.5 + oy;
+        if y < band || y > region.outline_height - band {
+            for col in 0..region.width {
                 visit(col, row);
             }
         } else {
-            for col in 0..width {
+            for col in (0..left_end).chain(right_start..region.width) {
                 visit(col, row);
             }
         }
@@ -209,22 +224,22 @@ fn for_each_band_pixel(width: u32, height: u32, params: &Params, mut visit: impl
 }
 
 /// Where `source` sits in the surface, so a read can land outside the panel.
-/// `panel_x`/`panel_y` are the panel's own top-left inside `source`.
+/// `panel_x`/`panel_y` are the region's own top-left inside `source`.
 pub(crate) struct Source<'a> {
     pub pixmap: &'a Pixmap,
     pub panel_x: u32,
     pub panel_y: u32,
 }
 
-/// `source`'s pixels inside the panel, refracted. The result is
-/// `width` x `height`, the panel's own box.
+/// `source`'s pixels inside `region`, refracted, and how many of them
+/// moved.
 pub(crate) fn refract(
     source: &Source<'_>,
-    width: u32,
-    height: u32,
+    region: &Region,
     outline: &RoundedRect,
     params: &Params,
-) -> Option<Pixmap> {
+) -> Option<(Pixmap, u32)> {
+    let (width, height) = (region.width, region.height);
     let mut out = Pixmap::new(width, height)?;
     let src_width = source.pixmap.width();
     let src_pixels = source.pixmap.pixels();
@@ -239,18 +254,74 @@ pub(crate) fn refract(
         bilinear: params.quality == GlassQuality::Full,
     };
     let radii = circular_radii(outline);
-    let (w, h) = (width as f32, height as f32);
-    for_each_band_pixel(width, height, params, |col, row| {
-        let (distance, normal) = edge_geometry(w, h, &radii, col as f32 + 0.5, row as f32 + 0.5);
+    let (ox, oy) = region.offset;
+    let mut moved = 0;
+    for_each_band_pixel(region, params.edge, |col, row| {
+        let (x, y) = (col as f32 + 0.5, row as f32 + 0.5);
+        let (distance, normal) = edge_geometry(
+            region.outline_width,
+            region.outline_height,
+            &radii,
+            x + ox,
+            y + oy,
+        );
         let shift = magnitude(params, distance);
         if shift > 0.0 {
-            out.pixels_mut()[(row * width + col) as usize] = sampler.at(
-                col as f32 + 0.5 + normal.0 * shift,
-                row as f32 + 0.5 + normal.1 * shift,
-            );
+            out.pixels_mut()[(row * width + col) as usize] =
+                sampler.at(x + normal.0 * shift, y + normal.1 * shift);
+            moved += 1;
         }
     });
-    Some(out)
+    Some((out, moved))
+}
+
+/// Adds the rim light over `pixels`, the surface's pixels of `region` (row
+/// by row, `stride` pixels wide). `coverage` weights each pixel by the
+/// outline's own antialiased edge and any clip.
+pub(crate) fn add_rim_light(
+    pixels: &mut [PremultipliedColorU8],
+    stride: usize,
+    region: &Region,
+    outline: &RoundedRect,
+    params: &Params,
+    clip_coverage: impl Fn(u32, u32) -> u8,
+) {
+    if params.light_strength <= 0.0 || params.edge <= 0.0 {
+        return;
+    }
+    let radii = circular_radii(outline);
+    let (ox, oy) = region.offset;
+    for_each_band_pixel(region, params.edge, |col, row| {
+        let (distance, normal) = edge_geometry(
+            region.outline_width,
+            region.outline_height,
+            &radii,
+            col as f32 + 0.5 + ox,
+            row as f32 + 0.5 + oy,
+        );
+        let coverage = (distance + 0.5).clamp(0.0, 1.0) * (clip_coverage(col, row) as f32 / 255.0);
+        if coverage <= 0.0 || distance >= params.edge {
+            return;
+        }
+        let facing = (normal.0 * params.light.0 + normal.1 * params.light.1).max(0.0);
+        let t = 1.0 - distance.max(0.0) / params.edge;
+        let light = params.light_strength * t * t * facing * coverage;
+        if light <= 0.0 {
+            return;
+        }
+        let pixel = &mut pixels[row as usize * stride + col as usize];
+        let alpha = pixel.alpha();
+        let add = (light * alpha as f32).round() as u16;
+        let lit = |channel: u8| (channel as u16 + add).min(alpha as u16) as u8;
+        if let Some(lit) = PremultipliedColorU8::from_rgba(
+            lit(pixel.red()),
+            lit(pixel.green()),
+            lit(pixel.blue()),
+            alpha,
+        ) {
+            *pixel = lit;
+        }
+    });
 }
 
 struct Sampler<'a, 'b> {
@@ -381,9 +452,9 @@ mod tests {
         let (distance, normal) = edge_geometry(100.0, 60.0, &radii, on_arc + 1.0, on_arc + 1.0);
         assert!(distance < 1.5 && distance > 0.0, "{distance}");
         assert!(normal.0 < 0.0 && normal.1 < 0.0);
-        // The square corner point is at distance 0 outside the arc.
+        // The square corner point is outside the arc.
         let (distance, _) = edge_geometry(100.0, 60.0, &radii, 0.5, 0.5);
-        assert_eq!(distance, 0.0);
+        assert!(distance < 0.0, "{distance}");
     }
 
     /// A test backdrop: vertical stripes, so any displacement is visible.
@@ -409,6 +480,16 @@ mod tests {
         }
     }
 
+    fn full(width: u32, height: u32) -> Region {
+        Region {
+            width,
+            height,
+            outline_width: width as f32,
+            outline_height: height as f32,
+            offset: (0.0, 0.0),
+        }
+    }
+
     fn run(p: &Params, quality_nearest: bool) -> Pixmap {
         let (margin, w, h) = (p.reach(), 120u32, 80u32);
         let source = stripes(w + 2 * margin, h + 2 * margin);
@@ -422,12 +503,12 @@ mod tests {
                 panel_x: margin,
                 panel_y: margin,
             },
-            w,
-            h,
+            &full(w, h),
             &outline(w as f32, h as f32, 16.0),
             &p,
         )
         .expect("size")
+        .0
     }
 
     #[test]
@@ -497,14 +578,13 @@ mod tests {
             }
         }
         let p = params(12.0, 20.0);
-        let out = refract(
+        let (out, _) = refract(
             &Source {
                 pixmap: &source,
                 panel_x: margin,
                 panel_y: margin,
             },
-            w,
-            h,
+            &full(w, h),
             &outline(w as f32, h as f32, 16.0),
             &p,
         )
@@ -554,7 +634,7 @@ mod tests {
             let time = |p: &Params| {
                 let t = Instant::now();
                 for _ in 0..rounds {
-                    std::hint::black_box(refract(&src, w, h, &rect, p));
+                    std::hint::black_box(refract(&src, &full(w, h), &rect, p));
                 }
                 t.elapsed() / rounds
             };
