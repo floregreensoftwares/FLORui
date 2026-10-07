@@ -136,3 +136,43 @@ fn the_material_on_differs_from_the_basic_glass() {
     }));
     assert!(result.is_err(), "the material changes what is painted");
 }
+
+// Reviewed reference scenes. These are Florui's own renders of the material,
+// looked at and accepted by eye; they say nothing about Chromium, which has no
+// such material. A change to the look needs `UPDATE_SNAPSHOTS=1` and a review
+// of the new images.
+
+fn scene_at_end(css: &str, dpr: f64) -> florui_test::Mounted {
+    Harness::new(move || scene(END, Action::Advance))
+        .css(&format!("{CSS} {css}"))
+        .viewport(200.0, 120.0)
+        .dpr(dpr)
+        .mount()
+}
+
+#[test]
+fn reference_scene_basic_glass() {
+    scene_at_end(".refract { --florui-glass: none; }", 1.0).assert_snapshot("glass_basic");
+}
+
+#[test]
+fn reference_scene_refraction_with_a_rim_light_from_the_top_left() {
+    scene_at_end("", 1.0).assert_snapshot("glass_refract");
+}
+
+#[test]
+fn reference_scene_refraction_with_the_light_from_the_right() {
+    scene_at_end(".refract { --florui-glass-light-angle: 90deg; }", 1.0)
+        .assert_snapshot("glass_refract_light_right");
+}
+
+#[test]
+fn reference_scene_reduced_quality() {
+    scene_at_end(".refract { --florui-glass-quality: reduced; }", 1.0)
+        .assert_snapshot("glass_refract_reduced");
+}
+
+#[test]
+fn reference_scene_on_a_canvas_scaled_by_two() {
+    scene_at_end("", 2.0).assert_snapshot("glass_refract_scaled");
+}
