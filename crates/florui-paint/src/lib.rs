@@ -55,6 +55,8 @@
 
 mod blur;
 mod glyph_cache;
+#[allow(dead_code)]
+mod material;
 mod rounded;
 mod shadow_cache;
 
