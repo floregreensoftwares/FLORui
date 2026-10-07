@@ -42,6 +42,44 @@ pub struct Corners<T> {
 /// Open Sans, not a redistribution of Arial itself (proprietary, so this
 /// crate cannot embed it) and not metrically matched to it either — see
 /// `florui_text`'s own `fonts/NOTICE.md` for that tradeoff.
+/// How much work the glass material may do; see [`GlassMaterial`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GlassQuality {
+    #[default]
+    Full,
+    Reduced,
+    Off,
+}
+
+/// The parameters of the opt-in glass material, read from the
+/// `--florui-glass*` custom properties. Lengths are CSS pixels. These are the
+/// values as written; the renderer applies the limits of the material
+/// contract and reports when it does.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GlassMaterial {
+    /// Peak displacement of the backdrop at the edge.
+    pub refraction: f32,
+    /// Width of the lensing band, measured inward from the edge.
+    pub edge: f32,
+    /// Direction the light comes from, in degrees clockwise from the top.
+    pub light_angle: f32,
+    /// Strength of the rim light, 0 to 1.
+    pub light_strength: f32,
+    pub quality: GlassQuality,
+}
+
+/// What `--florui-glass` asks of a node.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum GlassSpec {
+    /// The property is absent, or not `refract`.
+    #[default]
+    None,
+    Material(GlassMaterial),
+    /// `refract` was asked for with a value that cannot be honored, so there
+    /// is no material; the reason is for the effective-settings report.
+    Invalid(&'static str),
+}
+
 /// `text-align` for left-to-right text: `justify` is `Start`, `left` and
 /// `right` are `Start` and `End`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -492,6 +530,9 @@ pub struct ComputedStyle {
     pub text_decoration_underline: bool,
     /// Inherited; see [`TextAlign`].
     pub text_align: TextAlign,
+    /// The opt-in glass material, read from `--florui-glass` and its
+    /// parameters. Like any custom property it inherits.
+    pub glass: GlassSpec,
     /// `cursor: pointer` — true only for that one keyword; every other
     /// value (including `auto`) reads `false`, the same narrow scope as
     /// [`Self::text_decoration_underline`].
@@ -600,6 +641,7 @@ impl ComputedStyle {
             opacity,
             text_decoration_underline,
             text_align,
+            glass,
             cursor_pointer,
             placeholder_color,
             // Everything else may change layout, hit testing, stacking or what a
@@ -665,6 +707,7 @@ impl ComputedStyle {
         self.opacity = *opacity;
         self.text_decoration_underline = *text_decoration_underline;
         self.text_align = *text_align;
+        self.glass = *glass;
         self.cursor_pointer = *cursor_pointer;
         self.placeholder_color = *placeholder_color;
     }
@@ -2285,6 +2328,72 @@ mod tests {
         assert_eq!(computed[button].text_align, TextAlign::Center);
         assert_eq!(computed[left].text_align, TextAlign::Start);
         assert_eq!(computed[plain].text_align, TextAlign::Start);
+    }
+
+    #[test]
+    fn the_glass_material_is_opt_in_with_defaults_and_reports_why_it_is_refused() {
+        let tree: Element = view! {
+            <div>
+                <div class="none" />
+                <div class="bare" />
+                <div class="full" />
+                <div class="bad-length" />
+                <div class="bad-quality" />
+                <div class="bad-strength" />
+                <div class="other" />
+            </div>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".bare { --florui-glass: refract; }              .full { --florui-glass: refract; --florui-glass-refraction: 8px;                --florui-glass-edge: 14px; --florui-glass-light-angle: 90deg;                --florui-glass-light-strength: 0.5; --florui-glass-quality: reduced; }              .bad-length { --florui-glass: refract; --florui-glass-refraction: wide; }              .bad-quality { --florui-glass: refract; --florui-glass-quality: best; }              .bad-strength { --florui-glass: refract; --florui-glass-light-strength: 2; }              .other { --florui-glass: shiny; }",
+            &InteractionState::new(),
+        );
+        let kids = arena.children(arena.roots()[0]);
+        let glass = |i: usize| computed[&kids[i]].glass;
+
+        assert_eq!(glass(0), GlassSpec::None, "absent is no material");
+        assert_eq!(
+            glass(1),
+            GlassSpec::Material(GlassMaterial {
+                refraction: 12.0,
+                edge: 20.0,
+                light_angle: 315.0,
+                light_strength: 0.0,
+                quality: GlassQuality::Full,
+            })
+        );
+        assert_eq!(
+            glass(2),
+            GlassSpec::Material(GlassMaterial {
+                refraction: 8.0,
+                edge: 14.0,
+                light_angle: 90.0,
+                light_strength: 0.5,
+                quality: GlassQuality::Reduced,
+            })
+        );
+        for (index, name) in [(3, "refraction"), (4, "quality"), (5, "light-strength")] {
+            match glass(index) {
+                GlassSpec::Invalid(reason) => assert!(reason.contains(name), "{reason}"),
+                other => panic!("expected an invalid request, got {other:?}"),
+            }
+        }
+        assert_eq!(glass(6), GlassSpec::None, "only refract opts in");
+    }
+
+    #[test]
+    fn the_glass_material_inherits_like_any_custom_property_and_can_be_reset() {
+        let tree: Element = view! {
+            <div class="panel"><div class="child" /><div class="reset" /></div>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".panel { --florui-glass: refract; } .reset { --florui-glass: none; }",
+            &InteractionState::new(),
+        );
+        let kids = arena.children(arena.roots()[0]);
+        assert!(matches!(computed[&kids[0]].glass, GlassSpec::Material(_)));
+        assert_eq!(computed[&kids[1]].glass, GlassSpec::None);
     }
 
     #[test]
