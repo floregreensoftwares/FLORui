@@ -116,6 +116,15 @@ pub use desktop::{
 mod activation;
 
 #[cfg(feature = "desktop")]
+mod default_handler;
+
+#[cfg(feature = "desktop")]
+pub use default_handler::{
+    DefaultHandlerOutcome, DefaultHandlerPermission, DefaultTarget, REGISTERED_APPLICATIONS_KEY,
+    application_key, capabilities_key, request_default_handler,
+};
+
+#[cfg(feature = "desktop")]
 pub use activation::{
     ActivationEvent, ActivationEvents, SingleInstance, classify_launch,
     probe_single_instance_capability, use_activation_events,

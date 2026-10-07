@@ -34,8 +34,7 @@ use serde::{Deserialize, Serialize};
 
 pub const OWNER_VALUE: &str = "FloruiOwner";
 const CLASSES: &str = "Software\\Classes";
-const FLORUI: &str = "Software\\Florui";
-const REGISTERED_APPLICATIONS: &str = "Software\\RegisteredApplications";
+const REGISTERED_APPLICATIONS: &str = florui_platform::REGISTERED_APPLICATIONS_KEY;
 
 /// What an application declares to be registered.
 #[derive(Debug, Clone, PartialEq)]
@@ -123,8 +122,11 @@ pub struct ValueRef {
     pub name: String,
 }
 
+/// The application's own key, which holds the record of a registration. The
+/// layout is named once, in `florui-platform`, which also looks it up when the
+/// application asks to be the default.
 pub fn record_key(identifier: &str) -> String {
-    format!("{FLORUI}\\{identifier}")
+    florui_platform::application_key(identifier)
 }
 
 /// A scheme Florui will never register: the ones the web and the system rely
@@ -357,7 +359,7 @@ pub fn plan(declaration: &Declaration, exe: &Path, registry: &dyn Registry) -> P
 
     // The capabilities, which list the application in Settings, and the
     // record. Both live in the application's own namespace.
-    let capabilities = format!("{}\\Capabilities", record_key(identifier));
+    let capabilities = florui_platform::capabilities_key(identifier);
     steps.push(Step::Key(capabilities.clone()));
     steps.push(value(
         &capabilities,
