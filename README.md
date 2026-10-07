@@ -162,8 +162,11 @@ the same scheme or file type. Environments that are installed side by side give 
 `[environments.<name>.app.activation]`.
 
 An application that wants to be the default for some of them lists them in `request_default` (a scheme, or an extension
-with a dot) as a statement of intent; each must be declared above. Asking at run time is a separate, later step in which the
-operating system's own settings page is opened for the user to decide. Verified on Windows only, per user; machine-wide
+with a dot) as a statement of intent; each must be declared above. At run time it asks with
+`florui_platform::request_default_handler(&permission, &target)`, which refuses what was not declared, refuses when the
+application is not registered, and otherwise opens the operating system's own Default apps page for this application, where
+the user decides. It never sets a default itself and its answer (`Opened`) says the page opened, not that the user chose this
+application. The `single_instance` example has a button that does this. Verified on Windows only, per user; machine-wide
 registration, installers and other operating systems are not covered.
 
 Run `florui --help` for the other commands.
