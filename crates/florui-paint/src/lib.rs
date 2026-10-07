@@ -3654,7 +3654,9 @@ fn rasterize_and_blur(
         } else {
             stamp_rounded(&mut coverage, width, height, &local);
         }
-        blur::gaussian_blur_in_place(&mut coverage, width, height, sigma);
+        if !blur::box_blur_plane_in_place(&mut coverage, width, height, sigma) {
+            blur::gaussian_blur_in_place(&mut coverage, width, height, sigma);
+        }
         coverage
     });
 

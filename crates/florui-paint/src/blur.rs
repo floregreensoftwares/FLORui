@@ -151,13 +151,13 @@ fn box_radii(sigma_px: f32) -> Option<[usize; BOX_PASSES]> {
 /// Sums the `radius` cells before and after each pixel of `src` (and the pixel
 /// itself) into `dst`, a pixel being four channels that move together, treating
 /// what lies beyond either end as zero.
-fn box_pass_row(src: &[u32], dst: &mut [u32], radius: usize) {
-    let (src, _) = src.as_chunks::<4>();
-    let (dst, _) = dst.as_chunks_mut::<4>();
+fn box_pass_row<const CH: usize>(src: &[u32], dst: &mut [u32], radius: usize) {
+    let (src, _) = src.as_chunks::<CH>();
+    let (dst, _) = dst.as_chunks_mut::<CH>();
     let pixels = src.len();
-    let mut sum = [0u32; 4];
+    let mut sum = [0u32; CH];
     for pixel in &src[..(radius + 1).min(pixels)] {
-        for c in 0..4 {
+        for c in 0..CH {
             sum[c] += pixel[c];
         }
     }
@@ -165,13 +165,13 @@ fn box_pass_row(src: &[u32], dst: &mut [u32], radius: usize) {
         dst[p] = sum;
         // Slide to the next pixel: take in p + radius + 1, let go of p - radius.
         if let Some(entering) = src.get(p + radius + 1) {
-            for c in 0..4 {
+            for c in 0..CH {
                 sum[c] += entering[c];
             }
         }
         if p >= radius {
             let leaving = &src[p - radius];
-            for c in 0..4 {
+            for c in 0..CH {
                 sum[c] -= leaving[c];
             }
         }
@@ -225,8 +225,13 @@ fn workers_for(pixels: usize) -> usize {
         .min(8)
 }
 
-/// Blurs the rows of `rows` (whole RGBA rows of `row_len` bytes) horizontally.
-fn blur_rows(rows: &mut [u8], row_len: usize, radii: &[usize; BOX_PASSES], scale: f32) {
+/// Blurs the rows of `rows` (whole rows of `row_len` bytes) horizontally.
+fn blur_rows<const CH: usize>(
+    rows: &mut [u8],
+    row_len: usize,
+    radii: &[usize; BOX_PASSES],
+    scale: f32,
+) {
     let mut a = vec![0u32; row_len];
     let mut b = vec![0u32; row_len];
     for row in rows.chunks_exact_mut(row_len) {
@@ -239,9 +244,9 @@ fn blur_rows(rows: &mut [u8], row_len: usize, radii: &[usize; BOX_PASSES], scale
         let mut in_a = true;
         for &radius in radii {
             if in_a {
-                box_pass_row(&a, &mut b, radius);
+                box_pass_row::<CH>(&a, &mut b, radius);
             } else {
-                box_pass_row(&b, &mut a, radius);
+                box_pass_row::<CH>(&b, &mut a, radius);
             }
             in_a = !in_a;
         }
@@ -262,22 +267,22 @@ struct Strip {
 
 /// Blurs the strips of columns that start at each of `starts` (in pixels)
 /// vertically, reading `pixels` and returning the results to be written back.
-fn blur_strips(
+fn blur_strips<const CH: usize>(
     pixels: &[u8],
     (w, h): (usize, usize),
     starts: &[usize],
     radii: &[usize; BOX_PASSES],
     scale: f32,
 ) -> Vec<Strip> {
-    let row_len = w * 4;
-    let strip_cells = STRIP_PIXELS * 4;
+    let row_len = w * CH;
+    let strip_cells = STRIP_PIXELS * CH;
     let mut first = vec![0u32; h * strip_cells];
     let mut second = vec![0u32; h * strip_cells];
     let mut out = Vec::with_capacity(starts.len());
     for &x in starts {
-        let cells = (w - x).min(STRIP_PIXELS) * 4;
+        let cells = (w - x).min(STRIP_PIXELS) * CH;
         for y in 0..h {
-            let from = &pixels[y * row_len + x * 4..][..cells];
+            let from = &pixels[y * row_len + x * CH..][..cells];
             for (cell, &byte) in first[y * cells..][..cells].iter_mut().zip(from) {
                 *cell = u32::from(byte);
             }
@@ -318,7 +323,7 @@ pub(crate) fn box_blur_rgba_in_place(
     height: u32,
     sigma_px: f32,
 ) -> bool {
-    box_blur_with_workers(
+    box_blur_with_workers::<4>(
         pixels,
         width,
         height,
@@ -327,9 +332,26 @@ pub(crate) fn box_blur_rgba_in_place(
     )
 }
 
-/// [`box_blur_rgba_in_place`] on exactly `workers` threads (one runs it on the
-/// calling thread).
-fn box_blur_with_workers(
+/// The same for a single-channel plane (a coverage mask), which is what a
+/// shadow blurs.
+pub(crate) fn box_blur_plane_in_place(
+    samples: &mut [u8],
+    width: u32,
+    height: u32,
+    sigma_px: f32,
+) -> bool {
+    box_blur_with_workers::<1>(
+        samples,
+        width,
+        height,
+        sigma_px,
+        workers_for(width as usize * height as usize),
+    )
+}
+
+/// The box blur of `CH`-channel `pixels` on exactly `workers` threads (one
+/// runs it on the calling thread).
+fn box_blur_with_workers<const CH: usize>(
     pixels: &mut [u8],
     width: u32,
     height: u32,
@@ -348,17 +370,17 @@ fn box_blur_with_workers(
         return false;
     }
     let scale = 1.0 / divisor as f32;
-    let row_len = w * 4;
+    let row_len = w * CH;
 
     // Horizontal: whole rows, a share of them to each thread.
     if workers <= 1 {
-        blur_rows(pixels, row_len, &radii, scale);
+        blur_rows::<CH>(pixels, row_len, &radii, scale);
     } else {
         let rows_per = h.div_ceil(workers);
         std::thread::scope(|scope| {
             for chunk in pixels.chunks_mut(rows_per * row_len) {
                 let radii = &radii;
-                scope.spawn(move || blur_rows(chunk, row_len, radii, scale));
+                scope.spawn(move || blur_rows::<CH>(chunk, row_len, radii, scale));
             }
         });
     }
@@ -367,7 +389,7 @@ fn box_blur_with_workers(
     // their results back to be written into place.
     let starts: Vec<usize> = (0..w).step_by(STRIP_PIXELS).collect();
     let strips: Vec<Strip> = if workers <= 1 {
-        blur_strips(pixels, (w, h), &starts, &radii, scale)
+        blur_strips::<CH>(pixels, (w, h), &starts, &radii, scale)
     } else {
         let per = starts.len().div_ceil(workers);
         let shared: &[u8] = pixels;
@@ -376,7 +398,7 @@ fn box_blur_with_workers(
                 .chunks(per)
                 .map(|share| {
                     let radii = &radii;
-                    scope.spawn(move || blur_strips(shared, (w, h), share, radii, scale))
+                    scope.spawn(move || blur_strips::<CH>(shared, (w, h), share, radii, scale))
                 })
                 .collect();
             handles
@@ -387,7 +409,7 @@ fn box_blur_with_workers(
     };
     for strip in strips {
         for y in 0..h {
-            pixels[y * row_len + strip.x * 4..][..strip.cells]
+            pixels[y * row_len + strip.x * CH..][..strip.cells]
                 .copy_from_slice(&strip.bytes[y * strip.cells..][..strip.cells]);
         }
     }
@@ -603,10 +625,12 @@ mod tests {
         for (width, height, sigma) in [(211u32, 173u32, 3.0f32), (300, 130, 7.5), (64, 700, 12.0)] {
             let original = noisy_rgba(width, height, width + height);
             let mut one = original.clone();
-            assert!(box_blur_with_workers(&mut one, width, height, sigma, 1));
+            assert!(box_blur_with_workers::<4>(
+                &mut one, width, height, sigma, 1
+            ));
             for workers in [2usize, 3, 5, 8] {
                 let mut many = original.clone();
-                assert!(box_blur_with_workers(
+                assert!(box_blur_with_workers::<4>(
                     &mut many, width, height, sigma, workers
                 ));
                 assert_eq!(
@@ -614,6 +638,20 @@ mod tests {
                     "{width}x{height} sigma {sigma} on {workers} threads"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn a_plane_blurs_to_the_same_bytes_as_each_channel_of_the_rgba_blur() {
+        let (width, height) = (97u32, 61u32);
+        let rgba = noisy_rgba(width, height, 7);
+        let mut blurred = rgba.clone();
+        assert!(box_blur_rgba_in_place(&mut blurred, width, height, 4.5));
+        for channel in 0..4 {
+            let mut plane: Vec<u8> = rgba.iter().skip(channel).step_by(4).copied().collect();
+            assert!(box_blur_plane_in_place(&mut plane, width, height, 4.5));
+            let expected: Vec<u8> = blurred.iter().skip(channel).step_by(4).copied().collect();
+            assert_eq!(plane, expected, "channel {channel}");
         }
     }
 
@@ -693,7 +731,7 @@ mod tests {
             let t = Instant::now();
             for _ in 0..rounds {
                 for _ in 0..h {
-                    box_pass_row(&src, &mut dst, 5);
+                    box_pass_row::<4>(&src, &mut dst, 5);
                 }
                 std::hint::black_box(&dst);
             }
