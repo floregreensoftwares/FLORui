@@ -27,6 +27,8 @@ mod distribution;
 mod doctor;
 mod fmt;
 mod new;
+mod register_cmd;
+mod registration;
 mod resources;
 mod schema_cmd;
 mod test_cmd;
@@ -159,6 +161,34 @@ enum Command {
         #[arg(long)]
         strict: bool,
     },
+    /// Makes the operating system know the application's URL schemes and file
+    /// types (`[app.activation]`), for the current user, from the staged
+    /// build. It is the only command that changes an association, and it
+    /// never sets a default handler: the application becomes a candidate and
+    /// the user chooses. Refuses to take over a reserved scheme or anything
+    /// another application owns.
+    Register {
+        /// The staged build output (default: the project's
+        /// `target/florui-build/<package>/native`).
+        #[arg(long, value_name = "DIR")]
+        artifacts: Option<PathBuf>,
+        /// Which staged executable, when the build produced more than one.
+        #[arg(long, value_name = "NAME")]
+        exe: Option<String>,
+        /// Show what would be registered and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit a single JSON document on stdout.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Removes exactly what `register` wrote, and leaves anything that is no
+    /// longer this application's alone.
+    Unregister {
+        /// Emit a single JSON document on stdout.
+        #[arg(long)]
+        json: bool,
+    },
     /// Report real, observed evidence about the local environment and
     /// (when resolvable) the current project — see `doctor`'s own module
     /// doc for what each flag actually probes and how honestly it's
@@ -176,6 +206,11 @@ enum Command {
         /// Report packaging/distribution diagnostics.
         #[arg(long)]
         distribution: bool,
+        /// Report what the system knows of the application's URL schemes and
+        /// file types, and whether registering would take something over,
+        /// without changing anything.
+        #[arg(long)]
+        registration: bool,
         /// Check an existing native build output (the directory `florui build`
         /// staged) against its report and the current project, without building
         /// or changing anything.
@@ -289,11 +324,28 @@ fn main() -> ExitCode {
                 })
             }
         }
+        Command::Register {
+            artifacts,
+            exe,
+            dry_run,
+            json,
+        } => register_cmd::register(register_cmd::Options {
+            package: cli.package,
+            environment: cli.environment,
+            artifacts,
+            exe,
+            dry_run,
+            json,
+        }),
+        Command::Unregister { json } => {
+            register_cmd::unregister(cli.package, cli.environment, json)
+        }
         Command::Doctor {
             target,
             graphics,
             presentation,
             distribution,
+            registration,
             artifacts,
             json,
             strict,
@@ -304,6 +356,7 @@ fn main() -> ExitCode {
             graphics,
             presentation,
             distribution,
+            registration,
             artifacts,
             json,
             strict,
