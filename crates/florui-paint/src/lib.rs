@@ -1974,6 +1974,28 @@ fn apply_backdrop_filter(
     }
 }
 
+/// What the glass material will actually do for a request, in CSS pixels:
+/// the values after the limits of its contract, and whether the request was
+/// cut. `None` for `quality: off`, which is the basic glass. This is what a
+/// status line should show instead of the requested values.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GlassEffective {
+    pub refraction: f32,
+    pub edge: f32,
+    pub quality: florui_style::GlassQuality,
+    pub clamped: bool,
+}
+
+/// See [`GlassEffective`].
+pub fn glass_effective(material: &GlassMaterial) -> Option<GlassEffective> {
+    material::Params::resolve(material, 1.0).map(|params| GlassEffective {
+        refraction: params.refraction,
+        edge: params.edge,
+        quality: params.quality,
+        clamped: params.clamped,
+    })
+}
+
 /// `backdrop` (the surface's pixels at `(x0, y0)`, the part of the panel on
 /// the surface) refracted by the glass material, reading as far past the
 /// panel's box as the material can displace.
@@ -8135,6 +8157,27 @@ mod tests {
     }
 
     const IDENTITY_FILTER: &str = "backdrop-filter: brightness(1);";
+
+    #[test]
+    fn the_effective_glass_settings_report_the_limits_and_off() {
+        let material = |refraction, edge, quality| florui_style::GlassMaterial {
+            refraction,
+            edge,
+            light_angle: 0.0,
+            light_strength: 0.0,
+            quality,
+        };
+        let full = florui_style::GlassQuality::Full;
+        let kept = glass_effective(&material(8.0, 20.0, full)).expect("in effect");
+        assert_eq!(
+            (kept.refraction, kept.edge, kept.clamped),
+            (8.0, 20.0, false)
+        );
+        let cut = glass_effective(&material(48.0, 28.0, full)).expect("in effect");
+        assert_eq!((cut.refraction, cut.clamped), (28.0, true));
+        let off = material(8.0, 20.0, florui_style::GlassQuality::Off);
+        assert_eq!(glass_effective(&off), None);
+    }
 
     #[test]
     fn the_glass_material_moves_the_backdrop_only_in_the_panels_edge_band() {
