@@ -49,11 +49,11 @@ mod tree;
 
 pub use animation::AnimationTimeline;
 pub use cascade::{
-    Appearance, AspectRatio, BorderSide, BoxShadow, BoxSizing, ComputedStyle, ContainerType,
-    ContentAlignment, Corners, Display, Edges, FilterFunction, FlexDirection, FlexWrap, FontFamily,
-    GlassMaterial, GlassQuality, GlassSpec, GridPlacement, GridTrackSize, ItemAlignment,
-    LengthPercentage, ObjectFit, Position, Resize, TextAlign, TransformFunction, Viewport, compute,
-    compute_with_container_query_signature,
+    Appearance, AspectRatio, BackdropBlur, BorderSide, BoxShadow, BoxSizing, ComputedStyle,
+    ContainerType, ContentAlignment, Corners, Display, Edges, FilterFunction, FlexDirection,
+    FlexWrap, FontFamily, GlassMaterial, GlassQuality, GlassSpec, GridPlacement, GridTrackSize,
+    ItemAlignment, LengthPercentage, ObjectFit, Position, Resize, TextAlign, TransformFunction,
+    Viewport, compute, compute_with_container_query_signature,
 };
 pub use color::{ColorParseError, Rgba, parse_hex_color};
 pub use container_query_adapter::{ContentBoxSize, resolve_container_query_signatures};

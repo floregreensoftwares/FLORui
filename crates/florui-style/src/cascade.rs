@@ -68,6 +68,19 @@ pub struct GlassMaterial {
     pub quality: GlassQuality,
 }
 
+/// How a node's `backdrop-filter` blur is computed, read from
+/// `--florui-backdrop-blur`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BackdropBlur {
+    /// Every blur at full resolution; the pixels match the browser's. Also
+    /// what an unrecognized value means.
+    #[default]
+    Exact,
+    /// A large blur runs on a smaller copy of the backdrop and is enlarged
+    /// again, which costs far less and differs a little from the browser's.
+    Fast,
+}
+
 /// What `--florui-glass` asks of a node.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum GlassSpec {
@@ -533,6 +546,8 @@ pub struct ComputedStyle {
     /// The opt-in glass material, read from `--florui-glass` and its
     /// parameters. Like any custom property it inherits.
     pub glass: GlassSpec,
+    /// `--florui-backdrop-blur`; inherits like any custom property.
+    pub backdrop_blur: BackdropBlur,
     /// `cursor: pointer` — true only for that one keyword; every other
     /// value (including `auto`) reads `false`, the same narrow scope as
     /// [`Self::text_decoration_underline`].
@@ -642,6 +657,7 @@ impl ComputedStyle {
             text_decoration_underline,
             text_align,
             glass,
+            backdrop_blur,
             cursor_pointer,
             placeholder_color,
             // Everything else may change layout, hit testing, stacking or what a
@@ -708,6 +724,7 @@ impl ComputedStyle {
         self.text_decoration_underline = *text_decoration_underline;
         self.text_align = *text_align;
         self.glass = *glass;
+        self.backdrop_blur = *backdrop_blur;
         self.cursor_pointer = *cursor_pointer;
         self.placeholder_color = *placeholder_color;
     }
@@ -2394,6 +2411,34 @@ mod tests {
         let kids = arena.children(arena.roots()[0]);
         assert!(matches!(computed[&kids[0]].glass, GlassSpec::Material(_)));
         assert_eq!(computed[&kids[1]].glass, GlassSpec::None);
+    }
+
+    #[test]
+    fn the_fast_backdrop_blur_is_opt_in_inherits_and_can_be_reset() {
+        let tree: Element = view! {
+            <div class="none"></div>
+            <div class="panel"><div class="child" /><div class="reset" /></div>
+            <div class="loud"></div>
+            <div class="typo"></div>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".panel { --florui-backdrop-blur: fast; } .reset { --florui-backdrop-blur: exact; }              .loud { --florui-backdrop-blur: FAST; } .typo { --florui-backdrop-blur: faster; }",
+            &InteractionState::new(),
+        );
+        let roots = arena.roots();
+        let blur = |node| computed[&node].backdrop_blur;
+        assert_eq!(blur(roots[0]), BackdropBlur::Exact, "absent is exact");
+        assert_eq!(blur(roots[1]), BackdropBlur::Fast);
+        let kids = arena.children(roots[1]);
+        assert_eq!(blur(kids[0]), BackdropBlur::Fast, "inherited");
+        assert_eq!(blur(kids[1]), BackdropBlur::Exact, "reset by a child");
+        assert_eq!(blur(roots[2]), BackdropBlur::Fast, "keywords ignore case");
+        assert_eq!(
+            blur(roots[3]),
+            BackdropBlur::Exact,
+            "an unknown value keeps the exact blur"
+        );
     }
 
     #[test]

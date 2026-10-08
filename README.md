@@ -235,8 +235,21 @@ basic glass, and a value that cannot be honored gives no material with a stated 
 property these inherit, so a child that must not refract says `--florui-glass: none`. The full contract is
 in the docs of `florui-paint`'s `material` module.
 
+A large `backdrop-filter` blur is the most expensive part of a glass scene on the CPU. An application can
+trade a little exactness for speed, per node or for a whole tree (it inherits):
+
+```css
+.stage { --florui-backdrop-blur: fast; }   /* exact (default) or fast */
+```
+
+With `fast`, a blur of 6 device pixels or more runs on a copy of the backdrop shrunk by 2, and one of 16 or
+more on a copy shrunk by 4, and is enlarged again; smaller blurs and the other filters are unchanged. On a
+backdrop of hard-edged blocks the result differs from the exact blur by at most 2 of 255 levels at a blur of
+8 and 1 at a blur of 20, so it is the same blur a little softer at fine detail. `exact` is the default and
+is what the reference fixtures compare against Chromium; an unrecognized value means `exact`.
+
 `cargo run --example glass_showcase -p florui-example-app` shows opaque, glass and advanced modes over a
-moving backdrop, with the blur, refraction and quality adjustable and the effective settings on screen;
+moving backdrop, with the blur, whether it is fast, refraction and quality adjustable and the effective settings on screen;
 `-- --freeze 1500` stops animation time for reproducible captures. The advanced material has reviewed
 reference scenes of its own (they are Florui's renders, not Chromium's, which has no such material) and is
 compared against a fresh render while the backdrop moves and the panel changes.

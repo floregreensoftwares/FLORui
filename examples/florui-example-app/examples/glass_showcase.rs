@@ -71,6 +71,7 @@ fn showcase() -> Element {
     let refraction_step = use_signal(|| 1usize);
     let reduced = use_signal(|| false);
     let moving = use_signal(|| true);
+    let fast = use_signal(|| false);
 
     let blur = BLURS[blur_step.get() % BLURS.len()];
     let refraction = REFRACTIONS[refraction_step.get() % REFRACTIONS.len()];
@@ -95,14 +96,21 @@ fn showcase() -> Element {
     } else {
         "on"
     };
+    let fast_note = if fast.get() {
+        " (fast: large blurs on a shrunk copy)"
+    } else {
+        ""
+    };
     let status = match mode.get() {
         Mode::Opaque => format!("mode: opaque | glass panels: 0 | motion: {motion}"),
-        Mode::Glass => format!("mode: glass | blur: {blur}px | glass panels: 4 | motion: {motion}"),
+        Mode::Glass => {
+            format!("mode: glass | blur: {blur}px{fast_note} | glass panels: 4 | motion: {motion}")
+        }
         Mode::Advanced => {
             let effective = glass_effective(&material)
                 .expect("the quality here is never off, so the material is in effect");
             format!(
-                "mode: advanced | blur: {blur}px | refraction: {}px{} | edge: {}px | quality: {} \
+                "mode: advanced | blur: {blur}px{fast_note} | refraction: {}px{} | edge: {}px | quality: {} \
                  | glass panels: 4 | motion: {motion}",
                 effective.refraction,
                 if effective.clamped {
@@ -137,6 +145,11 @@ fn showcase() -> Element {
     } else {
         String::new()
     };
+    let material_style = if fast.get() {
+        format!("{material_style} --florui-backdrop-blur: fast;")
+    } else {
+        material_style
+    };
 
     let set_opaque = mode.clone();
     let set_glass = mode.clone();
@@ -145,6 +158,7 @@ fn showcase() -> Element {
     let cycle_refraction = refraction_step.clone();
     let toggle_quality = reduced.clone();
     let toggle_motion = moving.clone();
+    let toggle_fast = fast.clone();
     let seg = |active: bool| if active { "seg on" } else { "seg" };
 
     view! {
@@ -180,6 +194,9 @@ fn showcase() -> Element {
                     </button>
                     <button class="seg" onclick={move || cycle_refraction.set(cycle_refraction.get() + 1)}>
                         {format!("Refraction {refraction}px")}
+                    </button>
+                    <button class="seg" onclick={move || toggle_fast.set(!toggle_fast.get())}>
+                        {if fast.get() { "Blur: fast" } else { "Blur: exact" }}
                     </button>
                     <button class="seg" onclick={move || toggle_quality.set(!toggle_quality.get())}>
                         {if reduced.get() { "Quality: reduced" } else { "Quality: full" }}
