@@ -1799,15 +1799,143 @@ fn paint_group(
     let to_target = Transform::from_translate(-(buffer.origin.0 as f32), -(buffer.origin.1 as f32))
         .pre_concat(transform);
     let composite_mask = clip.and_then(|c| c.to_mask(buffer));
-    buffer.pixmap.draw_pixmap(
-        group.origin.0,
-        group.origin.1,
-        group.pixmap.as_ref(),
-        &paint,
-        to_target,
-        composite_mask.as_ref(),
-    );
+    // A group that is only moved is drawn by the same pixels shifted by a whole
+    // number, without the per-pixel sampling a general transform needs.
+    match whole_pixel_shift(to_target) {
+        Some((dx, dy)) => draw_shifted(
+            &mut buffer.pixmap,
+            &group.pixmap,
+            (group.origin.0 + dx, group.origin.1 + dy),
+            &paint,
+            composite_mask.as_ref(),
+        ),
+        None => buffer.pixmap.draw_pixmap(
+            group.origin.0,
+            group.origin.1,
+            group.pixmap.as_ref(),
+            &paint,
+            to_target,
+            composite_mask.as_ref(),
+        ),
+    }
 }
+
+/// Draws `source` with its top left at `(x, y)` in `target`, untransformed.
+/// Only the part inside `target` is handed to the drawing, so the pixels
+/// that fall outside are never looked at: a pixmap drawn partly out of its
+/// target leaves a stray column along the far edge in tiny-skia.
+fn draw_shifted(
+    target: &mut Pixmap,
+    source: &Pixmap,
+    (x, y): (i32, i32),
+    paint: &PixmapPaint,
+    mask: Option<&Mask>,
+) {
+    let (x0, y0) = (x.max(0), y.max(0));
+    let x1 = x
+        .saturating_add(source.width() as i32)
+        .min(target.width() as i32);
+    let y1 = y
+        .saturating_add(source.height() as i32)
+        .min(target.height() as i32);
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    // A clip that covers the whole drawn area (the usual rectangular one) is
+    // the same as no clip.
+    let mask = mask.filter(|mask| !mask_is_full(mask, target.width(), (x0, y0, x1, y1)));
+    if paint.opacity == 1.0 && mask.is_none() {
+        blit_over(target, source, (x, y), (x0, y0, x1, y1));
+        return;
+    }
+    let inside = IntRect::from_xywh(x0 - x, y0 - y, (x1 - x0) as u32, (y1 - y0) as u32);
+    if (x0, y0, x1, y1) == (x, y, x + source.width() as i32, y + source.height() as i32) {
+        target.draw_pixmap(x, y, source.as_ref(), paint, Transform::identity(), mask);
+    } else if let Some(visible) = inside.and_then(|rect| source.clone_rect(rect)) {
+        target.draw_pixmap(x0, y0, visible.as_ref(), paint, Transform::identity(), mask);
+    }
+}
+
+/// Whether `mask` (as large as a target `width` wide) is fully opaque over the
+/// pixels `(x0, y0, x1, y1)`.
+fn mask_is_full(mask: &Mask, width: u32, (x0, y0, x1, y1): (i32, i32, i32, i32)) -> bool {
+    if mask.width() != width {
+        return false;
+    }
+    let data = mask.data();
+    (y0..y1).all(|row| {
+        let start = row as usize * width as usize;
+        data.get(start + x0 as usize..start + x1 as usize)
+            .is_some_and(|cells| cells.iter().all(|&cell| cell == 255))
+    })
+}
+
+/// `source`, with its top left at `(x, y)`, composited over `target` within
+/// `(x0, y0, x1, y1)` (which lies inside both): an opaque pixel is copied, a
+/// clear one skipped, and any other is blended as `source + target * (255 -
+/// alpha) / 255` on every channel, rounded, which is the same rounding
+/// tiny-skia's own compositing gives. Several times faster than going through
+/// its general pipeline.
+fn blit_over(
+    target: &mut Pixmap,
+    source: &Pixmap,
+    (x, y): (i32, i32),
+    (x0, y0, x1, y1): (i32, i32, i32, i32),
+) {
+    let (target_width, source_width) = (target.width() as usize, source.width() as usize);
+    let count = (x1 - x0) as usize * 4;
+    let source_data = source.data();
+    let target_data = target.data_mut();
+    for row in y0..y1 {
+        let from = ((row - y) as usize * source_width + (x0 - x) as usize) * 4;
+        let to = (row as usize * target_width + x0 as usize) * 4;
+        let (src, dst) = (
+            &source_data[from..from + count],
+            &mut target_data[to..to + count],
+        );
+        for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+            match s[3] {
+                0 => {}
+                255 => d.copy_from_slice(s),
+                alpha => {
+                    let keep = 255 - u32::from(alpha);
+                    for (out, &over) in d.iter_mut().zip(s) {
+                        let mixed = u32::from(over) + (u32::from(*out) * keep + 127) / 255;
+                        *out = mixed.min(255) as u8;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The whole-pixel shift that draws the same pixels as `transform` when it
+/// is a pure translation, or `None` for anything else (a scale, a rotation, a
+/// skew) and for a shift too close to half a pixel. The general path moves the
+/// group's edge and samples its pixels by two slightly different rules, so at a
+/// half pixel it leaves a seam that no whole shift reproduces; that case is
+/// left to it.
+fn whole_pixel_shift(transform: Transform) -> Option<(i32, i32)> {
+    let Transform {
+        sx,
+        kx,
+        ky,
+        sy,
+        tx,
+        ty,
+    } = transform;
+    if sx != 1.0 || sy != 1.0 || kx != 0.0 || ky != 0.0 {
+        return None;
+    }
+    let shift = |t: f32| {
+        let near_half = (t - t.floor() - 0.5).abs() < HALF_PIXEL_BAND;
+        (t.is_finite() && t.abs() < 1.0e6 && !near_half).then(|| t.round() as i32)
+    };
+    Some((shift(tx)?, shift(ty)?))
+}
+
+/// How near half a pixel a translation may be and still be left to the general path.
+const HALF_PIXEL_BAND: f32 = 1.0e-3;
 
 /// `style`'s `transform` about its `transform-origin` as a canvas matrix —
 /// the identity (a cheap no-op composite, taken by [`paint_nodes`]'s own
@@ -8747,6 +8875,180 @@ mod tests {
                 .iter()
                 .all(|p| p.red() <= p.alpha() && p.green() <= p.alpha() && p.blue() <= p.alpha())
         );
+    }
+
+    #[test]
+    fn a_moved_group_is_drawn_by_the_same_pixels_as_the_general_transform() {
+        let mut group = Pixmap::new(37, 29).expect("a pixmap");
+        for (index, pixel) in group.pixels_mut().iter_mut().enumerate() {
+            let value = (index * 7 % 251) as u8;
+            *pixel = PremultipliedColorU8::from_rgba(
+                value / 2,
+                value / 3,
+                value / 4,
+                value.max(value / 2 + 1),
+            )
+            .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+        }
+        let paint = PixmapPaint {
+            opacity: 0.8,
+            ..Default::default()
+        };
+        let mut checked = 0;
+        for tx in [
+            -9.6f32, -3.51, -0.51, -0.49, 0.0, 0.25, 0.49, 0.51, 1.0, 7.75, 12.4, 40.2,
+        ] {
+            for ty in [-4.6f32, -0.51, 0.0, 0.49, 3.3, 9.7] {
+                let transform = Transform::from_translate(tx, ty);
+                let mut general = Pixmap::new(96, 72).expect("a pixmap");
+                general.fill(tiny_skia::Color::from_rgba8(20, 60, 90, 255));
+                let mut shifted = general.clone();
+                general.draw_pixmap(20, 15, group.as_ref(), &paint, transform, None);
+                let (dx, dy) = whole_pixel_shift(transform).expect("a translation");
+                shifted.draw_pixmap(
+                    20 + dx,
+                    15 + dy,
+                    group.as_ref(),
+                    &paint,
+                    Transform::identity(),
+                    None,
+                );
+                assert_eq!(general.data(), shifted.data(), "translate({tx}, {ty})");
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 72);
+        // Exactly or nearly half a pixel is left to the general path.
+        for half in [-9.5f32, -0.5, 0.5, 1.5, 12.5, 0.5004] {
+            assert_eq!(
+                whole_pixel_shift(Transform::from_translate(half, 0.0)),
+                None,
+                "{half}"
+            );
+        }
+        assert_eq!(whole_pixel_shift(Transform::from_scale(2.0, 2.0)), None);
+        assert_eq!(whole_pixel_shift(Transform::from_rotate(10.0)), None);
+        assert_eq!(
+            whole_pixel_shift(Transform::from_row(1.0, 0.0, 0.1, 1.0, 5.0, 0.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn the_direct_blit_rounds_like_the_general_drawing_over_any_backdrop() {
+        let mut source = Pixmap::new(41, 33).expect("a pixmap");
+        for (index, pixel) in source.pixels_mut().iter_mut().enumerate() {
+            let alpha = match index % 5 {
+                0 => 0,
+                1 => 255,
+                _ => (index * 37 % 254 + 1) as u8,
+            };
+            let color = (index * 91 % 256) as u8;
+            *pixel =
+                PremultipliedColorU8::from_rgba(color.min(alpha), (color / 2).min(alpha), 0, alpha)
+                    .expect("premultiplied");
+        }
+        for backdrop in [
+            tiny_skia::Color::from_rgba8(0, 0, 0, 0),
+            tiny_skia::Color::from_rgba8(20, 60, 90, 255),
+            tiny_skia::Color::from_rgba8(200, 30, 140, 128),
+        ] {
+            for (x, y) in [(10, 8), (-7, -5), (30, 20), (-60, 3), (80, 80)] {
+                let mut direct = Pixmap::new(64, 48).expect("a pixmap");
+                direct.fill(backdrop);
+                let paint = PixmapPaint::default();
+                draw_shifted(&mut direct, &source, (x, y), &paint, None);
+                let mut reference = Pixmap::new(64, 48).expect("a pixmap");
+                reference.fill(backdrop);
+                let (x0, y0) = (x.max(0), y.max(0));
+                let (x1, y1) = ((x + 41).min(64), (y + 33).min(48));
+                if x1 > x0 && y1 > y0 {
+                    let rect =
+                        IntRect::from_xywh(x0 - x, y0 - y, (x1 - x0) as u32, (y1 - y0) as u32)
+                            .expect("a rect");
+                    let visible = source.clone_rect(rect).expect("a crop");
+                    reference.draw_pixmap(
+                        x0,
+                        y0,
+                        visible.as_ref(),
+                        &paint,
+                        Transform::identity(),
+                        None,
+                    );
+                }
+                assert_eq!(
+                    direct.data(),
+                    reference.data(),
+                    "at ({x}, {y}) over {backdrop:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_clip_is_ignored_only_where_it_is_fully_opaque() {
+        let mut source = Pixmap::new(20, 12).expect("a pixmap");
+        source.fill(tiny_skia::Color::from_rgba8(200, 90, 40, 255));
+        let paint = PixmapPaint::default();
+        let mut full = Mask::new(48, 32).expect("a mask");
+        full.fill_path(
+            &tiny_skia::PathBuilder::from_rect(
+                tiny_skia::Rect::from_xywh(0.0, 0.0, 48.0, 32.0).expect("a rect"),
+            ),
+            FillRule::Winding,
+            false,
+            Transform::identity(),
+        );
+        assert!(mask_is_full(&full, 48, (5, 4, 25, 16)));
+        // A mask that is half open in one corner of the drawn area is not full
+        // there, and the drawing then honors it.
+        let mut cut = full.clone();
+        cut.data_mut()[4 * 48 + 5] = 128;
+        assert!(!mask_is_full(&cut, 48, (5, 4, 25, 16)));
+        assert!(mask_is_full(&cut, 48, (6, 4, 25, 16)));
+        let mut with_mask = Pixmap::new(48, 32).expect("a pixmap");
+        draw_shifted(&mut with_mask, &source, (5, 4), &paint, Some(&cut));
+        let partly = with_mask.pixel(5, 4).map_or(0, |p| p.alpha());
+        assert!(
+            (100..=156).contains(&partly),
+            "the half-open pixel is half drawn: {partly}"
+        );
+        assert_eq!(with_mask.pixel(6, 4).map(|p| p.alpha()), Some(255));
+        let mut without = Pixmap::new(48, 32).expect("a pixmap");
+        draw_shifted(&mut without, &source, (5, 4), &paint, Some(&full));
+        assert_eq!(without.pixel(5, 4).map(|p| p.alpha()), Some(255));
+    }
+
+    #[test]
+    fn a_moved_group_that_runs_off_the_canvas_is_the_part_of_the_unclipped_drawing() {
+        let mut group = Pixmap::new(37, 29).expect("a pixmap");
+        group.fill(tiny_skia::Color::from_rgba8(200, 90, 40, 255));
+        let paint = PixmapPaint::default();
+        for (tx, ty) in [
+            (-9.6f32, -4.6f32),
+            (50.3, 20.2),
+            (-40.0, 10.0),
+            (60.0, -30.7),
+        ] {
+            let (dx, dy) =
+                whole_pixel_shift(Transform::from_translate(tx, ty)).expect("a translation");
+            // The same drawing on a canvas with 100 pixels to spare on every side.
+            let mut wide = Pixmap::new(296, 272).expect("a pixmap");
+            wide.draw_pixmap(
+                100 + 3 + dx,
+                100 + 15 + dy,
+                group.as_ref(),
+                &paint,
+                Transform::identity(),
+                None,
+            );
+            let expected = wide
+                .clone_rect(IntRect::from_xywh(100, 100, 96, 72).expect("a rect"))
+                .expect("a crop");
+            let mut small = Pixmap::new(96, 72).expect("a pixmap");
+            draw_shifted(&mut small, &group, (3 + dx, 15 + dy), &paint, None);
+            assert_eq!(small.data(), expected.data(), "translate({tx}, {ty})");
+        }
     }
 
     #[test]
