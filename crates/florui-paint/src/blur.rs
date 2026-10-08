@@ -416,6 +416,116 @@ fn box_blur_with_workers<const CH: usize>(
     true
 }
 
+/// The smallest sigma, in device pixels, that a fast blur runs at half
+/// resolution, and the smallest that it runs at a quarter.
+const HALF_FROM_SIGMA: f32 = 6.0;
+const QUARTER_FROM_SIGMA: f32 = 16.0;
+
+/// By how much a fast blur of `sigma_px` shrinks the image first: 1 (not at
+/// all) for a blur too small for it to pay.
+pub(crate) fn reduction_for(sigma_px: f32) -> usize {
+    if sigma_px >= QUARTER_FROM_SIGMA {
+        4
+    } else if sigma_px >= HALF_FROM_SIGMA {
+        2
+    } else {
+        1
+    }
+}
+
+/// The size of `size` pixels shrunk by `factor`: a partial block at the far
+/// edge still counts as one.
+fn reduced_size(size: usize, factor: usize) -> usize {
+    size.div_ceil(factor)
+}
+
+/// Shrinks four-channel 8-bit `pixels` (`width x height`) by `factor` on each
+/// axis, each new pixel the rounded mean of the block it covers (fewer pixels
+/// at the far edges).
+pub(crate) fn shrink_rgba(pixels: &[u8], width: usize, height: usize, factor: usize) -> Vec<u8> {
+    let (small_w, small_h) = (reduced_size(width, factor), reduced_size(height, factor));
+    let mut out = vec![0u8; small_w * small_h * 4];
+    let mut sums = vec![0u32; small_w * 4];
+    for (sy, out_row) in out.chunks_exact_mut(small_w * 4).enumerate() {
+        let rows = (sy * factor)..((sy + 1) * factor).min(height);
+        sums.fill(0);
+        for y in rows.clone() {
+            let row = &pixels[y * width * 4..(y + 1) * width * 4];
+            for (block, sum) in row.chunks(factor * 4).zip(sums.chunks_exact_mut(4)) {
+                for pixel in block.chunks_exact(4) {
+                    for (total, &byte) in sum.iter_mut().zip(pixel) {
+                        *total += u32::from(byte);
+                    }
+                }
+            }
+        }
+        for (sx, (cell, sum)) in out_row
+            .chunks_exact_mut(4)
+            .zip(sums.chunks_exact(4))
+            .enumerate()
+        {
+            let count =
+                (rows.len() * ((sx + 1) * factor).min(width).saturating_sub(sx * factor)) as u32;
+            for (byte, &total) in cell.iter_mut().zip(sum) {
+                *byte = ((total + count / 2) / count) as u8;
+            }
+        }
+    }
+    out
+}
+
+/// For each of `size` output positions when `small` cells are enlarged by
+/// `factor`: the two source cells and the weight of the second out of 256.
+/// Bilinear, with cell centers at the middle of their block and the edge cells
+/// held.
+fn enlarge_taps(size: usize, small: usize, factor: usize) -> Vec<(usize, usize, u32)> {
+    (0..size)
+        .map(|position| {
+            let at = ((position as f32 + 0.5) / factor as f32 - 0.5).clamp(0.0, (small - 1) as f32);
+            let first = at.floor() as usize;
+            let weight = ((at - first as f32) * 256.0 + 0.5) as u32;
+            (first, (first + 1).min(small - 1), weight.min(256))
+        })
+        .collect()
+}
+
+/// Enlarges `small` (`small_w x small_h`, four channels) by `factor` into
+/// `out` (`width x height`, which must be the size `shrink_rgba` would have
+/// shrunk to `small_w x small_h`) with bilinear weights, in integers: a row is
+/// first blended from the two small rows it lies between, then spread along.
+pub(crate) fn enlarge_rgba(
+    small: &[u8],
+    (small_w, small_h): (usize, usize),
+    out: &mut [u8],
+    (width, height): (usize, usize),
+    factor: usize,
+) {
+    let columns = enlarge_taps(width, small_w, factor);
+    let mut blended = vec![0u32; small_w * 4];
+    for (out_row, (row_a, row_b, row_w)) in out
+        .chunks_exact_mut(width * 4)
+        .zip(enlarge_taps(height, small_h, factor))
+    {
+        let above = &small[row_a * small_w * 4..][..small_w * 4];
+        let below = &small[row_b * small_w * 4..][..small_w * 4];
+        for ((cell, &a), &b) in blended.iter_mut().zip(above).zip(below) {
+            *cell = u32::from(a) * (256 - row_w) + u32::from(b) * row_w;
+        }
+        for (pixel, &(col_a, col_b, col_w)) in out_row.chunks_exact_mut(4).zip(&columns) {
+            let (left, right) = (&blended[col_a * 4..][..4], &blended[col_b * 4..][..4]);
+            for channel in 0..4 {
+                let mixed = left[channel] * (256 - col_w) + right[channel] * col_w;
+                pixel[channel] = ((mixed + 32768) >> 16) as u8;
+            }
+        }
+    }
+}
+
+/// The size of the shrunk copy `shrink_rgba` makes.
+pub(crate) fn shrunk_size(width: usize, height: usize, factor: usize) -> (usize, usize) {
+    (reduced_size(width, factor), reduced_size(height, factor))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,6 +749,73 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_reduction_grows_with_the_sigma_and_is_one_for_a_small_blur() {
+        assert_eq!(reduction_for(2.0), 1);
+        assert_eq!(reduction_for(5.99), 1);
+        assert_eq!(reduction_for(6.0), 2);
+        assert_eq!(reduction_for(15.99), 2);
+        assert_eq!(reduction_for(16.0), 4);
+    }
+
+    #[test]
+    fn shrinking_averages_blocks_and_counts_a_partial_one_at_the_edge() {
+        // 5x3 shrunk by 2 is 3x2; the last column and row are partial blocks.
+        let mut pixels = vec![0u8; 5 * 3 * 4];
+        for (i, cell) in pixels.iter_mut().enumerate() {
+            *cell = (i / 4) as u8 * 10;
+        }
+        assert_eq!(shrunk_size(5, 3, 2), (3, 2));
+        let small = shrink_rgba(&pixels, 5, 3, 2);
+        assert_eq!(small.len(), 3 * 2 * 4);
+        // Block (0, 0) holds pixels 0, 1, 5, 6: mean of 0, 10, 50, 60 = 30.
+        assert_eq!(small[0], 30);
+        // Block (2, 1) is the lone pixel 14.
+        assert_eq!(small[(3 + 2) * 4], 140);
+        // A mean of 0.75 rounds up, not down.
+        let rounding = shrink_rgba(&[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0], 2, 2, 2);
+        assert_eq!(rounding, [1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn enlarging_a_flat_image_gives_the_same_flat_image_at_any_size() {
+        for (width, height, factor) in [(64usize, 48usize, 2usize), (67, 45, 4), (5, 3, 4)] {
+            let (small_w, small_h) = shrunk_size(width, height, factor);
+            let small = vec![123u8; small_w * small_h * 4];
+            let mut out = vec![0u8; width * height * 4];
+            enlarge_rgba(
+                &small,
+                (small_w, small_h),
+                &mut out,
+                (width, height),
+                factor,
+            );
+            assert!(
+                out.iter().all(|&byte| byte == 123),
+                "{width}x{height} by {factor}"
+            );
+        }
+    }
+
+    #[test]
+    fn enlarging_a_ramp_follows_it_instead_of_stepping() {
+        // One row of 4 cells holding 0, 40, 80, 120, enlarged by 4 to 16.
+        let small: Vec<u8> = [0u8, 40, 80, 120].iter().flat_map(|&v| [v; 4]).collect();
+        let mut out = vec![0u8; 16 * 4];
+        enlarge_rgba(&small, (4, 1), &mut out, (16, 1), 4);
+        let row: Vec<u8> = out.iter().step_by(4).copied().collect();
+        assert!(row.windows(2).all(|pair| pair[1] >= pair[0]), "{row:?}");
+        // The middle of a block keeps its cell's value.
+        assert!(
+            (i16::from(row[5]) - 40).abs() <= 6 && (i16::from(row[9]) - 80).abs() <= 6,
+            "{row:?}"
+        );
+        assert!(
+            row.windows(2).all(|pair| pair[1] - pair[0] <= 14),
+            "steps: {row:?}"
+        );
     }
 
     #[test]
