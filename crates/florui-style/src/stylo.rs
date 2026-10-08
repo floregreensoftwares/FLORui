@@ -1566,6 +1566,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         ),
         text_align: to_text_align(text.text_align),
         glass: to_glass(values),
+        backdrop_blur: to_backdrop_blur(values),
         text_decoration_underline: values
             .get_text()
             .text_decoration_line
@@ -1651,6 +1652,7 @@ struct FlorNames {
     glass_light_angle: Atom,
     glass_light_strength: Atom,
     glass_quality: Atom,
+    backdrop_blur: Atom,
 }
 
 thread_local! {
@@ -1665,6 +1667,7 @@ thread_local! {
         glass_light_angle: Atom::from("florui-glass-light-angle"),
         glass_light_strength: Atom::from("florui-glass-light-strength"),
         glass_quality: Atom::from("florui-glass-quality"),
+        backdrop_blur: Atom::from("florui-backdrop-blur"),
     };
 }
 
@@ -1696,6 +1699,18 @@ fn florui_property(values: &ComputedValues, name: impl Fn(&FlorNames) -> &Atom) 
 fn to_scroll_behavior_smooth(values: &ComputedValues) -> bool {
     florui_property(values, |names| &names.scroll_behavior)
         .is_some_and(|css| css.trim().eq_ignore_ascii_case("smooth"))
+}
+
+/// Reads `--florui-backdrop-blur`: `fast` is the only value that changes
+/// anything, so a misspelling keeps the exact blur.
+fn to_backdrop_blur(values: &ComputedValues) -> crate::BackdropBlur {
+    match florui_property(values, |names| &names.backdrop_blur)
+        .as_deref()
+        .map(str::trim)
+    {
+        Some(value) if value.eq_ignore_ascii_case("fast") => crate::BackdropBlur::Fast,
+        _ => crate::BackdropBlur::Exact,
+    }
 }
 
 /// Reads `--florui-glass` and its parameters. Absent or not `refract` is no

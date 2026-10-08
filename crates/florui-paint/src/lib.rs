@@ -1889,6 +1889,7 @@ fn apply_backdrop_filter(
     glass: Option<&GlassMaterial>,
     scale_factor: f32,
     clip: Option<&Mask>,
+    fast_blur: bool,
 ) {
     if functions.is_empty() {
         return;
@@ -1934,7 +1935,11 @@ fn apply_backdrop_filter(
     {
         backdrop = refracted;
     }
-    let backdrop = filtered_backdrop(backdrop, &scaled_filters(functions, scale_factor));
+    let backdrop = filtered_backdrop(
+        backdrop,
+        &scaled_filters(functions, scale_factor),
+        fast_blur,
+    );
     // Replace, weighted by the mask: `BlendMode::Source` with a mask would
     // scale the source itself, clearing the pixels outside it instead of
     // leaving them alone.
@@ -1966,7 +1971,11 @@ fn apply_backdrop_filter(
 /// last blur look at one pixel at a time, so they run on the part that is
 /// kept, not on the margin that was only there to be blurred; the result is
 /// the same.
-fn filtered_backdrop(mut backdrop: Pixmap, functions: &[FilterFunction]) -> Pixmap {
+fn filtered_backdrop(
+    mut backdrop: Pixmap,
+    functions: &[FilterFunction],
+    fast_blur: bool,
+) -> Pixmap {
     let margin = blur_margin(functions);
     let after_blur = functions
         .iter()
@@ -1977,7 +1986,7 @@ fn filtered_backdrop(mut backdrop: Pixmap, functions: &[FilterFunction]) -> Pixm
         .then(|| {
             let (width, height) = (backdrop.width(), backdrop.height());
             let mut padded = mirror_padded(&backdrop, margin)?;
-            apply_filters(&mut padded, until_blur);
+            apply_filters_with(&mut padded, until_blur, fast_blur);
             cropped(&padded, margin, width, height)
         })
         .flatten();
@@ -1986,7 +1995,7 @@ fn filtered_backdrop(mut backdrop: Pixmap, functions: &[FilterFunction]) -> Pixm
             backdrop = filtered;
             apply_filters(&mut backdrop, after_blur);
         }
-        None => apply_filters(&mut backdrop, functions),
+        None => apply_filters_with(&mut backdrop, functions, fast_blur),
     }
     backdrop
 }
@@ -2195,9 +2204,18 @@ fn lerp_premultiplied(
 /// authored order — real CSS's own filter-chain semantics (the
 /// first-listed function reads the node's own unfiltered content).
 fn apply_filters(pixmap: &mut Pixmap, functions: &[FilterFunction]) {
+    apply_filters_with(pixmap, functions, false);
+}
+
+/// [`apply_filters`], with `fast` letting a large blur run on a smaller copy
+/// (see [`blur_pixmap_reduced`]).
+fn apply_filters_with(pixmap: &mut Pixmap, functions: &[FilterFunction], fast: bool) {
     let (width, height) = (pixmap.width(), pixmap.height());
     for function in functions {
         match *function {
+            FilterFunction::Blur(radius) if fast && blur::reduction_for(radius) > 1 => {
+                blur_pixmap_reduced(pixmap, radius, blur::reduction_for(radius));
+            }
             FilterFunction::Blur(radius) => blur_pixmap_in_place(pixmap, width, height, radius),
             FilterFunction::Brightness(factor) => {
                 for pixel in pixmap.pixels_mut() {
@@ -2219,6 +2237,44 @@ fn apply_filters(pixmap: &mut Pixmap, functions: &[FilterFunction]) {
                 }
             }
         }
+    }
+}
+
+/// A blur of `radius_px` done on a copy of `pixmap` shrunk by `factor`, with
+/// the sigma shrunk the same, and enlarged back over it. Costs about
+/// `1 / factor^2` of the full blur; the result is the same blur a little
+/// softer at fine detail, which is why it is opt-in.
+fn blur_pixmap_reduced(pixmap: &mut Pixmap, radius_px: f32, factor: usize) {
+    let (width, height) = (pixmap.width() as usize, pixmap.height() as usize);
+    let (small_w, small_h) = blur::shrunk_size(width, height, factor);
+    let Some(mut small) = Pixmap::new(small_w as u32, small_h as u32) else {
+        return;
+    };
+    small
+        .data_mut()
+        .copy_from_slice(&blur::shrink_rgba(pixmap.data(), width, height, factor));
+    blur_pixmap_in_place(
+        &mut small,
+        small_w as u32,
+        small_h as u32,
+        radius_px / factor as f32,
+    );
+    blur::enlarge_rgba(
+        small.data(),
+        (small_w, small_h),
+        pixmap.data_mut(),
+        (width, height),
+        factor,
+    );
+    for pixel in pixmap.pixels_mut() {
+        let alpha = pixel.alpha();
+        *pixel = PremultipliedColorU8::from_rgba(
+            pixel.red().min(alpha),
+            pixel.green().min(alpha),
+            pixel.blue().min(alpha),
+            alpha,
+        )
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
     }
 }
 
@@ -2495,7 +2551,16 @@ fn paint_node(
                 GlassSpec::Material(material) => Some(material),
                 _ => None,
             });
-        apply_backdrop_filter(buffer, &outline, backdrop_filter, glass, scale_factor, clip);
+        let fast_blur = style.is_some_and(|s| s.backdrop_blur == florui_style::BackdropBlur::Fast);
+        apply_backdrop_filter(
+            buffer,
+            &outline,
+            backdrop_filter,
+            glass,
+            scale_factor,
+            clip,
+            fast_blur,
+        );
 
         let border = style.map_or(NO_BORDER, |s| s.border);
         let box_shadow: &[florui_style::BoxShadow] = style.map_or(&[][..], |s| &s.box_shadow[..]);
@@ -8592,9 +8657,96 @@ mod tests {
             let mut padded = mirror_padded(&backdrop, margin).expect("padded");
             apply_filters(&mut padded, &chain);
             let reference = cropped(&padded, margin, 80, 60).expect("cropped");
-            let ours = filtered_backdrop(backdrop.clone(), &chain);
+            let ours = filtered_backdrop(backdrop.clone(), &chain, false);
             assert_eq!(ours.data(), reference.data(), "{chain:?}");
         }
+    }
+
+    fn checker_backdrop(width: u32, height: u32) -> Pixmap {
+        let mut backdrop = Pixmap::new(width, height).expect("a pixmap");
+        for (index, pixel) in backdrop.pixels_mut().iter_mut().enumerate() {
+            let (x, y) = (index as u32 % width, index as u32 / width);
+            let (r, g, b) = if (x / 23 + y / 19) % 2 == 0 {
+                (230, 40, 70)
+            } else {
+                (30, 200, 160)
+            };
+            *pixel = PremultipliedColorU8::from_rgba(r, g, b, 255).expect("opaque");
+        }
+        backdrop
+    }
+
+    /// The mean and the largest difference, over all channels, between the
+    /// exact blur and the fast one of the same chain.
+    fn fast_against_exact(chain: &[FilterFunction]) -> (f64, u8) {
+        let backdrop = checker_backdrop(320, 220);
+        let exact = filtered_backdrop(backdrop.clone(), chain, false);
+        let fast = filtered_backdrop(backdrop, chain, true);
+        let mut total = 0u64;
+        let mut worst = 0u8;
+        for (a, b) in exact.data().iter().zip(fast.data()) {
+            let d = a.abs_diff(*b);
+            total += u64::from(d);
+            worst = worst.max(d);
+        }
+        (total as f64 / exact.data().len() as f64, worst)
+    }
+
+    #[test]
+    fn a_blur_too_small_to_shrink_is_the_same_bytes_in_both_modes() {
+        let backdrop = checker_backdrop(120, 90);
+        for sigma in [3.0f32, 5.5] {
+            let chain = [FilterFunction::Blur(sigma), FilterFunction::Saturate(1.4)];
+            assert_eq!(
+                filtered_backdrop(backdrop.clone(), &chain, false).data(),
+                filtered_backdrop(backdrop.clone(), &chain, true).data(),
+                "sigma {sigma}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fast_blur_stays_close_to_the_exact_one_at_each_reduction() {
+        // Measured on hard-edged blocks: 0.16 and 2 at sigma 8, 0.01 and 1 at 20.
+        for (sigma, mean, worst) in [(8.0f32, 0.5, 6u8), (20.0, 0.1, 4)] {
+            let (measured_mean, measured_worst) =
+                fast_against_exact(&[FilterFunction::Blur(sigma)]);
+            assert!(
+                measured_mean > 0.0,
+                "sigma {sigma}: the fast blur gave the exact bytes, so it did not run"
+            );
+            assert!(
+                measured_mean < mean && measured_worst <= worst,
+                "sigma {sigma}: mean {measured_mean}, worst {measured_worst}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fast_blur_keeps_a_flat_backdrop_flat_to_the_edge_and_the_color_under_alpha() {
+        let mut backdrop = Pixmap::new(97, 61).expect("a pixmap");
+        backdrop.fill(tiny_skia::Color::from_rgba8(90, 140, 200, 255));
+        let blurred = filtered_backdrop(backdrop.clone(), &[FilterFunction::Blur(20.0)], true);
+        for (a, b) in backdrop.data().iter().zip(blurred.data()) {
+            assert!(a.abs_diff(*b) <= 1, "{a} against {b}");
+        }
+        let mut translucent = checker_backdrop(97, 61);
+        for pixel in translucent.pixels_mut() {
+            *pixel = PremultipliedColorU8::from_rgba(
+                pixel.red() / 2,
+                pixel.green() / 2,
+                pixel.blue() / 2,
+                128,
+            )
+            .expect("premultiplied");
+        }
+        let blurred = filtered_backdrop(translucent, &[FilterFunction::Blur(9.0)], true);
+        assert!(
+            blurred
+                .pixels()
+                .iter()
+                .all(|p| p.red() <= p.alpha() && p.green() <= p.alpha() && p.blue() <= p.alpha())
+        );
     }
 
     #[test]
