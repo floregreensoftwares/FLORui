@@ -58,11 +58,14 @@ mod blur;
 mod glyph_cache;
 mod gradient;
 mod image_source;
+mod incremental;
 mod layer_cache;
 mod material;
 mod rounded;
 mod shadow_cache;
 mod text_shadow;
+
+pub use incremental::{PaintInputs, Repaint, Repainter};
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -1415,31 +1418,11 @@ fn filter_inflation(filters: &[FilterFunction], scale_factor: f32) -> f32 {
         .sum()
 }
 
-/// Every pixel `node`'s own subtree could possibly paint, in absolute,
-/// pre-`node`'s-own-transform coordinates — the union of `node`'s own
-/// border box, each of its own outset `box-shadow` layers (inflated by
-/// their own blur), its own text ink, and each child's own contribution.
-/// A child that itself starts a nested group is mapped through its own
-/// transform (and inflated by its own filter first) before folding into
-/// this union — its pixels land at their own transformed position
-/// *inside* this still-untransformed surface. A child with
-/// [`ComputedStyle::overflow_clips`] narrows what its own children
-/// contribute to its own padding box first, mirroring
-/// [`clip_for_children`]; a child at `opacity <= 0` contributes nothing,
-/// mirroring [`paint_nodes`]'s own skip.
-///
-/// Reshapes text fresh (the same call [`paint_node`] itself makes, since
-/// neither this crate nor `florui_text` caches shaped runs across
-/// calls) — a real, measured cost for a text-bearing animated group,
-/// accepted here rather than falling back to the canvas-sized surface
-/// for every label; see this crate's own paint benchmark for the actual
-/// number.
-///
-/// `None` only when `node` has no entry in `layouts` at all — the same
-/// case every other painting function in this module already treats as
-/// nothing to paint.
+/// Everything `node` paints itself, without its children: its box, the reach of
+/// its outer shadows and the room its text can take, as a rectangle
+/// `(x0, y0, x1, y1)` that holds all of it.
 #[allow(clippy::too_many_arguments)]
-fn subtree_extent(
+fn own_extent(
     arena: &Arena,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
@@ -1522,6 +1505,57 @@ fn subtree_extent(
         max_x = max_x.max(content_x + shaped_width * scale_factor + ink_pad);
         max_y = max_y.max(content_y + shaped_height * scale_factor + ink_pad);
     }
+
+    Some((min_x, min_y, max_x, max_y))
+}
+
+/// Every pixel `node`'s own subtree could possibly paint, in absolute,
+/// pre-`node`'s-own-transform coordinates — the union of `node`'s own
+/// border box, each of its own outset `box-shadow` layers (inflated by
+/// their own blur), its own text ink, and each child's own contribution.
+/// A child that itself starts a nested group is mapped through its own
+/// transform (and inflated by its own filter first) before folding into
+/// this union — its pixels land at their own transformed position
+/// *inside* this still-untransformed surface. A child with
+/// [`ComputedStyle::overflow_clips`] narrows what its own children
+/// contribute to its own padding box first, mirroring
+/// [`clip_for_children`]; a child at `opacity <= 0` contributes nothing,
+/// mirroring [`paint_nodes`]'s own skip.
+///
+/// Reshapes text fresh (the same call [`paint_node`] itself makes, since
+/// neither this crate nor `florui_text` caches shaped runs across
+/// calls) — a real, measured cost for a text-bearing animated group,
+/// accepted here rather than falling back to the canvas-sized surface
+/// for every label; see this crate's own paint benchmark for the actual
+/// number.
+///
+/// `None` only when `node` has no entry in `layouts` at all — the same
+/// case every other painting function in this module already treats as
+/// nothing to paint.
+#[allow(clippy::too_many_arguments)]
+fn subtree_extent(
+    arena: &Arena,
+    styles: &HashMap<NodeId, ComputedStyle>,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    font: &mut Font,
+    node: NodeId,
+    abs_x: f32,
+    abs_y: f32,
+    scale_factor: f32,
+) -> Option<(f32, f32, f32, f32)> {
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = own_extent(
+        arena,
+        styles,
+        layouts,
+        font,
+        node,
+        abs_x,
+        abs_y,
+        scale_factor,
+    )?;
+    let layout = *layouts.get(&node)?;
+    let style = styles.get(&node);
+    let border = scaled_border(style.map_or(NO_BORDER, |s| s.border), scale_factor);
 
     let overflow_clips = style.is_some_and(|s| s.overflow_clips);
     let clip_to_padding = overflow_clips.then(|| {
@@ -3839,19 +3873,25 @@ fn paint_rounded_shadow(
             return;
         };
         // Drawn in a layer the size of the shape, so the mask is that size and
-        // not the buffer's.
-        let (local_x, local_y) = buffer.local(fill.x, fill.y);
-        let x0 = (local_x.floor() as i32 - 1).max(0);
-        let y0 = (local_y.floor() as i32 - 1).max(0);
-        let x1 = ((local_x + fill.width).ceil() as i32 + 1).min(buffer.width() as i32);
-        let y1 = ((local_y + fill.height).ceil() as i32 + 1).min(buffer.height() as i32);
-        if x1 <= x0 || y1 <= y0 {
+        // not the buffer's. Its place and size come from the shape alone, not from
+        // what part of the window is being painted, so the same shape is the same
+        // pixels whichever part it is painted in.
+        let (layer_x, layer_y) = (fill.x.floor() as i32 - 1, fill.y.floor() as i32 - 1);
+        let layer_right = (fill.x + fill.width).ceil() as i32 + 1;
+        let layer_bottom = (fill.y + fill.height).ceil() as i32 + 1;
+        let (width, height) = (
+            (layer_right - layer_x) as u32,
+            (layer_bottom - layer_y) as u32,
+        );
+        let (x0, y0) = (layer_x - buffer.origin.0, layer_y - buffer.origin.1);
+        if layer_right <= buffer.origin.0
+            || layer_bottom <= buffer.origin.1
+            || x0 >= buffer.width() as i32
+            || y0 >= buffer.height() as i32
+        {
             return;
         }
-        let (width, height) = ((x1 - x0) as u32, (y1 - y0) as u32);
-        let Some(mut layer) =
-            Surface::new(width, height, (buffer.origin.0 + x0, buffer.origin.1 + y0))
-        else {
+        let Some(mut layer) = Surface::new(width, height, (layer_x, layer_y)) else {
             return;
         };
         let transform = surface_transform(&layer);
@@ -9331,8 +9371,8 @@ mod tests {
             .map(|(a, b)| a.abs_diff(*b))
             .max()
             .expect("pixels");
-        assert!(
-            worst <= 2,
+        assert_eq!(
+            worst, 0,
             "drawn straight differs from kept by {worst} levels"
         );
         assert_eq!(rgba(&kept, 0, 0)[3], 0, "the corner is cut");
