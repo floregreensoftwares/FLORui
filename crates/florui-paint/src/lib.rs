@@ -3719,24 +3719,33 @@ fn paint_rounded_shadow(
         let Some(path) = fill.path() else {
             return;
         };
-        let transform = surface_transform(buffer);
-        let mask = match exclude.path() {
+        // Drawn in a layer the size of the shape, so the mask is that size and
+        // not the buffer's.
+        let (local_x, local_y) = buffer.local(fill.x, fill.y);
+        let x0 = (local_x.floor() as i32 - 1).max(0);
+        let y0 = (local_y.floor() as i32 - 1).max(0);
+        let x1 = ((local_x + fill.width).ceil() as i32 + 1).min(buffer.width() as i32);
+        let y1 = ((local_y + fill.height).ceil() as i32 + 1).min(buffer.height() as i32);
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let (width, height) = ((x1 - x0) as u32, (y1 - y0) as u32);
+        let Some(mut layer) =
+            Surface::new(width, height, (buffer.origin.0 + x0, buffer.origin.1 + y0))
+        else {
+            return;
+        };
+        let transform = surface_transform(&layer);
+        let Some(mut mask) = Mask::new(width, height) else {
+            return;
+        };
+        match exclude.path() {
             Some(exclude_path) => {
-                let Some(mut mask) = Mask::new(buffer.width(), buffer.height()) else {
-                    return;
-                };
                 mask.fill_path(&exclude_path, FillRule::Winding, true, transform);
                 mask.invert();
-                mask
             }
-            None => {
-                let Some(mut mask) = Mask::new(buffer.width(), buffer.height()) else {
-                    return;
-                };
-                mask.data_mut().fill(255);
-                mask
-            }
-        };
+            None => mask.data_mut().fill(255),
+        }
         let mut paint = Paint::default();
         paint.set_color_rgba8(
             shadow.color.r,
@@ -3745,9 +3754,16 @@ fn paint_rounded_shadow(
             shadow.color.a,
         );
         paint.anti_alias = true;
-        buffer
+        layer
             .pixmap
             .fill_path(&path, &paint, FillRule::Winding, transform, Some(&mask));
+        draw_shifted(
+            &mut buffer.pixmap,
+            &layer.pixmap,
+            (x0, y0),
+            &PixmapPaint::default(),
+            None,
+        );
         return;
     }
 
@@ -7958,6 +7974,80 @@ mod tests {
     }
 
     #[test]
+    fn a_hard_rounded_shadow_is_what_a_window_sized_mask_would_give() {
+        let outline = RoundedRect {
+            x: 30.3,
+            y: 24.6,
+            width: 60.0,
+            height: 44.0,
+            radii: [(10.0, 10.0), (4.0, 4.0), (16.0, 16.0), (0.0, 0.0)],
+        };
+        for inset in [false, true] {
+            let shadow = florui_style::BoxShadow {
+                offset_x: 3.0,
+                offset_y: 5.0,
+                blur_radius: 0.0,
+                spread_radius: if inset { 2.0 } else { 3.0 },
+                color: Rgba {
+                    r: 200,
+                    g: 40,
+                    b: 40,
+                    a: 160,
+                },
+                inset,
+            };
+            let mut near = Surface::new(120, 100, (0, 0)).expect("a surface");
+            paint_rounded_shadow(&mut near, &outline, NO_BORDER, &shadow);
+
+            // The same shadow through a mask as large as the surface.
+            let mut whole = Surface::new(120, 100, (0, 0)).expect("a surface");
+            let (fill, exclude) = if inset {
+                let hole = outline
+                    .inset(0.0, 0.0, 0.0, 0.0)
+                    .inset(2.0, 2.0, 2.0, 2.0)
+                    .translated(3.0, 5.0);
+                (outline, hole)
+            } else {
+                let grown = outline.grown(3.0).translated(3.0, 5.0);
+                (grown, outline)
+            };
+            let transform = surface_transform(&whole);
+            let mut mask = Mask::new(120, 100).expect("a mask");
+            mask.fill_path(
+                &exclude.path().expect("a path"),
+                FillRule::Winding,
+                true,
+                transform,
+            );
+            mask.invert();
+            let mut paint = Paint::default();
+            paint.set_color_rgba8(200, 40, 40, 160);
+            paint.anti_alias = true;
+            whole.pixmap.fill_path(
+                &fill.path().expect("a path"),
+                &paint,
+                FillRule::Winding,
+                transform,
+                Some(&mask),
+            );
+            // Moving the shape into a smaller layer moves where its curved edge
+            // is sampled by a rounding error: a few edge pixels differ a little.
+            let diffs: Vec<u8> = near
+                .pixmap
+                .data()
+                .iter()
+                .zip(whole.pixmap.data())
+                .map(|(a, b)| a.abs_diff(*b))
+                .collect();
+            assert!(diffs.iter().all(|&d| d <= 12), "inset {inset}");
+            assert!(
+                diffs.iter().filter(|&&d| d > 1).count() <= 16,
+                "inset {inset}: only the edge differs"
+            );
+        }
+    }
+
+    #[test]
     fn a_turned_disc_keeps_a_smooth_edge() {
         // A disc turned about its own center is the same disc, so the edge
         // pixels should still be the unturned ones, not the nearest pixel of
@@ -8884,21 +8974,62 @@ mod tests {
     fn a_gradient_painted_again_unchanged_is_not_rendered_again() {
         // Colors and sizes no other test uses, so the cache starts cold for them.
         let css = ".box { background-image: linear-gradient(#123457, #fedcb8); background-size: 33px 21px; }";
-        let before = layer_cache::rendered_on_this_thread();
+        let rendered = || layer_cache::rendered_on_this_thread();
+        let before = rendered();
+        // Painted once, it goes straight onto the frame and is kept nowhere.
         let first = background_box(css, (50, 47.0, 47.0), 1.0);
-        assert_eq!(layer_cache::rendered_on_this_thread() - before, 1);
+        assert_eq!(rendered() - before, 0, "a layer seen once is not kept");
+        // Painted again, it is a layer worth keeping.
         let second = background_box(css, (50, 47.0, 47.0), 1.0);
+        assert_eq!(rendered() - before, 1);
+        let third = background_box(css, (50, 47.0, 47.0), 1.0);
+        assert_eq!(rendered() - before, 1, "the third frame reuses the layer");
         assert_eq!(
-            layer_cache::rendered_on_this_thread() - before,
-            1,
-            "the second frame reuses the layer"
+            first.data(),
+            second.data(),
+            "drawn straight or kept, the same pixels"
         );
-        assert_eq!(first.data(), second.data(), "and paints the same pixels");
-        // Anything that changes the pixels renders again: the color, the scale.
-        background_box(&css.replace("#123457", "#123458"), (50, 47.0, 47.0), 1.0);
-        assert_eq!(layer_cache::rendered_on_this_thread() - before, 2);
+        assert_eq!(second.data(), third.data());
+        // Anything that changes the pixels is a layer of its own: the color, the scale.
+        let other = css.replace("#123457", "#123458");
+        background_box(&other, (50, 47.0, 47.0), 1.0);
+        background_box(&other, (50, 47.0, 47.0), 1.0);
+        assert_eq!(rendered() - before, 2);
         background_box(css, (100, 47.0, 47.0), 2.0);
-        assert_eq!(layer_cache::rendered_on_this_thread() - before, 3);
+        background_box(css, (100, 47.0, 47.0), 2.0);
+        assert_eq!(rendered() - before, 3);
+    }
+
+    #[test]
+    fn a_rounded_layer_is_the_same_drawn_straight_or_kept() {
+        // Colors and sizes no other test uses, so the cache starts cold for them.
+        let css = ".box { border-radius: 9px; background-image: radial-gradient(circle at 30% 20%, #345612, #ab34cd80); background-size: 100% 100%; }";
+        let straight = background_box(css, (60, 47.3, 41.6), 1.0);
+        let kept = background_box(css, (60, 47.3, 41.6), 1.0);
+        let reused = background_box(css, (60, 47.3, 41.6), 1.0);
+        assert_eq!(
+            kept.data(),
+            reused.data(),
+            "a kept layer is put on the same way each time"
+        );
+        let worst = straight
+            .data()
+            .iter()
+            .zip(kept.data())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .expect("pixels");
+        assert!(
+            worst <= 2,
+            "drawn straight differs from kept by {worst} levels"
+        );
+        assert_eq!(rgba(&kept, 0, 0)[3], 0, "the corner is cut");
+        assert!(rgba(&kept, 25, 20)[3] > 0, "and the inside is not");
+        assert_eq!(
+            rgba(&straight, 0, 0)[3],
+            0,
+            "the corner is cut when drawn straight too"
+        );
     }
 
     /// A `data:` URL of a `width x height` PNG, `left` on its left half and
