@@ -201,6 +201,8 @@ pub enum Counter {
     LayersRendered,
     /// Background layers answered from the layer cache.
     LayersReused,
+    /// Background layers drawn straight onto the frame, kept nowhere.
+    LayersDrawnDirect,
     /// Shadow masks blurred because the shadow cache had no copy.
     ShadowMasksBlurred,
     /// Shadow masks answered from the shadow cache.
@@ -208,7 +210,7 @@ pub enum Counter {
 }
 
 impl Counter {
-    pub const ALL: [Counter; 17] = [
+    pub const ALL: [Counter; 18] = [
         Counter::NodesStyled,
         Counter::NodesLaidOut,
         Counter::NodesPainted,
@@ -224,6 +226,7 @@ impl Counter {
         Counter::GlassClamped,
         Counter::LayersRendered,
         Counter::LayersReused,
+        Counter::LayersDrawnDirect,
         Counter::ShadowMasksBlurred,
         Counter::ShadowMasksReused,
     ];
@@ -245,6 +248,7 @@ impl Counter {
             Counter::GlassClamped => "glass-clamped",
             Counter::LayersRendered => "layers-rendered",
             Counter::LayersReused => "layers-reused",
+            Counter::LayersDrawnDirect => "layers-drawn-direct",
             Counter::ShadowMasksBlurred => "shadow-masks-blurred",
             Counter::ShadowMasksReused => "shadow-masks-reused",
         }
