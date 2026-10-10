@@ -2051,28 +2051,31 @@ fn blit_over(
     let (target_width, source_width) = (target.width() as usize, source.width() as usize);
     let count = (x1 - x0) as usize * 4;
     let source_data = source.data();
-    let target_data = target.data_mut();
-    for row in y0..y1 {
-        let from = ((row - y) as usize * source_width + (x0 - x) as usize) * 4;
-        let to = (row as usize * target_width + x0 as usize) * 4;
-        let (src, dst) = (
-            &source_data[from..from + count],
-            &mut target_data[to..to + count],
-        );
-        for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
-            match s[3] {
-                0 => {}
-                255 => d.copy_from_slice(s),
-                alpha => {
-                    let keep = 255 - u32::from(alpha);
-                    for (out, &over) in d.iter_mut().zip(s) {
-                        let mixed = u32::from(over) + (u32::from(*out) * keep + 127) / 255;
-                        *out = mixed.min(255) as u8;
+    let pixels = (x1 - x0) as usize * (y1 - y0) as usize;
+    gradient::for_rows(
+        target.data_mut(),
+        target_width,
+        (y0 as usize, y1 as usize),
+        pixels,
+        |row, line| {
+            let from = ((row as i32 - y) as usize * source_width + (x0 - x) as usize) * 4;
+            let src = &source_data[from..from + count];
+            let dst = &mut line[x0 as usize * 4..x0 as usize * 4 + count];
+            for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+                match s[3] {
+                    0 => {}
+                    255 => d.copy_from_slice(s),
+                    alpha => {
+                        let keep = 255 - u32::from(alpha);
+                        for (out, &over) in d.iter_mut().zip(s) {
+                            let mixed = u32::from(over) + (u32::from(*out) * keep + 127) / 255;
+                            *out = mixed.min(255) as u8;
+                        }
                     }
                 }
             }
-        }
-    }
+        },
+    );
 }
 
 /// The whole-pixel shift that draws the same pixels as `transform` when it
