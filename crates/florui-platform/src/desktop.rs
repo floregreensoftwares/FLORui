@@ -1114,6 +1114,9 @@ struct WindowState {
     /// The last sharp frame, painted over by the next so only what changed is
     /// painted again.
     repainter: florui_paint::Repainter,
+    /// The last frame as the CPU presenter wants it, converted only where it
+    /// changed.
+    cpu_frame: Vec<u32>,
     /// Whether a frame may be painted over the last. Off when `FLORUI_NO_REPAINT`
     /// is set, to tell a picture the repainter got wrong from one that is.
     repaint_over_the_last: bool,
@@ -1485,8 +1488,11 @@ impl WindowState {
         let canvas_color = self.canvas_color;
         let over_the_last = sharp && self.observer.is_none() && self.repaint_over_the_last;
         let own;
+        // What of the frame differs from the one presented last, when that is
+        // known: a frame painted whole may differ everywhere.
+        let mut changed: Option<Vec<(i32, i32, i32, i32)>> = None;
         let canvas: &florui_paint::Canvas = if over_the_last {
-            self.repainter.paint(florui_paint::PaintInputs {
+            self.repainter.repaint(florui_paint::PaintInputs {
                 font,
                 width: size.width,
                 height: size.height,
@@ -1497,7 +1503,9 @@ impl WindowState {
                 scale_factor: scale_factor as f32,
                 text_inputs: Some(&parts.text_inputs),
                 images: Some(&parts.images),
-            })
+            });
+            changed = self.repainter.last_parts().map(<[_]>::to_vec);
+            self.repainter.canvas()
         } else {
             self.repainter.forget();
             let mut canvas = florui_paint::paint_to_buffer_with_desktop_extras(
@@ -1557,7 +1565,9 @@ impl WindowState {
                 // texture format exactly, so the painted bytes go straight
                 // across with no channel swizzle.
                 presenter.resize(width.get(), height.get());
-                if presenter.present(canvas.data()) == crate::gpu::PresentOutcome::Lost {
+                if presenter.present_changed(canvas.data(), changed.as_deref())
+                    == crate::gpu::PresentOutcome::Lost
+                {
                     self.recover_presenter();
                 }
             }
@@ -1578,12 +1588,36 @@ impl WindowState {
                 // all (see `crate::appearance`'s own doc) — the canvas is
                 // always painted fully opaque today regardless, so
                 // dropping alpha here is a no-op, not a lossy conversion.
-                let pixels: Vec<u32> = canvas
-                    .pixels()
-                    .iter()
-                    .map(|p| u32::from_be_bytes([0, p.red(), p.green(), p.blue()]))
-                    .collect();
-                buffer.copy_from_slice(&pixels);
+                // Only what changed is converted; the rest is the last frame's.
+                let (frame_width, frame_height) =
+                    (canvas.width() as usize, canvas.height() as usize);
+                let whole = changed.is_none() || self.cpu_frame.len() != frame_width * frame_height;
+                if whole {
+                    self.cpu_frame.clear();
+                    self.cpu_frame.extend(
+                        canvas
+                            .pixels()
+                            .iter()
+                            .map(|p| u32::from_be_bytes([0, p.red(), p.green(), p.blue()])),
+                    );
+                } else if let Some(rects) = &changed {
+                    let pixels = canvas.pixels();
+                    for &(x0, y0, x1, y1) in rects {
+                        let (x0, y0) = (x0.max(0) as usize, y0.max(0) as usize);
+                        let (x1, y1) = (
+                            (x1.max(0) as usize).min(frame_width),
+                            (y1.max(0) as usize).min(frame_height),
+                        );
+                        for y in y0..y1 {
+                            for x in x0..x1 {
+                                let p = pixels[y * frame_width + x];
+                                self.cpu_frame[y * frame_width + x] =
+                                    u32::from_be_bytes([0, p.red(), p.green(), p.blue()]);
+                            }
+                        }
+                    }
+                }
+                buffer.copy_from_slice(&self.cpu_frame);
                 if let Err(error) = buffer.present() {
                     eprintln!("florui-platform: could not present the frame: {error}");
                 }
@@ -2101,6 +2135,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 resizing_until: None,
                 frame_quality: crate::frame_quality::FrameQuality::default(),
                 repainter: florui_paint::Repainter::new(),
+                cpu_frame: Vec::new(),
                 repaint_over_the_last: std::env::var_os("FLORUI_NO_REPAINT").is_none(),
                 css_path: spec.css_path,
                 applied_css: None,
