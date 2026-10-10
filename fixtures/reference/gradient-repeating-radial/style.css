@@ -1,0 +1,5 @@
+.box {
+    width: 100px;
+    height: 100px;
+    background-image: repeating-radial-gradient(circle at center, #1b1b2f 0, #1b1b2f 8px, #ffd166 8px, #ffd166 16px);
+}

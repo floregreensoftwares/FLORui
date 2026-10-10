@@ -1,0 +1,24 @@
+{
+  "id": "background-size-repeat",
+  "description": "background-size tiles a gradient; repeat, no-repeat, space and round place the tiles.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 150,
+    "height_css_px": 150,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "box",
+    "css": ".box { width: 130px; height: 130px; background-color: #1b1b2f; background-image: linear-gradient(to right, #ff5a5f, #ffd166), linear-gradient(#2ec4b6, #3a86ff), linear-gradient(135deg, #ffffff, #888888), linear-gradient(#ffd166, #ff5a5f); background-size: 30px 20px, 25px 25px, 22px 18px, 17px 11px; background-repeat: no-repeat, space, round, repeat-x; background-position: 5px 5px, 0 0, 0 0, 0 108px; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 12,
+    "channel_tolerance": 2,
+    "reason": "Layers whose tiles do not fall on whole pixels (space and round give fractional sizes and gaps) differ from Chromium along the seams between tiles, by up to 49 levels, 8.5% of the pixels in this deliberately hard layout; the tiles themselves, the no-repeat and the repeat-x layers match, and so does the geometry."
+  }
+}

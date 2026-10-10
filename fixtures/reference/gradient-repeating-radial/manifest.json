@@ -1,0 +1,24 @@
+{
+  "id": "gradient-repeating-radial",
+  "description": "A repeating radial gradient makes rings.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 120,
+    "height_css_px": 120,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "box",
+    "css": ".box { width: 100px; height: 100px; background-image: repeating-radial-gradient(circle at center, #1b1b2f 0, #1b1b2f 8px, #ffd166 8px, #ffd166 16px); }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 0.2,
+    "channel_tolerance": 2,
+    "reason": "Chromium dithers gradients, so a smooth gradient differs from this engine by one level of 255 on a third of its pixels (max error 1, mean about 0.3); channel_tolerance 2 stops that from counting. Measured against desktop Chrome: nothing differs by more than 2 levels, geometry an exact match."
+  }
+}

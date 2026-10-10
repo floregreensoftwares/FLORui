@@ -1,0 +1,8 @@
+.box {
+    width: 100px;
+    height: 80px;
+    border-radius: 12px;
+    background-image: linear-gradient(to right, #ff5a5f, #ffd166), radial-gradient(circle at 50% 50%, #ffffff, #1b1b2f);
+    background-size: 40px 20px, 100% 100%;
+    background-repeat: repeat-x, no-repeat;
+}

@@ -203,6 +203,43 @@ florui compare [--fixture NAME_OR_PATH]... [--chromium PATH] [--out-dir DIR] [--
 
 renders the reference fixtures in Chromium and in Florui and writes, for each, the two images, their difference, overlays and a `report.json` under `target/florui-conformance/<fixture>/` of the project. A fixture is named by its directory under `fixtures/reference` at the workspace root or given as a path; with none named, all are compared in one browser launch. The Chromium is `--chromium`, `FLORUI_CHROMIUM`, or the pinned build from `scripts/fetch-chromium.ps1`. Every result prints where its artifacts are; `--open` opens a failing fixture's folder (or the only fixture's) in the file manager on Windows. The command only reads the fixtures: it never updates an expected result. The exit code is 1 when any fixture differs. `compare-all` records a run history instead.
 
+## Backgrounds
+
+`background-image` takes gradients, several layers of them, over the `background-color`:
+
+```css
+.panel {
+  background-color: #264653;
+  background-image:
+    radial-gradient(circle at 80% 20%, rgba(255, 255, 255, 0.6), transparent 40%),
+    linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.5)),
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.15) 0 6px, transparent 6px 12px);
+  background-size: 100% 100%, 100% 100%, 24px 24px;
+  background-repeat: no-repeat, no-repeat, repeat;
+  background-origin: padding-box;
+  background-clip: border-box;
+}
+```
+
+Covered: `linear-gradient` (angles, `to <side>` and `to <corner>`), `radial-gradient` (circle and ellipse,
+lengths, percentages and the four extent keywords, `at <position>`), `conic-gradient` (`from <angle>`,
+`at <position>`, angle or percentage stops), their `repeating-` forms, color stops with or without
+positions, two-position stops, interpolation hints, `currentcolor` and translucent colors (interpolated
+premultiplied, as CSS says), and `background-size` (lengths, percentages, `auto`, `cover`, `contain`),
+`background-position`, `background-repeat` (`repeat`, `no-repeat`, `space`, `round`), `background-origin`
+and `background-clip` (`border-box`, `padding-box`, `content-box`). A layer is cut to the rounded corners of
+the box it is clipped to, and painted under the inset shadows and the border.
+
+Limits: a color interpolation method other than the default (`in oklab`, `in hsl longer hue`) is read but
+the colors are interpolated in sRGB; `background-clip: text`, `background-attachment`, `background-blend-mode`
+and the `-webkit-` gradient syntax are not supported; `url()` images are not painted yet. A tile that does
+not start on a whole pixel (`space` and `round` give them) has soft edges that differ from Chromium's along
+the seams. Chromium dithers gradients, so a smooth gradient differs from this engine by one level of 255 on
+a third of its pixels; the reference fixtures allow two levels. A gradient is rendered once and reused while
+nothing about it changes, so a still gradient costs a copy per frame; one that changes every frame (an
+animated angle, a moving tile) renders again each time, about 3 ms for a 600 x 400 linear one, 5 ms for a
+radial one and 11 ms for a conic one in a release build.
+
 ## Glass
 
 Glass is built from supported CSS: a translucent `background-color`, a `border`, a `box-shadow` and
