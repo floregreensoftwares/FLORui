@@ -10,10 +10,10 @@ use std::time::Duration;
 pub(crate) const SETTLE: Duration = Duration::from_millis(140);
 
 /// What a frame painted while resizing should cost, in milliseconds.
-const TARGET_MS: f32 = 22.0;
+const TARGET_MS: f32 = 26.0;
 
 /// The fractions of the window's size a frame may be painted at, largest first.
-const STEPS: [f32; 4] = [1.0, 0.75, 0.5, 0.35];
+const STEPS: [f32; 3] = [1.0, 0.75, 0.5];
 
 /// What painting a frame costs at full size, learnt from the frames painted so
 /// far.
@@ -69,7 +69,11 @@ mod tests {
         );
         let mut quality = FrameQuality::default();
         quality.record(1.0, 100.0);
-        assert_eq!(quality.pick(), 0.35, "100 ms wants less than half a side");
+        assert_eq!(
+            quality.pick(),
+            0.5,
+            "100 ms wants less than half a side, and half is the least"
+        );
         let mut quality = FrameQuality::default();
         quality.record(1.0, 50.0);
         assert_eq!(quality.pick(), 0.5);
