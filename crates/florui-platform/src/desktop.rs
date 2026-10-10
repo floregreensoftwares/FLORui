@@ -1111,6 +1111,12 @@ struct WindowState {
     resizing_until: Option<std::time::Instant>,
     /// What a frame costs at full size, to choose how small to paint while resizing.
     frame_quality: crate::frame_quality::FrameQuality,
+    /// The last sharp frame, painted over by the next so only what changed is
+    /// painted again.
+    repainter: florui_paint::Repainter,
+    /// Whether a frame may be painted over the last. Off when `FLORUI_NO_REPAINT`
+    /// is set, to tell a picture the repainter got wrong from one that is.
+    repaint_over_the_last: bool,
     /// Only set for a window built via [`WindowSpec::with_css_reload`] —
     /// [`Self::reload_css`] is a no-op without it.
     css_path: Option<PathBuf>,
@@ -1473,50 +1479,75 @@ impl WindowState {
         let raster_span = florui_profile::span(florui_profile::Phase::Raster);
         let raster_started = std::time::Instant::now();
 
-        let mut canvas = florui_paint::paint_to_buffer_with_desktop_extras(
-            font,
-            paint_width,
-            paint_height,
-            self.canvas_color,
-            arena,
-            styles,
-            &parts.physical_layouts,
-            scale_factor as f32,
-            Some(&parts.text_inputs),
-            Some(&parts.images),
-        );
-        if self.resizing_until.is_some() {
-            self.frame_quality
-                .record(fraction, raster_started.elapsed().as_secs_f32() * 1000.0);
-        }
-        if !sharp && let Some(stretched) = florui_paint::stretched(&canvas, size.width, size.height)
-        {
-            canvas = stretched;
-        }
+        // A sharp frame is painted over the last one, so only what changed is
+        // painted again; a devtools overlay draws on the canvas it is handed, so
+        // it gets a canvas of its own, as does a frame painted small.
+        let canvas_color = self.canvas_color;
+        let over_the_last = sharp && self.observer.is_none() && self.repaint_over_the_last;
+        let own;
+        let canvas: &florui_paint::Canvas = if over_the_last {
+            self.repainter.paint(florui_paint::PaintInputs {
+                font,
+                width: size.width,
+                height: size.height,
+                canvas_color,
+                arena,
+                styles,
+                layouts: &parts.physical_layouts,
+                scale_factor: scale_factor as f32,
+                text_inputs: Some(&parts.text_inputs),
+                images: Some(&parts.images),
+            })
+        } else {
+            self.repainter.forget();
+            let mut canvas = florui_paint::paint_to_buffer_with_desktop_extras(
+                font,
+                paint_width,
+                paint_height,
+                canvas_color,
+                arena,
+                styles,
+                &parts.physical_layouts,
+                scale_factor as f32,
+                Some(&parts.text_inputs),
+                Some(&parts.images),
+            );
+            if self.resizing_until.is_some() {
+                self.frame_quality
+                    .record(fraction, raster_started.elapsed().as_secs_f32() * 1000.0);
+            }
+            if !sharp
+                && let Some(stretched) = florui_paint::stretched(&canvas, size.width, size.height)
+            {
+                canvas = stretched;
+            }
+            if let Some(observer) = self.observer.as_ref().filter(|_| sharp) {
+                let _span = florui_profile::span(florui_profile::Phase::Overlay);
+                let mut observer = observer.borrow_mut();
+                observer.frame(
+                    window.id(),
+                    &crate::host_observer::ObservedFrame {
+                        arena,
+                        styles,
+                        layouts: &parts.physical_layouts,
+                        bounds: &node_bounds,
+                        scale_factor,
+                        focused,
+                    },
+                );
+                observer.paint_overlay(
+                    window.id(),
+                    crate::host_observer::OverlayCanvas {
+                        width: size.width,
+                        height: size.height,
+                        rgba: canvas.data_mut(),
+                    },
+                );
+            }
+            own = canvas;
+            &own
+        };
         drop(raster_span);
-        if let Some(observer) = self.observer.as_ref().filter(|_| sharp) {
-            let _span = florui_profile::span(florui_profile::Phase::Overlay);
-            let mut observer = observer.borrow_mut();
-            observer.frame(
-                window.id(),
-                &crate::host_observer::ObservedFrame {
-                    arena,
-                    styles,
-                    layouts: &parts.physical_layouts,
-                    bounds: &node_bounds,
-                    scale_factor,
-                    focused,
-                },
-            );
-            observer.paint_overlay(
-                window.id(),
-                crate::host_observer::OverlayCanvas {
-                    width: size.width,
-                    height: size.height,
-                    rgba: canvas.data_mut(),
-                },
-            );
-        }
 
         let _present_span = florui_profile::span(florui_profile::Phase::Present);
         match &mut self.presenter {
@@ -2069,6 +2100,8 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 resize_pending: false,
                 resizing_until: None,
                 frame_quality: crate::frame_quality::FrameQuality::default(),
+                repainter: florui_paint::Repainter::new(),
+                repaint_over_the_last: std::env::var_os("FLORUI_NO_REPAINT").is_none(),
                 css_path: spec.css_path,
                 applied_css: None,
                 _css_watcher: css_watcher,
