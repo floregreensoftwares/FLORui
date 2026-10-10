@@ -59,7 +59,7 @@ fn mix(from: [f32; 4], to: [f32; 4], t: f32) -> [f32; 4] {
 /// they sit among, raised or lowered into that span, then each becomes a few
 /// extra stops that follow the curve it describes.
 ///
-/// \`end\` is where an unpositioned last stop goes: the gradient line's length
+/// `end` is where an unpositioned last stop goes: the gradient line's length
 /// in pixels, or one turn.
 fn resolve(items: &[Item], end: f32) -> Vec<Stop> {
     // Stops first: only they take part in the fix-up of positions.
@@ -142,7 +142,7 @@ fn resolve(items: &[Item], end: f32) -> Vec<Stop> {
     out
 }
 
-/// The colors of a gradient from its first stop to its last, \`TABLE_SIZE\`
+/// The colors of a gradient from its first stop to its last, `TABLE_SIZE`
 /// entries of premultiplied RGBA bytes.
 #[derive(Debug, Clone)]
 pub(crate) struct Table {
@@ -151,6 +151,9 @@ pub(crate) struct Table {
     first: f32,
     last: f32,
     repeating: bool,
+    /// `(TABLE_SIZE - 1)` over the span, so a position is one multiply from
+    /// its entry.
+    steps_per_unit: f32,
     /// What a gradient that does not repeat shows before its first stop and
     /// after its last: those stops' own colors, even when a hard stop puts
     /// another color at the very same position.
@@ -195,12 +198,13 @@ impl Table {
             first,
             last,
             repeating,
+            steps_per_unit: (TABLE_SIZE - 1) as f32 / span,
             before: to_bytes(stops.first()?.color),
             after: to_bytes(stops.last()?.color),
         })
     }
 
-    /// The color at \`position\` (in the gradient's unit), padded past the ends
+    /// The color at `position` (in the gradient's unit), padded past the ends
     /// or repeated.
     #[inline]
     fn at(&self, position: f32) -> [u8; 4] {
@@ -212,12 +216,12 @@ impl Table {
                 return self.after;
             }
         }
-        let span = (self.last - self.first).max(1.0e-6);
-        let mut t = (position - self.first) / span;
+        let mut steps = (position - self.first) * self.steps_per_unit;
         if self.repeating {
-            t -= t.floor();
+            let turns = steps / (TABLE_SIZE - 1) as f32;
+            steps = (turns - turns.floor()) * (TABLE_SIZE - 1) as f32;
         }
-        let index = (t.clamp(0.0, 1.0) * (TABLE_SIZE - 1) as f32 + 0.5) as usize;
+        let index = (steps.clamp(0.0, (TABLE_SIZE - 1) as f32) + 0.5) as usize;
         self.entries[index.min(TABLE_SIZE - 1)]
     }
 
@@ -248,7 +252,7 @@ pub(crate) enum Shader {
         table: Table,
         center: (f32, f32),
         /// The ellipse's radii; a circle has them equal. Distances are
-        /// measured in units of \`radius_x\`.
+        /// measured in units of `radius_x`.
         radius_x: f32,
         radius_y: f32,
     },
@@ -288,7 +292,7 @@ fn table_or_solid(stops: &[Stop], repeating: bool) -> Result<Table, [u8; 4]> {
 }
 
 impl Shader {
-    /// A linear gradient painted into a \`width x height\` tile.
+    /// A linear gradient painted into a `width x height` tile.
     pub(crate) fn linear(gradient: &LinearGradient, width: f32, height: f32, scale: f32) -> Self {
         let (sin, cos, direction) = match gradient.direction {
             LinearDirection::Angle(degrees) => {
@@ -323,7 +327,7 @@ impl Shader {
         }
     }
 
-    /// A radial gradient painted into a \`width x height\` tile.
+    /// A radial gradient painted into a `width x height` tile.
     pub(crate) fn radial(gradient: &RadialGradient, width: f32, height: f32, scale: f32) -> Self {
         let center = (
             px(gradient.center.0, width, scale),
@@ -343,7 +347,7 @@ impl Shader {
         }
     }
 
-    /// A conic gradient painted into a \`width x height\` tile.
+    /// A conic gradient painted into a `width x height` tile.
     pub(crate) fn conic(gradient: &ConicGradient, width: f32, height: f32, scale: f32) -> Self {
         let items: Vec<Item> = gradient
             .items
@@ -367,7 +371,53 @@ impl Shader {
         }
     }
 
-    /// The premultiplied color at the center of the pixel at \`(x, y)\` of the tile.
+    /// Writes the colors of the pixels `first..first + out.len()` of row `y` of
+    /// the tile (centers at `x + 0.5`), one after another into `out` as RGBA
+    /// bytes. The same colors `color_at` gives, with the work that does not
+    /// change along a row done once.
+    pub(crate) fn fill_row(&self, out: &mut [u8], first: f32, y: f32) {
+        match self {
+            Self::Solid(color) => {
+                for pixel in out.chunks_exact_mut(4) {
+                    pixel.copy_from_slice(color);
+                }
+            }
+            Self::Linear {
+                table,
+                center,
+                direction,
+                length,
+            } => {
+                let row = (y - center.1) * direction.1 + length / 2.0;
+                let mut along = (first - center.0) * direction.0 + row;
+                for pixel in out.chunks_exact_mut(4) {
+                    pixel.copy_from_slice(&table.at(along));
+                    along += direction.0;
+                }
+            }
+            Self::Radial {
+                table,
+                center,
+                radius_x,
+                radius_y,
+            } => {
+                let dy = (y - center.1) * (radius_x / radius_y);
+                let dy_squared = dy * dy;
+                let mut dx = first - center.0;
+                for pixel in out.chunks_exact_mut(4) {
+                    pixel.copy_from_slice(&table.at((dx * dx + dy_squared).sqrt()));
+                    dx += 1.0;
+                }
+            }
+            Self::Conic { .. } => {
+                for (offset, pixel) in out.chunks_exact_mut(4).enumerate() {
+                    pixel.copy_from_slice(&self.color_at(first + offset as f32, y));
+                }
+            }
+        }
+    }
+
+    /// The premultiplied color at the center of the pixel at `(x, y)` of the tile.
     #[inline]
     pub(crate) fn color_at(&self, x: f32, y: f32) -> [u8; 4] {
         match self {
@@ -405,7 +455,7 @@ impl Shader {
 }
 
 /// The radii of a radial gradient's ending shape in a box of the given size
-/// with the center at \`center\`.
+/// with the center at `center`.
 fn radial_radii(
     size: RadialSize,
     center: (f32, f32),
@@ -464,8 +514,8 @@ fn radial_radii(
     }
 }
 
-/// An ellipse with the proportions of \`radii\` made just large enough to pass
-/// through \`corner\` (measured from the center).
+/// An ellipse with the proportions of `radii` made just large enough to pass
+/// through `corner` (measured from the center).
 fn scaled_through_corner(radii: (f32, f32), corner: (f32, f32)) -> (f32, f32) {
     let (rx, ry) = (radii.0.max(1.0e-3), radii.1.max(1.0e-3));
     let factor = ((corner.0 / rx).powi(2) + (corner.1 / ry).powi(2)).sqrt();
@@ -512,7 +562,37 @@ pub(crate) fn fill(
             continue;
         }
         let local_y = y as f32 + 0.5 - top;
+        // The columns the tile covers wholly: nothing to blend, so the shader
+        // writes them straight into the row.
+        let whole_from = (left.ceil().max(x0 as f32) as usize).min(x1);
+        let whole_to = (right.floor().max(whole_from as f32) as usize).min(x1);
         let row = &mut target[(y * width + x0) * 4..(y * width + x1) * 4];
+        if row_share >= 1.0 && whole_to > whole_from {
+            let (head, rest) = row.split_at_mut((whole_from - x0) * 4);
+            let (middle, tail) = rest.split_at_mut((whole_to - whole_from) * 4);
+            shader.fill_row(middle, whole_from as f32 + 0.5 - left, local_y);
+            blend_edges(head, x0, left, right, row_share, shader, top, local_y);
+            blend_edges(tail, whole_to, left, right, row_share, shader, top, local_y);
+            continue;
+        }
+        blend_edges(row, x0, left, right, row_share, shader, top, local_y);
+    }
+}
+
+/// The pixels of `row` (the first at column `x0`) the tile covers in part or
+/// that its row share thins, blended over what is there.
+#[allow(clippy::too_many_arguments)]
+fn blend_edges(
+    row: &mut [u8],
+    x0: usize,
+    left: f32,
+    right: f32,
+    row_share: f32,
+    shader: &Shader,
+    _top: f32,
+    local_y: f32,
+) {
+    {
         for (offset, pixel) in row.chunks_exact_mut(4).enumerate() {
             let x = x0 + offset;
             let share = row_share * coverage(x, left, right);
@@ -901,6 +981,104 @@ mod tests {
             1.0,
         );
         assert!(from_right.color_at(99.5, 50.6)[0] <= 6);
+    }
+
+    #[test]
+    fn a_row_filled_at_once_has_the_colors_of_its_pixels() {
+        let half = LengthPercentage {
+            length: 0.0,
+            percentage: 0.5,
+        };
+        let ramp = || {
+            vec![
+                GradientItem::Stop {
+                    color: color(10, 40, 200),
+                    position: None,
+                },
+                GradientItem::Stop {
+                    color: color(250, 220, 30),
+                    position: None,
+                },
+            ]
+        };
+        let shaders = [
+            linear(LinearDirection::Angle(33.0), 60.0, 40.0),
+            Shader::linear(
+                &LinearGradient {
+                    direction: LinearDirection::Angle(100.0),
+                    items: vec![
+                        GradientItem::Stop {
+                            color: color(0, 0, 0),
+                            position: Some(LengthPercentage {
+                                length: 0.0,
+                                percentage: 0.1,
+                            }),
+                        },
+                        GradientItem::Stop {
+                            color: color(255, 255, 255),
+                            position: Some(LengthPercentage {
+                                length: 0.0,
+                                percentage: 0.4,
+                            }),
+                        },
+                    ],
+                    repeating: true,
+                },
+                60.0,
+                40.0,
+                1.0,
+            ),
+            Shader::radial(
+                &RadialGradient {
+                    size: RadialSize::Extent {
+                        circle: false,
+                        extent: RadialExtent::FarthestCorner,
+                    },
+                    center: (half, half),
+                    items: ramp(),
+                    repeating: false,
+                },
+                60.0,
+                40.0,
+                1.0,
+            ),
+            Shader::conic(
+                &ConicGradient {
+                    from: 20.0,
+                    center: (half, half),
+                    items: vec![
+                        ConicItem::Stop {
+                            color: color(0, 0, 0),
+                            position: Some(0.0),
+                        },
+                        ConicItem::Stop {
+                            color: color(255, 255, 255),
+                            position: Some(1.0),
+                        },
+                    ],
+                    repeating: false,
+                },
+                60.0,
+                40.0,
+                1.0,
+            ),
+            Shader::Solid([9, 8, 7, 255]),
+        ];
+        for (which, shader) in shaders.iter().enumerate() {
+            for y in [0.5, 17.5, 39.5] {
+                let mut row = vec![0u8; 60 * 4];
+                shader.fill_row(&mut row, 0.5, y);
+                for (x, pixel) in row.chunks_exact(4).enumerate() {
+                    let expected = shader.color_at(x as f32 + 0.5, y);
+                    for (got, want) in pixel.iter().zip(expected) {
+                        assert!(
+                            got.abs_diff(want) <= 2,
+                            "shader {which} at ({x}, {y}): {pixel:?} against {expected:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
