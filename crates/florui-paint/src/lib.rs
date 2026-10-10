@@ -2704,7 +2704,7 @@ fn paint_node(
         // inset shadows sit on top of the background but still behind the
         // border and content. See [`paint_box_shadows`]'s own doc for the
         // painted shape.
-        paint_box_shadows(buffer, &outline, border, box_shadow, false);
+        paint_box_shadows_clipped(buffer, &outline, border, box_shadow, false, clip);
 
         let background = style.map_or(Rgba::TRANSPARENT, |s| s.background_color);
         if background.a != 0 {
@@ -2729,7 +2729,7 @@ fn paint_node(
             );
         }
 
-        paint_box_shadows(buffer, &outline, border, box_shadow, true);
+        paint_box_shadows_clipped(buffer, &outline, border, box_shadow, true, clip);
 
         if rounded {
             paint_rounded_border(buffer, &outline, border, clip);
@@ -3511,6 +3511,78 @@ fn paint_border(
 /// order: the *last*-listed layer paints first, so the first-listed one
 /// ends up on top — real CSS's own layering rule for `box-shadow`'s
 /// comma-separated list.
+/// [`paint_box_shadows`] under an ancestor's clip. A shadow reaches past its box,
+/// so a box that sits half out of a scrolled or `overflow: hidden` ancestor
+/// would paint its shadow over whatever is beyond that clip. When the clip does
+/// not change anything where the shadows land they are painted directly;
+/// otherwise they are painted into a layer just large enough to hold them, and
+/// the layer is composited through the clip.
+fn paint_box_shadows_clipped(
+    buffer: &mut Surface,
+    outline: &RoundedRect,
+    border: florui_style::Edges<florui_style::BorderSide>,
+    shadows: &[florui_style::BoxShadow],
+    inset: bool,
+    clip: Option<&Mask>,
+) {
+    let Some(mask) = clip else {
+        return paint_box_shadows(buffer, outline, border, shadows, inset);
+    };
+    // Where these shadows can land: an inset one stays inside the box, an outer
+    // one is its shape moved, grown by its spread and softened by its blur.
+    let mut reach: Option<(f32, f32, f32, f32)> = None;
+    for shadow in shadows
+        .iter()
+        .filter(|s| s.inset == inset && s.color.a != 0)
+    {
+        let (x0, y0, w, h) = if inset {
+            (outline.x, outline.y, outline.width, outline.height)
+        } else {
+            let (x, y, w, h) =
+                outset_shadow_extent(shadow, outline.x, outline.y, outline.width, outline.height);
+            let soften = blur::kernel_radius(shadow.blur_radius / 2.0) as f32;
+            (x - soften, y - soften, w + 2.0 * soften, h + 2.0 * soften)
+        };
+        reach = Some(match reach {
+            None => (x0, y0, x0 + w, y0 + h),
+            Some((a, b, c, d)) => (a.min(x0), b.min(y0), c.max(x0 + w), d.max(y0 + h)),
+        });
+    }
+    let Some((rx0, ry0, rx1, ry1)) = reach else {
+        return;
+    };
+    let (lx0, ly0) = buffer.local(rx0, ry0);
+    let (lx1, ly1) = buffer.local(rx1, ry1);
+    let x0 = (lx0.floor().max(0.0)) as i32;
+    let y0 = (ly0.floor().max(0.0)) as i32;
+    let x1 = (lx1.ceil() as i32).min(buffer.width() as i32);
+    let y1 = (ly1.ceil() as i32).min(buffer.height() as i32);
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    if buffer
+        .mask_for(Some(mask), (x0 as f32, y0 as f32, x1 as f32, y1 as f32))
+        .is_none()
+    {
+        return paint_box_shadows(buffer, outline, border, shadows, inset);
+    }
+    let Some(mut layer) = Surface::new(
+        (x1 - x0) as u32,
+        (y1 - y0) as u32,
+        (buffer.origin.0 + x0, buffer.origin.1 + y0),
+    ) else {
+        return;
+    };
+    paint_box_shadows(&mut layer, outline, border, shadows, inset);
+    draw_shifted(
+        &mut buffer.pixmap,
+        &layer.pixmap,
+        (x0, y0),
+        &PixmapPaint::default(),
+        Some(mask),
+    );
+}
+
 fn paint_box_shadows(
     buffer: &mut Surface,
     outline: &RoundedRect,
@@ -8799,6 +8871,113 @@ mod tests {
             (120..=135).contains(&r) && (120..=135).contains(&b),
             "half red, half blue: {r} {b}"
         );
+    }
+
+    /// A `.wrap` that clips (`overflow: hidden`), 40 x 20, holding a 40 x 60
+    /// `.inner` painted with `inner_css` and laid out by hand.
+    fn clipped_inner(inner_css: &str, inner_top: f32) -> Canvas {
+        let tree: Element = view! { <div class="wrap"><div class="inner"></div></div> };
+        let css = format!(".wrap {{ overflow: hidden; }} .inner {{ {inner_css} }}");
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(&css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let wrap = arena.roots()[0];
+        let inner = arena.children(wrap)[0];
+        let mut layouts = HashMap::new();
+        layouts.insert(
+            wrap,
+            BoxLayout {
+                x: 0.0,
+                y: 20.0,
+                width: 40.0,
+                height: 20.0,
+            },
+        );
+        layouts.insert(
+            inner,
+            BoxLayout {
+                x: 0.0,
+                y: inner_top,
+                width: 40.0,
+                height: 60.0,
+            },
+        );
+        let mut font = Font::load_embedded();
+        paint_to_buffer(
+            &mut font,
+            40,
+            80,
+            Rgba::TRANSPARENT,
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        )
+    }
+
+    #[test]
+    fn a_box_shadow_is_cut_by_an_overflow_clip_above_it() {
+        // The same hand-laid tree as the layers: the inner box sits where the
+        // clip is only partly over it, with an inset highlight and a drop shadow.
+        for (what, css) in [
+            (
+                "an outer shadow",
+                "background-color: #ff0000; box-shadow: 0 0 0 6px #00ff00;",
+            ),
+            (
+                "a blurred outer shadow",
+                "background-color: #ff0000; box-shadow: 0 0 8px 4px #00ff00;",
+            ),
+            (
+                "an inset shadow",
+                "background-color: #ff0000; box-shadow: inset 0 0 0 6px #00ff00;",
+            ),
+        ] {
+            let page = clipped_inner(css, 10.0);
+            // The clip is rows 20..40 of a 40 x 80 page; nothing may be drawn outside it.
+            for y in (0..20).chain(40..80) {
+                for x in 0..40 {
+                    assert_eq!(
+                        rgba(&page, x, y)[3],
+                        0,
+                        "{what}: ({x}, {y}) is outside the clip"
+                    );
+                }
+            }
+            assert!(
+                (20..40).any(|y| rgba(&page, 20, y)[3] > 0),
+                "{what}: and it shows inside"
+            );
+        }
+    }
+
+    #[test]
+    fn a_background_layer_is_cut_by_an_overflow_clip_above_it() {
+        for (what, css) in [
+            ("a color", "background-color: #ff0000;"),
+            (
+                "a gradient",
+                "background-image: linear-gradient(#ff0000, #ff0000);",
+            ),
+            (
+                "a tiled gradient",
+                "background-image: repeating-linear-gradient(to bottom, #ff0000 0 3px, transparent 3px 6px);",
+            ),
+        ] {
+            // The inner box is laid out 15px above the clip (its parent's own
+            // top is at 20): its top part must not show above the clip.
+            let page = clipped_inner(css, 0.0);
+            assert_eq!(rgba(&page, 20, 5)[3], 0, "{what}: nothing above the clip");
+            assert_eq!(rgba(&page, 20, 50)[3], 0, "{what}: nothing below the clip");
+            let inside = (20..40).any(|y| rgba(&page, 20, y)[3] > 0);
+            assert!(inside, "{what}: but it shows inside the clip");
+        }
     }
 
     #[test]
