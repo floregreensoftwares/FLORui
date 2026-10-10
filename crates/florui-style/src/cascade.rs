@@ -392,6 +392,9 @@ pub enum BoxSizing {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     pub background_color: Rgba,
+    /// `background-image` and the properties that go with it, one entry per
+    /// layer, the first drawn on top.
+    pub background_layers: Vec<crate::background::BackgroundLayer>,
     pub color: Rgba,
     /// `None` means `auto` — or, since real CSS now parses here, any
     /// value this crate can't yet resolve to a concrete pixel length
@@ -650,6 +653,7 @@ impl ComputedStyle {
         let ComputedStyle {
             // Paint only.
             background_color,
+            background_layers,
             color,
             border,
             box_shadow,
@@ -714,6 +718,7 @@ impl ComputedStyle {
             scroll_behavior_smooth: _,
         } = other;
         self.background_color = *background_color;
+        self.background_layers.clone_from(background_layers);
         self.color = *color;
         self.border.top.color = border.top.color;
         self.border.right.color = border.right.color;
@@ -2411,6 +2416,243 @@ mod tests {
         let kids = arena.children(arena.roots()[0]);
         assert!(matches!(computed[&kids[0]].glass, GlassSpec::Material(_)));
         assert_eq!(computed[&kids[1]].glass, GlassSpec::None);
+    }
+
+    fn layers(css: &str) -> Vec<crate::BackgroundLayer> {
+        let tree: Element = view! { <div class="a" /> };
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        computed[&arena.roots()[0]].background_layers.clone()
+    }
+
+    #[test]
+    fn a_linear_gradient_keeps_its_direction_stops_and_hints() {
+        use crate::{BackgroundImage, GradientItem, LinearDirection};
+        let red = Rgba::opaque(255, 0, 0);
+        let blue = Rgba::opaque(0, 0, 255);
+        let only = |css: &str| match layers(css).remove(0).image {
+            BackgroundImage::Linear(gradient) => gradient,
+            other => panic!("not a linear gradient: {other:?}"),
+        };
+
+        let plain = only(".a { background-image: linear-gradient(red, blue); }");
+        assert_eq!(
+            plain.direction,
+            LinearDirection::Angle(180.0),
+            "the default is to bottom"
+        );
+        assert!(!plain.repeating);
+        assert_eq!(
+            plain.items,
+            vec![
+                GradientItem::Stop {
+                    color: red,
+                    position: None
+                },
+                GradientItem::Stop {
+                    color: blue,
+                    position: None
+                },
+            ]
+        );
+
+        assert_eq!(
+            only(".a { background-image: linear-gradient(45deg, red, blue); }").direction,
+            LinearDirection::Angle(45.0)
+        );
+        for (keyword, degrees) in [
+            ("top", 0.0),
+            ("right", 90.0),
+            ("bottom", 180.0),
+            ("left", 270.0),
+        ] {
+            assert_eq!(
+                only(&format!(
+                    ".a {{ background-image: linear-gradient(to {keyword}, red, blue); }}"
+                ))
+                .direction,
+                LinearDirection::Angle(degrees),
+                "to {keyword}"
+            );
+        }
+        assert_eq!(
+            only(".a { background-image: linear-gradient(to bottom right, red, blue); }").direction,
+            LinearDirection::Corner {
+                right: true,
+                bottom: true
+            }
+        );
+        assert_eq!(
+            only(".a { background-image: linear-gradient(to top left, red, blue); }").direction,
+            LinearDirection::Corner {
+                right: false,
+                bottom: false
+            }
+        );
+
+        let positioned = only(
+            ".a { background-image: repeating-linear-gradient(red 10px, 30%, blue calc(50% + 4px)); }",
+        );
+        assert!(positioned.repeating);
+        assert_eq!(
+            positioned.items,
+            vec![
+                GradientItem::Stop {
+                    color: red,
+                    position: Some(lp(10.0, 0.0))
+                },
+                GradientItem::Hint(lp(0.0, 0.3)),
+                GradientItem::Stop {
+                    color: blue,
+                    position: Some(lp(4.0, 0.5))
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_gradient_color_can_be_currentcolor_or_translucent() {
+        use crate::{BackgroundImage, GradientItem};
+        let layer = layers(
+            ".a { color: #102030; background-image: linear-gradient(currentcolor, rgba(255, 0, 0, 0.5)); }",
+        )
+        .remove(0);
+        let BackgroundImage::Linear(gradient) = layer.image else {
+            panic!("linear")
+        };
+        assert_eq!(
+            gradient.items,
+            vec![
+                GradientItem::Stop {
+                    color: Rgba::opaque(0x10, 0x20, 0x30),
+                    position: None
+                },
+                GradientItem::Stop {
+                    color: Rgba {
+                        r: 255,
+                        g: 0,
+                        b: 0,
+                        a: 128
+                    },
+                    position: None
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_radial_gradient_keeps_its_shape_size_and_center() {
+        use crate::{BackgroundImage, RadialExtent, RadialSize};
+        let only = |css: &str| match layers(css).remove(0).image {
+            BackgroundImage::Radial(gradient) => gradient,
+            other => panic!("not a radial gradient: {other:?}"),
+        };
+        let default = only(".a { background-image: radial-gradient(red, blue); }");
+        assert_eq!(
+            default.size,
+            RadialSize::Extent {
+                circle: false,
+                extent: RadialExtent::FarthestCorner
+            }
+        );
+        assert_eq!(default.center, (lp(0.0, 0.5), lp(0.0, 0.5)));
+
+        let circle =
+            only(".a { background-image: radial-gradient(circle 40px at 10px 25%, red, blue); }");
+        assert_eq!(circle.size, RadialSize::Circle(40.0));
+        assert_eq!(circle.center, (lp(10.0, 0.0), lp(0.0, 0.25)));
+
+        let ellipse = only(".a { background-image: radial-gradient(30px 50%, red, blue); }");
+        assert_eq!(
+            ellipse.size,
+            RadialSize::Ellipse(lp(30.0, 0.0), lp(0.0, 0.5))
+        );
+
+        let extent = only(
+            ".a { background-image: repeating-radial-gradient(circle closest-side at right bottom, red, blue); }",
+        );
+        assert_eq!(
+            extent.size,
+            RadialSize::Extent {
+                circle: true,
+                extent: RadialExtent::ClosestSide
+            }
+        );
+        assert_eq!(extent.center, (lp(0.0, 1.0), lp(0.0, 1.0)));
+        assert!(extent.repeating);
+    }
+
+    #[test]
+    fn a_conic_gradient_keeps_its_start_center_and_stops_in_turns() {
+        use crate::{BackgroundImage, ConicItem};
+        let BackgroundImage::Conic(gradient) = layers(
+            ".a { background-image: conic-gradient(from 90deg at 20% 30%, red 0deg, 25%, blue 180deg, green); }",
+        )
+        .remove(0)
+        .image
+        else {
+            panic!("conic")
+        };
+        assert_eq!(gradient.from, 90.0);
+        assert_eq!(gradient.center, (lp(0.0, 0.2), lp(0.0, 0.3)));
+        assert_eq!(
+            gradient.items,
+            vec![
+                ConicItem::Stop {
+                    color: Rgba::opaque(255, 0, 0),
+                    position: Some(0.0)
+                },
+                ConicItem::Hint(0.25),
+                ConicItem::Stop {
+                    color: Rgba::opaque(0, 0, 255),
+                    position: Some(0.5)
+                },
+                ConicItem::Stop {
+                    color: Rgba::opaque(0, 128, 0),
+                    position: None
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn background_layers_take_their_properties_in_turn() {
+        use crate::{BackgroundBox, BackgroundRepeat, BackgroundSize};
+        let all = layers(
+            ".a { background-image: linear-gradient(red, blue), none, radial-gradient(red, blue), linear-gradient(red, blue);              background-size: 20px 30px, cover;              background-position: 10px 5px, right bottom;              background-repeat: no-repeat, repeat-x, space round;              background-origin: content-box;              background-clip: padding-box, border-box; }",
+        );
+        // `none` makes no layer but keeps its place in the cycle.
+        assert_eq!(all.len(), 3);
+        assert_eq!(
+            all[0].size,
+            BackgroundSize::Explicit(Some(lp(20.0, 0.0)), Some(lp(30.0, 0.0)))
+        );
+        assert_eq!(all[0].position, (lp(10.0, 0.0), lp(5.0, 0.0)));
+        assert_eq!(
+            all[0].repeat,
+            (BackgroundRepeat::NoRepeat, BackgroundRepeat::NoRepeat)
+        );
+        assert_eq!(all[0].clip, BackgroundBox::Padding);
+        // The third image is index 2: its size is the first again, its repeat
+        // is the third (`space round`), its clip the first.
+        assert_eq!(
+            all[1].size,
+            BackgroundSize::Explicit(Some(lp(20.0, 0.0)), Some(lp(30.0, 0.0)))
+        );
+        assert_eq!(
+            all[1].repeat,
+            (BackgroundRepeat::Space, BackgroundRepeat::Round)
+        );
+        assert_eq!(all[1].origin, BackgroundBox::Content);
+        // The fourth is index 3: second size and position, first repeat, second clip.
+        assert_eq!(all[2].size, BackgroundSize::Cover);
+        assert_eq!(all[2].position, (lp(0.0, 1.0), lp(0.0, 1.0)));
+        assert_eq!(all[2].clip, BackgroundBox::Border);
+    }
+
+    #[test]
+    fn a_node_without_a_background_image_has_no_layers() {
+        assert!(layers(".a { background-color: red; }").is_empty());
+        assert!(layers(".a { background-image: none; }").is_empty());
     }
 
     #[test]
