@@ -14,7 +14,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use florui_layout::BoxLayout;
-use florui_style::{Arena, ComputedStyle, NodeId, Rgba};
+use florui_style::{ComputedStyle, NodeId, Rgba, Tree};
 use florui_text::Font;
 
 use super::material::Params;
@@ -32,7 +32,7 @@ pub struct PaintInputs<'a> {
     pub width: u32,
     pub height: u32,
     pub canvas_color: Rgba,
-    pub arena: &'a Arena,
+    pub arena: &'a Tree,
     pub styles: &'a HashMap<NodeId, ComputedStyle>,
     /// In painted pixels.
     pub layouts: &'a HashMap<NodeId, BoxLayout>,
@@ -416,7 +416,7 @@ fn contains(outer: Area, inner: Area) -> bool {
 /// Writes a note for every box of the tree.
 fn take_notes(
     font: &mut Font,
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
@@ -463,7 +463,7 @@ fn take_notes(
 /// What `top` and everything under it paint, once it is moved or filtered.
 fn group_extent(
     font: &mut Font,
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     top: NodeId,
@@ -487,7 +487,7 @@ fn group_extent(
 /// under a box that is moved or filtered is inked where that box puts it.
 pub(crate) fn node_inks(
     font: &mut Font,
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
@@ -522,7 +522,7 @@ pub(crate) fn node_inks(
 }
 
 /// What the tree says about `id`, as a number.
-fn shape_of(arena: &Arena, id: NodeId) -> u64 {
+fn shape_of(arena: &Tree, id: NodeId) -> u64 {
     let mut hasher = DefaultHasher::new();
     arena.tag(id).hash(&mut hasher);
     arena.classes(id).hash(&mut hasher);
@@ -549,7 +549,7 @@ fn repaint_part(
     (x0, y0, x1, y1): (i32, i32, i32, i32),
     font: &mut Font,
     canvas_color: Rgba,
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,

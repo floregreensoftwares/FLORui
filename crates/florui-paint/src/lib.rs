@@ -89,10 +89,12 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use florui_layout::{BoxLayout, absolute_position};
+#[cfg(test)]
+use florui_style::Arena;
 use florui_style::{
-    Arena, ComputedStyle, ContentAlignment, Display, FilterFunction, FlexDirection, GlassMaterial,
+    ComputedStyle, ContentAlignment, Display, FilterFunction, FlexDirection, GlassMaterial,
     GlassSpec, ItemAlignment, LengthPercentage, NodeId, ObjectFit, Position, Rgba, RoundedRect,
-    TextAlign,
+    TextAlign, Tree,
 };
 use florui_text::Font;
 use rounded::RoundedRectPath;
@@ -127,7 +129,7 @@ const CONTROL_ICON_INSET: f32 = 4.0;
 /// type="checkbox">`. Shared by [`crate::desktop`]'s own registration
 /// query (`crate::platform`, not this crate) and this crate's own paint
 /// branch, so both agree on exactly which nodes this applies to.
-fn is_control_icon_node(arena: &Arena, node: NodeId) -> bool {
+fn is_control_icon_node(arena: &Tree, node: NodeId) -> bool {
     arena.tag(node) == "select"
         || (arena.tag(node) == "input"
             && arena.input_type(node) == Some("checkbox")
@@ -144,7 +146,7 @@ fn is_control_icon_node(arena: &Arena, node: NodeId) -> bool {
 /// replaced element's own content), so this is a fixed formula, not a
 /// resolved CSS property.
 fn control_icon_rect(
-    arena: &Arena,
+    arena: &Tree,
     node: NodeId,
     content_width: f32,
     content_height: f32,
@@ -401,7 +403,7 @@ pub fn paint_to_png(
     width: u32,
     height: u32,
     canvas: Rgba,
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
@@ -501,7 +503,7 @@ pub fn paint_to_buffer(
     width: u32,
     height: u32,
     canvas: Rgba,
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
@@ -533,7 +535,7 @@ pub fn paint_to_buffer_with_desktop_extras(
     width: u32,
     height: u32,
     canvas: Rgba,
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
@@ -642,7 +644,7 @@ pub fn paint_to_buffer_banded(
     width: u32,
     height: u32,
     canvas: Rgba,
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
@@ -712,7 +714,7 @@ pub fn paint_to_buffer_banded(
 #[allow(clippy::too_many_arguments)]
 fn paint_nodes(
     buffer: &mut Surface,
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     font: &mut Font,
@@ -875,7 +877,7 @@ thread_local! {
 /// skipped; their extent is not known without more work than painting them.
 #[allow(clippy::too_many_arguments)]
 fn ink_is_outside_clip(
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     font: &mut Font,
@@ -1023,7 +1025,7 @@ fn padding_box_mask(
 /// and far more visible case (clipping other elements, e.g. an image
 /// container) works correctly today.
 fn clip_for_children(
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     node: NodeId,
@@ -1499,7 +1501,7 @@ fn filter_inflation(filters: &[FilterFunction], scale_factor: f32) -> f32 {
 /// `(x0, y0, x1, y1)` that holds all of it.
 #[allow(clippy::too_many_arguments)]
 fn own_extent(
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     font: &mut Font,
@@ -1610,7 +1612,7 @@ fn own_extent(
 /// nothing to paint.
 #[allow(clippy::too_many_arguments)]
 fn subtree_extent(
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     font: &mut Font,
@@ -1795,7 +1797,7 @@ struct TargetRegion {
 /// `target`-sized one regardless of which this returns.
 #[allow(clippy::too_many_arguments)]
 fn group_extent(
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     font: &mut Font,
@@ -1921,7 +1923,7 @@ fn group_extent(
 #[allow(clippy::too_many_arguments)]
 fn paint_group(
     buffer: &mut Surface,
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     font: &mut Font,
@@ -2886,7 +2888,7 @@ pub fn paint_order(
 #[allow(clippy::too_many_arguments)]
 fn paint_node(
     buffer: &mut Surface,
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     font: &mut Font,
@@ -3443,7 +3445,7 @@ fn text_offset(
 fn paint_node_text(
     buffer: &mut Surface,
     font: &mut Font,
-    arena: &Arena,
+    arena: &Tree,
     node: NodeId,
     style: Option<&ComputedStyle>,
     color: Rgba,
