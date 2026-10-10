@@ -87,6 +87,13 @@ fn depth_of(phase: Phase) -> u8 {
         | Phase::Layout
         | Phase::PostLayout
         | Phase::Observers
+        | Phase::RasterBackdrop
+        | Phase::RasterShadows
+        | Phase::RasterFill
+        | Phase::RasterLayers
+        | Phase::RasterBorders
+        | Phase::RasterContent
+        | Phase::RasterComposite
         | Phase::Upload
         | Phase::Acquire
         | Phase::Submit

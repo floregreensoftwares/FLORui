@@ -1781,6 +1781,7 @@ fn paint_group(
         images,
     );
 
+    let _composite_span = florui_profile::span(florui_profile::Phase::RasterComposite);
     let filter = styles.get(&node).map_or(&[][..], |s| &s.filter[..]);
     apply_filters(&mut group.pixmap, &scaled_filters(filter, scale_factor));
 
@@ -2692,15 +2693,18 @@ fn paint_node(
                 _ => None,
             });
         let fast_blur = style.is_some_and(|s| s.backdrop_blur == florui_style::BackdropBlur::Fast);
-        apply_backdrop_filter(
-            buffer,
-            &outline,
-            backdrop_filter,
-            glass,
-            scale_factor,
-            clip,
-            fast_blur,
-        );
+        {
+            let _span = florui_profile::span(florui_profile::Phase::RasterBackdrop);
+            apply_backdrop_filter(
+                buffer,
+                &outline,
+                backdrop_filter,
+                glass,
+                scale_factor,
+                clip,
+                fast_blur,
+            );
+        }
 
         let border = style.map_or(NO_BORDER, |s| s.border);
         let box_shadow: &[florui_style::BoxShadow] = style.map_or(&[][..], |s| &s.box_shadow[..]);
@@ -2711,10 +2715,14 @@ fn paint_node(
         // inset shadows sit on top of the background but still behind the
         // border and content. See [`paint_box_shadows`]'s own doc for the
         // painted shape.
-        paint_box_shadows_clipped(buffer, &outline, border, box_shadow, false, clip);
+        {
+            let _span = florui_profile::span(florui_profile::Phase::RasterShadows);
+            paint_box_shadows_clipped(buffer, &outline, border, box_shadow, false, clip);
+        }
 
         let background = style.map_or(Rgba::TRANSPARENT, |s| s.background_color);
         if background.a != 0 {
+            let _span = florui_profile::span(florui_profile::Phase::RasterFill);
             if rounded {
                 fill_rounded_rect(buffer, &outline, background, clip);
             } else {
@@ -2725,6 +2733,7 @@ fn paint_node(
         if let Some(style) = style
             && !style.background_layers.is_empty()
         {
+            let _span = florui_profile::span(florui_profile::Phase::RasterLayers);
             background::paint_layers(
                 buffer,
                 &outline,
@@ -2736,16 +2745,25 @@ fn paint_node(
             );
         }
 
-        paint_box_shadows_clipped(buffer, &outline, border, box_shadow, true, clip);
+        {
+            let _span = florui_profile::span(florui_profile::Phase::RasterShadows);
+            paint_box_shadows_clipped(buffer, &outline, border, box_shadow, true, clip);
+        }
 
-        if rounded {
-            paint_rounded_border(buffer, &outline, border, clip);
-        } else {
-            paint_border(buffer, x, y, layout.width, layout.height, border, clip);
-        };
+        {
+            let _span = florui_profile::span(florui_profile::Phase::RasterBorders);
+            if rounded {
+                paint_rounded_border(buffer, &outline, border, clip);
+            } else {
+                paint_border(buffer, x, y, layout.width, layout.height, border, clip);
+            };
+        }
         if let Some(material) = glass {
+            let _span = florui_profile::span(florui_profile::Phase::RasterBackdrop);
             paint_glass_rim(buffer, &outline, material, scale_factor, clip);
         }
+
+        let _content_span = florui_profile::span(florui_profile::Phase::RasterContent);
 
         let color = style.map_or(Rgba::opaque(0, 0, 0), |s| s.color);
         let no_padding = florui_style::Edges {

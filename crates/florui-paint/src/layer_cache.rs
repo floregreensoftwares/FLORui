@@ -103,8 +103,10 @@ pub(crate) fn get_or_render(
     render: impl FnOnce() -> Option<Pixmap>,
 ) -> Option<Rc<Pixmap>> {
     if let Some(hit) = CACHE.with(|cache| cache.borrow_mut().get(&key)) {
+        florui_profile::count(florui_profile::Counter::LayersReused, 1);
         return Some(hit);
     }
+    florui_profile::count(florui_profile::Counter::LayersRendered, 1);
     let pixels = render()?;
     Some(CACHE.with(|cache| cache.borrow_mut().insert(key, pixels)))
 }
