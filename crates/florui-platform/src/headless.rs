@@ -672,6 +672,126 @@ mod tests {
         );
     }
 
+    /// A button whose face is a sized child (a knob's cap, a switch's thumb):
+    /// the child covers the middle of the button.
+    fn button_with_a_face() -> Element {
+        let count = use_signal(|| 0);
+        let clicked = count.clone();
+        view! {
+            <div class="page">
+                <button class="face" onclick={move || clicked.set(clicked.get() + 1)}>
+                    <span class="cap"></span>
+                    <span class="pad"></span>
+                </button>
+                <p class="count">{count.get().to_string()}</p>
+            </div>
+        }
+    }
+
+    const FACE_CSS: &str = ".page { display: flex; flex-direction: column; } \
+        .face { display: block; width: 80px; height: 80px; padding: 0; } \
+        .cap { display: block; width: 50px; height: 50px; margin: 6px; } \
+        .pad { display: block; width: 60px; height: 14px; }";
+
+    fn face_window(root: fn() -> Element) -> HeadlessWindow {
+        HeadlessWindow::new(
+            FACE_CSS,
+            root,
+            HeadlessOptions {
+                width: 300.0,
+                height: 300.0,
+                ..HeadlessOptions::default()
+            },
+        )
+        .expect("the stylesheet parses")
+    }
+
+    fn with_class(window: &HeadlessWindow, class: &str) -> NodeId {
+        let (arena, ..) = window.runtime().geometry();
+        arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == class))
+            .unwrap_or_else(|| panic!("no .{class}"))
+    }
+
+    #[test]
+    fn a_click_on_what_is_inside_a_button_reaches_the_button() {
+        let mut window = face_window(button_with_a_face);
+        let cap = with_class(&window, "cap");
+        let (x, y) = center(&mut window, cap);
+        window.click_at(x, y);
+        window.settle();
+        assert_eq!(
+            text_of(&window, "count"),
+            "1",
+            "the click landed on the cap"
+        );
+        let pad = with_class(&window, "pad");
+        let (x, y) = center(&mut window, pad);
+        window.click_at(x, y);
+        window.settle();
+        assert_eq!(text_of(&window, "count"), "2", "and on the pad under it");
+    }
+
+    #[test]
+    fn a_press_and_release_on_different_parts_of_one_button_is_a_click() {
+        let mut window = face_window(button_with_a_face);
+        let cap = with_class(&window, "cap");
+        let (cap_x, cap_y) = center(&mut window, cap);
+        let pad = with_class(&window, "pad");
+        let (pad_x, pad_y) = center(&mut window, pad);
+        window.pointer_move(cap_x, cap_y);
+        window.pointer_press();
+        window.pointer_move(pad_x, pad_y);
+        window.pointer_release();
+        window.settle();
+        assert_eq!(text_of(&window, "count"), "1");
+    }
+
+    #[test]
+    fn a_click_inside_a_disabled_button_does_nothing() {
+        fn disabled_face() -> Element {
+            let count = use_signal(|| 0);
+            let clicked = count.clone();
+            view! {
+                <div class="page">
+                    <button class="face" disabled={true} onclick={move || clicked.set(clicked.get() + 1)}>
+                        <span class="cap"></span>
+                    </button>
+                    <p class="count">{count.get().to_string()}</p>
+                </div>
+            }
+        }
+        let mut window = face_window(disabled_face);
+        let cap = with_class(&window, "cap");
+        let (x, y) = center(&mut window, cap);
+        window.click_at(x, y);
+        window.settle();
+        assert_eq!(text_of(&window, "count"), "0");
+    }
+
+    #[test]
+    fn a_click_on_a_child_with_a_handler_of_its_own_goes_to_that_child() {
+        fn nested() -> Element {
+            let outer = use_signal(|| 0);
+            let inner = use_signal(|| 0);
+            let (o, i) = (outer.clone(), inner.clone());
+            view! {
+                <div class="page">
+                    <button class="face" onclick={move || o.set(o.get() + 1)}>
+                        <span class="cap" onclick={move || i.set(i.get() + 1)}></span>
+                    </button>
+                    <p class="count">{format!("{}-{}", outer.get(), inner.get())}</p>
+                </div>
+            }
+        }
+        let mut window = face_window(nested);
+        let cap = with_class(&window, "cap");
+        let (x, y) = center(&mut window, cap);
+        window.click_at(x, y);
+        window.settle();
+        assert_eq!(text_of(&window, "count"), "0-1");
+    }
+
     fn click_the_button_and_paint() -> HeadlessFrame {
         let mut window = window(counter);
         let button = first(&window, "button");
