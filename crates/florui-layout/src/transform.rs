@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use florui_style::{Arena, ComputedStyle, NodeId, TransformFunction};
+use florui_style::{ComputedStyle, NodeId, TransformFunction, Tree};
 
 use crate::{BoxLayout, absolute_position};
 
@@ -146,7 +146,7 @@ pub fn resolve_transform(
 /// same place painting puts it and hit testing finds it. `layouts` and
 /// `scale_factor` are the caller's pixels (logical layouts with `1.0`).
 pub fn screen_bounds(
-    arena: &Arena,
+    arena: &Tree,
     layouts: &HashMap<NodeId, BoxLayout>,
     styles: &HashMap<NodeId, ComputedStyle>,
     scale_factor: f32,
