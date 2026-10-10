@@ -541,6 +541,77 @@ pub fn paint_to_buffer_with_desktop_extras(
     surface.pixmap
 }
 
+/// `canvas` stretched to `width x height`, sampled smoothly: a frame painted
+/// small to be shown large. Bilinear: a row of the source is blended across once
+/// and then down, two channels at a time, in whole numbers.
+pub fn stretched(canvas: &Canvas, width: u32, height: u32) -> Option<Canvas> {
+    /// `a` and `b` (four channels each) mixed, `weight` out of 256 of `b`.
+    #[inline]
+    fn blend(a: u32, b: u32, weight: u32) -> u32 {
+        const LANES: u32 = 0x00FF_00FF;
+        let mix = |a: u32, b: u32| ((a * (256 - weight) + b * weight) >> 8) & LANES;
+        mix(a & LANES, b & LANES) | (mix((a >> 8) & LANES, (b >> 8) & LANES) << 8)
+    }
+
+    let mut stretched = Pixmap::new(width, height)?;
+    let (source_width, source_height) = (canvas.width() as usize, canvas.height() as usize);
+    let (width, height) = (width as usize, height as usize);
+    // For each column of the result, the two source columns it blends and the
+    // weight of the second.
+    let columns: Vec<(usize, usize, u32)> = (0..width)
+        .map(|x| {
+            let at = ((x as f32 + 0.5) * source_width as f32 / width as f32 - 0.5).max(0.0);
+            let first = (at.floor() as usize).min(source_width - 1);
+            let second = (first + 1).min(source_width - 1);
+            (first, second, ((at - first as f32) * 256.0) as u32)
+        })
+        .collect();
+    let packed: Vec<u32> = canvas
+        .data()
+        .chunks_exact(4)
+        .map(|pixel| u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]))
+        .collect();
+    // A source row blended across to the result's width, kept for the rows
+    // below that need it again.
+    let across = |row: usize, out: &mut Vec<u32>| {
+        out.clear();
+        let line = &packed[row * source_width..(row + 1) * source_width];
+        out.extend(
+            columns
+                .iter()
+                .map(|&(first, second, weight)| blend(line[first], line[second], weight)),
+        );
+    };
+    let mut upper = Vec::with_capacity(width);
+    let mut lower = Vec::with_capacity(width);
+    let (mut upper_row, mut lower_row) = (usize::MAX, usize::MAX);
+    let out = stretched.data_mut();
+    for y in 0..height {
+        let at = ((y as f32 + 0.5) * source_height as f32 / height as f32 - 0.5).max(0.0);
+        let first = (at.floor() as usize).min(source_height - 1);
+        let second = (first + 1).min(source_height - 1);
+        let weight = ((at - first as f32) * 256.0) as u32;
+        if upper_row != first {
+            if lower_row == first {
+                std::mem::swap(&mut upper, &mut lower);
+                lower_row = upper_row;
+            } else {
+                across(first, &mut upper);
+            }
+            upper_row = first;
+        }
+        if lower_row != second {
+            across(second, &mut lower);
+            lower_row = second;
+        }
+        let line = &mut out[y * width * 4..(y + 1) * width * 4];
+        for ((pixel, &a), &b) in line.chunks_exact_mut(4).zip(&upper).zip(&lower) {
+            pixel.copy_from_slice(&blend(a, b, weight).to_le_bytes());
+        }
+    }
+    Some(stretched)
+}
+
 /// Paints `nodes` (a set of siblings — document roots when
 /// `parent_display` is `None`, one node's own children otherwise) and
 /// their descendants onto `buffer`, in real paint order (see
@@ -8045,6 +8116,41 @@ mod tests {
                 "inset {inset}: only the edge differs"
             );
         }
+    }
+
+    #[test]
+    fn a_small_frame_stretches_to_the_size_asked() {
+        let mut small = Pixmap::new(4, 3).expect("a pixmap");
+        small.fill(tiny_skia::Color::from_rgba8(200, 100, 50, 255));
+        let big = stretched(&small, 10, 7).expect("a pixmap");
+        assert_eq!((big.width(), big.height()), (10, 7));
+        for pixel in big.pixels() {
+            assert_eq!(
+                (pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()),
+                (200, 100, 50, 255),
+                "a flat frame stays flat, edges included"
+            );
+        }
+        assert!(stretched(&small, 0, 7).is_none());
+    }
+
+    #[test]
+    fn a_small_frame_is_blended_between_its_pixels_when_stretched() {
+        let mut small = Pixmap::new(2, 1).expect("a pixmap");
+        small.data_mut()[..4].copy_from_slice(&[0, 0, 0, 255]);
+        small.data_mut()[4..].copy_from_slice(&[200, 200, 200, 255]);
+        let wide = stretched(&small, 8, 3).expect("a pixmap");
+        let reds: Vec<u8> = (0..8)
+            .map(|x| wide.pixel(x, 1).expect("inside").red())
+            .collect();
+        assert!(reds.windows(2).all(|pair| pair[0] <= pair[1]), "{reds:?}");
+        assert_eq!(reds[0], 0, "the left edge is the left pixel");
+        assert_eq!(reds[7], 200, "the right edge is the right pixel");
+        assert!(reds[3] > 0 && reds[3] < 200, "the middle is both: {reds:?}");
+        let rows: Vec<u8> = (0..3)
+            .map(|y| wide.pixel(4, y).expect("inside").red())
+            .collect();
+        assert_eq!(rows[0], rows[2], "rows of a one row frame are alike");
     }
 
     #[test]

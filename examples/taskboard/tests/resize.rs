@@ -16,10 +16,17 @@ const SCREENS: [(&str, &str); 3] = [
     ("settings", "nav-settings"),
 ];
 
+/// The window is mounted at `TASKBOARD_DPR` (1 when unset): a frame painted at a
+/// fraction of the window's size, as while it is dragged, has that scale.
 fn mounted() -> Mounted {
+    let dpr = std::env::var("TASKBOARD_DPR")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1.0);
     Harness::new(|| App(AppProps {}))
         .css(&taskboard::stylesheet())
         .viewport(1180.0, 760.0)
+        .dpr(dpr)
         .mount()
 }
 
@@ -33,7 +40,8 @@ const PARTS: [Phase; 7] = [
     Phase::RasterComposite,
 ];
 
-const CACHES: [Counter; 4] = [
+const CACHES: [Counter; 5] = [
+    Counter::LayersDrawnDirect,
     Counter::LayersRendered,
     Counter::LayersReused,
     Counter::ShadowMasksBlurred,
