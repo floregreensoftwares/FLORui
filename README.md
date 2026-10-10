@@ -266,6 +266,25 @@ no `image-set()`, no `http` addresses), and a relative path is read against the 
 packaged application does not share with a development checkout, so ship textures as `data:` URLs or as
 files the application places itself.
 
+## Text shadows
+
+`text-shadow` paints the glyphs again behind the text, in the shadow's color, moved by its offsets and blurred:
+
+```css
+.engraved {
+  color: #8a7a5c;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.7), 0 -1px 0 rgba(0, 0, 0, 0.45);
+}
+```
+
+Several layers are allowed, the first on top, and the property inherits. Offsets and blur are CSS pixels and
+scale with the display; the blur radius is twice the Gaussian's standard deviation, as for `box-shadow`, and
+a blurred shadow with the text itself transparent matches Chromium to within 18 levels of 255. `currentcolor`
+is the element's own color. Limits: a shadow is drawn again each frame (a text with a very large blur on a
+very large area, over 16 million pixels, is not painted), and `text-shadow` on the text of a form field is
+painted for an `<input>`'s typed text but not for its placeholder. The text of a glyph at the edge differs
+from Chromium's by the difference between the two rasterizers, as every text fixture does.
+
 ## Glass
 
 Glass is built from supported CSS: a translucent `background-color`, a `border`, a `box-shadow` and
