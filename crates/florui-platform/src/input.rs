@@ -878,7 +878,10 @@ impl<H: InputHost> Input<'_, H> {
         // mouse click from focusing a disabled button, which gating
         // `dispatch_click` alone can't (that only stops the click's own
         // handler from firing).
-        self.state.pressed = hit.filter(|&node| !self.is_disabled(node));
+        // A press on what is inside a control presses the control.
+        self.state.pressed = hit
+            .map(|node| self.runtime.click_target(node))
+            .filter(|&node| !self.is_disabled(node));
     }
 
     /// A real right-button press on [`crate::WINDOW_DRAG_REGION_ID`] opens
@@ -1088,7 +1091,10 @@ impl<H: InputHost> Input<'_, H> {
         }
         let (x, y) = self.to_logical_cursor(self.state.last_cursor.0, self.state.last_cursor.1);
         let pressed = self.state.pressed.take();
-        let released_over = self.runtime.hit_test(x, y);
+        let released_over = self
+            .runtime
+            .hit_test(x, y)
+            .map(|node| self.runtime.click_target(node));
         if let (Some(pressed), Some(released_over)) = (pressed, released_over)
             && pressed == released_over
         {

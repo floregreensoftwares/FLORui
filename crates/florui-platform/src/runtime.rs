@@ -1481,6 +1481,29 @@ impl UiRuntime {
         self.rebuild_interaction();
     }
 
+    /// Where a click that lands on `node` is handled: `node` itself when it is
+    /// interactive (a control, or anything with a click handler of its own),
+    /// otherwise the nearest ancestor that is, so a click on something inside a
+    /// button (a sized child that draws its face, say) reaches the button as it
+    /// does in a browser. A node with nothing interactive above it stays itself.
+    pub fn click_target(&self, node: NodeId) -> NodeId {
+        let mut current = Some(node);
+        while let Some(id) = current {
+            if self.is_interactive(id) {
+                return id;
+            }
+            current = self.arena.parent(id);
+        }
+        node
+    }
+
+    fn is_interactive(&self, id: NodeId) -> bool {
+        matches!(
+            self.arena.tag(id),
+            "button" | "a" | "select" | "option" | "input" | "textarea" | "label"
+        ) || self.arena.handler(id, "click").is_some()
+    }
+
     /// The node a click on `node` activates. A click reaching a `<label>`
     /// (on the label itself, or on something inside it) activates the
     /// label's control, as in real HTML: the `<input>`/`<button>` its
