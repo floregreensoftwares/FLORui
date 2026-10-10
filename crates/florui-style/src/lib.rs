@@ -68,7 +68,7 @@ pub use focus::FocusPath;
 pub use interaction::{FormState, InteractionState};
 pub use rounded::RoundedRect;
 pub use stylesheet_parse::{Rule, compile_sources, parse_stylesheet};
-pub use tree::{AccessibleRole, Arena, InlineItem, NodeId};
+pub use tree::{AccessibleRole, Arena, InlineItem, NodeId, Tree};
 
 #[cfg(test)]
 mod integration_tests {
