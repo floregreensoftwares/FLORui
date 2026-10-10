@@ -166,6 +166,19 @@ impl Harness {
         self
     }
 
+    /// Paints each frame over the last, as a window does, instead of whole.
+    pub fn repaint(mut self, on: bool) -> Self {
+        self.options.repaint = on;
+        self
+    }
+
+    /// Paints every frame whole as well as over the last, and fails when the two
+    /// differ by more than a few levels of a color.
+    pub fn verify_repaint(mut self, on: bool) -> Self {
+        self.options.verify_repaint = on;
+        self
+    }
+
     /// What `prefers-color-scheme: dark` reports.
     pub fn dark(mut self, dark: bool) -> Self {
         self.options.prefers_dark = dark;
@@ -454,6 +467,11 @@ impl Mounted {
     /// The text on the clipboard the component sees.
     pub fn clipboard(&self) -> &MemoryClipboard {
         self.window().clipboard()
+    }
+
+    /// How the last frame was painted: whole, or over the one before it.
+    pub fn last_repaint(&mut self) -> Option<florui_paint::Repaint> {
+        self.window().last_repaint()
     }
 
     /// The painted frame: pixels, where each element is drawn, accessibility.

@@ -22,6 +22,7 @@ florui-style = { path = "../../crates/florui-style" }
 florui-build = { path = "../../crates/florui-build" }
 
 [dev-dependencies]
+florui-paint = { path = "../../crates/florui-paint" }
 florui-test = { path = "../../crates/florui-test" }
 florui-profile = { path = "../../crates/florui-profile" }
 png = "0.17"
