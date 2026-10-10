@@ -1566,6 +1566,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
             style::values::specified::PointerEvents::None
         ),
         text_align: to_text_align(text.text_align),
+        text_shadow: to_text_shadows(&text.text_shadow.0, &text.color),
         glass: to_glass(values),
         backdrop_blur: to_backdrop_blur(values),
         text_decoration_underline: values
@@ -2341,6 +2342,23 @@ fn to_conic_items(
                 position: Some(turns(position)),
             },
             I::InterpolationHint(position) => crate::ConicItem::Hint(turns(position)),
+        })
+        .collect()
+}
+
+/// `text-shadow`'s layers, in source order; `currentcolor` is the element's
+/// own `color`.
+fn to_text_shadows(
+    shadows: &[style::values::computed::effects::SimpleShadow],
+    current: &style::color::AbsoluteColor,
+) -> Vec<crate::TextShadow> {
+    shadows
+        .iter()
+        .map(|shadow| crate::TextShadow {
+            offset_x: shadow.horizontal.px(),
+            offset_y: shadow.vertical.px(),
+            blur_radius: shadow.blur.px(),
+            color: to_gradient_color(&shadow.color, current),
         })
         .collect()
 }
