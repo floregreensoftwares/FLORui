@@ -1082,9 +1082,14 @@ fn clip_for_children(
 const WRAP_SLACK: f32 = 0.05;
 
 /// The width, in logical pixels, text is wrapped at in a box whose content is
-/// `content_width` painted pixels wide.
+/// `content_width` painted pixels wide. At a scale of one the division is exact,
+/// and the width stays the one layout measured, which keys the text caches.
 fn wrap_width(content_width: f32, scale_factor: f32) -> f32 {
-    content_width / scale_factor + WRAP_SLACK
+    if scale_factor == 1.0 {
+        content_width
+    } else {
+        content_width / scale_factor + WRAP_SLACK
+    }
 }
 
 /// `border` with its widths in painted pixels: they are authored in logical
