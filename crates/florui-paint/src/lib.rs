@@ -4142,27 +4142,7 @@ fn rasterize_and_blur(
     // shadows at whole-pixel offsets share one (see `shadow_cache`).
     let local = shape.translated(-(origin_x as f32), -(origin_y as f32));
     let key = shadow_cache::ShadowKey::new(width, height, sigma, &local);
-    let coverage = shadow_cache::coverage(key, || {
-        let mut coverage = vec![0u8; (width as usize) * (height as usize)];
-        if local.is_square() {
-            stamp_rect(
-                &mut coverage,
-                width,
-                height,
-                local.x,
-                local.y,
-                local.width,
-                local.height,
-                255,
-            );
-        } else {
-            stamp_rounded(&mut coverage, width, height, &local);
-        }
-        if !blur::box_blur_plane_in_place(&mut coverage, width, height, sigma) {
-            blur::gaussian_blur_in_place(&mut coverage, width, height, sigma);
-        }
-        coverage
-    });
+    let coverage = shadow_cache::coverage(key, || blurred_coverage(width, height, sigma, &local));
 
     Some(BlurredShape {
         origin_x,
@@ -4171,6 +4151,98 @@ fn rasterize_and_blur(
         height,
         coverage,
     })
+}
+
+/// The blurred silhouette of `local` in a `width x height` buffer, one byte of
+/// coverage a pixel.
+///
+/// A box far from the shape's corners and from the buffer's edges sees the same
+/// straight edge all along it, so the columns between the two left and right
+/// margins (and the rows between the top and bottom ones) are copies of one
+/// another. A big shape is therefore blurred as a small one, with a stretch of
+/// its middle taken out, and the middle put back by copying: the work follows
+/// the rim of the shape, not its area.
+fn blurred_coverage(width: u32, height: u32, sigma: f32, local: &RoundedRect) -> Vec<u8> {
+    let (w, h) = (width as usize, height as usize);
+    let reach = local
+        .radii
+        .iter()
+        .fold(0.0f32, |most, &(rx, ry)| most.max(rx).max(ry))
+        + blur::kernel_radius(sigma) as f32;
+    // How far in from a side of the buffer the straight edge is not yet the
+    // same all along: the side's distance to the shape, then its corner's reach.
+    let margin = |to_shape: f32| ((to_shape + reach).ceil() + 2.0).max(0.0) as usize;
+    let (left, right) = (
+        margin(local.x),
+        margin(width as f32 - local.x - local.width),
+    );
+    let (top, bottom) = (
+        margin(local.y),
+        margin(height as f32 - local.y - local.height),
+    );
+    // Two columns (rows) are kept of the middle; the rest is taken out when
+    // that is worth the trouble.
+    let taken = |len: usize, near: usize, far: usize| {
+        let spare = len.saturating_sub(near + far + 2);
+        if spare >= MIDDLE_WORTH_TAKING {
+            spare
+        } else {
+            0
+        }
+    };
+    let (out_x, out_y) = (taken(w, left, right), taken(h, top, bottom));
+    if out_x == 0 && out_y == 0 {
+        return direct_coverage(width, height, sigma, local);
+    }
+    let small_shape = RoundedRect {
+        width: local.width - out_x as f32,
+        height: local.height - out_y as f32,
+        ..*local
+    };
+    let (small_w, small_h) = (w - out_x, h - out_y);
+    let small = direct_coverage(small_w as u32, small_h as u32, sigma, &small_shape);
+    let mut coverage = vec![0u8; w * h];
+    for y in 0..h {
+        let from = if y < top {
+            y
+        } else if y >= h - bottom {
+            y - out_y
+        } else {
+            top
+        };
+        let source = &small[from * small_w..(from + 1) * small_w];
+        let row = &mut coverage[y * w..(y + 1) * w];
+        row[..left].copy_from_slice(&source[..left]);
+        row[left..w - right].fill(source[left]);
+        row[w - right..].copy_from_slice(&source[small_w - right..]);
+    }
+    coverage
+}
+
+/// How many columns or rows of middle are worth taking out and putting back.
+const MIDDLE_WORTH_TAKING: usize = 16;
+
+/// [`blurred_coverage`] by blurring the whole buffer.
+fn direct_coverage(width: u32, height: u32, sigma: f32, local: &RoundedRect) -> Vec<u8> {
+    let mut coverage = vec![0u8; (width as usize) * (height as usize)];
+    if local.is_square() {
+        stamp_rect(
+            &mut coverage,
+            width,
+            height,
+            local.x,
+            local.y,
+            local.width,
+            local.height,
+            255,
+        );
+    } else {
+        stamp_rounded(&mut coverage, width, height, local);
+    }
+    if !blur::box_blur_plane_in_place(&mut coverage, width, height, sigma) {
+        blur::gaussian_blur_in_place(&mut coverage, width, height, sigma);
+    }
+    coverage
 }
 
 /// [`stamp_rect`]'s rounded counterpart: the outline's anti-aliased
@@ -8251,6 +8323,39 @@ mod tests {
                 wrap_width(line.width * scale, scale),
             );
             assert_eq!(wrapped.height, line.height, "wrapped at a scale of {scale}");
+        }
+    }
+
+    #[test]
+    fn a_shadow_blurred_as_a_small_shape_is_the_one_blurred_whole() {
+        let radii_sets: [[(f32, f32); 4]; 3] = [
+            [(0.0, 0.0); 4],
+            [(14.0, 14.0); 4],
+            [(10.0, 6.0), (3.0, 3.0), (18.0, 18.0), (0.0, 0.0)],
+        ];
+        for radii in radii_sets {
+            for (x, y) in [(0.0, 0.0), (0.5, 0.25), (3.75, 2.0)] {
+                for sigma in [1.0f32, 3.0, 6.0, 9.0] {
+                    let pad = blur::kernel_radius(sigma) as f32;
+                    let (shape_w, shape_h) = (260.3f32, 140.6f32);
+                    let (width, height) = (
+                        (shape_w + 2.0 * pad + x).ceil() as u32 + 3,
+                        (shape_h + 2.0 * pad + y).ceil() as u32 + 3,
+                    );
+                    let local = RoundedRect {
+                        x: pad + x,
+                        y: pad + y,
+                        width: shape_w,
+                        height: shape_h,
+                        radii,
+                    };
+                    assert_eq!(
+                        blurred_coverage(width, height, sigma, &local),
+                        direct_coverage(width, height, sigma, &local),
+                        "radii {radii:?}, offset ({x}, {y}), sigma {sigma}"
+                    );
+                }
+            }
         }
     }
 
