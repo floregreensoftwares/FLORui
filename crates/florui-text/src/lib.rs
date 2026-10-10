@@ -307,6 +307,26 @@ pub struct Font {
     monospace_family_name: String,
     metrics_memo: MetricsMemo,
     inline_memo: inline_memo::InlineMemo,
+    /// Counts the fonts registered after loading, so a copy made earlier can tell
+    /// it is out of date.
+    generation: u64,
+}
+
+/// What another thread needs to shape text as a [`Font`] does: its fonts, with
+/// none of its scratch state. See [`Font::seed`].
+#[derive(Clone)]
+pub struct FontSeed {
+    font_cx: FontContext,
+    sans_serif_family_name: String,
+    monospace_family_name: String,
+    generation: u64,
+}
+
+impl FontSeed {
+    /// Changes whenever a font is registered on the [`Font`] this came from.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
 }
 
 impl Font {
@@ -326,6 +346,38 @@ impl Font {
             monospace_family_name,
             metrics_memo: MetricsMemo::with_capacity(METRICS_MEMO_CAPACITY),
             inline_memo: inline_memo::InlineMemo::with_capacity(inline_memo::INLINE_MEMO_BYTES),
+            generation: 0,
+        }
+    }
+
+    /// Changes whenever a font is registered, so a [`FontSeed`] taken before is
+    /// out of date.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// The fonts of this instance, to make another [`Font`] from (on another
+    /// thread) that shapes text the same way. It shares the font data and starts
+    /// with scratch state of its own.
+    pub fn seed(&self) -> FontSeed {
+        FontSeed {
+            font_cx: self.font_cx.clone(),
+            sans_serif_family_name: self.sans_serif_family_name.clone(),
+            monospace_family_name: self.monospace_family_name.clone(),
+            generation: self.generation,
+        }
+    }
+
+    /// A [`Font`] with the fonts of `seed`.
+    pub fn from_seed(seed: &FontSeed) -> Self {
+        Self {
+            font_cx: seed.font_cx.clone(),
+            layout_cx: LayoutContext::new(),
+            sans_serif_family_name: seed.sans_serif_family_name.clone(),
+            monospace_family_name: seed.monospace_family_name.clone(),
+            metrics_memo: MetricsMemo::with_capacity(METRICS_MEMO_CAPACITY),
+            inline_memo: inline_memo::InlineMemo::with_capacity(inline_memo::INLINE_MEMO_BYTES),
+            generation: seed.generation,
         }
     }
 
@@ -339,6 +391,7 @@ impl Font {
         // A newly registered font can change what text measures.
         self.metrics_memo.clear();
         self.inline_memo.clear();
+        self.generation += 1;
         Self::register_into(&mut self.font_cx, font_bytes)
     }
 
