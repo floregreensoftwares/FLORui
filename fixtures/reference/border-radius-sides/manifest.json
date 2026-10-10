@@ -1,0 +1,19 @@
+{
+  "id": "border-radius-sides",
+  "description": "A rounded box whose four border sides are four colors: the sides meet along the diagonal of each corner, so the arc of a corner is split between them and none of it is left unpainted.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": { "width_css_px": 90, "height_css_px": 90, "device_pixel_ratio": 1.0 },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "box",
+    "css": ".box { width: 60px; height: 60px; background-color: #2c352f; border-width: 6px; border-style: solid; border-color: #f0dc9c #6c5224 #1e3a8a #c0392b; border-radius: 26px; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 5.0,
+    "reason": "Chromium's and tiny-skia's anti-aliasing of a curved edge never agree pixel for pixel, and the seam between two colors is a pixel wide in both. Measured against desktop Chrome: 3.70% of pixels differ, geometry an exact match; with the corners left unpainted 6.67% differ, so the threshold tells the two apart."
+  }
+}
