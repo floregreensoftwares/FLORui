@@ -1,0 +1,49 @@
+/* The framework's switch is an input (the whole track) and a thumb after it;
+   this dresses both. */
+
+.toggle .florui-switch {
+    position: relative;
+    width: 64px;
+    height: 30px;
+}
+
+.toggle .florui-switch-input {
+    --florui-appearance: none;
+    width: 64px;
+    height: 30px;
+    padding: 0;
+    border-radius: 15px;
+    border: 1px solid;
+    border-color: #0b0a07 #5c5543 #5c5543 #0b0a07;
+    background-color: #1d1912;
+    box-shadow: inset 2px 3px 6px var(--shade-deep), 1px 1px 0 var(--lit-soft);
+    transition: background-color 0.18s;
+}
+
+.toggle .florui-switch-input:checked {
+    background-color: #2f4a25;
+    box-shadow: inset 2px 3px 6px var(--shade-deep), inset 0 0 12px rgba(120, 178, 90, 0.35), 1px 1px 0 var(--lit-soft);
+}
+
+.toggle .florui-switch-input:focus-visible {
+    box-shadow: inset 2px 3px 6px var(--shade-deep), 0 0 0 2px var(--brass-light);
+}
+
+.toggle .florui-switch-thumb {
+    position: absolute;
+    left: 3px;
+    top: 3px;
+    width: 22px;
+    height: 22px;
+    border-radius: 12px;
+    border: 1px solid;
+    border-color: #fff7e0 #8a7742 #8a7742 #fff7e0;
+    background-color: #cfc3a0;
+    background-image: radial-gradient(circle at 35% 30%, #fffaf0, #e3d7b6 40%, #a3946a);
+    box-shadow: 1px 3px 4px var(--shade), inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+    transition: left 0.18s;
+}
+
+.toggle .florui-switch-input:checked + .florui-switch-thumb {
+    left: 37px;
+}

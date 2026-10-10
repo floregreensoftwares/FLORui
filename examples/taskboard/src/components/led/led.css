@@ -1,0 +1,44 @@
+.led {
+    display: block;
+    width: 12px;
+    height: 12px;
+    border-radius: 6px;
+    border: 1px solid;
+    border-color: #14130f #55534a #55534a #14130f;
+    background-color: var(--lamp-off);
+    background-image: radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.35), transparent 45%);
+    box-shadow: 0 1px 0 var(--lit-soft);
+}
+
+.led.lit {
+    border-color: rgba(0, 0, 0, 0.55) rgba(255, 255, 255, 0.3) rgba(255, 255, 255, 0.3) rgba(0, 0, 0, 0.55);
+}
+
+.led.amber.lit {
+    background-color: var(--lamp-amber);
+    background-image: radial-gradient(circle at 35% 30%, #fff6dc, rgba(255, 246, 220, 0) 40%), radial-gradient(circle at 50% 50%, transparent 40%, rgba(120, 60, 0, 0.55));
+    box-shadow: 0 0 5px rgba(232, 168, 56, 0.9), 0 0 12px rgba(232, 168, 56, 0.45), 0 1px 0 var(--lit-soft);
+}
+
+.led.green.lit {
+    background-color: var(--lamp-green);
+    background-image: radial-gradient(circle at 35% 30%, #effbe4, rgba(239, 251, 228, 0) 40%), radial-gradient(circle at 50% 50%, transparent 40%, rgba(20, 70, 10, 0.55));
+    box-shadow: 0 0 5px rgba(120, 178, 90, 0.9), 0 0 12px rgba(120, 178, 90, 0.45), 0 1px 0 var(--lit-soft);
+}
+
+.led.red.lit {
+    background-color: var(--lamp-red);
+    background-image: radial-gradient(circle at 35% 30%, #ffe6dc, rgba(255, 230, 220, 0) 40%), radial-gradient(circle at 50% 50%, transparent 40%, rgba(110, 20, 5, 0.55));
+    box-shadow: 0 0 5px rgba(214, 90, 63, 0.9), 0 0 12px rgba(214, 90, 63, 0.45), 0 1px 0 var(--lit-soft);
+}
+
+.led.blue.lit {
+    background-color: var(--lamp-blue);
+    background-image: radial-gradient(circle at 35% 30%, #e4f1ff, rgba(228, 241, 255, 0) 40%), radial-gradient(circle at 50% 50%, transparent 40%, rgba(10, 40, 90, 0.55));
+    box-shadow: 0 0 5px rgba(91, 149, 201, 0.9), 0 0 12px rgba(91, 149, 201, 0.45), 0 1px 0 var(--lit-soft);
+}
+
+/* The settings can turn the halo off; the jewel stays lit. */
+.glow-off .led.lit {
+    box-shadow: 0 1px 0 var(--lit-soft);
+}

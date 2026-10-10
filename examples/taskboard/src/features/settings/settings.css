@@ -1,0 +1,15 @@
+.setting {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    padding: 6px 0;
+}
+
+.setting-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-width: 420px;
+}

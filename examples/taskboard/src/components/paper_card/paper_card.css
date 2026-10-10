@@ -1,0 +1,52 @@
+.paper-card {
+    position: relative;
+    height: 56px;
+    border-radius: var(--radius-small);
+    overflow: hidden;
+}
+
+.paper-card.selected {
+    box-shadow: inset 1px 1px 0 var(--lit), 0 0 0 2px var(--brass), 0 6px 14px var(--shade);
+}
+
+/* The ruled lines and the red margin sit on a layer over the paper, so the
+   grain underneath shows through. */
+.paper-card .ruled {
+    position: relative;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    height: 56px;
+    background-image:
+        linear-gradient(90deg, transparent 40px, var(--paper-margin) 40px 41px, transparent 41px),
+        repeating-linear-gradient(to bottom, transparent 0 27px, var(--paper-line) 27px 28px);
+    background-repeat: no-repeat, repeat;
+}
+
+/* The hole a binder's ring goes through: a dark disc with a lit lower lip. */
+.paper-card .hole {
+    position: absolute;
+    left: 14px;
+    top: 21px;
+    width: 14px;
+    height: 14px;
+    border-radius: 7px;
+    background-color: #2a1c12;
+    box-shadow: inset 1px 2px 3px rgba(0, 0, 0, 0.8), 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.paper-card .writing {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex-grow: 1;
+    padding: 0 8px 0 54px;
+}
+
+.paper-card .aside {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 0 14px 0 0;
+}

@@ -1,0 +1,35 @@
+/* Shared by every fixture under fixtures/reference/ that validates the
+   framework's own default element stylesheet against a real Chromium
+   default rendering (see florui-conformance's engine module).
+
+   Neutralizes two asymmetries that have nothing to do with what these
+   fixtures actually test (an element's own default display/font-size/
+   margin), so a real difference in those isn't masked or falsely
+   flagged by something else:
+
+   - html/body margin: Florui has no <body> concept at all — the tested
+     element sits directly at its own tree's origin. Chromium's own UA
+     stylesheet gives <body> an 8px margin by default, which would shift
+     the tested element's position for a reason unrelated to its own
+     styling.
+   - font-family: comparing two independent text rasterizers (Chromium's
+     own vs. skrifa+tiny-skia) is only meaningful at the pixel level with
+     an identical font — this embeds the exact same Open Sans file Florui
+     itself falls back to (see crates/florui-text/fonts/NOTICE.md),
+     rather than whatever sans-serif system font this machine happens to
+     have configured as its browser default. */
+
+@font-face {
+    font-family: "Open Sans";
+    src: url("OpenSans-Variable.ttf");
+}
+
+html,
+body {
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: "Open Sans", sans-serif;
+}
