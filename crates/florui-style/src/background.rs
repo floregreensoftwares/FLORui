@@ -85,6 +85,8 @@ pub enum BackgroundImage {
     Linear(LinearGradient),
     Radial(RadialGradient),
     Conic(ConicGradient),
+    /// `url(...)`: a file path as written, or a `data:` URL, to a PNG or an SVG.
+    Url(String),
 }
 
 /// `background-size` for one layer.

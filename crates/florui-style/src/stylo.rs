@@ -2175,6 +2175,18 @@ fn to_gradient_color(
     to_absolute_rgba(&color.resolve_to_absolute(current))
 }
 
+/// The text of a `url()`: what the stylesheet wrote for a path that does not
+/// resolve against the stylesheet's own address (every relative one, which is
+/// then read against the working directory like `<img src>`), or the full
+/// address of one that does (`data:`).
+fn url_text(url: &style::servo::url::ComputedUrl) -> String {
+    use style::servo::url::ComputedUrl;
+    match url {
+        ComputedUrl::Valid(resolved) => resolved.as_str().to_string(),
+        ComputedUrl::Invalid(original) => original.to_string(),
+    }
+}
+
 fn to_background_image(
     image: &style::values::computed::Image,
     current: &style::color::AbsoluteColor,
@@ -2183,8 +2195,10 @@ fn to_background_image(
     use style::values::computed::Image;
     use style::values::generics::image::{GenericGradient as G, GradientFlags};
 
-    let Image::Gradient(gradient) = image else {
-        return None;
+    let gradient = match image {
+        Image::Gradient(gradient) => gradient,
+        Image::Url(url) => return Some(BackgroundImage::Url(url_text(url))),
+        _ => return None,
     };
     let center = |position: &style::values::computed::Position| {
         (
