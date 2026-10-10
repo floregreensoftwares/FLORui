@@ -168,6 +168,19 @@ impl From<accesskit_winit::Event> for UserEvent {
 /// *does* replace what `@media (prefers-color-scheme: ...)` itself
 /// reports, rather than leaving a separately-preserved OS truth: `winit`
 /// itself doesn't keep one once an override is set.
+/// How a window is painted while its edge is being dragged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LiveResize {
+    /// Frames are painted at a fraction of the window's size and stretched, as
+    /// small as it takes to keep the drag light, and the sharp frame follows when
+    /// the drag stops. A little soft while moving, smooth to the hand.
+    #[default]
+    Adaptive,
+    /// Every frame is painted at the window's own size, however long it takes.
+    /// `FLORUI_SHARP_RESIZE` in the environment asks for this for any window.
+    Sharp,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowOptions {
     pub decorations: DecorationMode,
@@ -185,6 +198,8 @@ pub struct WindowOptions {
     /// instead of the wall clock, so a capture of a moving scene is
     /// reproducible. `None` (the default) follows real time.
     pub frozen_animation_time: Option<f64>,
+    /// How the window is painted while it is dragged to a new size.
+    pub live_resize: LiveResize,
 }
 
 /// Not `#[derive(Default)]`: every field but `respect_reduced_motion`
@@ -208,6 +223,7 @@ impl Default for WindowOptions {
             theme: crate::theme::ThemePreference::default(),
             persistence: None,
             frozen_animation_time: None,
+            live_resize: LiveResize::default(),
         }
     }
 }
@@ -1111,6 +1127,9 @@ struct WindowState {
     resizing_until: Option<std::time::Instant>,
     /// What a frame costs at full size, to choose how small to paint while resizing.
     frame_quality: crate::frame_quality::FrameQuality,
+    /// Whether a drag to a new size is painted small. Sharp when asked for by the
+    /// window's options or by `FLORUI_SHARP_RESIZE`.
+    live_resize: LiveResize,
     /// The last sharp frame, painted over by the next so only what changed is
     /// painted again.
     repainter: florui_paint::Repainter,
@@ -1388,9 +1407,10 @@ impl WindowState {
         // While the window is being dragged to a new size the frame is painted
         // small and stretched; `full_scale` is what the window really is.
         let full_scale = scale_factor;
-        let fraction = if self
-            .resizing_until
-            .is_some_and(|until| std::time::Instant::now() < until)
+        let fraction = if self.live_resize == LiveResize::Adaptive
+            && self
+                .resizing_until
+                .is_some_and(|until| std::time::Instant::now() < until)
         {
             self.frame_quality.pick()
         } else {
@@ -2134,6 +2154,11 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 resize_pending: false,
                 resizing_until: None,
                 frame_quality: crate::frame_quality::FrameQuality::default(),
+                live_resize: if std::env::var_os("FLORUI_SHARP_RESIZE").is_some() {
+                    LiveResize::Sharp
+                } else {
+                    spec.options.live_resize
+                },
                 repainter: florui_paint::Repainter::new(),
                 cpu_frame: Vec::new(),
                 repaint_over_the_last: std::env::var_os("FLORUI_NO_REPAINT").is_none(),
