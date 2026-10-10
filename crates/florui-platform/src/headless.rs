@@ -44,6 +44,9 @@ pub struct HeadlessOptions {
     /// What is painted again is the same picture to within a few levels of a
     /// color, not to the bit, so a test that compares pixels leaves this off.
     pub repaint: bool,
+    /// Paints a frame painted whole in bands on the thread pool, as a window does
+    /// (and so to within a few levels of a color of the same frame in one piece).
+    pub parallel_paint: bool,
     /// Paints every frame whole as well as over the last (and so implies
     /// `repaint`), and panics when the two differ by more than a few levels. On
     /// when `FLORUI_VERIFY_REPAINT` is set.
@@ -64,6 +67,7 @@ impl Default for HeadlessOptions {
             prefers_reduced_motion: false,
             assistive_technology: true,
             repaint: false,
+            parallel_paint: false,
             verify_repaint: std::env::var_os("FLORUI_VERIFY_REPAINT").is_some(),
             context: Vec::new(),
         }
@@ -286,6 +290,8 @@ pub struct HeadlessWindow {
     repainter: florui_paint::Repainter,
     /// Whether frames are painted over the last.
     repaint: bool,
+    /// Whether a frame painted whole is painted in bands.
+    parallel_paint: bool,
     /// Paints each frame whole too, to find a frame the repainter got wrong.
     verify_repaint: bool,
     last_repaint: Option<florui_paint::Repaint>,
@@ -335,6 +341,7 @@ impl HeadlessWindow {
             clock: 0.0,
             repainter: florui_paint::Repainter::new(),
             repaint: options.repaint || options.verify_repaint,
+            parallel_paint: options.parallel_paint,
             verify_repaint: options.verify_repaint,
             last_repaint: None,
         })
@@ -631,10 +638,27 @@ impl HeadlessWindow {
                 scale_factor: scale_factor as f32,
                 text_inputs: Some(&parts.text_inputs),
                 images: Some(&parts.images),
+                parallel: self.parallel_paint,
             });
             (canvas.data().to_vec(), self.repainter.last())
         } else {
-            (paint_whole(font).data().to_vec(), None)
+            let canvas = if self.parallel_paint {
+                florui_paint::paint_to_buffer_banded(
+                    font,
+                    physical.0,
+                    physical.1,
+                    self.canvas_color,
+                    arena,
+                    styles,
+                    &parts.physical_layouts,
+                    scale_factor as f32,
+                    Some(&parts.text_inputs),
+                    Some(&parts.images),
+                )
+            } else {
+                paint_whole(font)
+            };
+            (canvas.data().to_vec(), None)
         };
         if self.verify_repaint {
             let whole = paint_whole(font);

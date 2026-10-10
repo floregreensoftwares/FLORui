@@ -15,6 +15,17 @@ use tiny_skia::Pixmap;
 /// Budget for the layers one thread keeps between paints.
 const CAPACITY_BYTES: usize = 48 * 1024 * 1024;
 
+/// What a worker thread of the pool keeps: every thread has a cache of its own.
+const WORKER_CAPACITY_BYTES: usize = 8 * 1024 * 1024;
+
+fn capacity() -> usize {
+    if rayon::current_thread_index().is_some() {
+        WORKER_CAPACITY_BYTES
+    } else {
+        CAPACITY_BYTES
+    }
+}
+
 struct Entry {
     pixels: Rc<Pixmap>,
     last_used: u64,
@@ -93,7 +104,7 @@ impl LayerCache {
 }
 
 thread_local! {
-    static CACHE: RefCell<LayerCache> = RefCell::new(LayerCache::with_capacity(CAPACITY_BYTES));
+    static CACHE: RefCell<LayerCache> = RefCell::new(LayerCache::with_capacity(capacity()));
 }
 
 /// The pixels for `key` if this thread's cache has them.

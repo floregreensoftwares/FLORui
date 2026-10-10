@@ -39,6 +39,8 @@ pub struct PaintInputs<'a> {
     pub scale_factor: f32,
     pub text_inputs: Option<&'a HashMap<NodeId, TextInputPaint>>,
     pub images: Option<&'a HashMap<NodeId, ImagePaint>>,
+    /// Whether a frame painted whole may be painted in bands on the thread pool.
+    pub parallel: bool,
 }
 
 /// What painting the last frame left, and how the next one was painted.
@@ -160,6 +162,7 @@ impl Repainter {
             scale_factor,
             text_inputs,
             images,
+            parallel,
         } = inputs;
         let (kept_canvas, kept_notes) = match self.memo.take() {
             Some(memo)
@@ -240,18 +243,33 @@ impl Repainter {
                 )
             }
             _ => (
-                super::paint_to_buffer_with_desktop_extras(
-                    font,
-                    width,
-                    height,
-                    canvas_color,
-                    arena,
-                    styles,
-                    layouts,
-                    scale_factor,
-                    text_inputs,
-                    images,
-                ),
+                if parallel {
+                    super::paint_to_buffer_banded(
+                        font,
+                        width,
+                        height,
+                        canvas_color,
+                        arena,
+                        styles,
+                        layouts,
+                        scale_factor,
+                        text_inputs,
+                        images,
+                    )
+                } else {
+                    super::paint_to_buffer_with_desktop_extras(
+                        font,
+                        width,
+                        height,
+                        canvas_color,
+                        arena,
+                        styles,
+                        layouts,
+                        scale_factor,
+                        text_inputs,
+                        images,
+                    )
+                },
                 Repaint::Whole,
             ),
         };
@@ -406,31 +424,13 @@ fn take_notes(
     images: Option<&HashMap<NodeId, ImagePaint>>,
 ) -> HashMap<NodeId, Note> {
     let ids = arena.find_all(|_, _| true);
+    let inks = node_inks(font, arena, styles, layouts, scale_factor);
     let mut notes = HashMap::with_capacity(ids.len());
-    // The box that moves or filters everything below it, found from the top
-    // down so a box under one is painted again with it.
-    let mut top_group: HashMap<NodeId, Option<NodeId>> = HashMap::with_capacity(ids.len());
-    let mut group_ink: HashMap<NodeId, Area> = HashMap::new();
-    for &id in &ids {
-        let above = arena
-            .parent(id)
-            .and_then(|parent| top_group.get(&parent).copied().flatten());
-        let own = styles
-            .get(&id)
-            .is_some_and(|s| !s.transform.is_empty() || !s.filter.is_empty());
-        top_group.insert(id, above.or(own.then_some(id)));
-    }
     for &id in &ids {
         let style = styles.get(&id);
         let layout = layouts.get(&id).copied();
         let (x, y) = absolute_position(arena, layouts, id);
-        let ink = match top_group.get(&id).copied().flatten() {
-            Some(top) => *group_ink
-                .entry(top)
-                .or_insert_with(|| group_extent(font, arena, styles, layouts, top, scale_factor)),
-            None => own_extent(arena, styles, layouts, font, id, x, y, scale_factor)
-                .unwrap_or((x, y, x, y)),
-        };
+        let ink = inks.get(&id).copied().unwrap_or((x, y, x, y));
         let backdrop = style.zip(layout).and_then(|(s, layout)| {
             // A blur reads only the box it filters; glass can read a little beyond it.
             let moved = match &s.glass {
@@ -481,6 +481,44 @@ fn group_extent(
     let pad = filter_inflation(&style.filter, scale_factor);
     let transform = resolve_transform(style, layout, x, y, scale_factor);
     map_rect_aabb(x0 - pad, y0 - pad, x1 + pad, y1 + pad, transform)
+}
+
+/// The room each box can ink, with the boxes it moves or filters: everything
+/// under a box that is moved or filtered is inked where that box puts it.
+pub(crate) fn node_inks(
+    font: &mut Font,
+    arena: &Arena,
+    styles: &HashMap<NodeId, ComputedStyle>,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    scale_factor: f32,
+) -> HashMap<NodeId, Area> {
+    let ids = arena.find_all(|_, _| true);
+    // The box that moves or filters everything below it, found from the top
+    // down so a box under one is painted again with it.
+    let mut top_group: HashMap<NodeId, Option<NodeId>> = HashMap::with_capacity(ids.len());
+    let mut group_ink: HashMap<NodeId, Area> = HashMap::new();
+    for &id in &ids {
+        let above = arena
+            .parent(id)
+            .and_then(|parent| top_group.get(&parent).copied().flatten());
+        let own = styles
+            .get(&id)
+            .is_some_and(|s| !s.transform.is_empty() || !s.filter.is_empty());
+        top_group.insert(id, above.or(own.then_some(id)));
+    }
+    let mut inks = HashMap::with_capacity(ids.len());
+    for &id in &ids {
+        let (x, y) = absolute_position(arena, layouts, id);
+        let ink = match top_group.get(&id).copied().flatten() {
+            Some(top) => *group_ink
+                .entry(top)
+                .or_insert_with(|| group_extent(font, arena, styles, layouts, top, scale_factor)),
+            None => own_extent(arena, styles, layouts, font, id, x, y, scale_factor)
+                .unwrap_or((x, y, x, y)),
+        };
+        inks.insert(id, ink);
+    }
+    inks
 }
 
 /// What the tree says about `id`, as a number.
