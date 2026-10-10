@@ -111,8 +111,9 @@ pub use host_observer::{HostObserver, ObservedFrame, OverlayCanvas};
 
 #[cfg(feature = "desktop")]
 pub use desktop::{
-    RunError, RunOutcome, WindowOptions, WindowSpec, run, run_single_instance, run_windows,
-    run_windows_observed, run_with_css_reload, run_with_css_reload_and_options, run_with_options,
+    LiveResize, RunError, RunOutcome, WindowOptions, WindowSpec, run, run_single_instance,
+    run_windows, run_windows_observed, run_with_css_reload, run_with_css_reload_and_options,
+    run_with_options,
 };
 
 #[cfg(feature = "desktop")]
