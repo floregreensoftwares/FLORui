@@ -295,22 +295,26 @@ fn paint_layer(
             });
             if loose && !layer_cache::seen_before(&key) {
                 florui_profile::count(florui_profile::Counter::LayersDrawnDirect, 1);
-                let rim =
-                    (!cut.is_square()).then(|| Rim::keep(buffer, cut, (x0, y0), (width, height)));
-                render_layer(
-                    &mut buffer.pixmap,
-                    &layer.image,
-                    loaded.as_deref(),
-                    scale,
-                    (tile_w, tile_h),
-                    (&xs, &ys),
-                    (0, 0),
+                draw_straight(
+                    buffer,
+                    cut,
+                    (x0, y0),
+                    (width, height),
                     (keep_x0, keep_x1, keep_y0, keep_y1),
-                    true,
+                    &|pixels, origin, keep, over| {
+                        render_layer(
+                            pixels,
+                            &layer.image,
+                            loaded.as_deref(),
+                            scale,
+                            (tile_w, tile_h),
+                            (&xs, &ys),
+                            origin,
+                            keep,
+                            over,
+                        );
+                    },
                 );
-                if let Some(rim) = rim {
-                    rim.restore(buffer);
-                }
                 return;
             }
             let Some(pixels) = layer_cache::get_or_render(key, || {
@@ -550,116 +554,101 @@ fn composite_rounded(
             ),
         );
     }
-    let surface_width = buffer.pixmap.width() as usize;
-    for (bx0, by0, bx1, by1) in bands {
-        let (bw, bh) = (bx1 - bx0, by1 - by0);
-        let Some(cover) =
-            corner_coverage(buffer, cut, (x0 + bx0 as i32, y0 + by0 as i32), (bw, bh))
-        else {
+    for band in bands {
+        shape_band(buffer, cut, (x0, y0), band, layer, (band.0, band.1));
+    }
+}
+
+/// Draws a layer straight onto the frame: what the cut leaves whole as it is, and
+/// the frame along its rounded corners through a small layer of its own, shaped
+/// and put over the frame the way a kept layer is, so that both come out alike.
+/// `draw` renders the layer into a pixmap whose top left is at the given point
+/// of the surface, within the given pixels (`x0, x1, y0, y1`), over what is there
+/// or not.
+type DrawLayer<'a> = &'a dyn Fn(&mut Pixmap, (i32, i32), (i32, i32, i32, i32), bool);
+
+fn draw_straight(
+    buffer: &mut Surface,
+    cut: &RoundedRect,
+    (x0, y0): (i32, i32),
+    (width, height): (usize, usize),
+    keep: (i32, i32, i32, i32),
+    draw: DrawLayer<'_>,
+) {
+    if cut.is_square() {
+        draw(&mut buffer.pixmap, (0, 0), keep, true);
+        return;
+    }
+    let (inside, bands) = rim_rects(width, height, cut);
+    if let Some((ix0, iy0, ix1, iy1)) = inside {
+        let within = (
+            keep.0.max(x0 + ix0 as i32),
+            keep.1.min(x0 + ix1 as i32),
+            keep.2.max(y0 + iy0 as i32),
+            keep.3.min(y0 + iy1 as i32),
+        );
+        if within.1 > within.0 && within.3 > within.2 {
+            draw(&mut buffer.pixmap, (0, 0), within, true);
+        }
+    }
+    for band in bands {
+        let (bw, bh) = (band.2 - band.0, band.3 - band.1);
+        let Some(mut piece) = Pixmap::new(bw as u32, bh as u32) else {
             continue;
         };
-        let source = layer.data();
-        let target = buffer.pixmap.data_mut();
-        for row in 0..bh {
-            for column in 0..bw {
-                let keep = cover[row * bw + column];
-                let from = ((by0 + row) * width + bx0 + column) * 4;
-                let pixel = &source[from..from + 4];
-                if keep == 0 || pixel[3] == 0 {
-                    continue;
-                }
-                let scaled = if keep == 255 {
-                    [pixel[0], pixel[1], pixel[2], pixel[3]]
-                } else {
-                    [
-                        mul_div_255(pixel[0], keep),
-                        mul_div_255(pixel[1], keep),
-                        mul_div_255(pixel[2], keep),
-                        mul_div_255(pixel[3], keep),
-                    ]
-                };
-                let to =
-                    (((y0 as usize + by0 + row) * surface_width) + x0 as usize + bx0 + column) * 4;
-                gradient::over(&mut target[to..to + 4], scaled);
-            }
+        let origin = (x0 + band.0 as i32, y0 + band.1 as i32);
+        let within = (
+            keep.0.max(origin.0),
+            keep.1.min(origin.0 + bw as i32),
+            keep.2.max(origin.1),
+            keep.3.min(origin.1 + bh as i32),
+        );
+        if within.1 > within.0 && within.3 > within.2 {
+            draw(&mut piece, origin, within, false);
+            shape_band(buffer, cut, (x0, y0), band, &piece, (0, 0));
         }
     }
 }
 
-/// The frame of a rounded layer's area as the buffer had it before the layer was
-/// drawn straight onto it, to give back the part the corners cut away.
-struct Rim {
-    origin: (i32, i32),
-    cut: RoundedRect,
-    parts: Vec<(Area, Vec<u8>)>,
-}
-
-impl Rim {
-    fn keep(
-        buffer: &Surface,
-        cut: &RoundedRect,
-        origin: (i32, i32),
-        (width, height): (usize, usize),
-    ) -> Self {
-        let surface_width = buffer.pixmap.width() as usize;
-        let data = buffer.pixmap.data();
-        let (_, bands) = rim_rects(width, height, cut);
-        let parts = bands
-            .into_iter()
-            .map(|(bx0, by0, bx1, by1)| {
-                let mut saved = Vec::with_capacity((bx1 - bx0) * (by1 - by0) * 4);
-                for row in by0..by1 {
-                    let from =
-                        ((origin.1 as usize + row) * surface_width + origin.0 as usize + bx0) * 4;
-                    saved.extend_from_slice(&data[from..from + (bx1 - bx0) * 4]);
-                }
-                ((bx0, by0, bx1, by1), saved)
-            })
-            .collect();
-        Self {
-            origin,
-            cut: *cut,
-            parts,
-        }
-    }
-
-    /// Each pixel of the frame is what it was and what the layer made it, in the
-    /// share of the pixel the cut covers.
-    fn restore(self, buffer: &mut Surface) {
-        let surface_width = buffer.pixmap.width() as usize;
-        for ((bx0, by0, bx1, by1), saved) in self.parts {
-            let (bw, bh) = (bx1 - bx0, by1 - by0);
-            let Some(cover) = corner_coverage(
-                buffer,
-                &self.cut,
-                (self.origin.0 + bx0 as i32, self.origin.1 + by0 as i32),
-                (bw, bh),
-            ) else {
+/// The part `band` of the area at `(x0, y0)`, read from `source` (where the
+/// band's top left is at `from`), put over the buffer through the cut's corners.
+fn shape_band(
+    buffer: &mut Surface,
+    cut: &RoundedRect,
+    (x0, y0): (i32, i32),
+    (bx0, by0, bx1, by1): Area,
+    source: &Pixmap,
+    (from_x, from_y): (usize, usize),
+) {
+    let (bw, bh) = (bx1 - bx0, by1 - by0);
+    let Some(cover) = corner_coverage(buffer, cut, (x0 + bx0 as i32, y0 + by0 as i32), (bw, bh))
+    else {
+        return;
+    };
+    let surface_width = buffer.pixmap.width() as usize;
+    let source_width = source.width() as usize;
+    let pixels = source.data();
+    let target = buffer.pixmap.data_mut();
+    for row in 0..bh {
+        for column in 0..bw {
+            let keep = cover[row * bw + column];
+            let at = ((from_y + row) * source_width + from_x + column) * 4;
+            let pixel = &pixels[at..at + 4];
+            if keep == 0 || pixel[3] == 0 {
                 continue;
-            };
-            let data = buffer.pixmap.data_mut();
-            for row in 0..bh {
-                for column in 0..bw {
-                    let keep = u32::from(cover[row * bw + column]);
-                    if keep == 255 {
-                        continue;
-                    }
-                    let at = ((self.origin.1 as usize + by0 + row) * surface_width
-                        + self.origin.0 as usize
-                        + bx0
-                        + column)
-                        * 4;
-                    let was = (row * bw + column) * 4;
-                    for channel in 0..4 {
-                        let (before, after) = (
-                            u32::from(saved[was + channel]),
-                            u32::from(data[at + channel]),
-                        );
-                        data[at + channel] =
-                            ((before * (255 - keep) + after * keep + 127) / 255) as u8;
-                    }
-                }
             }
+            let scaled = if keep == 255 {
+                [pixel[0], pixel[1], pixel[2], pixel[3]]
+            } else {
+                [
+                    mul_div_255(pixel[0], keep),
+                    mul_div_255(pixel[1], keep),
+                    mul_div_255(pixel[2], keep),
+                    mul_div_255(pixel[3], keep),
+                ]
+            };
+            let to = ((y0 as usize + by0 + row) * surface_width + x0 as usize + bx0 + column) * 4;
+            gradient::over(&mut target[to..to + 4], scaled);
         }
     }
 }
