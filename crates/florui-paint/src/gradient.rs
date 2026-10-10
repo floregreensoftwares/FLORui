@@ -151,6 +151,11 @@ pub(crate) struct Table {
     first: f32,
     last: f32,
     repeating: bool,
+    /// What a gradient that does not repeat shows before its first stop and
+    /// after its last: those stops' own colors, even when a hard stop puts
+    /// another color at the very same position.
+    before: [u8; 4],
+    after: [u8; 4],
 }
 
 impl Table {
@@ -184,11 +189,14 @@ impl Table {
             };
             entries.push(color.map(|channel| (channel.clamp(0.0, 1.0) * 255.0 + 0.5) as u8));
         }
+        let to_bytes = |color: [f32; 4]| color.map(|c| (c.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
         Some(Self {
             entries,
             first,
             last,
             repeating,
+            before: to_bytes(stops.first()?.color),
+            after: to_bytes(stops.last()?.color),
         })
     }
 
@@ -196,6 +204,14 @@ impl Table {
     /// or repeated.
     #[inline]
     fn at(&self, position: f32) -> [u8; 4] {
+        if !self.repeating {
+            if position < self.first {
+                return self.before;
+            }
+            if position > self.last {
+                return self.after;
+            }
+        }
         let span = (self.last - self.first).max(1.0e-6);
         let mut t = (position - self.first) / span;
         if self.repeating {
@@ -600,6 +616,48 @@ mod tests {
         )
         .expect("a table");
         assert!((i32::from(plain.at(25.0)[0]) - 64).abs() <= 2);
+    }
+
+    #[test]
+    fn a_gradient_that_starts_with_a_hard_stop_pads_with_its_first_color() {
+        // transparent up to 40, then a red line one unit wide, then transparent:
+        // the stop at 40 is a hard one, and what is before it is its first color.
+        let clear = Rgba {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 0,
+        };
+        let red = Rgba {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 255,
+        };
+        let items = [
+            stop(clear, Some(40.0)),
+            stop(red, Some(40.0)),
+            stop(red, Some(41.0)),
+            stop(clear, Some(41.0)),
+        ];
+        let table = Table::new(&resolve(&items, 100.0), false).expect("a table");
+        assert_eq!(table.at(10.0), [0, 0, 0, 0], "before the first stop");
+        assert_eq!(table.at(39.9), [0, 0, 0, 0]);
+        assert_eq!(table.at(40.5), [255, 0, 0, 255], "the line");
+        assert_eq!(table.at(60.0), [0, 0, 0, 0], "after the last stop");
+        // And the same when the hard stop is the last one.
+        let items = [
+            stop(red, Some(0.0)),
+            stop(red, Some(10.0)),
+            stop(clear, Some(10.0)),
+        ];
+        let table = Table::new(&resolve(&items, 100.0), false).expect("a table");
+        assert_eq!(table.at(5.0), [255, 0, 0, 255]);
+        assert_eq!(
+            table.at(500.0),
+            [0, 0, 0, 0],
+            "past the end it keeps the last color"
+        );
     }
 
     #[test]
