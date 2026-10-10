@@ -271,7 +271,14 @@ fn resample(source: Vec<u8>, (sw, sh): (usize, usize), (width, height): (usize, 
 /// One tile of `loaded` drawn at `width x height` pixels, premultiplied: an SVG
 /// is drawn at that size, a PNG is resampled to it. `None` when the size is
 /// empty or absurd.
-pub(crate) fn tile(loaded: &Loaded, width: u32, height: u32) -> Option<Pixmap> {
+pub(crate) fn tile(url: &str, loaded: &Loaded, width: u32, height: u32) -> Option<Rc<Pixmap>> {
+    // Drawing an SVG is the costly part and a resized box asks for the same
+    // tile again, so it is kept.
+    let key = format!("tile|{}|{width}x{height}", identity(url));
+    crate::layer_cache::get_or_render(key, || draw_tile(loaded, width, height))
+}
+
+fn draw_tile(loaded: &Loaded, width: u32, height: u32) -> Option<Pixmap> {
     if width == 0
         || height == 0
         || width > MAX_SIDE
@@ -402,11 +409,11 @@ mod tests {
     fn a_png_tile_is_premultiplied_and_resampled_to_the_size_asked() {
         let url = base64_url(&png(2, 2, [200, 100, 50, 128]));
         let loaded = load(&url).expect("a PNG");
-        let same = tile(&loaded, 2, 2).expect("a tile");
+        let same = draw_tile(&loaded, 2, 2).expect("a tile");
         let pixel = same.pixel(0, 0).expect("a pixel");
         assert_eq!(pixel.alpha(), 128);
         assert_eq!(pixel.red(), 100, "200 * 128 / 255, premultiplied");
-        let larger = tile(&loaded, 8, 6).expect("a tile");
+        let larger = draw_tile(&loaded, 8, 6).expect("a tile");
         assert_eq!((larger.width(), larger.height()), (8, 6));
         let corner = larger.pixel(7, 5).expect("a pixel");
         assert_eq!(
@@ -414,7 +421,7 @@ mod tests {
             (100, 128),
             "a flat image stays flat when resampled"
         );
-        let smaller = tile(&loaded, 1, 1).expect("a tile");
+        let smaller = draw_tile(&loaded, 1, 1).expect("a tile");
         assert_eq!(smaller.pixel(0, 0).map(|p| p.alpha()), Some(128));
     }
 
@@ -443,7 +450,7 @@ mod tests {
                 .expect("pixels");
         }
         let loaded = load(&base64_url(&bytes)).expect("a PNG");
-        let small = tile(&loaded, 8, 1).expect("a tile");
+        let small = draw_tile(&loaded, 8, 1).expect("a tile");
         for x in 0..8 {
             let value = small.pixel(x, 0).expect("a pixel").red();
             assert!((28..=36).contains(&value), "column {x}: {value}");
@@ -454,7 +461,7 @@ mod tests {
     fn an_svg_tile_is_drawn_at_the_size_asked() {
         let svg = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='10' height='10' fill='#0000ff'/></svg>";
         let loaded = load(svg).expect("an SVG");
-        let big = tile(&loaded, 40, 20).expect("a tile");
+        let big = draw_tile(&loaded, 40, 20).expect("a tile");
         assert_eq!((big.width(), big.height()), (40, 20));
         let pixel = big.pixel(39, 19).expect("a pixel");
         assert_eq!(
@@ -465,10 +472,21 @@ mod tests {
     }
 
     #[test]
+    fn the_same_tile_is_drawn_once() {
+        let svg = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='10' height='10' fill='#00ff00'/></svg>";
+        let loaded = load(svg).expect("an SVG");
+        let first = tile(svg, &loaded, 12, 7).expect("a tile");
+        let again = tile(svg, &loaded, 12, 7).expect("a tile");
+        assert!(Rc::ptr_eq(&first, &again), "asked twice, drawn once");
+        let other = tile(svg, &loaded, 12, 8).expect("a tile");
+        assert!(!Rc::ptr_eq(&first, &other), "another size is another tile");
+    }
+
+    #[test]
     fn an_empty_or_absurd_tile_is_none() {
         let loaded = load(&base64_url(&png(2, 2, [0, 0, 0, 255]))).expect("a PNG");
-        assert!(tile(&loaded, 0, 5).is_none());
-        assert!(tile(&loaded, 9000, 2).is_none());
-        assert!(tile(&loaded, 8000, 8000).is_none());
+        assert!(draw_tile(&loaded, 0, 5).is_none());
+        assert!(draw_tile(&loaded, 9000, 2).is_none());
+        assert!(draw_tile(&loaded, 8000, 8000).is_none());
     }
 }

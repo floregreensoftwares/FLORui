@@ -282,7 +282,6 @@ fn paint_layer(
     }) else {
         return;
     };
-
     composite_layer(buffer, &pixels, (x0, y0), cut, clip);
 }
 
@@ -305,9 +304,9 @@ fn render_layer(
         BackgroundImage::Linear(g) => Shader::linear(g, tile_w, tile_h, scale),
         BackgroundImage::Radial(g) => Shader::radial(g, tile_w, tile_h, scale),
         BackgroundImage::Conic(g) => Shader::conic(g, tile_w, tile_h, scale),
-        BackgroundImage::Url(_) => {
-            let Some(tile) =
-                loaded.and_then(|loaded| image_source::tile(loaded, tile_w as u32, tile_h as u32))
+        BackgroundImage::Url(url) => {
+            let Some(tile) = loaded
+                .and_then(|loaded| image_source::tile(url, loaded, tile_w as u32, tile_h as u32))
             else {
                 return;
             };
