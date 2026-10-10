@@ -31,6 +31,7 @@
 //! system of its own to derive it from.
 
 mod animation;
+mod background;
 mod cascade;
 mod color;
 mod container_query_adapter;
@@ -48,6 +49,11 @@ mod stylo;
 mod tree;
 
 pub use animation::AnimationTimeline;
+pub use background::{
+    BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BackgroundSize,
+    ConicGradient, ConicItem, GradientItem, LinearDirection, LinearGradient, RadialExtent,
+    RadialGradient, RadialSize,
+};
 pub use cascade::{
     Appearance, AspectRatio, BackdropBlur, BorderSide, BoxShadow, BoxSizing, ComputedStyle,
     ContainerType, ContentAlignment, Corners, Display, Edges, FilterFunction, FlexDirection,

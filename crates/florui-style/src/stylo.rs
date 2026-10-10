@@ -1511,6 +1511,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
             .as_absolute()
             .map(to_absolute_rgba)
             .unwrap_or(color),
+        background_layers: to_background_layers(background, &text.color),
         color,
         width: to_optional_length(&position.width),
         height: to_optional_length(&position.height),
@@ -2081,6 +2082,253 @@ fn to_length_percentage(value: &style::values::computed::LengthPercentage) -> Fl
         length: at_zero,
         percentage: at_one - at_zero,
     }
+}
+
+/// The layers of `background-image`. The list is as long as the images are
+/// many; `background-size`, `-position`, `-repeat`, `-origin` and `-clip` are
+/// read cyclically against it, as CSS says. A `none` or `url()` image makes
+/// no layer here, but still takes its place in that cycle.
+fn to_background_layers(
+    background: &style::properties::style_structs::Background,
+    current: &style::color::AbsoluteColor,
+) -> Vec<crate::BackgroundLayer> {
+    use crate::{BackgroundBox, BackgroundLayer};
+    use style::properties::longhands::{background_clip, background_origin};
+
+    let images = &background.background_image.0;
+    let sizes = &background.background_size.0;
+    let xs = &background.background_position_x.0;
+    let ys = &background.background_position_y.0;
+    let repeats = &background.background_repeat.0;
+    let origins = &background.background_origin.0;
+    let clips = &background.background_clip.0;
+    let cycle = |len: usize, index: usize| if len == 0 { 0 } else { index % len };
+
+    let origin_box = |value: &background_origin::computed_value::single_value::T| match value {
+        background_origin::computed_value::single_value::T::BorderBox => BackgroundBox::Border,
+        background_origin::computed_value::single_value::T::PaddingBox => BackgroundBox::Padding,
+        background_origin::computed_value::single_value::T::ContentBox => BackgroundBox::Content,
+    };
+    let clip_box = |value: &background_clip::computed_value::single_value::T| match value {
+        background_clip::computed_value::single_value::T::BorderBox => BackgroundBox::Border,
+        background_clip::computed_value::single_value::T::PaddingBox => BackgroundBox::Padding,
+        background_clip::computed_value::single_value::T::ContentBox => BackgroundBox::Content,
+    };
+
+    images
+        .iter()
+        .enumerate()
+        .filter_map(|(index, image)| {
+            let image = to_background_image(image, current)?;
+            let size = sizes.get(cycle(sizes.len(), index))?;
+            let x = xs.get(cycle(xs.len(), index))?;
+            let y = ys.get(cycle(ys.len(), index))?;
+            let repeat = repeats.get(cycle(repeats.len(), index))?;
+            let origin = origins.get(cycle(origins.len(), index))?;
+            let clip = clips.get(cycle(clips.len(), index))?;
+            Some(BackgroundLayer {
+                image,
+                size: to_background_size(size),
+                position: (to_length_percentage(x), to_length_percentage(y)),
+                repeat: (to_repeat(repeat.0), to_repeat(repeat.1)),
+                origin: origin_box(origin),
+                clip: clip_box(clip),
+            })
+        })
+        .collect()
+}
+
+fn to_repeat(
+    keyword: style::values::specified::background::BackgroundRepeatKeyword,
+) -> crate::BackgroundRepeat {
+    use crate::BackgroundRepeat;
+    use style::values::specified::background::BackgroundRepeatKeyword as K;
+    match keyword {
+        K::Repeat => BackgroundRepeat::Repeat,
+        K::Space => BackgroundRepeat::Space,
+        K::Round => BackgroundRepeat::Round,
+        K::NoRepeat => BackgroundRepeat::NoRepeat,
+    }
+}
+
+fn to_background_size(size: &style::values::computed::BackgroundSize) -> crate::BackgroundSize {
+    use crate::BackgroundSize;
+    use style::values::generics::background::BackgroundSize as S;
+    use style::values::generics::length::LengthPercentageOrAuto as Axis;
+    let axis = |value: &Axis<style::values::computed::NonNegativeLengthPercentage>| match value {
+        Axis::LengthPercentage(lp) => Some(to_length_percentage(&lp.0)),
+        Axis::Auto => None,
+    };
+    match size {
+        S::ExplicitSize { width, height } => BackgroundSize::Explicit(axis(width), axis(height)),
+        S::Cover => BackgroundSize::Cover,
+        S::Contain => BackgroundSize::Contain,
+    }
+}
+
+/// One gradient color: `currentcolor` and the like settle against this
+/// element's own `color`.
+fn to_gradient_color(
+    color: &style::values::computed::Color,
+    current: &style::color::AbsoluteColor,
+) -> Rgba {
+    to_absolute_rgba(&color.resolve_to_absolute(current))
+}
+
+fn to_background_image(
+    image: &style::values::computed::Image,
+    current: &style::color::AbsoluteColor,
+) -> Option<crate::BackgroundImage> {
+    use crate::{BackgroundImage, ConicGradient, LinearGradient, RadialGradient};
+    use style::values::computed::Image;
+    use style::values::generics::image::{GenericGradient as G, GradientFlags};
+
+    let Image::Gradient(gradient) = image else {
+        return None;
+    };
+    let center = |position: &style::values::computed::Position| {
+        (
+            to_length_percentage(&position.horizontal),
+            to_length_percentage(&position.vertical),
+        )
+    };
+    match &**gradient {
+        G::Linear {
+            direction,
+            items,
+            flags,
+            ..
+        } => Some(BackgroundImage::Linear(LinearGradient {
+            direction: to_linear_direction(direction),
+            items: to_gradient_items(items, current),
+            repeating: flags.contains(GradientFlags::REPEATING),
+        })),
+        G::Radial {
+            shape,
+            position,
+            items,
+            flags,
+            ..
+        } => Some(BackgroundImage::Radial(RadialGradient {
+            size: to_radial_size(shape),
+            center: center(position),
+            items: to_gradient_items(items, current),
+            repeating: flags.contains(GradientFlags::REPEATING),
+        })),
+        G::Conic {
+            angle,
+            position,
+            items,
+            flags,
+            ..
+        } => Some(BackgroundImage::Conic(ConicGradient {
+            from: angle.degrees(),
+            center: center(position),
+            items: to_conic_items(items, current),
+            repeating: flags.contains(GradientFlags::REPEATING),
+        })),
+    }
+}
+
+fn to_linear_direction(
+    direction: &style::values::computed::image::LineDirection,
+) -> crate::LinearDirection {
+    use crate::LinearDirection;
+    use style::values::computed::image::LineDirection as D;
+    use style::values::specified::position::{
+        HorizontalPositionKeyword as H, VerticalPositionKeyword as V,
+    };
+    match direction {
+        D::Angle(angle) => LinearDirection::Angle(angle.degrees()),
+        D::Horizontal(H::Left) => LinearDirection::Angle(270.0),
+        D::Horizontal(H::Right) => LinearDirection::Angle(90.0),
+        D::Vertical(V::Top) => LinearDirection::Angle(0.0),
+        D::Vertical(V::Bottom) => LinearDirection::Angle(180.0),
+        D::Corner(h, v) => LinearDirection::Corner {
+            right: matches!(h, H::Right),
+            bottom: matches!(v, V::Bottom),
+        },
+    }
+}
+
+fn to_radial_size(shape: &style::values::computed::image::EndingShape) -> crate::RadialSize {
+    use crate::{RadialExtent, RadialSize};
+    use style::values::generics::image::{Circle, Ellipse, EndingShape, ShapeExtent};
+    let extent = |extent: &ShapeExtent| match extent {
+        ShapeExtent::ClosestSide | ShapeExtent::Contain => RadialExtent::ClosestSide,
+        ShapeExtent::FarthestSide => RadialExtent::FarthestSide,
+        ShapeExtent::ClosestCorner => RadialExtent::ClosestCorner,
+        ShapeExtent::FarthestCorner | ShapeExtent::Cover => RadialExtent::FarthestCorner,
+    };
+    match shape {
+        EndingShape::Circle(Circle::Radius(radius)) => RadialSize::Circle(radius.0.px()),
+        EndingShape::Circle(Circle::Extent(e)) => RadialSize::Extent {
+            circle: true,
+            extent: extent(e),
+        },
+        EndingShape::Ellipse(Ellipse::Radii(w, h)) => {
+            RadialSize::Ellipse(to_length_percentage(&w.0), to_length_percentage(&h.0))
+        }
+        EndingShape::Ellipse(Ellipse::Extent(e)) => RadialSize::Extent {
+            circle: false,
+            extent: extent(e),
+        },
+    }
+}
+
+fn to_gradient_items(
+    items: &[style::values::generics::image::GenericGradientItem<
+        style::values::computed::Color,
+        style::values::computed::LengthPercentage,
+    >],
+    current: &style::color::AbsoluteColor,
+) -> Vec<crate::GradientItem> {
+    use style::values::generics::image::GenericGradientItem as I;
+    items
+        .iter()
+        .map(|item| match item {
+            I::SimpleColorStop(color) => crate::GradientItem::Stop {
+                color: to_gradient_color(color, current),
+                position: None,
+            },
+            I::ComplexColorStop { color, position } => crate::GradientItem::Stop {
+                color: to_gradient_color(color, current),
+                position: Some(to_length_percentage(position)),
+            },
+            I::InterpolationHint(position) => {
+                crate::GradientItem::Hint(to_length_percentage(position))
+            }
+        })
+        .collect()
+}
+
+fn to_conic_items(
+    items: &[style::values::generics::image::GenericGradientItem<
+        style::values::computed::Color,
+        style::values::computed::AngleOrPercentage,
+    >],
+    current: &style::color::AbsoluteColor,
+) -> Vec<crate::ConicItem> {
+    use style::values::computed::AngleOrPercentage;
+    use style::values::generics::image::GenericGradientItem as I;
+    let turns = |value: &AngleOrPercentage| match value {
+        AngleOrPercentage::Percentage(p) => p.0,
+        AngleOrPercentage::Angle(a) => a.degrees() / 360.0,
+    };
+    items
+        .iter()
+        .map(|item| match item {
+            I::SimpleColorStop(color) => crate::ConicItem::Stop {
+                color: to_gradient_color(color, current),
+                position: None,
+            },
+            I::ComplexColorStop { color, position } => crate::ConicItem::Stop {
+                color: to_gradient_color(color, current),
+                position: Some(turns(position)),
+            },
+            I::InterpolationHint(position) => crate::ConicItem::Hint(turns(position)),
+        })
+        .collect()
 }
 
 /// `box-shadow`'s own list of layers, in source order — see
