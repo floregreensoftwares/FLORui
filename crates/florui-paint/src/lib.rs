@@ -62,6 +62,7 @@ mod layer_cache;
 mod material;
 mod rounded;
 mod shadow_cache;
+mod text_shadow;
 
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -2871,6 +2872,14 @@ fn paint_node(
                         clip,
                     );
                 }
+                text_shadow::paint(
+                    buffer,
+                    &paint.runs,
+                    (content_x, content_y),
+                    style.map_or(&[][..], |s| &s.text_shadow[..]),
+                    scale_factor,
+                    clip,
+                );
                 paint_shaped_runs(
                     buffer,
                     &paint.runs,
@@ -3037,6 +3046,14 @@ fn paint_node(
                     (shaped.width * scale_factor, shaped.height * scale_factor),
                     single_line,
                 );
+                text_shadow::paint(
+                    buffer,
+                    &shaped.runs,
+                    (content_x + dx, content_y + dy),
+                    style.map_or(&[][..], |s| &s.text_shadow[..]),
+                    scale_factor,
+                    clip,
+                );
                 paint_shaped_runs(
                     buffer,
                     &shaped.runs,
@@ -3201,6 +3218,7 @@ fn paint_node_text(
             wrap_width,
             scale_factor,
             clip,
+            shadows: style.map_or(&[][..], |s| &s.text_shadow[..]),
         },
     );
 }
@@ -4215,6 +4233,7 @@ struct TextPaint<'a> {
     wrap_width: f32,
     scale_factor: f32,
     clip: Option<&'a Mask>,
+    shadows: &'a [florui_style::TextShadow],
 }
 
 fn to_text_font_family(value: florui_style::FontFamily) -> florui_text::FontFamily {
@@ -4236,8 +4255,10 @@ fn paint_text(buffer: &mut Surface, font: &mut Font, params: TextPaint<'_>) {
         wrap_width,
         scale_factor,
         clip,
+        shadows,
     } = params;
     let shaped = font.shape_wrapped(font_family, text, font_size, font_weight, wrap_width);
+    text_shadow::paint(buffer, &shaped.runs, (x, y), shadows, scale_factor, clip);
     paint_shaped_runs(buffer, &shaped.runs, x, y, color, scale_factor, clip);
 }
 
@@ -6489,6 +6510,176 @@ mod tests {
             }
         }
         assert!(found_ink, "expected at least one red glyph pixel");
+    }
+
+    /// A red "H" of 40px in a 20px-padded box, painted with `css` on top of the
+    /// base rules; the canvas is the box. Returns the canvas.
+    fn render_shadowed_h(extra_css: &str) -> Canvas {
+        let tree: Element = view! { <div class="wrap"><h2>{"H"}</h2></div> };
+        let css = format!(
+            ".wrap {{ padding: 24px; }} h2 {{ margin: 0; color: #ff0000; font-size: 40px; {extra_css} }}"
+        );
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(&css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let node = arena.roots()[0];
+        paint_to_buffer(
+            &mut font,
+            layouts[&node].width.ceil() as u32,
+            layouts[&node].height.ceil() as u32,
+            Rgba::TRANSPARENT,
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        )
+    }
+
+    /// The box around the pixels `matches` accepts, as `(x0, y0, x1, y1)`.
+    fn ink_box(buffer: &Canvas, matches: impl Fn([u8; 4]) -> bool) -> Option<(u32, u32, u32, u32)> {
+        let mut found: Option<(u32, u32, u32, u32)> = None;
+        for y in 0..buffer.height() {
+            for x in 0..buffer.width() {
+                if matches(rgba(buffer, x, y)) {
+                    found = Some(match found {
+                        None => (x, y, x, y),
+                        Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
+                    });
+                }
+            }
+        }
+        found
+    }
+
+    fn is_red(p: [u8; 4]) -> bool {
+        p[0] > 200 && p[1] < 40 && p[2] < 40 && p[3] > 200
+    }
+
+    fn is_green(p: [u8; 4]) -> bool {
+        p[1] > 200 && p[0] < 40 && p[2] < 40 && p[3] > 200
+    }
+
+    #[test]
+    fn a_text_shadow_is_the_glyphs_again_moved_by_its_offsets() {
+        let plain = render_shadowed_h("");
+        assert!(ink_box(&plain, is_green).is_none(), "no shadow, no green");
+        let shadowed = render_shadowed_h("text-shadow: 7px 5px #00ff00;");
+        let red = ink_box(&shadowed, is_red).expect("the text");
+        assert_eq!(
+            red,
+            ink_box(&plain, is_red).expect("the text"),
+            "the text itself does not move"
+        );
+        let green = ink_box(&shadowed, is_green).expect("the shadow");
+        // The shadow is the same "H", seven to the right and five down; the
+        // anti-aliased edges leave a pixel of play.
+        for (shadow, text, shift) in [
+            (green.0, red.0, 7),
+            (green.1, red.1, 5),
+            (green.2, red.2, 7),
+            (green.3, red.3, 5),
+        ] {
+            assert!(
+                shadow.abs_diff(text + shift) <= 1,
+                "{green:?} against {red:?}"
+            );
+        }
+        // Negative offsets go the other way.
+        let back = render_shadowed_h("text-shadow: -6px -4px #00ff00;");
+        let green = ink_box(&back, is_green).expect("the shadow");
+        assert!(
+            green.0.abs_diff(red.0 - 6) <= 1 && green.1.abs_diff(red.1 - 4) <= 1,
+            "{green:?}"
+        );
+    }
+
+    #[test]
+    fn the_text_is_drawn_over_its_shadow() {
+        // A shadow with no offset is hidden behind the glyphs it copies.
+        let page = render_shadowed_h("text-shadow: 0 0 #00ff00;");
+        let plain = render_shadowed_h("");
+        let (x0, y0, x1, y1) = ink_box(&page, is_red).expect("the text");
+        let mut solid = 0;
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                if is_red(rgba(&plain, x, y)) {
+                    assert!(is_red(rgba(&page, x, y)), "ink at ({x}, {y}) stayed on top");
+                    solid += 1;
+                }
+            }
+        }
+        assert!(solid > 50, "the glyph has body: {solid}");
+    }
+
+    #[test]
+    fn a_blurred_shadow_spreads_soft_beyond_the_glyphs() {
+        let hard = render_shadowed_h("text-shadow: 1px 1px #0000ff;");
+        let soft = render_shadowed_h("text-shadow: 0 0 10px #0000ff;");
+        let text = ink_box(&soft, is_red).expect("the text");
+        let bluish = |p: [u8; 4]| p[2] > 8 && p[0] < 100 && p[3] > 8;
+        let halo = ink_box(&soft, bluish).expect("the blur");
+        // The blur reaches about its radius past the glyphs, on every side.
+        assert!(
+            halo.0 + 6 <= text.0 && halo.2 >= text.2 + 6,
+            "{halo:?} around {text:?}"
+        );
+        assert!(
+            halo.1 + 6 <= text.1 && halo.3 >= text.3 + 6,
+            "{halo:?} around {text:?}"
+        );
+        // About twice its sigma of 5 at the visible threshold, never the 20 or so a
+        // radius mistaken for the sigma would give.
+        for reach in [
+            text.0 - halo.0,
+            halo.2 - text.2,
+            text.1 - halo.1,
+            halo.3 - text.3,
+        ] {
+            assert!((6..=16).contains(&reach), "the halo reaches {reach}px");
+        }
+        // Soft: there are pixels that are partly blue, not only none or all.
+        let partial = (0..soft.height())
+            .flat_map(|y| (0..soft.width()).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                (40..=200).contains(&rgba(&soft, x, y)[3]) && rgba(&soft, x, y)[2] > 0
+            })
+            .count();
+        assert!(partial > 100, "a gradient of coverage: {partial}");
+        // The same shadow with no blur is a hard copy: opaque blue, nothing soft.
+        let hard_blue = |p: [u8; 4]| p[2] > 200 && p[0] < 40 && p[3] > 200;
+        assert!(ink_box(&hard, hard_blue).is_some() || ink_box(&hard, |p| p[3] > 0).is_some());
+    }
+
+    #[test]
+    fn the_first_shadow_is_on_top() {
+        let is_blue = |p: [u8; 4]| p[2] > 200 && p[0] < 40 && p[1] < 40 && p[3] > 200;
+        let page = render_shadowed_h("text-shadow: 8px 8px #00ff00, 8px 8px #0000ff;");
+        assert!(ink_box(&page, is_green).is_some(), "the first shadow shows");
+        assert!(
+            ink_box(&page, is_blue).is_none(),
+            "the second is entirely under it"
+        );
+        let swapped = render_shadowed_h("text-shadow: 8px 8px #0000ff, 8px 8px #00ff00;");
+        assert!(
+            ink_box(&swapped, is_green).is_none(),
+            "now the blue one covers the green"
+        );
+        assert!(ink_box(&swapped, is_blue).is_some());
+    }
+
+    #[test]
+    fn a_shadow_that_is_transparent_paints_nothing() {
+        let page = render_shadowed_h("text-shadow: 5px 5px rgba(0, 255, 0, 0);");
+        assert!(ink_box(&page, |p| p[1] > 0 && p[0] == 0).is_none());
     }
 
     /// Renders `<a href>"H"</a>` at a fixed size under `css` and returns

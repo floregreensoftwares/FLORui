@@ -1,0 +1,32 @@
+{
+  "id": "text-shadow-only-blur",
+  "description": "The shadow alone: a blurred, offset copy of the glyphs.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 180,
+    "height_css_px": 90,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "scene",
+    "css": ".scene { position: relative; width: 160px; height: 70px; background-color: #ffffff; } .t { position: absolute; left: 14px; top: 10px; font-size: 36px; font-weight: 700; color: transparent; text-shadow: 2px 4px 6px rgba(0, 0, 0, 0.6); }",
+    "children": [
+      {
+        "tag": "div",
+        "class": "t",
+        "text": "Soft",
+        "css": ""
+      }
+    ]
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 0.5,
+    "channel_tolerance": 24,
+    "reason": "A blurred shadow with the text itself transparent matches Chromium to within 18 levels of 255 everywhere (none beyond the 24 allowed): the blur radius is twice the Gaussian's standard deviation in both, so the spread and the offset agree. Measured against desktop Chrome; geometry an exact match."
+  }
+}
