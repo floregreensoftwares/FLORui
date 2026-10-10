@@ -7,16 +7,10 @@
 //! rows are copied into the frame. The tasks run on the thread pool, each
 //! with a font of its own made from the same fonts, and with the caches every
 //! thread keeps for itself.
-//!
-//! # The one `unsafe` in this crate
-//!
-//! The tree of a window holds its event handlers as `Rc`s, so it cannot be
-//! shared between threads, though painting only reads what the tree says
-//! about each box: its tag, classes, attributes, text and children. [`Shared`]
-//! carries the tree and the other inputs across threads on that promise, and
-//! [`tests::painting_never_reaches_the_handlers_of_the_tree`] holds paint to it
-//! by reading its own source: a handler is only unsafe to touch from two threads
-//! (its count is not atomic), and no painting code asks the tree for one.
+//! The bands read the tree from several threads. They read a [`Tree`], which
+//! is the tree without the handlers its nodes declared (those are `Rc`s, and the
+//! [`florui_style::Arena`] that holds them cannot be shared); painting is given
+//! the tree alone, so it cannot reach a handler and nothing here is unsafe.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -24,7 +18,7 @@ use std::rc::Rc;
 use std::sync::Mutex;
 
 use florui_layout::BoxLayout;
-use florui_style::{Arena, ComputedStyle, NodeId, Rgba};
+use florui_style::{ComputedStyle, NodeId, Rgba, Tree};
 use florui_text::{Font, FontSeed};
 
 use super::incremental::node_inks;
@@ -46,7 +40,7 @@ type Band<'a> = (i32, i32, &'a mut [u8]);
 
 /// What every band reads.
 struct Shared<'a> {
-    arena: &'a Arena,
+    arena: &'a Tree,
     styles: &'a HashMap<NodeId, ComputedStyle>,
     layouts: &'a HashMap<NodeId, BoxLayout>,
     text_inputs: Option<&'a HashMap<NodeId, TextInputPaint>>,
@@ -55,12 +49,12 @@ struct Shared<'a> {
 
 impl<'a> Shared<'a> {
     /// Everything is read through a method, so that a closure takes the whole of
-    /// `Shared` (which is `Sync`) and not one of its fields (which is not).
+    /// `Shared` and not one of its fields.
     #[allow(clippy::type_complexity)]
     fn parts(
         &self,
     ) -> (
-        &'a Arena,
+        &'a Tree,
         &'a HashMap<NodeId, ComputedStyle>,
         &'a HashMap<NodeId, BoxLayout>,
         Option<&'a HashMap<NodeId, TextInputPaint>>,
@@ -75,12 +69,6 @@ impl<'a> Shared<'a> {
         )
     }
 }
-
-// SAFETY: see the module's doc. The only part of `Shared` that is not `Sync`
-// is the handlers inside the `Arena`, an `Rc` each, and they are never read,
-// cloned or dropped while bands are painted: sharing a reference to an `Rc`
-// that nobody touches is the same as sharing a reference to nothing.
-unsafe impl Sync for Shared<'_> {}
 
 /// Rows of room painted above and below a band and thrown away.
 const EDGE_ROOM: i32 = 12;
@@ -121,7 +109,7 @@ pub(crate) fn worth_it(width: u32, height: u32) -> bool {
 /// transform or a filter works on: a band edge inside them would cut what it
 /// blurs, refracts, turns or scales, which is sampled between pixels.
 fn filtered_rows(
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     inks: &HashMap<NodeId, Ink>,
@@ -182,7 +170,7 @@ pub(crate) fn paint(
     width: u32,
     height: u32,
     canvas_color: Rgba,
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
