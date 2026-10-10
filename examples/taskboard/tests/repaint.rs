@@ -22,7 +22,7 @@ fn painted(mounted: &mut Mounted) -> Option<Repaint> {
 }
 
 fn is_part(repaint: Option<Repaint>) -> bool {
-    matches!(repaint, Some(Repaint::Part(..)) | Some(Repaint::Nothing))
+    matches!(repaint, Some(Repaint::Part { .. }) | Some(Repaint::Nothing))
 }
 
 #[test]
