@@ -593,28 +593,55 @@ pub(crate) fn fill(
 ) {
     let (x0, y0, x1, y1) = rect;
     let (left, top, right, bottom) = tile;
-    for y in y0..y1 {
+    for_rows(target, width, (y0, y1), (x1 - x0) * (y1 - y0), |y, line| {
         let row_share = coverage(y, top, bottom);
         if row_share <= 0.0 {
-            continue;
+            return;
         }
         let local_y = y as f32 + 0.5 - top;
         // The columns the tile covers wholly: nothing to blend, so the shader
         // writes them straight into the row.
         let whole_from = (left.ceil().max(x0 as f32) as usize).min(x1);
         let whole_to = (right.floor().max(whole_from as f32) as usize).min(x1);
-        let row = &mut target[(y * width + x0) * 4..(y * width + x1) * 4];
+        let row = &mut line[x0 * 4..x1 * 4];
         if row_share >= 1.0 && whole_to > whole_from {
             let (head, rest) = row.split_at_mut((whole_from - x0) * 4);
             let (middle, tail) = rest.split_at_mut((whole_to - whole_from) * 4);
             shader.fill_row(middle, whole_from as f32 + 0.5 - left, local_y);
             blend_edges(head, x0, left, right, row_share, shader, top, local_y);
             blend_edges(tail, whole_to, left, right, row_share, shader, top, local_y);
-            continue;
+            return;
         }
         blend_edges(row, x0, left, right, row_share, shader, top, local_y);
+    });
+}
+
+/// Calls `work` with each row `y` of `y0..y1` and that row's pixels (the whole
+/// `width`), the rows spread over the processor's threads when there are enough
+/// `pixels` to be worth the hand-over. Each row is its own and `work` reads no
+/// other, so the result is the one a single thread gives, byte for byte.
+pub(crate) fn for_rows(
+    target: &mut [u8],
+    width: usize,
+    (y0, y1): (usize, usize),
+    pixels: usize,
+    work: impl Fn(usize, &mut [u8]) + Sync + Send,
+) {
+    use rayon::prelude::*;
+    let rows = &mut target[y0 * width * 4..y1 * width * 4];
+    if pixels >= PARALLEL_PIXELS {
+        rows.par_chunks_mut(width * 4)
+            .enumerate()
+            .for_each(|(offset, line)| work(y0 + offset, line));
+    } else {
+        for (offset, line) in rows.chunks_mut(width * 4).enumerate() {
+            work(y0 + offset, line);
+        }
     }
 }
+
+/// How many pixels a fill must have before its rows are given to other threads.
+const PARALLEL_PIXELS: usize = 60_000;
 
 /// [`fill`] for a target that already has pixels: every pixel the tile covers
 /// is put over what is there, the way a layer is composited.
@@ -627,15 +654,15 @@ pub(crate) fn fill_over(
 ) {
     let (x0, y0, x1, y1) = rect;
     let (left, top, right, bottom) = tile;
-    for y in y0..y1 {
+    for_rows(target, width, (y0, y1), (x1 - x0) * (y1 - y0), |y, line| {
         let row_share = coverage(y, top, bottom);
         if row_share <= 0.0 {
-            continue;
+            return;
         }
         let local_y = y as f32 + 0.5 - top;
         let whole_from = (left.ceil().max(x0 as f32) as usize).min(x1);
         let whole_to = (right.floor().max(whole_from as f32) as usize).min(x1);
-        let row = &mut target[(y * width + x0) * 4..(y * width + x1) * 4];
+        let row = &mut line[x0 * 4..x1 * 4];
         let whole = row_share >= 1.0 && whole_to > whole_from;
         if whole {
             let start = (whole_from - x0) * 4;
@@ -662,7 +689,7 @@ pub(crate) fn fill_over(
                 over(pixel, color.map(|c| (f32::from(c) * share + 0.5) as u8));
             }
         }
-    }
+    });
 }
 
 /// `color` (premultiplied) over `pixel`, rounded the way compositing a layer is.
