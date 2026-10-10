@@ -1,0 +1,32 @@
+{
+  "id": "text-shadow-glow",
+  "description": "A blurred text shadow with no offset glows around light text on a dark ground.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 180,
+    "height_css_px": 90,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "scene",
+    "css": ".scene { position: relative; width: 160px; height: 70px; background-color: #1b1b2f; } .t { position: absolute; left: 14px; top: 10px; font-size: 34px; font-weight: 700; color: #ffffff; text-shadow: 0 0 8px #ffd166; }",
+    "children": [
+      {
+        "tag": "div",
+        "class": "t",
+        "text": "Glow",
+        "css": ""
+      }
+    ]
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 5,
+    "channel_tolerance": 24,
+    "reason": "Chromium and this engine draw the same font's glyphs with different rasterizers (the existing text fixtures are tolerant for that reason), so the glyph edges differ slightly in both the text and its shadow. Measured against desktop Chrome; geometry an exact match."
+  }
+}

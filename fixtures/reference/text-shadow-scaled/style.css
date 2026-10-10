@@ -1,0 +1,12 @@
+.scene {
+    position: relative;
+    width: 160px;
+    height: 70px;
+    background-color: #f4e9d8;
+}
+.t {
+    position: absolute;
+    left: 14px;
+    top: 10px;
+    font-size: 30px; font-weight: 700; color: #1b1b2f; text-shadow: 3px 3px 4px rgba(193, 68, 14, 0.8);
+}

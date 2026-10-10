@@ -1,0 +1,32 @@
+{
+  "id": "text-shadow-soft-drop",
+  "description": "A soft drop shadow with an offset and a blur.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 180,
+    "height_css_px": 90,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "scene",
+    "css": ".scene { position: relative; width: 160px; height: 70px; background-color: #ffffff; } .t { position: absolute; left: 14px; top: 10px; font-size: 36px; font-weight: 700; color: #264653; text-shadow: 2px 4px 6px rgba(0, 0, 0, 0.5); }",
+    "children": [
+      {
+        "tag": "div",
+        "class": "t",
+        "text": "Drop",
+        "css": ""
+      }
+    ]
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 5,
+    "channel_tolerance": 24,
+    "reason": "Chromium and this engine draw the same font's glyphs with different rasterizers (the existing text fixtures are tolerant for that reason), so the glyph edges differ slightly in both the text and its shadow. Measured against desktop Chrome; geometry an exact match."
+  }
+}
