@@ -214,7 +214,6 @@ fn paint_layer(
     if x1 <= x0 || y1 <= y0 {
         return;
     }
-    let (width, height) = ((x1 - x0) as usize, (y1 - y0) as usize);
     // Free space decides the percentages of `background-position`.
     let (origin_x, origin_y) = buffer.local(origin.x, origin.y);
     let offset_x = resolve(layer.position.0, origin.width - tile_w, scale);
@@ -247,6 +246,25 @@ fn paint_layer(
         (xs, ys, tile_w, tile_h)
     };
 
+    // Only the part the tiles cover is drawn and kept: a strip along one edge of
+    // a large box is a strip, not a box-sized layer of clear pixels.
+    let (Some(&first_x), Some(&last_x), Some(&first_y), Some(&last_y)) = (
+        xs.iter().min_by(|a, b| a.total_cmp(b)),
+        xs.iter().max_by(|a, b| a.total_cmp(b)),
+        ys.iter().min_by(|a, b| a.total_cmp(b)),
+        ys.iter().max_by(|a, b| a.total_cmp(b)),
+    ) else {
+        return;
+    };
+    let x0 = x0.max(first_x.floor() as i32);
+    let y0 = y0.max(first_y.floor() as i32);
+    let x1 = x1.min((last_x + tile_w).ceil() as i32);
+    let y1 = y1.min((last_y + tile_h).ceil() as i32);
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    let (width, height) = ((x1 - x0) as usize, (y1 - y0) as usize);
+
     // The pixels of the layer depend on nothing but these, so a layer that is
     // painted again unchanged is not rendered again.
     let (keep_x0, keep_x1) = center_range(cut_x, cut_x + cut.width, x0, x1);
@@ -266,21 +284,54 @@ fn paint_layer(
         bits(&[x0 as f32, y0 as f32]),
         (layer.repeat, layer.origin, layer.clip),
     );
-    let Some(pixels) = layer_cache::get_or_render(key, || {
-        let mut pixels = Pixmap::new(width as u32, height as u32)?;
-        render_layer(
-            &mut pixels,
-            &layer.image,
-            loaded.as_deref(),
-            scale,
-            (tile_w, tile_h),
-            (&xs, &ys),
-            (x0, y0),
-            (keep_x0, keep_x1, keep_y0, keep_y1),
-        );
-        Some(pixels)
-    }) else {
-        return;
+    let pixels = match layer_cache::peek(&key) {
+        Some(pixels) => pixels,
+        None => {
+            // A layer nothing cuts or clips, not asked for before, goes straight
+            // onto the frame: drawing it into a layer of its own and putting that
+            // over the frame is twice the work, and a resize asks for each size once.
+            let loose = clip.is_none_or(|mask| {
+                crate::mask_is_full(mask, buffer.pixmap.width(), (x0, y0, x1, y1))
+            });
+            if loose && !layer_cache::seen_before(&key) {
+                florui_profile::count(florui_profile::Counter::LayersDrawnDirect, 1);
+                let rim =
+                    (!cut.is_square()).then(|| Rim::keep(buffer, cut, (x0, y0), (width, height)));
+                render_layer(
+                    &mut buffer.pixmap,
+                    &layer.image,
+                    loaded.as_deref(),
+                    scale,
+                    (tile_w, tile_h),
+                    (&xs, &ys),
+                    (0, 0),
+                    (keep_x0, keep_x1, keep_y0, keep_y1),
+                    true,
+                );
+                if let Some(rim) = rim {
+                    rim.restore(buffer);
+                }
+                return;
+            }
+            let Some(pixels) = layer_cache::get_or_render(key, || {
+                let mut pixels = Pixmap::new(width as u32, height as u32)?;
+                render_layer(
+                    &mut pixels,
+                    &layer.image,
+                    loaded.as_deref(),
+                    scale,
+                    (tile_w, tile_h),
+                    (&xs, &ys),
+                    (x0, y0),
+                    (keep_x0, keep_x1, keep_y0, keep_y1),
+                    false,
+                );
+                Some(pixels)
+            }) else {
+                return;
+            };
+            pixels
+        }
     };
     composite_layer(buffer, &pixels, (x0, y0), cut, clip);
 }
@@ -298,6 +349,7 @@ fn render_layer(
     (xs, ys): (&[f32], &[f32]),
     (x0, y0): (i32, i32),
     (keep_x0, keep_x1, keep_y0, keep_y1): (i32, i32, i32, i32),
+    over: bool,
 ) {
     let width = pixels.width() as usize;
     let shader = match image {
@@ -341,7 +393,12 @@ fn render_layer(
             if col1 <= col0 || row1 <= row0 {
                 continue;
             }
-            gradient::fill(
+            let fill = if over {
+                gradient::fill_over
+            } else {
+                gradient::fill
+            };
+            fill(
                 data,
                 width,
                 (
@@ -382,6 +439,18 @@ fn composite_layer(
     clip: Option<&Mask>,
 ) {
     let (width, height) = (layer.width() as usize, layer.height() as usize);
+    let surface_width_now = buffer.pixmap.width();
+    let unclipped = clip.is_none_or(|mask| {
+        crate::mask_is_full(
+            mask,
+            surface_width_now,
+            (x0, y0, x0 + width as i32, y0 + height as i32),
+        )
+    });
+    if unclipped && !cut.is_square() {
+        composite_rounded(buffer, layer, (x0, y0), cut);
+        return;
+    }
     let rounded = (!cut.is_square())
         .then(|| corner_coverage(buffer, cut, (x0, y0), (width, height)))
         .flatten();
@@ -430,6 +499,169 @@ fn composite_layer(
         &PixmapPaint::default(),
         None,
     );
+}
+
+/// A rectangle `(x0, y0, x1, y1)` of an area, in its own pixels.
+type Area = (usize, usize, usize, usize);
+
+/// The part of a `width x height` area that a rounded cut can touch: a frame as
+/// thick as the corners are round, as rectangles `(x0, y0, x1, y1)` of the area,
+/// and what is inside it, where the cut covers every pixel.
+fn rim_rects(width: usize, height: usize, cut: &RoundedRect) -> (Option<Area>, Vec<Area>) {
+    let reach = cut
+        .radii
+        .iter()
+        .fold(0.0f32, |most, &(h, v)| most.max(h).max(v));
+    let pad = reach.ceil() as usize + 1;
+    if width <= 2 * pad || height <= 2 * pad {
+        return (None, vec![(0, 0, width, height)]);
+    }
+    (
+        Some((pad, pad, width - pad, height - pad)),
+        vec![
+            (0, 0, width, pad),
+            (0, height - pad, width, height),
+            (0, pad, pad, height - pad),
+            (width - pad, pad, width, height - pad),
+        ],
+    )
+}
+
+/// `layer` over the buffer through the rounded corners of `cut`: the inside is
+/// copied as it is, and only the frame where the corners are is shaped.
+fn composite_rounded(
+    buffer: &mut Surface,
+    layer: &Pixmap,
+    (x0, y0): (i32, i32),
+    cut: &RoundedRect,
+) {
+    let (width, height) = (layer.width() as usize, layer.height() as usize);
+    let (inside, bands) = rim_rects(width, height, cut);
+    if let Some((ix0, iy0, ix1, iy1)) = inside {
+        crate::blit_over(
+            &mut buffer.pixmap,
+            layer,
+            (x0, y0),
+            (
+                x0 + ix0 as i32,
+                y0 + iy0 as i32,
+                x0 + ix1 as i32,
+                y0 + iy1 as i32,
+            ),
+        );
+    }
+    let surface_width = buffer.pixmap.width() as usize;
+    for (bx0, by0, bx1, by1) in bands {
+        let (bw, bh) = (bx1 - bx0, by1 - by0);
+        let Some(cover) =
+            corner_coverage(buffer, cut, (x0 + bx0 as i32, y0 + by0 as i32), (bw, bh))
+        else {
+            continue;
+        };
+        let source = layer.data();
+        let target = buffer.pixmap.data_mut();
+        for row in 0..bh {
+            for column in 0..bw {
+                let keep = cover[row * bw + column];
+                let from = ((by0 + row) * width + bx0 + column) * 4;
+                let pixel = &source[from..from + 4];
+                if keep == 0 || pixel[3] == 0 {
+                    continue;
+                }
+                let scaled = if keep == 255 {
+                    [pixel[0], pixel[1], pixel[2], pixel[3]]
+                } else {
+                    [
+                        mul_div_255(pixel[0], keep),
+                        mul_div_255(pixel[1], keep),
+                        mul_div_255(pixel[2], keep),
+                        mul_div_255(pixel[3], keep),
+                    ]
+                };
+                let to =
+                    (((y0 as usize + by0 + row) * surface_width) + x0 as usize + bx0 + column) * 4;
+                gradient::over(&mut target[to..to + 4], scaled);
+            }
+        }
+    }
+}
+
+/// The frame of a rounded layer's area as the buffer had it before the layer was
+/// drawn straight onto it, to give back the part the corners cut away.
+struct Rim {
+    origin: (i32, i32),
+    cut: RoundedRect,
+    parts: Vec<(Area, Vec<u8>)>,
+}
+
+impl Rim {
+    fn keep(
+        buffer: &Surface,
+        cut: &RoundedRect,
+        origin: (i32, i32),
+        (width, height): (usize, usize),
+    ) -> Self {
+        let surface_width = buffer.pixmap.width() as usize;
+        let data = buffer.pixmap.data();
+        let (_, bands) = rim_rects(width, height, cut);
+        let parts = bands
+            .into_iter()
+            .map(|(bx0, by0, bx1, by1)| {
+                let mut saved = Vec::with_capacity((bx1 - bx0) * (by1 - by0) * 4);
+                for row in by0..by1 {
+                    let from =
+                        ((origin.1 as usize + row) * surface_width + origin.0 as usize + bx0) * 4;
+                    saved.extend_from_slice(&data[from..from + (bx1 - bx0) * 4]);
+                }
+                ((bx0, by0, bx1, by1), saved)
+            })
+            .collect();
+        Self {
+            origin,
+            cut: *cut,
+            parts,
+        }
+    }
+
+    /// Each pixel of the frame is what it was and what the layer made it, in the
+    /// share of the pixel the cut covers.
+    fn restore(self, buffer: &mut Surface) {
+        let surface_width = buffer.pixmap.width() as usize;
+        for ((bx0, by0, bx1, by1), saved) in self.parts {
+            let (bw, bh) = (bx1 - bx0, by1 - by0);
+            let Some(cover) = corner_coverage(
+                buffer,
+                &self.cut,
+                (self.origin.0 + bx0 as i32, self.origin.1 + by0 as i32),
+                (bw, bh),
+            ) else {
+                continue;
+            };
+            let data = buffer.pixmap.data_mut();
+            for row in 0..bh {
+                for column in 0..bw {
+                    let keep = u32::from(cover[row * bw + column]);
+                    if keep == 255 {
+                        continue;
+                    }
+                    let at = ((self.origin.1 as usize + by0 + row) * surface_width
+                        + self.origin.0 as usize
+                        + bx0
+                        + column)
+                        * 4;
+                    let was = (row * bw + column) * 4;
+                    for channel in 0..4 {
+                        let (before, after) = (
+                            u32::from(saved[was + channel]),
+                            u32::from(data[at + channel]),
+                        );
+                        data[at + channel] =
+                            ((before * (255 - keep) + after * keep + 127) / 255) as u8;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// How much of each pixel of the `width x height` area at `(x0, y0)` of the
@@ -617,6 +849,59 @@ mod tests {
             center_range(4.0, 4.0, 0, 10).1 - center_range(4.0, 4.0, 0, 10).0,
             0,
             "empty"
+        );
+    }
+
+    #[test]
+    fn a_strip_along_the_edge_of_a_large_box_keeps_a_strip() {
+        let before = layer_cache::bytes_on_this_thread();
+        // Four tiles of a 2px strip each, on a 400x400 box.
+        let tree: florui::prelude::Element = florui::prelude::view! { <div class="box"></div> };
+        let arena = florui_style::Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(
+            ".box { background-image: repeating-linear-gradient(90deg, #f00 0 6px, transparent 6px 11px); \
+             background-size: 100% 2px; background-position: left bottom; background-repeat: no-repeat; }",
+        )
+        .expect("a stylesheet");
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &florui_style::InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let node = arena.roots()[0];
+        let mut layouts = std::collections::HashMap::new();
+        layouts.insert(
+            node,
+            florui_layout::BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 400.0,
+            },
+        );
+        let mut font = florui_text::Font::load_embedded();
+        let page = crate::paint_to_buffer(
+            &mut font,
+            400,
+            400,
+            florui_style::Rgba::TRANSPARENT,
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        );
+        let kept = layer_cache::bytes_on_this_thread() - before;
+        assert!(kept <= 400 * 2 * 4, "{kept} bytes kept for a 400x2 strip");
+        assert!(
+            page.pixel(2, 399).expect("inside").alpha() > 0,
+            "it is drawn at the bottom"
+        );
+        assert_eq!(
+            page.pixel(2, 390).expect("inside").alpha(),
+            0,
+            "and only there"
         );
     }
 }
