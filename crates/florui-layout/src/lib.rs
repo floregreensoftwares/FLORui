@@ -56,7 +56,7 @@ use florui_style::{
     AnimationTimeline, Arena, BoxSizing as StyleBoxSizing, ComputedStyle, ContentAlignment,
     ContentBoxSize, Display as StyleDisplay, FlexDirection as StyleFlexDirection,
     FlexWrap as StyleFlexWrap, InlineItem as StyleInlineItem, InteractionState, ItemAlignment,
-    NodeId, Position as StylePosition, RoundedRect, Rule, Viewport,
+    NodeId, Position as StylePosition, RoundedRect, Rule, Tree, Viewport,
 };
 use taffy::prelude::*;
 use taffy::{Baselines, compute_leaf_layout};
@@ -191,7 +191,7 @@ impl LeafScratch {
 /// `Font::measure`'s own documented behavior treats a truly empty string
 /// as occupying no line at all, which would otherwise collapse an
 /// `<input>`'s height to zero the instant its value is cleared.
-fn leaf_text(arena: &Arena, node: NodeId) -> &str {
+fn leaf_text(arena: &Tree, node: NodeId) -> &str {
     if arena.tag(node) == "input" {
         match arena.value_attr(node) {
             Some(value) if !value.is_empty() => value,
@@ -284,7 +284,7 @@ const TEXTAREA_SCROLLBAR_WIDTH: f32 = 15.0;
 /// characters wide plus its scrollbar, `rows` (default 2) lines tall.
 fn textarea_intrinsic_size(
     font: &mut florui_text::Font,
-    arena: &Arena,
+    arena: &Tree,
     node: NodeId,
     style: Option<&ComputedStyle>,
 ) -> Size<f32> {
@@ -345,7 +345,7 @@ struct ImageContext {
 /// inline-in-inline-in-inline nesting — see this crate's own top-level
 /// scope doc for why).
 fn needs_inline_layout(
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     node: NodeId,
 ) -> bool {
@@ -395,7 +395,7 @@ fn needs_inline_layout(
 /// has to measure.
 fn measure_inline_block_intrinsic_size(
     font: &mut florui_text::Font,
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     child: NodeId,
 ) -> (f32, f32) {
@@ -464,7 +464,7 @@ fn measure_inline_block_intrinsic_size(
 /// same as a real styled `<span>`.
 fn build_inline_content_items(
     font: &mut florui_text::Font,
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     node: NodeId,
 ) -> Vec<InlineContentItem> {
@@ -525,7 +525,7 @@ fn build_inline_content_items(
 /// this node, rather than duplicating (and risking drifting from) this
 /// logic in a second crate.
 pub fn is_inline_formatting_context(
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     node: NodeId,
 ) -> bool {
@@ -540,7 +540,7 @@ pub fn is_inline_formatting_context(
 /// true for `node`; returns `None` otherwise (nothing to shape).
 pub fn shape_inline_formatting_context(
     font: &mut florui_text::Font,
-    arena: &Arena,
+    arena: &Tree,
     styles: &HashMap<NodeId, ComputedStyle>,
     node: NodeId,
     wrap_width: f32,
@@ -1640,7 +1640,7 @@ fn to_item_alignment(value: Option<ItemAlignment>) -> Option<AlignItems> {
 /// relative to the layout root, since Taffy itself only ever reports a
 /// position relative to the immediate parent.
 pub fn absolute_position(
-    arena: &Arena,
+    arena: &Tree,
     layouts: &HashMap<NodeId, BoxLayout>,
     node: NodeId,
 ) -> (f32, f32) {
@@ -1665,7 +1665,7 @@ pub fn absolute_position(
 /// shifted by its own offset, only by an ancestor's — scrolling moves a
 /// node's *content*, not the node itself.
 pub fn apply_scroll_offsets(
-    arena: &Arena,
+    arena: &Tree,
     layouts: &HashMap<NodeId, BoxLayout>,
     scroll_offsets: &HashMap<NodeId, (f32, f32)>,
 ) -> HashMap<NodeId, BoxLayout> {
