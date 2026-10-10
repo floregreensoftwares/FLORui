@@ -1,0 +1,20 @@
+.count-line {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+}
+
+.count-label {
+    flex-grow: 1;
+}
+
+.count-value {
+    font-weight: 700;
+    min-width: 40px;
+    text-align: right;
+}
+
+.next-card {
+    padding: 4px 0;
+}

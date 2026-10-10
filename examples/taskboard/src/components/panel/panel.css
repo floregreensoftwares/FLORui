@@ -1,0 +1,44 @@
+.panel {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 18px 20px 20px 20px;
+    border-radius: var(--radius-large);
+}
+
+.panel .stitching {
+    position: absolute;
+    left: 7px;
+    top: 7px;
+    right: 7px;
+    bottom: 7px;
+}
+
+.panel .screw {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    border-radius: 4px;
+    background-color: #8a7742;
+    background-image: radial-gradient(circle at 35% 30%, #fff3c4, #b8944d 55%, #5b4620);
+    box-shadow: 1px 1px 1px var(--shade-deep), inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+.panel .screw.tl { left: 12px; top: 12px; }
+.panel .screw.tr { right: 12px; top: 12px; }
+.panel .screw.bl { left: 12px; bottom: 12px; }
+.panel .screw.br { right: 12px; bottom: 12px; }
+
+.panel .plate-title {
+    display: flex;
+    flex-direction: row;
+    padding: 0 0 6px 14px;
+}
+
+.panel .plate-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 0 8px 4px 8px;
+}

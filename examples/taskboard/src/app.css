@@ -1,0 +1,90 @@
+.desk {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    height: 100vh;
+    box-sizing: border-box;
+    padding: 18px 22px 22px 22px;
+}
+
+.lid {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+}
+
+.brand {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.lamps {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+}
+
+.body {
+    display: flex;
+    flex-direction: row;
+    gap: 22px;
+    flex-grow: 1;
+    min-height: 0;
+}
+
+.rail {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 150px;
+    flex-shrink: 0;
+    padding: 22px 18px;
+    border-radius: var(--radius-large);
+}
+
+.rail .stitching {
+    position: absolute;
+    left: 6px;
+    top: 6px;
+    right: 6px;
+    bottom: 6px;
+}
+
+.nav-key {
+    font-family: inherit;
+    padding: 11px 12px;
+    font-size: 13px;
+    font-weight: 700;
+    color: #e5d8b8;
+    text-shadow: 0 -1px 0 var(--shade-deep);
+    border: 1px solid;
+    border-color: rgba(255, 255, 255, 0.3) rgba(0, 0, 0, 0.6) rgba(0, 0, 0, 0.6) rgba(255, 255, 255, 0.3);
+    border-radius: var(--radius);
+    background-color: #3f392c;
+    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.18), rgba(0, 0, 0, 0.2));
+    box-shadow: 0 3px 0 #15120c, 0 5px 6px var(--shade);
+}
+
+.nav-key:hover {
+    background-color: #4b4434;
+}
+
+.nav-key.on {
+    color: var(--brass-light);
+    background-color: #2a251b;
+    background-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.28), rgba(255, 255, 255, 0.05));
+    box-shadow: inset 1px 3px 5px var(--shade-deep), 0 1px 0 var(--lit-soft);
+}
+
+.surface {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    min-width: 0;
+    min-height: 0;
+}

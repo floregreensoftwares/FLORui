@@ -1,0 +1,29 @@
+.page {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    flex-grow: 1;
+    min-height: 0;
+    padding: 6px 8px 0 8px;
+}
+
+.columns {
+    display: flex;
+    flex-direction: row;
+    gap: 22px;
+    align-items: flex-start;
+}
+
+.column {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    flex-basis: 0;
+    min-width: 0;
+}
+
+.column.narrow {
+    flex-grow: 0;
+    flex-basis: auto;
+    width: 340px;
+}

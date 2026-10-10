@@ -1,0 +1,57 @@
+.knob-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+}
+
+.knob {
+    display: block;
+    width: 70px;
+    height: 70px;
+    padding: 0;
+    border: none;
+    border-radius: 35px;
+    background-color: #17130d;
+    /* The seat the knob sits in: a dark ring with a lit lip below it. */
+    box-shadow: inset 2px 3px 6px var(--shade-deep), 1px 2px 0 var(--lit-soft);
+}
+
+.knob .cap {
+    position: relative;
+    display: block;
+    width: 58px;
+    height: 58px;
+    margin: 6px;
+    border-radius: 29px;
+    border: 1px solid;
+    border-color: #f6efe0 #7a7466 #7a7466 #f6efe0;
+    background-color: #b9b2a2;
+    /* Brushed metal: a sweep of light and dark around the center, with a soft
+       highlight on the upper left. */
+    background-image:
+        radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0) 45%),
+        conic-gradient(from 0deg, #d9d3c5, #8f897b, #ebe6d9, #7d776a, #dad4c6, #8d8779, #e8e2d4, #7f796c, #d9d3c5);
+    box-shadow: 2px 4px 6px var(--shade-deep), inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+.knob .pointer {
+    position: absolute;
+    left: 26px;
+    top: 4px;
+    width: 4px;
+    height: 16px;
+    border-radius: 2px;
+    background-color: var(--brass-dark);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.5), inset 1px 0 0 rgba(0, 0, 0, 0.3);
+}
+
+.knob:focus-visible {
+    box-shadow: inset 2px 3px 6px var(--shade-deep), 0 0 0 2px var(--brass-light);
+}
+
+.knob-group .lamps {
+    display: flex;
+    flex-direction: row;
+    gap: 4px;
+}

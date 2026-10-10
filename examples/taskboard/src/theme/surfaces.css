@@ -1,0 +1,103 @@
+/* The surfaces of the desk, each made of layers: a base color, a grain, and the
+   light that falls on it. The grains are small SVG tiles carried in the
+   stylesheet, drawn once and repeated. */
+
+/* The desk top: dark wood with long streaks, darker toward the corners. */
+.wood {
+    background-color: var(--wood);
+    background-image:
+        radial-gradient(ellipse at 30% 20%, rgba(255, 220, 160, 0.10), transparent 60%),
+        radial-gradient(ellipse at 50% 50%, transparent 55%, rgba(0, 0, 0, 0.45) 100%),
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='320' height='240'><filter id='g' x='0' y='0' width='100%25' height='100%25'><feTurbulence type='fractalNoise' baseFrequency='0.006 0.2' numOctaves='3' seed='4' stitchTiles='stitch' result='n'/><feColorMatrix in='n' values='0 0 0 0 0.10  0 0 0 0 0.05  0 0 0 0 0.02  0 0 0 1.6 -0.55'/></filter><rect width='320' height='240' filter='url(%23g)'/></svg>");
+    background-size: 100% 100%, 100% 100%, 320px 240px;
+    background-repeat: no-repeat, no-repeat, repeat;
+}
+
+/* Leather: a dark, finely grained cover with the light on its upper left. */
+.leather {
+    background-color: var(--leather);
+    background-image:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.10), transparent 45%),
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='l' x='0' y='0' width='100%25' height='100%25'><feTurbulence type='fractalNoise' baseFrequency='0.7' numOctaves='3' seed='9' stitchTiles='stitch' result='n'/><feColorMatrix in='n' values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.9 -0.28'/></filter><rect width='120' height='120' filter='url(%23l)'/></svg>");
+    background-size: 100% 100%, 120px 120px;
+    background-repeat: no-repeat, repeat;
+    box-shadow:
+        inset 1px 1px 0 var(--lit-soft),
+        inset -1px -1px 0 var(--shade),
+        2px 0 10px var(--shade-deep);
+}
+
+/* Stitching along the inside of an edge: dashes of thread, drawn as four
+   gradients on an element that sits inset in its parent. */
+.stitching {
+    background-image:
+        repeating-linear-gradient(90deg, var(--stitch) 0 6px, transparent 6px 11px),
+        repeating-linear-gradient(90deg, var(--stitch) 0 6px, transparent 6px 11px),
+        repeating-linear-gradient(180deg, var(--stitch) 0 6px, transparent 6px 11px),
+        repeating-linear-gradient(180deg, var(--stitch) 0 6px, transparent 6px 11px);
+    background-size: 100% 2px, 100% 2px, 2px 100%, 2px 100%;
+    background-position: left top, left bottom, left top, right top;
+    background-repeat: no-repeat;
+    border-radius: var(--radius);
+    opacity: 0.55;
+}
+
+/* A brass rim: the metal catches the light on its top and left edges. */
+.brass-rim {
+    border: 2px solid;
+    border-color: var(--brass-light) var(--brass-dark) var(--brass-dark) var(--brass-light);
+}
+
+/* Paper: warm, with a faint grain and a soft shade toward the lower right. */
+.paper {
+    background-color: var(--paper);
+    background-image:
+        linear-gradient(135deg, transparent 55%, rgba(120, 90, 40, 0.10)),
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='p' x='0' y='0' width='100%25' height='100%25'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='2' stitchTiles='stitch' result='n'/><feColorMatrix in='n' values='0 0 0 0 0.35  0 0 0 0 0.25  0 0 0 0 0.1  0 0 0 0.45 -0.12'/></filter><rect width='160' height='160' filter='url(%23p)'/></svg>");
+    background-size: 100% 100%, 160px 160px;
+    background-repeat: no-repeat, repeat;
+    box-shadow:
+        inset 1px 1px 0 var(--lit),
+        0 1px 1px var(--shade-soft),
+        0 6px 14px var(--shade);
+}
+
+/* A recess cut into whatever it sits in: shadow on the top and left, light on
+   the bottom and right. */
+.well {
+    background-color: rgba(0, 0, 0, 0.28);
+    border-radius: var(--radius);
+    box-shadow:
+        inset 2px 2px 5px var(--shade-deep),
+        inset -1px -1px 0 var(--lit-soft),
+        1px 1px 0 var(--lit-soft);
+}
+
+/* The glass lid over the header: it blurs the wood under it, with a rim of
+   light along its top. */
+.glass-lid {
+    background-color: rgba(255, 244, 220, 0.10);
+    backdrop-filter: blur(10px) saturate(1.3);
+    border: 1px solid;
+    border-color: rgba(255, 255, 255, 0.40) rgba(255, 255, 255, 0.10) rgba(0, 0, 0, 0.40) rgba(255, 255, 255, 0.22);
+    border-radius: var(--radius-large);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.35),
+        0 8px 18px var(--shade);
+}
+
+/* How coarse the paper is, chosen by the grain knob in the settings. */
+.grain-0 .paper {
+    background-image: linear-gradient(135deg, transparent 55%, rgba(120, 90, 40, 0.10));
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+}
+
+.grain-2 .paper {
+    background-image:
+        linear-gradient(135deg, transparent 55%, rgba(120, 90, 40, 0.10)),
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='p' x='0' y='0' width='100%25' height='100%25'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='2' stitchTiles='stitch' result='n'/><feColorMatrix in='n' values='0 0 0 0 0.35  0 0 0 0 0.25  0 0 0 0 0.1  0 0 0 0.45 -0.12'/></filter><rect width='160' height='160' filter='url(%23p)'/></svg>"),
+        url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='p' x='0' y='0' width='100%25' height='100%25'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='2' stitchTiles='stitch' result='n'/><feColorMatrix in='n' values='0 0 0 0 0.35  0 0 0 0 0.25  0 0 0 0 0.1  0 0 0 0.45 -0.12'/></filter><rect width='160' height='160' filter='url(%23p)'/></svg>");
+    background-size: 100% 100%, 160px 160px, 97px 97px;
+    background-repeat: no-repeat, repeat, repeat;
+}
