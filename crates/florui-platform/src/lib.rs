@@ -92,6 +92,9 @@ mod stylesheet_reload;
 mod frame;
 
 #[cfg(feature = "desktop")]
+mod frame_quality;
+
+#[cfg(feature = "desktop")]
 mod headless;
 
 #[cfg(feature = "desktop")]

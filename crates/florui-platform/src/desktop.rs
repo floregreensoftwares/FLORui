@@ -1103,6 +1103,14 @@ struct WindowState {
     /// recent [`Self::redraw`] left here — no separate cross-thread
     /// signal needed to drive continuous repaints.
     next_animation_wake: Option<std::time::Instant>,
+    /// A size change not yet laid out: the layout waits for the frame it is for,
+    /// so a burst of size changes is one layout.
+    resize_pending: bool,
+    /// While the window is being dragged to a new size, until when; frames
+    /// until then are painted small and stretched.
+    resizing_until: Option<std::time::Instant>,
+    /// What a frame costs at full size, to choose how small to paint while resizing.
+    frame_quality: crate::frame_quality::FrameQuality,
     /// Only set for a window built via [`WindowSpec::with_css_reload`] —
     /// [`Self::reload_css`] is a no-op without it.
     css_path: Option<PathBuf>,
@@ -1368,6 +1376,27 @@ impl WindowState {
             return;
         };
         let _frame_end = crate::frame::FrameEnd;
+        // While the window is being dragged to a new size the frame is painted
+        // small and stretched; `full_scale` is what the window really is.
+        let full_scale = scale_factor;
+        let fraction = if self
+            .resizing_until
+            .is_some_and(|until| std::time::Instant::now() < until)
+        {
+            self.frame_quality.pick()
+        } else {
+            1.0
+        };
+        let sharp = fraction >= 1.0;
+        let scale_factor = full_scale * f64::from(fraction);
+        let (paint_width, paint_height) = if sharp {
+            (size.width, size.height)
+        } else {
+            (
+                ((size.width as f32 * fraction).round() as u32).max(1),
+                ((size.height as f32 * fraction).round() as u32).max(1),
+            )
+        };
 
         let scroll_registry = self.runtime.scroll_registry();
         let text_input_registry = self.runtime.text_input_registry();
@@ -1397,7 +1426,7 @@ impl WindowState {
             scroll_dragging: self.input.scroll_drag.as_ref().map(|drag| drag.id.as_str()),
             scale_factor,
         });
-        if self.controls.input_mode() == InputMode::Selective {
+        if sharp && self.controls.input_mode() == InputMode::Selective {
             sync_input_regions(&self.controls, &window, arena, &parts.physical_layouts);
         }
         if let Some(node) = focused
@@ -1428,22 +1457,26 @@ impl WindowState {
         );
         let accessibility_span = florui_profile::span(florui_profile::Phase::Accessibility);
         // Only built when assistive technology is listening: the tree walks
-        // every node, and the reverse table is read only by its requests.
-        self.accessibility_adapter.update_if_active(|| {
-            let (update, reverse) =
-                self.accessibility_tree
-                    .build(arena, focused, &node_bounds, interaction);
-            self.accessibility_reverse = reverse;
-            update
-        });
+        // every node, and the reverse table is read only by its requests. A
+        // frame painted small has bounds that are not the window's.
+        if sharp {
+            self.accessibility_adapter.update_if_active(|| {
+                let (update, reverse) =
+                    self.accessibility_tree
+                        .build(arena, focused, &node_bounds, interaction);
+                self.accessibility_reverse = reverse;
+                update
+            });
+        }
         drop(accessibility_span);
 
         let raster_span = florui_profile::span(florui_profile::Phase::Raster);
+        let raster_started = std::time::Instant::now();
 
         let mut canvas = florui_paint::paint_to_buffer_with_desktop_extras(
             font,
-            size.width,
-            size.height,
+            paint_width,
+            paint_height,
             self.canvas_color,
             arena,
             styles,
@@ -1452,8 +1485,16 @@ impl WindowState {
             Some(&parts.text_inputs),
             Some(&parts.images),
         );
+        if self.resizing_until.is_some() {
+            self.frame_quality
+                .record(fraction, raster_started.elapsed().as_secs_f32() * 1000.0);
+        }
+        if !sharp && let Some(stretched) = florui_paint::stretched(&canvas, size.width, size.height)
+        {
+            canvas = stretched;
+        }
         drop(raster_span);
-        if let Some(observer) = &self.observer {
+        if let Some(observer) = self.observer.as_ref().filter(|_| sharp) {
             let _span = florui_profile::span(florui_profile::Phase::Overlay);
             let mut observer = observer.borrow_mut();
             observer.frame(
@@ -1553,6 +1594,15 @@ impl WindowState {
     /// correct, matching the design's own separation of "update" from
     /// "paint" everywhere else.
     fn redraw_for_frame(&mut self) {
+        if self.resize_pending {
+            self.resize_pending = false;
+            let viewport = layout_viewport(self.viewport_scale());
+            self.runtime.clear_dirty();
+            self.runtime
+                .set_os_prefers_reduced_motion(crate::accessibility::prefers_reduced_motion());
+            self.runtime.update(viewport);
+            self.refresh_animation_schedule();
+        }
         let deadline_due = self
             .next_animation_wake
             .is_some_and(|deadline| std::time::Instant::now() >= deadline);
@@ -2016,6 +2066,9 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 input: InputState::default(),
                 gpu_losses: 0,
                 next_animation_wake: None,
+                resize_pending: false,
+                resizing_until: None,
+                frame_quality: crate::frame_quality::FrameQuality::default(),
                 css_path: spec.css_path,
                 applied_css: None,
                 _css_watcher: css_watcher,
@@ -2063,6 +2116,17 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
         let now = std::time::Instant::now();
         let mut next_wake: Option<std::time::Instant> = None;
         for state in self.windows.values_mut() {
+            match state.resizing_until {
+                Some(deadline) if now >= deadline => {
+                    // The drag has stopped: the frame at full size.
+                    state.resizing_until = None;
+                    state.window.request_redraw();
+                }
+                Some(deadline) => {
+                    next_wake = Some(next_wake.map_or(deadline, |current| current.min(deadline)));
+                }
+                None => {}
+            }
             match state.next_animation_wake {
                 Some(deadline) if now >= deadline => state.window.request_redraw(),
                 Some(deadline) => {
@@ -2128,7 +2192,10 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             .process_event(&state.window, &event);
         match event {
             WindowEvent::Resized(_) => {
-                state.update_and_request_redraw();
+                state.resize_pending = true;
+                state.resizing_until =
+                    Some(std::time::Instant::now() + crate::frame_quality::SETTLE);
+                state.window.request_redraw();
                 state.mark_geometry_dirty();
             }
             // Fires on its own — not bundled into `Resized` — when the
