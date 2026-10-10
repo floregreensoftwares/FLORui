@@ -6,13 +6,13 @@ use florui_style::{
     BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BackgroundSize, BorderSide,
     Edges, LengthPercentage, RoundedRect,
 };
-use tiny_skia::{FillRule, Mask, Pixmap, PixmapPaint};
+use tiny_skia::{FillRule, Mask, Pixmap, PixmapPaint, Transform};
 
 use crate::gradient::{self, Shader};
 use crate::image_source;
 use crate::layer_cache;
 use crate::rounded::RoundedRectPath;
-use crate::{Surface, draw_shifted, mul_div_255, surface_transform};
+use crate::{Surface, draw_shifted, mul_div_255};
 
 /// More tiles than this in one layer are not drawn: a pattern that fine is a
 /// texture, and a texture is an image (see the limits in the README).
@@ -283,14 +283,7 @@ fn paint_layer(
         return;
     };
 
-    let mask = cut_mask(buffer, cut, clip);
-    draw_shifted(
-        &mut buffer.pixmap,
-        &pixels,
-        (x0, y0),
-        &PixmapPaint::default(),
-        mask.as_ref().or(clip),
-    );
+    composite_layer(buffer, &pixels, (x0, y0), cut, clip);
 }
 
 /// Draws every tile of the layer into `pixels` (whose top-left pixel is at
@@ -377,21 +370,85 @@ fn center_range(start: f32, end: f32, low: i32, high: i32) -> (i32, i32) {
     (first, last)
 }
 
-/// The mask that cuts a layer to `cut` when it has rounded corners: its
-/// anti-aliased shape times the ancestors' clip. A square cut needs none.
-fn cut_mask(buffer: &Surface, cut: &RoundedRect, clip: Option<&Mask>) -> Option<Mask> {
-    if cut.is_square() {
-        return None;
+/// Puts `layer` (whose top-left pixel is at `(x0, y0)` of the surface) over the
+/// buffer, through the rounded corners of `cut` and the ancestors' clip. The
+/// cut and the clip are applied to the layer's own pixels, over the area it
+/// covers only, so a small rounded panel costs a small mask and not one the size
+/// of the window; a layer that nothing cuts is copied as it is.
+fn composite_layer(
+    buffer: &mut Surface,
+    layer: &Pixmap,
+    (x0, y0): (i32, i32),
+    cut: &RoundedRect,
+    clip: Option<&Mask>,
+) {
+    let (width, height) = (layer.width() as usize, layer.height() as usize);
+    let rounded = (!cut.is_square())
+        .then(|| corner_coverage(buffer, cut, (x0, y0), (width, height)))
+        .flatten();
+    let surface_width = buffer.pixmap.width();
+    let clip = clip.filter(|mask| {
+        !crate::mask_is_full(
+            mask,
+            surface_width,
+            (x0, y0, x0 + width as i32, y0 + height as i32),
+        )
+    });
+    if rounded.is_none() && clip.is_none() {
+        draw_shifted(
+            &mut buffer.pixmap,
+            layer,
+            (x0, y0),
+            &PixmapPaint::default(),
+            None,
+        );
+        return;
     }
-    let path = cut.path()?;
-    let mut mask = Mask::new(buffer.pixmap.width(), buffer.pixmap.height())?;
-    mask.fill_path(&path, FillRule::Winding, true, surface_transform(buffer));
-    if let Some(clip) = clip {
-        for (own, ancestor) in mask.data_mut().iter_mut().zip(clip.data()) {
-            *own = mul_div_255(*own, *ancestor);
+    let mut shaped = layer.clone();
+    for (row, pixels) in shaped.data_mut().chunks_exact_mut(width * 4).enumerate() {
+        for (column, pixel) in pixels.chunks_exact_mut(4).enumerate() {
+            if pixel[3] == 0 {
+                continue;
+            }
+            let mut keep = rounded
+                .as_ref()
+                .map_or(255, |cover| cover[row * width + column]);
+            if let Some(clip) = clip {
+                let index = (y0 as usize + row) * surface_width as usize + x0 as usize + column;
+                keep = mul_div_255(keep, clip.data().get(index).copied().unwrap_or(0));
+            }
+            if keep != 255 {
+                for channel in pixel.iter_mut() {
+                    *channel = mul_div_255(*channel, keep);
+                }
+            }
         }
     }
-    Some(mask)
+    draw_shifted(
+        &mut buffer.pixmap,
+        &shaped,
+        (x0, y0),
+        &PixmapPaint::default(),
+        None,
+    );
+}
+
+/// How much of each pixel of the `width x height` area at `(x0, y0)` of the
+/// surface the rounded box `cut` covers, anti-aliased.
+fn corner_coverage(
+    buffer: &Surface,
+    cut: &RoundedRect,
+    (x0, y0): (i32, i32),
+    (width, height): (usize, usize),
+) -> Option<Vec<u8>> {
+    let path = cut.path()?;
+    let mut mask = Mask::new(width as u32, height as u32)?;
+    let to_area = Transform::from_translate(
+        -(buffer.origin.0 + x0) as f32,
+        -(buffer.origin.1 + y0) as f32,
+    );
+    mask.fill_path(&path, FillRule::Winding, true, to_area);
+    Some(mask.data().to_vec())
 }
 
 #[cfg(test)]

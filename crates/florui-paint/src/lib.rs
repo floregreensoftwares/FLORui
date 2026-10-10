@@ -2735,7 +2735,7 @@ fn paint_node(
             paint_rounded_border(buffer, &outline, border, clip);
         } else {
             paint_border(buffer, x, y, layout.width, layout.height, border, clip);
-        }
+        };
         if let Some(material) = glass {
             paint_glass_rim(buffer, &outline, material, scale_factor, clip);
         }
@@ -3406,6 +3406,27 @@ fn paint_rounded_border(
         [(x1, y1), (x0, y1), (ix0, iy1), (ix1, iy1)],
         [(x0, y1), (x0, y0), (ix0, iy0), (ix0, iy1)],
     ];
+    // Each side is the ring cut to its wedge. The cut is a mask the size of the
+    // area the border covers, in a layer of that size, so a small box costs a
+    // small mask and not four the size of the window; the layer is then put over
+    // the buffer through the ancestors' clip.
+    let (local_x0, local_y0) = buffer.local(outer.x, outer.y);
+    let rx0 = (local_x0.floor() as i32).max(0);
+    let ry0 = (local_y0.floor() as i32).max(0);
+    let rx1 = ((local_x0 + outer.width).ceil() as i32).min(buffer.width() as i32);
+    let ry1 = ((local_y0 + outer.height).ceil() as i32).min(buffer.height() as i32);
+    if rx1 <= rx0 || ry1 <= ry0 {
+        return;
+    }
+    let (width, height) = ((rx1 - rx0) as u32, (ry1 - ry0) as u32);
+    let Some(mut layer) = Surface::new(
+        width,
+        height,
+        (buffer.origin.0 + rx0, buffer.origin.1 + ry0),
+    ) else {
+        return;
+    };
+    let layer_transform = surface_transform(&layer);
     for (side, corners) in sides.iter().zip(wedges) {
         if side.width <= 0.0 {
             continue;
@@ -3419,24 +3440,28 @@ fn paint_rounded_border(
         let Some(wedge) = wedge.finish() else {
             continue;
         };
-        let mut mask = match clip {
-            Some(existing) => existing.clone(),
-            None => {
-                let Some(mut full) = Mask::new(buffer.width(), buffer.height()) else {
-                    continue;
-                };
-                full.data_mut().fill(255);
-                full
-            }
+        let Some(mut mask) = Mask::new(width, height) else {
+            continue;
         };
-        mask.intersect_path(&wedge, FillRule::Winding, true, transform);
+        mask.fill_path(&wedge, FillRule::Winding, true, layer_transform);
         let mut paint = Paint::default();
         paint.set_color_rgba8(side.color.r, side.color.g, side.color.b, side.color.a);
         paint.anti_alias = true;
-        buffer
-            .pixmap
-            .fill_path(&ring, &paint, FillRule::EvenOdd, transform, Some(&mask));
+        layer.pixmap.fill_path(
+            &ring,
+            &paint,
+            FillRule::EvenOdd,
+            layer_transform,
+            Some(&mask),
+        );
     }
+    draw_shifted(
+        &mut buffer.pixmap,
+        &layer.pixmap,
+        (rx0, ry0),
+        &PixmapPaint::default(),
+        clip,
+    );
 }
 
 /// Paints `border`'s four sides as flat rectangles at the box's own outer
@@ -8919,6 +8944,34 @@ mod tests {
             &layouts,
             1.0,
         )
+    }
+
+    #[test]
+    fn a_rounded_border_with_differing_side_colors_is_cut_by_an_overflow_clip_above_it() {
+        let page = clipped_inner(
+            "border: 6px solid; border-color: #ff0000 #00ff00 #0000ff #ffff00; border-radius: 12px;",
+            -10.0,
+        );
+        for y in (0..20).chain(40..80) {
+            for x in 0..40 {
+                assert_eq!(rgba(&page, x, y)[3], 0, "({x}, {y}) is outside the clip");
+            }
+        }
+        // Inside the clip the left side (yellow) and the right side (green) show.
+        assert!(
+            is_color(rgba(&page, 2, 30), [255, 255, 0]),
+            "{:?}",
+            rgba(&page, 2, 30)
+        );
+        assert!(
+            is_color(rgba(&page, 37, 30), [0, 255, 0]),
+            "{:?}",
+            rgba(&page, 37, 30)
+        );
+    }
+
+    fn is_color(pixel: [u8; 4], rgb: [u8; 3]) -> bool {
+        pixel[3] == 255 && pixel[..3] == rgb
     }
 
     #[test]
