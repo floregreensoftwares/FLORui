@@ -1434,7 +1434,7 @@ mod tests {
         .row { width: 120px; height: 40px; background-color: #335577; \
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.5); border-radius: 6px; } \
         .row:hover { background-color: #7799bb; } \
-        .far { width: 60px; height: 30px; background-color: #aa4433; } \n        .far:hover { margin-left: 50px; }";
+        .far { width: 60px; height: 30px; background-color: #aa4433; } \n        .far:hover { margin-left: 50px; } \n        .glass { position: absolute; left: 4px; top: 4px; width: 160px; height: 60px; pointer-events: none; \n        background-color: rgba(255, 255, 255, 0.15); backdrop-filter: blur(6px); }";
 
     fn repainting_window() -> HeadlessWindow {
         HeadlessWindow::new(
@@ -1445,6 +1445,7 @@ mod tests {
                         <div class="row" id="a"></div>
                         <div class="row" id="b"></div>
                         <div class="far"></div>
+                        <div class="glass"></div>
                     </div>
                 }
             },
@@ -1488,14 +1489,27 @@ mod tests {
         window.pointer_move(x + w / 2.0, y + h / 2.0);
         let _ = window.frame();
         match window.last_repaint() {
-            Some(Repaint::Part(x0, y0, x1, y1)) => {
+            Some(Repaint::Part { pixels, bounds, .. }) => {
                 assert!(
-                    (x1 - x0) * (y1 - y0) < 400 * 400 / 2,
-                    "only a part of the window: {x0},{y0} to {x1},{y1}"
+                    pixels < 400 * 400 / 2,
+                    "only a part of the window: {pixels} pixels within {bounds:?}"
                 );
             }
             other => panic!("a hover is painted over the last frame, not {other:?}"),
         }
+
+        // The pointer going over a row under a glass panel changes what the panel
+        // filters: the panel is painted again as well.
+        let b = {
+            let (arena, ..) = window.runtime().geometry();
+            arena
+                .find(|a, id| a.id_attr(id) == Some("b"))
+                .expect("the second row")
+        };
+        let (bx, by, bw, bh) = window.frame().bounds[&b];
+        window.pointer_move(bx + bw / 2.0, by + bh / 2.0);
+        let _ = window.frame();
+        assert!(matches!(window.last_repaint(), Some(Repaint::Part { .. })));
 
         // A box that moves leaves its old place as well as taking a new one: the
         // frame is checked against the whole one at every step.
@@ -1508,10 +1522,10 @@ mod tests {
         let (fx, fy, fw, fh) = window.frame().bounds[&far];
         window.pointer_move(fx + fw / 2.0, fy + fh / 2.0);
         let _ = window.frame();
-        assert!(matches!(window.last_repaint(), Some(Repaint::Part(..))));
+        assert!(matches!(window.last_repaint(), Some(Repaint::Part { .. })));
         window.pointer_move(1.0, 1.0);
         let _ = window.frame();
-        assert!(matches!(window.last_repaint(), Some(Repaint::Part(..))));
+        assert!(matches!(window.last_repaint(), Some(Repaint::Part { .. })));
 
         window.resize(300.0, 300.0);
         let _ = window.frame();
