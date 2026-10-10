@@ -1,0 +1,11 @@
+.box {
+    box-sizing: border-box;
+    width: 120px;
+    height: 80px;
+    padding: 14px;
+    border: 8px solid #5a5a5a;
+    background-image: linear-gradient(to right, #ff5a5f, #ffd166);
+    background-origin: content-box;
+    background-clip: padding-box;
+    background-repeat: no-repeat;
+}

@@ -53,8 +53,11 @@
 //! padding box; nested clips intersect. `border-radius` rounds a box's
 //! background and border (see [`rounded::RoundedRect`]).
 
+mod background;
 mod blur;
 mod glyph_cache;
+mod gradient;
+mod layer_cache;
 mod material;
 mod rounded;
 mod shadow_cache;
@@ -2708,6 +2711,20 @@ fn paint_node(
             } else {
                 fill_rect(buffer, x, y, layout.width, layout.height, background, clip);
             }
+        }
+
+        if let Some(style) = style
+            && !style.background_layers.is_empty()
+        {
+            background::paint_layers(
+                buffer,
+                &outline,
+                border,
+                style.padding,
+                &style.background_layers,
+                scale_factor,
+                clip,
+            );
         }
 
         paint_box_shadows(buffer, &outline, border, box_shadow, true);
@@ -8185,6 +8202,245 @@ mod tests {
         shadowed_cards(&[(20.0, 20.0), (70.0, 40.0)]);
 
         assert_eq!(shadow_cache::computed_on_this_thread(), after_first);
+    }
+
+    /// One `width x height` box at the origin of a `canvas x canvas` page,
+    /// painted with `css` for `.box`.
+    fn background_box(css: &str, (canvas, width, height): (u32, f32, f32), scale: f32) -> Canvas {
+        let tree: Element = view! { <div class="box"></div> };
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut layouts = HashMap::new();
+        layouts.insert(
+            arena.roots()[0],
+            BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: width * scale,
+                height: height * scale,
+            },
+        );
+        let mut font = Font::load_embedded();
+        paint_to_buffer(
+            &mut font,
+            canvas,
+            canvas,
+            Rgba::TRANSPARENT,
+            &arena,
+            &styles,
+            &layouts,
+            scale,
+        )
+    }
+
+    fn rgba(buffer: &Canvas, x: u32, y: u32) -> [u8; 4] {
+        let pixel = buffer.pixel(x, y).expect("pixel is within the canvas");
+        [pixel.red(), pixel.green(), pixel.blue(), pixel.alpha()]
+    }
+
+    #[test]
+    fn a_linear_gradient_fills_the_box_from_its_first_color_to_its_last() {
+        let page = background_box(
+            ".box { background-image: linear-gradient(to bottom, #000000, #ffffff); }",
+            (60, 40.0, 40.0),
+            1.0,
+        );
+        assert!(rgba(&page, 20, 0)[0] <= 8, "the top is the first color");
+        assert!(rgba(&page, 20, 39)[0] >= 247, "the bottom is the last");
+        let middle = rgba(&page, 20, 20)[0];
+        assert!(
+            (110..=146).contains(&middle),
+            "the middle is in between: {middle}"
+        );
+        assert_eq!(
+            rgba(&page, 5, 20),
+            rgba(&page, 35, 20),
+            "no change across the line"
+        );
+        assert_eq!(rgba(&page, 50, 20), [0, 0, 0, 0], "nothing outside the box");
+    }
+
+    #[test]
+    fn the_background_color_shows_through_a_translucent_gradient() {
+        let page = background_box(
+            ".box { background-color: #0000ff; background-image: linear-gradient(to right, transparent, #ff0000); }",
+            (60, 40.0, 40.0),
+            1.0,
+        );
+        let [r, _, b, a] = rgba(&page, 0, 20);
+        assert!(
+            r <= 8 && b >= 247 && a == 255,
+            "the left is the blue underneath: {r} {b}"
+        );
+        let [r, _, b, _] = rgba(&page, 39, 20);
+        assert!(r >= 247 && b <= 8, "the right is the red on top: {r} {b}");
+    }
+
+    #[test]
+    fn the_first_layer_is_on_top() {
+        let page = background_box(
+            ".box { background-image: linear-gradient(#ff0000, #ff0000), linear-gradient(#0000ff, #0000ff); }",
+            (30, 20.0, 20.0),
+            1.0,
+        );
+        assert_eq!(rgba(&page, 10, 10), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn a_gradient_is_cut_to_the_rounded_corners() {
+        let page = background_box(
+            ".box { border-radius: 12px; background-image: linear-gradient(#ff0000, #ff0000); }",
+            (40, 40.0, 40.0),
+            1.0,
+        );
+        assert_eq!(rgba(&page, 0, 0)[3], 0, "the corner is cut");
+        assert_eq!(rgba(&page, 20, 20), [255, 0, 0, 255]);
+        assert_eq!(
+            rgba(&page, 20, 0),
+            [255, 0, 0, 255],
+            "the straight edge stays"
+        );
+    }
+
+    #[test]
+    fn background_size_and_repeat_lay_tiles_out() {
+        // 10px tiles of a left-to-right black-to-white ramp, repeated.
+        let page = background_box(
+            ".box { background-image: linear-gradient(to right, #000000, #ffffff); background-size: 10px 10px; }",
+            (40, 40.0, 40.0),
+            1.0,
+        );
+        assert!(rgba(&page, 0, 0)[0] <= 20 && rgba(&page, 9, 0)[0] >= 235);
+        assert!(rgba(&page, 10, 0)[0] <= 20, "the ramp starts again");
+        assert_eq!(
+            rgba(&page, 3, 5),
+            rgba(&page, 33, 35),
+            "every tile is the same"
+        );
+
+        let once = background_box(
+            ".box { background-color: #00ff00; background-image: linear-gradient(#ff0000, #ff0000); background-size: 10px 10px; background-repeat: no-repeat; }",
+            (40, 40.0, 40.0),
+            1.0,
+        );
+        assert_eq!(rgba(&once, 5, 5), [255, 0, 0, 255]);
+        assert_eq!(rgba(&once, 15, 5), [0, 255, 0, 255], "no second tile");
+
+        let placed = background_box(
+            ".box { background-image: linear-gradient(#ff0000, #ff0000); background-size: 10px 10px; background-repeat: no-repeat; background-position: right bottom; }",
+            (40, 40.0, 40.0),
+            1.0,
+        );
+        assert_eq!(rgba(&placed, 35, 35), [255, 0, 0, 255]);
+        assert_eq!(rgba(&placed, 5, 5)[3], 0);
+    }
+
+    #[test]
+    fn the_origin_and_clip_boxes_pick_where_the_gradient_sits_and_what_it_covers() {
+        // A 4px border and 6px padding: the content box starts at 10.
+        let base = "border: 4px solid #000000; padding: 6px; background-image: linear-gradient(#ff0000, #ff0000); background-repeat: no-repeat;";
+        let border_box = background_box(
+            &format!(".box {{ {base} background-clip: border-box; }}"),
+            (40, 40.0, 40.0),
+            1.0,
+        );
+        assert_eq!(
+            rgba(&border_box, 1, 1)[0],
+            0,
+            "the border is painted over the layer"
+        );
+        let content_box = background_box(
+            &format!(".box {{ {base} background-clip: content-box; }}"),
+            (40, 40.0, 40.0),
+            1.0,
+        );
+        assert_eq!(
+            rgba(&content_box, 8, 20),
+            [0, 0, 0, 0],
+            "the padding is not covered"
+        );
+        assert_eq!(rgba(&content_box, 12, 20), [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn lengths_scale_with_the_display_but_percentages_do_not() {
+        let page = background_box(
+            ".box { background-image: linear-gradient(#ff0000, #ff0000); background-size: 10px 50%; background-repeat: no-repeat; }",
+            (80, 20.0, 20.0),
+            2.0,
+        );
+        // A 40x40 painted box; the tile is 20 wide and 20 tall.
+        assert_eq!(rgba(&page, 19, 19), [255, 0, 0, 255]);
+        assert_eq!(rgba(&page, 21, 5)[3], 0);
+        assert_eq!(rgba(&page, 5, 21)[3], 0);
+    }
+
+    #[test]
+    fn a_gradient_painted_again_unchanged_is_not_rendered_again() {
+        // Colors and sizes no other test uses, so the cache starts cold for them.
+        let css = ".box { background-image: linear-gradient(#123457, #fedcb8); background-size: 33px 21px; }";
+        let before = layer_cache::rendered_on_this_thread();
+        let first = background_box(css, (50, 47.0, 47.0), 1.0);
+        assert_eq!(layer_cache::rendered_on_this_thread() - before, 1);
+        let second = background_box(css, (50, 47.0, 47.0), 1.0);
+        assert_eq!(
+            layer_cache::rendered_on_this_thread() - before,
+            1,
+            "the second frame reuses the layer"
+        );
+        assert_eq!(first.data(), second.data(), "and paints the same pixels");
+        // Anything that changes the pixels renders again: the color, the scale.
+        background_box(&css.replace("#123457", "#123458"), (50, 47.0, 47.0), 1.0);
+        assert_eq!(layer_cache::rendered_on_this_thread() - before, 2);
+        background_box(css, (100, 47.0, 47.0), 2.0);
+        assert_eq!(layer_cache::rendered_on_this_thread() - before, 3);
+    }
+
+    #[test]
+    fn radial_and_conic_gradients_paint() {
+        let radial = background_box(
+            ".box { background-image: radial-gradient(circle closest-side, #ffffff, #000000); }",
+            (40, 40.0, 40.0),
+            1.0,
+        );
+        assert!(rgba(&radial, 20, 20)[0] >= 240, "white at the center");
+        assert!(rgba(&radial, 0, 20)[0] <= 20 && rgba(&radial, 20, 0)[0] <= 20);
+        let conic = background_box(
+            ".box { background-image: conic-gradient(#ff0000 0 25%, #00ff00 0 50%, #0000ff 0 75%, #ffff00 0); }",
+            (40, 40.0, 40.0),
+            1.0,
+        );
+        assert_eq!(
+            rgba(&conic, 30, 10),
+            [255, 0, 0, 255],
+            "upper right quarter"
+        );
+        assert_eq!(rgba(&conic, 30, 30), [0, 255, 0, 255], "lower right");
+        assert_eq!(rgba(&conic, 10, 30), [0, 0, 255, 255], "lower left");
+        assert_eq!(rgba(&conic, 10, 10), [255, 255, 0, 255], "upper left");
+    }
+
+    #[test]
+    fn a_gradient_goes_under_the_inset_shadow_and_the_border() {
+        let page = background_box(
+            ".box { border: 3px solid #00ff00; background-image: linear-gradient(#ff0000, #ff0000); box-shadow: inset 0 0 0 5px #0000ff; }",
+            (40, 40.0, 40.0),
+            1.0,
+        );
+        assert_eq!(rgba(&page, 1, 20), [0, 255, 0, 255], "the border on top");
+        assert_eq!(
+            rgba(&page, 5, 20),
+            [0, 0, 255, 255],
+            "then the inset shadow"
+        );
+        assert_eq!(rgba(&page, 20, 20), [255, 0, 0, 255], "the gradient inside");
     }
 
     fn backdrop_over_red_buffer(backdrop_css: &str) -> Canvas {

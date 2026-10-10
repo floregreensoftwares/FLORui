@@ -1,0 +1,5 @@
+.box {
+    width: 100px;
+    height: 100px;
+    background-image: conic-gradient(#ff5a5f 0 25%, #ffd166 0 60%, #2ec4b6 0);
+}

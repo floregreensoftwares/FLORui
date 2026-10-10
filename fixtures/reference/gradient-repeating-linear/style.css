@@ -1,0 +1,5 @@
+.box {
+    width: 120px;
+    height: 80px;
+    background-image: repeating-linear-gradient(45deg, #ff5a5f 0, #ff5a5f 10px, #ffffff 10px, #ffffff 20px);
+}

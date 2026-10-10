@@ -1,0 +1,24 @@
+{
+  "id": "gradient-linear-angle",
+  "description": "A linear gradient at an angle with three stops, one of them positioned.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 140,
+    "height_css_px": 100,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "box",
+    "css": ".box { width: 120px; height: 80px; background-image: linear-gradient(65deg, #1b1b2f 0%, #ffd166 60%, #ff5a5f 100%); }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 0.2,
+    "channel_tolerance": 2,
+    "reason": "Chromium dithers gradients, so a smooth gradient differs from this engine by one level of 255 on a third of its pixels (max error 1, mean about 0.3); channel_tolerance 2 stops that from counting. Measured against desktop Chrome: nothing differs by more than 2 levels, geometry an exact match."
+  }
+}

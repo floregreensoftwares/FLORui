@@ -1,0 +1,5 @@
+.box {
+    width: 120px;
+    height: 80px;
+    background-image: linear-gradient(to bottom, #ff5a5f, #2ec4b6);
+}

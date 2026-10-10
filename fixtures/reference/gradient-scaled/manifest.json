@@ -1,0 +1,24 @@
+{
+  "id": "gradient-scaled",
+  "description": "A tiled gradient at device pixel ratio 2: lengths scale with the display.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 120,
+    "height_css_px": 100,
+    "device_pixel_ratio": 2
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "box",
+    "css": ".box { width: 100px; height: 80px; border-radius: 12px; background-image: linear-gradient(to right, #ff5a5f, #ffd166), radial-gradient(circle at 50% 50%, #ffffff, #1b1b2f); background-size: 40px 20px, 100% 100%; background-repeat: repeat-x, no-repeat; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 0.8,
+    "channel_tolerance": 2,
+    "reason": "At device pixel ratio 2 the dithering stays at one level and the anti-aliased corners of the rounded box differ by up to 55 levels in 0.28% of the pixels, geometry an exact match."
+  }
+}

@@ -22,6 +22,16 @@ use florui_style::Rgba;
 
 use crate::workloads::Workload;
 
+/// Background declarations for the gradient workloads.
+const LINEAR: &str = "background-image: linear-gradient(135deg, #e63946, #f4a261 45%, #264653);";
+const RADIAL: &str =
+    "background-image: radial-gradient(circle at 30% 40%, #ffffff, #2a9d8f 50%, #264653);";
+const CONIC: &str =
+    "background-image: conic-gradient(from 20deg, #e63946, #e9c46a, #2a9d8f, #3a86ff, #e63946);";
+const TILED: &str =
+    "background-image: linear-gradient(to right, #e63946, #e9c46a); background-size: 24px 24px;";
+const LAYERS: &str = "background-color: #264653; background-image: radial-gradient(circle at 80% 20%, rgba(255, 255, 255, 0.6), transparent 40%), linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.5)), repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.15) 0 6px, transparent 6px 12px);";
+
 /// How many 25 px tiles fill the 800 x 600 window.
 const TILES: usize = 32 * 24;
 
@@ -36,6 +46,9 @@ enum Effect {
     Backdrop(u32),
     Blur(u32),
     Chain,
+    /// A `background-image` declared on the panel, with its other background
+    /// properties.
+    Background(&'static str),
     /// A backdrop blur with the refracting glass material and a rim light.
     Glass {
         blur: u32,
@@ -52,6 +65,7 @@ impl Effect {
             Effect::Backdrop(radius) => format!("backdrop-filter: blur({radius}px);"),
             Effect::Blur(radius) => format!("filter: blur({radius}px);"),
             Effect::Chain => "filter: brightness(1.2) contrast(1.3) saturate(1.5);".into(),
+            Effect::Background(declarations) => declarations.to_string(),
             Effect::Glass {
                 blur,
                 refraction,
@@ -362,6 +376,42 @@ pub fn all() -> Vec<Workload> {
             description: "The same panel with filter: brightness() contrast() saturate()",
             exercises: "an ordered chain of color filters on an intermediate surface",
             build: || with_effect(one(600, 400, Effect::Chain, false, 1.0)),
+        },
+        Workload {
+            name: "effects_gradient_linear_large",
+            description: "A 600 x 400 panel with a three-stop linear-gradient background",
+            exercises: "painting a linear gradient into a box over busy content",
+            build: || with_effect(one(600, 400, Effect::Background(LINEAR), false, 1.0)),
+        },
+        Workload {
+            name: "effects_gradient_radial_large",
+            description: "A 600 x 400 panel with a radial-gradient background",
+            exercises: "a gradient that takes a square root per pixel",
+            build: || with_effect(one(600, 400, Effect::Background(RADIAL), false, 1.0)),
+        },
+        Workload {
+            name: "effects_gradient_conic_large",
+            description: "A 600 x 400 panel with a conic-gradient background",
+            exercises: "a gradient that takes an arctangent per pixel",
+            build: || with_effect(one(600, 400, Effect::Background(CONIC), false, 1.0)),
+        },
+        Workload {
+            name: "effects_gradient_tiled_large",
+            description: "A 600 x 400 panel whose linear gradient is tiled in 24 px squares",
+            exercises: "many tiles of one gradient, as a texture would be laid out",
+            build: || with_effect(one(600, 400, Effect::Background(TILED), false, 1.0)),
+        },
+        Workload {
+            name: "effects_gradient_layers_large",
+            description: "A 600 x 400 panel with three background layers over its color",
+            exercises: "layers painted bottom to top, each into its own surface",
+            build: || with_effect(one(600, 400, Effect::Background(LAYERS), false, 1.0)),
+        },
+        Workload {
+            name: "effects_gradient_linear_large_dpr2",
+            description: "The linear gradient panel at device pixel ratio 2",
+            exercises: "four times the pixels of the same gradient",
+            build: || with_effect(one(600, 400, Effect::Background(LINEAR), false, 2.0)),
         },
     ]
 }
