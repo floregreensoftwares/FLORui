@@ -204,3 +204,36 @@ fn the_desk_fits_the_window_at_any_size() {
         }
     }
 }
+
+#[test]
+fn the_new_card_form_stays_inside_its_plate_at_the_smallest_window() {
+    let mut mounted = Harness::new(|| App(AppProps {}))
+        .css(&taskboard::stylesheet())
+        .viewport(900.0, 600.0)
+        .mount();
+    go(&mut mounted, "nav-stack");
+    let plate = mounted.get(by_class("new-task"));
+    let plate = mounted.bounds(plate).expect("the plate is laid out");
+    let parts = [
+        ("the title", mounted.get(by_id("new-title"))),
+        (
+            "the priority keys",
+            *mounted
+                .all(by_class("segmented"))
+                .last()
+                .expect("a row of keys"),
+        ),
+        ("the brass key", mounted.get(by_class("key"))),
+    ];
+    for (class, node) in parts {
+        let bounds = mounted.bounds(node).expect("laid out");
+        assert!(
+            bounds.x >= plate.x && bounds.x + bounds.width <= plate.x + plate.width,
+            "{class} spans {}..{}, the plate {}..{}",
+            bounds.x,
+            bounds.x + bounds.width,
+            plate.x,
+            plate.x + plate.width
+        );
+    }
+}
