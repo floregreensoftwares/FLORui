@@ -3407,11 +3407,26 @@ fn paint_rounded_border(
     let (x1, y1) = (outer.x + outer.width, outer.y + outer.height);
     let (ix0, iy0) = (inner.x, inner.y);
     let (ix1, iy1) = (inner.x + inner.width, inner.y + inner.height);
+    // The sides meet along the diagonal from each outer corner through its
+    // inner one, carried on as far in as the corner is round: a rounded
+    // corner's ring lies along that line, further in than the border is wide.
+    let reach = outer
+        .radii
+        .iter()
+        .fold(0.0f32, |most, &(h, v)| most.max(h).max(v));
+    let along = |from: (f32, f32), through: (f32, f32)| {
+        let (dx, dy) = (through.0 - from.0, through.1 - from.1);
+        let step = dx.abs().max(dy.abs()).max(1.0e-3);
+        let scale = 1.0 + reach / step;
+        (from.0 + dx * scale, from.1 + dy * scale)
+    };
+    let (top_left, top_right) = (along((x0, y0), (ix0, iy0)), along((x1, y0), (ix1, iy0)));
+    let (bottom_right, bottom_left) = (along((x1, y1), (ix1, iy1)), along((x0, y1), (ix0, iy1)));
     let wedges = [
-        [(x0, y0), (x1, y0), (ix1, iy0), (ix0, iy0)],
-        [(x1, y0), (x1, y1), (ix1, iy1), (ix1, iy0)],
-        [(x1, y1), (x0, y1), (ix0, iy1), (ix1, iy1)],
-        [(x0, y1), (x0, y0), (ix0, iy0), (ix0, iy1)],
+        [(x0, y0), (x1, y0), top_right, top_left],
+        [(x1, y0), (x1, y1), bottom_right, top_right],
+        [(x1, y1), (x0, y1), bottom_left, bottom_right],
+        [(x0, y1), (x0, y0), top_left, bottom_left],
     ];
     // Each side is the ring cut to its wedge. The cut is a mask the size of the
     // area the border covers, in a layer of that size, so a small box costs a
@@ -7868,6 +7883,60 @@ mod tests {
             let interior = outline.solid_interior().expect("room inside");
             assert_eq!(draw(Some((interior, inset))), draw(None), "inset: {inset}");
         }
+    }
+
+    #[test]
+    fn a_rounded_border_of_four_colors_is_painted_all_round_its_corners() {
+        // 6px sides on a 60px box with 25.8px corners: the arc of each corner lies
+        // well inside the box's corner square, along its diagonal.
+        let page = single_box_buffer_at(
+            ".box { background-color: #000000; border: 6px solid; border-radius: 4.3px; \
+             border-color: #ff0000 #00ff00 #0000ff #ffff00; }",
+            80,
+            6.0,
+            0.0,
+            0.0,
+        );
+        // Half way through the ring, at 45 degrees from the arc's center: the
+        // diagonal where two sides meet. A pixel to either side of it belongs to
+        // one of them.
+        let c = 25.8 - 22.8 * std::f32::consts::FRAC_1_SQRT_2;
+        let at = |x: f32, y: f32| {
+            let p = page.pixel(x as u32, y as u32).expect("inside the page");
+            [p.red(), p.green(), p.blue()]
+        };
+        assert_eq!(at(c - 2.0, c + 2.0), [255, 255, 0], "top left, left side");
+        assert_eq!(at(c + 2.0, c - 2.0), [255, 0, 0], "top left, top side");
+        assert_eq!(
+            at(60.0 - c + 2.0, c + 2.0),
+            [0, 255, 0],
+            "top right, right side"
+        );
+        assert_eq!(
+            at(60.0 - c - 2.0, c - 2.0),
+            [255, 0, 0],
+            "top right, top side"
+        );
+        assert_eq!(
+            at(60.0 - c + 2.0, 60.0 - c - 2.0),
+            [0, 255, 0],
+            "bottom right, right side"
+        );
+        assert_eq!(
+            at(60.0 - c - 2.0, 60.0 - c + 2.0),
+            [0, 0, 255],
+            "bottom right, bottom side"
+        );
+        assert_eq!(
+            at(c - 2.0, 60.0 - c - 2.0),
+            [255, 255, 0],
+            "bottom left, left side"
+        );
+        assert_eq!(
+            at(c + 2.0, 60.0 - c + 2.0),
+            [0, 0, 255],
+            "bottom left, bottom side"
+        );
     }
 
     #[test]
