@@ -12,6 +12,7 @@ name = "florui_test"
 
 [dependencies]
 florui = { path = "../florui" }
+florui-paint = { path = "../florui-paint" }
 florui-platform = { path = "../florui-platform" }
 # Always measuring-capable here, so a test can ask what work a change did in any build.
 florui-profile = { path = "../florui-profile", features = ["profiling"] }

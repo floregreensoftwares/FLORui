@@ -40,6 +40,14 @@ pub struct HeadlessOptions {
     /// built for a frame only when it is, the way the desktop host does; a
     /// window nobody listens to builds none.
     pub assistive_technology: bool,
+    /// Paints each frame over the last, as a window does, instead of whole.
+    /// What is painted again is the same picture to within a few levels of a
+    /// color, not to the bit, so a test that compares pixels leaves this off.
+    pub repaint: bool,
+    /// Paints every frame whole as well as over the last (and so implies
+    /// `repaint`), and panics when the two differ by more than a few levels. On
+    /// when `FLORUI_VERIFY_REPAINT` is set.
+    pub verify_repaint: bool,
     /// Providers made reachable through context from the first render on,
     /// for a component that reads something its host supplies.
     pub context: Vec<Box<dyn Fn()>>,
@@ -55,6 +63,8 @@ impl Default for HeadlessOptions {
             prefers_dark: false,
             prefers_reduced_motion: false,
             assistive_technology: true,
+            repaint: false,
+            verify_repaint: std::env::var_os("FLORUI_VERIFY_REPAINT").is_some(),
             context: Vec::new(),
         }
     }
@@ -272,7 +282,18 @@ pub struct HeadlessWindow {
     accessibility_tree: crate::accessibility::tree::AccessibilityTree,
     assistive_technology: bool,
     clock: f64,
+    /// Paints each frame over the last, as a window does.
+    repainter: florui_paint::Repainter,
+    /// Whether frames are painted over the last.
+    repaint: bool,
+    /// Paints each frame whole too, to find a frame the repainter got wrong.
+    verify_repaint: bool,
+    last_repaint: Option<florui_paint::Repaint>,
 }
+
+/// How far, in levels of a channel, a frame painted over the last may be from the
+/// same frame painted whole.
+const REPAINT_TOLERANCE: u8 = 4;
 
 impl HeadlessWindow {
     /// Parses `css`, renders `root` once and returns the window.
@@ -312,7 +333,16 @@ impl HeadlessWindow {
             accessibility_tree: crate::accessibility::tree::AccessibilityTree::new(),
             assistive_technology: options.assistive_technology,
             clock: 0.0,
+            repainter: florui_paint::Repainter::new(),
+            repaint: options.repaint || options.verify_repaint,
+            verify_repaint: options.verify_repaint,
+            last_repaint: None,
         })
+    }
+
+    /// How the last frame was painted: whole, or over the one before it.
+    pub fn last_repaint(&self) -> Option<florui_paint::Repaint> {
+        self.last_repaint
     }
 
     /// Whether an assistive technology is listening, which is what decides
@@ -575,23 +605,68 @@ impl HeadlessWindow {
         };
         drop(accessibility_span);
         let raster_span = florui_profile::span(florui_profile::Phase::Raster);
-        let canvas = florui_paint::paint_to_buffer_with_desktop_extras(
-            font,
-            physical.0,
-            physical.1,
-            self.canvas_color,
-            arena,
-            styles,
-            &parts.physical_layouts,
-            scale_factor as f32,
-            Some(&parts.text_inputs),
-            Some(&parts.images),
-        );
+        let paint_whole = |font: &mut florui_text::Font| {
+            florui_paint::paint_to_buffer_with_desktop_extras(
+                font,
+                physical.0,
+                physical.1,
+                self.canvas_color,
+                arena,
+                styles,
+                &parts.physical_layouts,
+                scale_factor as f32,
+                Some(&parts.text_inputs),
+                Some(&parts.images),
+            )
+        };
+        let (rgba, repaint) = if self.repaint {
+            let canvas = self.repainter.paint(florui_paint::PaintInputs {
+                font,
+                width: physical.0,
+                height: physical.1,
+                canvas_color: self.canvas_color,
+                arena,
+                styles,
+                layouts: &parts.physical_layouts,
+                scale_factor: scale_factor as f32,
+                text_inputs: Some(&parts.text_inputs),
+                images: Some(&parts.images),
+            });
+            (canvas.data().to_vec(), self.repainter.last())
+        } else {
+            (paint_whole(font).data().to_vec(), None)
+        };
+        if self.verify_repaint {
+            let whole = paint_whole(font);
+            let worst = rgba
+                .iter()
+                .zip(whole.data())
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap_or(0);
+            if worst > REPAINT_TOLERANCE {
+                let at = rgba
+                    .iter()
+                    .zip(whole.data())
+                    .position(|(a, b)| a.abs_diff(*b) > REPAINT_TOLERANCE)
+                    .unwrap_or(0);
+                let pixel = at / 4;
+                panic!(
+                    "a frame painted over the last ({repaint:?}) differs from the frame painted whole \
+                     by {worst} levels, first at pixel ({}, {}): {:?} against {:?}",
+                    pixel % physical.0 as usize,
+                    pixel / physical.0 as usize,
+                    &rgba[pixel * 4..pixel * 4 + 4],
+                    &whole.data()[pixel * 4..pixel * 4 + 4],
+                );
+            }
+        }
         drop(raster_span);
+        self.last_repaint = repaint;
         HeadlessFrame {
             width: physical.0,
             height: physical.1,
-            rgba: canvas.data().to_vec(),
+            rgba,
             bounds,
             accessibility,
         }
@@ -1352,6 +1427,98 @@ mod tests {
                 .iter()
                 .any(|node| node.role == "Button" && node.focused),
             "and the focus the Tab key moved while detached: {after:?}"
+        );
+    }
+    const REPAINT_CSS: &str = ".page { display: flex; flex-direction: column; gap: 10px; \
+        padding: 10px; } \
+        .row { width: 120px; height: 40px; background-color: #335577; \
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.5); border-radius: 6px; } \
+        .row:hover { background-color: #7799bb; } \
+        .far { width: 60px; height: 30px; background-color: #aa4433; } \n        .far:hover { margin-left: 50px; }";
+
+    fn repainting_window() -> HeadlessWindow {
+        HeadlessWindow::new(
+            REPAINT_CSS,
+            || {
+                view! {
+                    <div class="page">
+                        <div class="row" id="a"></div>
+                        <div class="row" id="b"></div>
+                        <div class="far"></div>
+                    </div>
+                }
+            },
+            HeadlessOptions {
+                width: 400.0,
+                height: 400.0,
+                repaint: true,
+                verify_repaint: true,
+                ..HeadlessOptions::default()
+            },
+        )
+        .expect("the stylesheet parses")
+    }
+
+    #[test]
+    fn a_frame_is_painted_whole_then_over_the_last_where_something_changed() {
+        use florui_paint::Repaint;
+        let mut window = repainting_window();
+        let _ = window.frame();
+        assert_eq!(
+            window.last_repaint(),
+            Some(Repaint::Whole),
+            "the first frame"
+        );
+
+        let _ = window.frame();
+        assert_eq!(
+            window.last_repaint(),
+            Some(Repaint::Nothing),
+            "nothing changed, so the frame is the last one"
+        );
+
+        let (x, y, w, h) = {
+            let (arena, ..) = window.runtime().geometry();
+            let a = arena
+                .find(|a, id| a.id_attr(id) == Some("a"))
+                .expect("the first row");
+            let frame = window.frame();
+            frame.bounds[&a]
+        };
+        window.pointer_move(x + w / 2.0, y + h / 2.0);
+        let _ = window.frame();
+        match window.last_repaint() {
+            Some(Repaint::Part(x0, y0, x1, y1)) => {
+                assert!(
+                    (x1 - x0) * (y1 - y0) < 400 * 400 / 2,
+                    "only a part of the window: {x0},{y0} to {x1},{y1}"
+                );
+            }
+            other => panic!("a hover is painted over the last frame, not {other:?}"),
+        }
+
+        // A box that moves leaves its old place as well as taking a new one: the
+        // frame is checked against the whole one at every step.
+        let far = {
+            let (arena, ..) = window.runtime().geometry();
+            arena
+                .find(|a, id| a.classes(id).iter().any(|c| c == "far"))
+                .expect("the far box")
+        };
+        let (fx, fy, fw, fh) = window.frame().bounds[&far];
+        window.pointer_move(fx + fw / 2.0, fy + fh / 2.0);
+        let _ = window.frame();
+        assert!(matches!(window.last_repaint(), Some(Repaint::Part(..))));
+        window.pointer_move(1.0, 1.0);
+        let _ = window.frame();
+        assert!(matches!(window.last_repaint(), Some(Repaint::Part(..))));
+
+        window.resize(300.0, 300.0);
+        let _ = window.frame();
+        assert_eq!(
+            window.last_repaint(),
+            Some(Repaint::Whole),
+            "a new size is painted whole"
         );
     }
 }

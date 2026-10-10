@@ -2081,6 +2081,7 @@ name = "florui-test"
 version = "0.1.0"
 dependencies = [
  "florui",
+ "florui-paint",
  "florui-platform",
  "florui-profile",
  "florui-reactive",
@@ -5517,6 +5518,7 @@ version = "0.1.0"
 dependencies = [
  "florui",
  "florui-build",
+ "florui-paint",
  "florui-platform",
  "florui-profile",
  "florui-routing",
