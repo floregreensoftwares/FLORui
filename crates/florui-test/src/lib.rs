@@ -166,6 +166,13 @@ impl Harness {
         self
     }
 
+    /// Paints a frame painted whole in bands on the thread pool, as a window
+    /// does.
+    pub fn parallel_paint(mut self, on: bool) -> Self {
+        self.options.parallel_paint = on;
+        self
+    }
+
     /// Paints each frame over the last, as a window does, instead of whole.
     pub fn repaint(mut self, on: bool) -> Self {
         self.options.repaint = on;

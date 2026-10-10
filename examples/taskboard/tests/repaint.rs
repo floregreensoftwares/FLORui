@@ -104,3 +104,23 @@ fn a_new_size_is_painted_whole() {
     mounted.hover(key);
     assert!(is_part(painted(&mut mounted)));
 }
+
+#[test]
+fn a_frame_painted_in_bands_is_the_frame_painted_whole() {
+    let mut mounted = Harness::new(|| App(AppProps {}))
+        .css(&taskboard::stylesheet())
+        .viewport(1180.0, 760.0)
+        .parallel_paint(true)
+        .verify_repaint(true)
+        .mount();
+    // Every frame is checked against the whole one, whichever way it is painted.
+    for id in ["nav-desk", "nav-stack", "nav-settings"] {
+        let key = mounted.get(by_id(id));
+        mounted.click(key);
+        let _ = mounted.frame();
+    }
+    mounted.resize(1000.0, 700.0);
+    let _ = mounted.frame();
+    mounted.resize(1300.0, 900.0);
+    let _ = mounted.frame();
+}
