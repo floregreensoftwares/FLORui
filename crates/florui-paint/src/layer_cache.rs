@@ -39,21 +39,33 @@ impl LayerCache {
         }
     }
 
+    fn get(&mut self, key: &str) -> Option<Rc<Pixmap>> {
+        self.tick += 1;
+        let entry = self.entries.get_mut(key)?;
+        entry.last_used = self.tick;
+        Some(Rc::clone(&entry.pixels))
+    }
+
+    #[cfg(test)]
     fn get_or_render(
         &mut self,
         key: String,
         render: impl FnOnce() -> Option<Pixmap>,
     ) -> Option<Rc<Pixmap>> {
-        self.tick += 1;
-        if let Some(entry) = self.entries.get_mut(&key) {
-            entry.last_used = self.tick;
-            return Some(Rc::clone(&entry.pixels));
+        if let Some(hit) = self.get(&key) {
+            return Some(hit);
         }
+        let pixels = render()?;
+        Some(self.insert(key, pixels))
+    }
+
+    /// Keeps `pixels` under `key` (unless too big) and hands them back.
+    fn insert(&mut self, key: String, pixels: Pixmap) -> Rc<Pixmap> {
         self.rendered += 1;
-        let pixels = Rc::new(render()?);
+        let pixels = Rc::new(pixels);
         let size = pixels.data().len();
         if size > self.capacity / 4 {
-            return Some(pixels);
+            return pixels;
         }
         while self.bytes + size > self.capacity {
             let Some(oldest) = self
@@ -76,7 +88,7 @@ impl LayerCache {
                 last_used: self.tick,
             },
         );
-        Some(pixels)
+        pixels
     }
 }
 
@@ -84,13 +96,17 @@ thread_local! {
     static CACHE: RefCell<LayerCache> = RefCell::new(LayerCache::with_capacity(CAPACITY_BYTES));
 }
 
-/// The layer for `key` from this thread's cache, rendered with `render` if it
-/// is not there. `render` must not paint a background layer itself.
+/// The pixels for `key` from this thread's cache, rendered with `render` if
+/// they are not there. `render` runs with the cache free, so it may use it.
 pub(crate) fn get_or_render(
     key: String,
     render: impl FnOnce() -> Option<Pixmap>,
 ) -> Option<Rc<Pixmap>> {
-    CACHE.with(|cache| cache.borrow_mut().get_or_render(key, render))
+    if let Some(hit) = CACHE.with(|cache| cache.borrow_mut().get(&key)) {
+        return Some(hit);
+    }
+    let pixels = render()?;
+    Some(CACHE.with(|cache| cache.borrow_mut().insert(key, pixels)))
 }
 
 /// How many layers this thread has rendered (misses), for tests.
