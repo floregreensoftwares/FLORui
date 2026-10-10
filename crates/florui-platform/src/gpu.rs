@@ -127,6 +127,9 @@ pub struct GpuPresenter {
     capability: PresentationCapability,
     upload_texture: wgpu::Texture,
     upload_size: (u32, u32),
+    /// Whether the upload texture holds nothing yet of the frame it must hold: a
+    /// new texture (a new presenter, a new size) is filled whole the first time.
+    needs_whole_upload: bool,
     /// Set by wgpu when the device is lost or destroyed.
     device_lost: Arc<AtomicBool>,
 }
@@ -261,6 +264,7 @@ impl GpuPresenter {
             capability,
             upload_texture,
             upload_size: (width, height),
+            needs_whole_upload: true,
             device_lost,
         })
     }
@@ -292,6 +296,7 @@ impl GpuPresenter {
         self.upload_texture =
             create_upload_texture(&self.device, self.config.format, width, height);
         self.upload_size = (width, height);
+        self.needs_whole_upload = true;
     }
 
     /// Uploads `rgba` (tiny-skia's own premultiplied `R,G,B,A` byte
@@ -308,6 +313,17 @@ impl GpuPresenter {
     /// frame. A lost device or surface reports [`PresentOutcome::Lost`] so the
     /// caller can build a new presenter.
     pub fn present(&mut self, rgba: &[u8]) -> PresentOutcome {
+        self.present_changed(rgba, None)
+    }
+
+    /// [`Self::present`], uploading only `changed` (rectangles `x0, y0, x1, y1` of
+    /// the frame, which differs from the one uploaded last nowhere else) when it
+    /// is given and the texture already holds that last frame.
+    pub fn present_changed(
+        &mut self,
+        rgba: &[u8],
+        changed: Option<&[(i32, i32, i32, i32)]>,
+    ) -> PresentOutcome {
         if self.is_lost() {
             return PresentOutcome::Lost;
         }
@@ -320,25 +336,62 @@ impl GpuPresenter {
         );
 
         let upload_span = florui_profile::span(florui_profile::Phase::Upload);
-        self.queue.write_texture(
-            TexelCopyTextureInfo {
-                texture: &self.upload_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: TextureAspect::All,
-            },
-            rgba,
-            TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width * 4),
-                rows_per_image: Some(height),
-            },
-            Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-        );
+        let parts = changed.filter(|_| !self.needs_whole_upload);
+        match parts {
+            Some(rects) => {
+                for &(x0, y0, x1, y1) in rects {
+                    let (x0, y0) = (x0.max(0) as u32, y0.max(0) as u32);
+                    let (x1, y1) = (
+                        (x1.max(0) as u32).min(width),
+                        (y1.max(0) as u32).min(height),
+                    );
+                    if x1 <= x0 || y1 <= y0 {
+                        continue;
+                    }
+                    self.queue.write_texture(
+                        TexelCopyTextureInfo {
+                            texture: &self.upload_texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d { x: x0, y: y0, z: 0 },
+                            aspect: TextureAspect::All,
+                        },
+                        &rgba[((y0 * width + x0) * 4) as usize..],
+                        TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(width * 4),
+                            rows_per_image: Some(y1 - y0),
+                        },
+                        Extent3d {
+                            width: x1 - x0,
+                            height: y1 - y0,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+            }
+            None => {
+                self.queue.write_texture(
+                    TexelCopyTextureInfo {
+                        texture: &self.upload_texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: TextureAspect::All,
+                    },
+                    rgba,
+                    TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(width * 4),
+                        rows_per_image: Some(height),
+                    },
+                    Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+                self.needs_whole_upload = false;
+            }
+        }
 
         drop(upload_span);
         let acquire_span = florui_profile::span(florui_profile::Phase::Acquire);

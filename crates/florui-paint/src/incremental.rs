@@ -90,6 +90,9 @@ struct Memo {
 pub struct Repainter {
     memo: Option<Memo>,
     last: Option<Repaint>,
+    /// The rectangles `(x0, y0, x1, y1)` the last frame painted again, when it
+    /// was painted over the one before.
+    parts: Option<Vec<(i32, i32, i32, i32)>>,
 }
 
 /// More of the window than this is painted whole: bookkeeping for a part that
@@ -112,6 +115,13 @@ impl Repainter {
         self.last
     }
 
+    /// What the last frame changed of the one before it, as rectangles in painted
+    /// pixels: empty when nothing changed, `None` when it was painted whole and
+    /// so may differ everywhere.
+    pub fn last_parts(&self) -> Option<&[(i32, i32, i32, i32)]> {
+        self.parts.as_deref()
+    }
+
     /// Forgets the last frame: the next one is painted whole.
     pub fn forget(&mut self) {
         self.memo = None;
@@ -119,6 +129,26 @@ impl Repainter {
 
     /// Paints the frame `inputs` describe and returns it.
     pub fn paint(&mut self, inputs: PaintInputs<'_>) -> &Canvas {
+        self.repaint(inputs);
+        self.canvas()
+    }
+
+    /// The frame last painted.
+    ///
+    /// # Panics
+    ///
+    /// Panics before any frame has been painted.
+    pub fn canvas(&self) -> &Canvas {
+        &self
+            .memo
+            .as_ref()
+            .expect("a frame was painted before it is asked for")
+            .canvas
+    }
+
+    /// [`Self::paint`] without handing the frame back, so that what it changed
+    /// can be asked for before the frame is read.
+    pub fn repaint(&mut self, inputs: PaintInputs<'_>) {
         let PaintInputs {
             font,
             width,
@@ -156,8 +186,12 @@ impl Repainter {
             .as_ref()
             .and_then(|old| damage(old, &fresh, (width, height)));
 
+        let mut changed: Option<Vec<(i32, i32, i32, i32)>> = None;
         let (canvas, repaint) = match (kept_canvas, kept_notes, part) {
-            (Some(canvas), Some(_), Some(Damage::Nothing)) => (canvas, Repaint::Nothing),
+            (Some(canvas), Some(_), Some(Damage::Nothing)) => {
+                changed = Some(Vec::new());
+                (canvas, Repaint::Nothing)
+            }
             (Some(mut canvas), Some(_), Some(Damage::Parts(areas))) => {
                 let mut pixels = 0u64;
                 let mut bounds = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
@@ -194,10 +228,12 @@ impl Repainter {
                         bounds.3.max(y1),
                     );
                 }
+                let count = rects.len();
+                changed = Some(rects);
                 (
                     canvas,
                     Repaint::Part {
-                        rects: rects.len(),
+                        rects: count,
                         pixels,
                         bounds,
                     },
@@ -220,17 +256,15 @@ impl Repainter {
             ),
         };
         self.last = Some(repaint);
-        &self
-            .memo
-            .insert(Memo {
-                canvas,
-                width,
-                height,
-                canvas_color,
-                scale_factor,
-                notes: fresh,
-            })
-            .canvas
+        self.parts = changed;
+        self.memo = Some(Memo {
+            canvas,
+            width,
+            height,
+            canvas_color,
+            scale_factor,
+            notes: fresh,
+        });
     }
 }
 

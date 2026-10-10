@@ -1470,12 +1470,21 @@ mod tests {
             Some(Repaint::Whole),
             "the first frame"
         );
+        assert!(
+            window.repainter.last_parts().is_none(),
+            "a frame painted whole may differ everywhere"
+        );
 
         let _ = window.frame();
         assert_eq!(
             window.last_repaint(),
             Some(Repaint::Nothing),
             "nothing changed, so the frame is the last one"
+        );
+        assert_eq!(
+            window.repainter.last_parts(),
+            Some(&[][..]),
+            "and nothing is uploaded"
         );
 
         let (x, y, w, h) = {
@@ -1490,6 +1499,11 @@ mod tests {
         let _ = window.frame();
         match window.last_repaint() {
             Some(Repaint::Part { pixels, bounds, .. }) => {
+                let parts = window.repainter.last_parts().expect("the parts painted");
+                assert!(!parts.is_empty());
+                assert!(parts.iter().all(|&(x0, y0, x1, y1)| {
+                    x0 >= bounds.0 && y0 >= bounds.1 && x1 <= bounds.2 && y1 <= bounds.3
+                }));
                 assert!(
                     pixels < 400 * 400 / 2,
                     "only a part of the window: {pixels} pixels within {bounds:?}"
