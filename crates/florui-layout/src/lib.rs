@@ -61,8 +61,10 @@ use florui_style::{
 use taffy::prelude::*;
 use taffy::{Baselines, compute_leaf_layout};
 
+mod cache;
 mod transform;
 
+pub use cache::LayoutCache;
 pub use transform::{Affine, resolve_transform, screen_bounds};
 
 /// Checked before Taffy's own recursive layout algorithms run — if less
@@ -129,6 +131,7 @@ impl std::error::Error for LayoutError {
 /// A leaf's own text plus what's needed to measure it — see
 /// [`florui_text`]'s own scope notes for what "measure" does and doesn't
 /// cover yet (no rasterization).
+#[derive(PartialEq)]
 struct TextContext {
     text: String,
     font_size: f32,
@@ -217,7 +220,7 @@ pub fn to_text_font_family(value: florui_style::FontFamily) -> florui_text::Font
 /// resolved down to what [`florui_text::Font::shape_inline`] needs — built
 /// once in [`build_node`], reused by both the measure closure and the
 /// post-layout pass that positions each `Box` item's own [`BoxLayout`].
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum InlineContentItem {
     Text {
         text: String,
@@ -265,6 +268,7 @@ fn to_inline_content(item: &InlineContentItem) -> florui_text::InlineContent<'_>
 /// [`florui_text::Font::shape_inline`] rather than Taffy's own block
 /// algorithm, which has no inline display mode at all (see this module's
 /// own top-level doc).
+#[derive(PartialEq)]
 enum LeafContext {
     Text(TextContext),
     Inline(Vec<InlineContentItem>),
@@ -322,6 +326,7 @@ fn textarea_intrinsic_size(
 /// intrinsic size yet" case (an image that hasn't finished loading, or
 /// never will) with its own well-defined sizing behavior — see
 /// [`resolve_replaced_size`]'s own doc.
+#[derive(PartialEq)]
 struct ImageContext {
     intrinsic_size: Option<Size<f32>>,
     aspect_ratio: florui_style::AspectRatio,
@@ -637,9 +642,32 @@ pub fn compute_layout_with_content_extents(
         )?;
     }
 
-    let mut result = HashMap::with_capacity(taffy_ids.len());
-    let mut content_extents = HashMap::with_capacity(taffy_ids.len());
-    for (&node_id, &tid) in &taffy_ids {
+    collect_layouts(
+        font,
+        styles,
+        &tree,
+        taffy_ids.iter().map(|(&node, &id)| (node, id)),
+        taffy_ids.len(),
+        &inline_leaves,
+        |node| taffy_ids[&node],
+    )
+}
+
+/// Reads every node's box and content extent back out of a laid-out `tree`,
+/// then places the boxes of each inline formatting context's own items (see
+/// the second pass below). `id_of` finds the Taffy node of an arena node.
+fn collect_layouts(
+    font: &mut florui_text::Font,
+    styles: &HashMap<NodeId, ComputedStyle>,
+    tree: &TaffyTree<LeafContext>,
+    nodes: impl Iterator<Item = (NodeId, taffy::NodeId)>,
+    node_count: usize,
+    inline_leaves: &[(NodeId, Vec<InlineContentItem>)],
+    id_of: impl Fn(NodeId) -> taffy::NodeId,
+) -> Result<LayoutsAndContentExtents, LayoutError> {
+    let mut result = HashMap::with_capacity(node_count);
+    let mut content_extents = HashMap::with_capacity(node_count);
+    for (node_id, tid) in nodes {
         let layout = tree.layout(tid).map_err(LayoutError)?;
         result.insert(
             node_id,
@@ -670,7 +698,7 @@ pub fn compute_layout_with_content_extents(
     // wrap points and box positions, and this is exactly the width
     // `measure_leaf` would also have used for Taffy's own final "perform
     // layout" call on this same leaf.
-    for (container, items) in &inline_leaves {
+    for (container, items) in inline_leaves {
         // Only `Box` items need this pass; a paragraph of text and plain
         // inline elements has nothing to place, so reshaping it is wasted.
         if !items
@@ -679,7 +707,7 @@ pub fn compute_layout_with_content_extents(
         {
             continue;
         }
-        let tid = taffy_ids[container];
+        let tid = id_of(*container);
         let layout = tree.layout(tid).map_err(LayoutError)?;
         let content: Vec<florui_text::InlineContent<'_>> =
             items.iter().map(to_inline_content).collect();
@@ -771,6 +799,19 @@ fn layout_root_group(
         )
         .map_err(LayoutError)?;
 
+    run_layout(font, tree, synthetic_root, available, taffy_ids.len())
+}
+
+/// Lays out the tree under `synthetic_root` against `available`; the half of
+/// [`layout_root_group`] that is the same whether the tree was just built or
+/// kept from the last layout (see [`LayoutCache`]).
+fn run_layout(
+    font: &mut florui_text::Font,
+    tree: &mut TaffyTree<LeafContext>,
+    synthetic_root: taffy::NodeId,
+    available: Size<AvailableSpace>,
+    node_count: usize,
+) -> Result<(), LayoutError> {
     // Taffy queries a leaf's intrinsic size multiple times during one
     // layout pass (an intrinsic min/max-content query, then a final
     // definite pass), often landing on more than one width and sometimes
@@ -782,7 +823,7 @@ fn layout_root_group(
     // one call: a fresh, empty map every call, nothing persisted across
     // renders or between this group and any other.
     let mut shaping_caches: HashMap<taffy::NodeId, LeafScratch> =
-        HashMap::with_capacity(taffy_ids.len());
+        HashMap::with_capacity(node_count);
 
     // Taffy's own block/flex/grid algorithms recurse once per tree depth
     // internally — third-party code this crate doesn't control, and deep
@@ -918,6 +959,48 @@ pub fn compute_with_style(
     timeline: &mut AnimationTimeline,
     available: Size<AvailableSpace>,
 ) -> Result<LayoutResult, LayoutError> {
+    compute_with_style_in(
+        None, font, arena, rules, state, viewport, timeline, available,
+    )
+}
+
+/// [`compute_with_style`] that lays the tree out in `cache`, so what did not
+/// change since the last call is not laid out again. The result is the same.
+/// A stylesheet with `@container` rules lays out afresh, as the plain call does.
+#[allow(clippy::too_many_arguments)]
+pub fn compute_with_style_cached(
+    cache: &mut LayoutCache,
+    font: &mut florui_text::Font,
+    arena: &Arena,
+    rules: &[Rule],
+    state: &InteractionState,
+    viewport: Viewport,
+    timeline: &mut AnimationTimeline,
+    available: Size<AvailableSpace>,
+) -> Result<LayoutResult, LayoutError> {
+    compute_with_style_in(
+        Some(cache),
+        font,
+        arena,
+        rules,
+        state,
+        viewport,
+        timeline,
+        available,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compute_with_style_in(
+    cache: Option<&mut LayoutCache>,
+    font: &mut florui_text::Font,
+    arena: &Arena,
+    rules: &[Rule],
+    state: &InteractionState,
+    viewport: Viewport,
+    timeline: &mut AnimationTimeline,
+    available: Size<AvailableSpace>,
+) -> Result<LayoutResult, LayoutError> {
     let base_styles = {
         let _span = florui_profile::span(florui_profile::Phase::Cascade);
         florui_style::compute(arena, rules, state, viewport, timeline)
@@ -928,7 +1011,12 @@ pub fn compute_with_style(
     );
     let (base_layouts, base_content_extents) = {
         let _span = florui_profile::span(florui_profile::Phase::Layout);
-        compute_layout_with_content_extents(font, arena, &base_styles, available)?
+        match cache {
+            Some(cache) if !rules.iter().any(Rule::has_container_queries) => {
+                cache.compute(font, arena, &base_styles, available)?
+            }
+            _ => compute_layout_with_content_extents(font, arena, &base_styles, available)?,
+        }
     };
     florui_profile::count(
         florui_profile::Counter::NodesLaidOut,

@@ -1005,11 +1005,11 @@ mod tests {
         assert!(nodes > 0);
         assert_eq!(unchanged.counter(Counter::NodesStyled), nodes);
         assert!(unchanged.counter(Counter::NodesPainted) > 0);
-        assert!(
-            unchanged.counter(Counter::TextMemoHits) > 0,
-            "text that did not change is answered from the memo"
+        assert_eq!(
+            unchanged.counter(Counter::TextMemoHits) + unchanged.counter(Counter::TextMemoMisses),
+            0,
+            "text that did not change is not measured at all, the layout kept its answer"
         );
-        assert_eq!(unchanged.counter(Counter::TextMemoMisses), 0);
 
         let changed = &frames[1];
         assert!(
