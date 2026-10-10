@@ -54,6 +54,7 @@
 //! background and border (see [`rounded::RoundedRect`]).
 
 mod background;
+mod banded;
 mod blur;
 mod glyph_cache;
 mod gradient;
@@ -67,10 +68,25 @@ mod text_shadow;
 
 pub use incremental::{PaintInputs, Repaint, Repainter};
 
-use std::cell::Cell;
-use std::collections::HashMap;
+/// The boxes that reach a band of a frame being painted in bands.
+pub(crate) struct BandView {
+    /// Boxes whose own ink reaches the band: only these are painted.
+    pub(crate) own: HashSet<NodeId>,
+    /// Boxes whose ink, or the ink of anything under them, reaches the band: a box
+    /// that is not here, and everything under it, is passed by without a look.
+    pub(crate) subtree: HashSet<NodeId>,
+}
+
+thread_local! {
+    /// The view of the band this thread is painting, if it is painting one.
+    static BAND_VIEW: RefCell<Option<Rc<BandView>>> = const { RefCell::new(None) };
+}
+
+use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use florui_layout::{BoxLayout, absolute_position};
 use florui_style::{
@@ -615,6 +631,53 @@ pub fn stretched(canvas: &Canvas, width: u32, height: u32) -> Option<Canvas> {
     Some(stretched)
 }
 
+/// [`paint_to_buffer_with_desktop_extras`] with a big frame painted in bands, at
+/// once, on the thread pool. A band is painted on a surface of its own with room
+/// round it that is thrown away, so the picture is the whole one's to within a
+/// few levels of a color near the edges of the bands; a small frame, or a
+/// machine with one thread, is painted in one piece as before.
+#[allow(clippy::too_many_arguments)]
+pub fn paint_to_buffer_banded(
+    font: &mut Font,
+    width: u32,
+    height: u32,
+    canvas: Rgba,
+    arena: &Arena,
+    styles: &HashMap<NodeId, ComputedStyle>,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    scale_factor: f32,
+    text_inputs: Option<&HashMap<NodeId, TextInputPaint>>,
+    images: Option<&HashMap<NodeId, ImagePaint>>,
+) -> Canvas {
+    if banded::worth_it(width, height) {
+        banded::paint(
+            font,
+            width,
+            height,
+            canvas,
+            arena,
+            styles,
+            layouts,
+            scale_factor,
+            text_inputs,
+            images,
+        )
+    } else {
+        paint_to_buffer_with_desktop_extras(
+            font,
+            width,
+            height,
+            canvas,
+            arena,
+            styles,
+            layouts,
+            scale_factor,
+            text_inputs,
+            images,
+        )
+    }
+}
+
 /// Paints `nodes` (a set of siblings — document roots when
 /// `parent_display` is `None`, one node's own children otherwise) and
 /// their descendants onto `buffer`, in real paint order (see
@@ -673,7 +736,14 @@ fn paint_nodes(
         buffer.width() as f32,
         buffer.height() as f32,
     );
+    let view = BAND_VIEW.with(|slot| slot.borrow().clone());
     while let Some((node, node_clip)) = stack.pop() {
+        if view
+            .as_ref()
+            .is_some_and(|view| !view.subtree.contains(&node))
+        {
+            continue;
+        }
         if styles
             .get(&node)
             .is_some_and(|s| s.display == florui_style::Display::None)
@@ -741,16 +811,19 @@ fn paint_nodes(
             (Some(_), Some((_, mask))) => mask.as_ref(),
             _ => None,
         };
-        let invisible = ink_is_outside_clip(
-            arena,
-            styles,
-            layouts,
-            font,
-            node,
-            node_abs,
-            [Some(&surface_rect), node_clip.as_ref()],
-            scale_factor,
-        );
+        let invisible = match &view {
+            Some(view) => !view.own.contains(&node),
+            None => ink_is_outside_clip(
+                arena,
+                styles,
+                layouts,
+                font,
+                node,
+                node_abs,
+                [Some(&surface_rect), node_clip.as_ref()],
+                scale_factor,
+            ),
+        };
         if !invisible {
             paint_node(
                 buffer,
@@ -4137,7 +4210,7 @@ struct BlurredShape {
     origin_y: i32,
     width: u32,
     height: u32,
-    coverage: Rc<Vec<u8>>,
+    coverage: Arc<Vec<u8>>,
 }
 
 /// Stamps a `shape_width x shape_height` rect (at `shape_x`/`shape_y`,
