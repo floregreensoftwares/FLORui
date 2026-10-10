@@ -83,8 +83,8 @@ use skrifa::outline::DrawSettings;
 use skrifa::outline::OutlinePen;
 use skrifa::{FontRef, GlyphId, MetadataProvider};
 use tiny_skia::{
-    FillRule, IntRect, Mask, Paint, PathBuilder, Pixmap, PixmapPaint, PremultipliedColorU8, Rect,
-    Transform,
+    FillRule, FilterQuality, IntRect, Mask, Paint, PathBuilder, Pixmap, PixmapPaint,
+    PremultipliedColorU8, Rect, Transform,
 };
 
 pub type Canvas = Pixmap;
@@ -1784,8 +1784,15 @@ fn paint_group(
     let filter = styles.get(&node).map_or(&[][..], |s| &s.filter[..]);
     apply_filters(&mut group.pixmap, &scaled_filters(filter, scale_factor));
 
+    // A turned or scaled group is sampled between its pixels; nearest-pixel
+    // sampling leaves the edge of a rotated disc in steps.
     let paint = PixmapPaint {
         opacity,
+        quality: if transform.is_translate() {
+            FilterQuality::Nearest
+        } else {
+            FilterQuality::Bilinear
+        },
         ..Default::default()
     };
     // `draw_pixmap`'s own `(x, y)` places the group's local `(0, 0)` at
@@ -4725,7 +4732,17 @@ mod tests {
     /// the first differing pixel's own coordinates and colors, which is
     /// far more useful for tracking down a real regression than a bare
     /// `assert_eq!` on two whole buffers.
-    fn assert_bounded_and_full_target_paint_identically(mut paint: impl FnMut() -> Canvas) {
+    fn assert_bounded_and_full_target_paint_identically(paint: impl FnMut() -> Canvas) {
+        assert_bounded_and_full_target_paint_within(0, paint);
+    }
+
+    /// The same check for a group that is sampled between its pixels, where
+    /// the two surfaces round the sample position differently by up to
+    /// `tolerance` of a channel level.
+    fn assert_bounded_and_full_target_paint_within(
+        tolerance: u8,
+        mut paint: impl FnMut() -> Canvas,
+    ) {
         FORCE_FULL_TARGET_GROUPS.with(|flag| flag.set(false));
         let bounded = paint();
         FORCE_FULL_TARGET_GROUPS.with(|flag| flag.set(true));
@@ -4738,11 +4755,16 @@ mod tests {
             for x in 0..bounded.width() {
                 let a = bounded.pixel(x, y).unwrap();
                 let b = full_target.pixel(x, y).unwrap();
-                assert_eq!(
+                let close = a.red().abs_diff(b.red()) <= tolerance
+                    && a.green().abs_diff(b.green()) <= tolerance
+                    && a.blue().abs_diff(b.blue()) <= tolerance
+                    && a.alpha().abs_diff(b.alpha()) <= tolerance;
+                assert!(
+                    close,
+                    "pixel ({x}, {y}): {:?} against {:?} differs between a bounded group surface and a \
+                     target-sized one — bounding changed real output, not just its cost",
                     (a.red(), a.green(), a.blue(), a.alpha()),
                     (b.red(), b.green(), b.blue(), b.alpha()),
-                    "pixel ({x}, {y}) differs between a bounded group surface and a \
-                     target-sized one — bounding changed real output, not just its cost"
                 );
             }
         }
@@ -7778,6 +7800,35 @@ mod tests {
     }
 
     #[test]
+    fn a_turned_disc_keeps_a_smooth_edge() {
+        // A disc turned about its own center is the same disc, so the edge
+        // pixels should still be the unturned ones, not the nearest pixel of
+        // an edge already softened once.
+        let disc = |extra: &str| {
+            single_box_buffer(
+                &format!(".box {{ background-color: #ff0000; border-radius: 5px; {extra} }}"),
+                80,
+                4.0,
+            )
+        };
+        let flat = disc("");
+        let turned = disc("transform: rotate(30deg);");
+        let worst = (0..80)
+            .flat_map(|y| (0..80).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                let a = flat.pixel(x, y).expect("inside").red();
+                let b = turned.pixel(x, y).expect("inside").red();
+                a.abs_diff(b)
+            })
+            .max()
+            .expect("pixels");
+        assert!(
+            worst <= 90,
+            "the turned edge is {worst} levels from the flat one"
+        );
+    }
+
+    #[test]
     fn a_rounded_background_leaves_its_corners_unpainted() {
         let buffer = single_box_buffer(
             ".box { background-color: #ff0000; border-radius: 5px; }",
@@ -9589,7 +9640,7 @@ mod tests {
 
     #[test]
     fn a_scaled_box_at_a_non_zero_position_paints_identically_bounded_or_target_sized() {
-        assert_bounded_and_full_target_paint_identically(|| {
+        assert_bounded_and_full_target_paint_within(1, || {
             single_box_buffer_at(
                 ".box { background-color: #ff0000; transform: scale(2.5); transform-origin: 20% 80%; }",
                 80,
