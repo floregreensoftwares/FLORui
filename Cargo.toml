@@ -25,6 +25,7 @@ members = [
     "crates/florui-routing",
     "examples/florui-example-app",
     "examples/florui-player",
+    "examples/taskboard",
 ]
 
 [workspace.package]

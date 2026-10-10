@@ -5512,6 +5512,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "taskboard"
+version = "0.1.0"
+dependencies = [
+ "florui",
+ "florui-build",
+ "florui-platform",
+ "florui-profile",
+ "florui-routing",
+ "florui-style",
+ "florui-test",
+ "png 0.17.16",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

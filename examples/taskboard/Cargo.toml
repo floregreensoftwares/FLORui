@@ -1,0 +1,27 @@
+[package]
+name = "taskboard"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "A task manager laid out as a small workshop desk"
+publish = false
+
+[package.metadata.florui.dev]
+example = "dev"
+
+[lib]
+name = "taskboard"
+
+[dependencies]
+florui = { path = "../../crates/florui" }
+florui-platform = { path = "../../crates/florui-platform" }
+florui-routing = { path = "../../crates/florui-routing" }
+florui-style = { path = "../../crates/florui-style" }
+
+[build-dependencies]
+florui-build = { path = "../../crates/florui-build" }
+
+[dev-dependencies]
+florui-test = { path = "../../crates/florui-test" }
+florui-profile = { path = "../../crates/florui-profile" }
+png = "0.17"

@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="wood" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6d4a2e"/>
+      <stop offset="1" stop-color="#3b2718"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbf4e2"/>
+      <stop offset="1" stop-color="#e5d9be"/>
+    </linearGradient>
+    <linearGradient id="brass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f6e6a8"/>
+      <stop offset="0.5" stop-color="#b8944d"/>
+      <stop offset="1" stop-color="#6c5224"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="44" fill="url(#wood)"/>
+  <g filter="url(#shadow)">
+    <rect x="52" y="44" width="152" height="176" rx="12" fill="url(#paper)"/>
+  </g>
+  <g stroke="#4a70a0" stroke-opacity="0.35" stroke-width="2">
+    <line x1="68" y1="104" x2="188" y2="104"/>
+    <line x1="68" y1="132" x2="188" y2="132"/>
+    <line x1="68" y1="160" x2="188" y2="160"/>
+    <line x1="68" y1="188" x2="160" y2="188"/>
+  </g>
+  <line x1="84" y1="60" x2="84" y2="212" stroke="#c4472f" stroke-opacity="0.55" stroke-width="2"/>
+  <path d="M96 118 l12 12 l24 -26" fill="none" stroke="#2f6b2a" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="92" y="30" width="72" height="32" rx="8" fill="url(#brass)"/>
+  <rect x="106" y="20" width="44" height="22" rx="11" fill="none" stroke="url(#brass)" stroke-width="7"/>
+</svg>

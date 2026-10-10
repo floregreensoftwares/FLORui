@@ -1,0 +1,41 @@
+/* Type is pressed into the surface: dark ink on paper gets a thin light edge
+   below it, light lettering on leather and wood gets a dark one. */
+
+.desk {
+    font-family: sans-serif;
+    font-size: 14px;
+    color: var(--ink);
+}
+
+.title {
+    margin: 0;
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--brass-light);
+    text-shadow: 0 -1px 0 var(--shade-deep), 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.heading {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--ink);
+    text-shadow: 0 1px 0 var(--lit);
+}
+
+.label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--brass);
+    text-shadow: 0 -1px 0 var(--shade);
+}
+
+.muted {
+    color: var(--ink-soft);
+    text-shadow: 0 1px 0 var(--lit-soft);
+}
+
+.on-dark {
+    color: #e9dcc0;
+    text-shadow: 0 -1px 0 var(--shade);
+}

@@ -1,0 +1,44 @@
+#:schema ./florui.config.schema.json
+schema_version = 1
+
+[app]
+name = "Taskboard"
+identifier = "dev.florui.taskboard"
+description = "A task manager laid out as a small workshop desk"
+default_locale = "en"
+
+[app.icons]
+source = "assets/icons/taskboard.svg"
+
+[app.locales.en]
+name = "Taskboard"
+description = "A task manager laid out as a small workshop desk"
+
+[app.locales.pt-BR]
+name = "Quadro de tarefas"
+description = "Um gerenciador de tarefas montado como uma pequena bancada de oficina"
+
+[app.activation]
+url_schemes = ["taskboard"]
+request_default = ["taskboard", ".taskboard"]
+
+[[app.activation.file_associations]]
+extension = "taskboard"
+description = "Taskboard task list"
+identity = "dev.florui.taskboard.list"
+
+[bundle]
+publisher = "Florui Examples"
+copyright = "Copyright (c) 2026 Florui Examples"
+license = "MIT"
+license_file = "LICENSE"
+category = "productivity"
+
+[window]
+title = "Taskboard"
+
+[window.persistence]
+enabled = true
+
+[dev]
+example = "dev"

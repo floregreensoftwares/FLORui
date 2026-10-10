@@ -1,0 +1,47 @@
+/* The tokens. The light comes from the top left everywhere: a highlight sits on
+   the top and left edges of a raised thing, a shadow falls to its bottom and
+   right, and a recessed thing is the other way round. */
+
+.desk {
+    /* Wood and leather */
+    --wood-deep: #2a1c12;
+    --wood: #4b3220;
+    --wood-light: #6d4a2e;
+    --leather: #2c352f;
+    --leather-light: #3a463e;
+    --leather-edge: #1b211d;
+    --stitch: #cdbb93;
+
+    /* Brass */
+    --brass-light: #f0dc9c;
+    --brass: #b8944d;
+    --brass-dark: #6c5224;
+
+    /* Paper and ink */
+    --paper: #f4ecd9;
+    --paper-shade: #e5d9be;
+    --paper-line: rgba(74, 112, 160, 0.26);
+    --paper-margin: rgba(196, 71, 47, 0.5);
+    --ink: #2a2118;
+    --ink-soft: #6a5b47;
+    --ink-faint: #9b8c74;
+
+    /* Lamps */
+    --lamp-off: #3b3a34;
+    --lamp-amber: #e8a838;
+    --lamp-green: #78b25a;
+    --lamp-red: #d65a3f;
+    --lamp-blue: #5b95c9;
+
+    /* Light and shade, always from the top left */
+    --lit: rgba(255, 255, 255, 0.5);
+    --lit-soft: rgba(255, 255, 255, 0.22);
+    --shade-soft: rgba(0, 0, 0, 0.25);
+    --shade: rgba(0, 0, 0, 0.45);
+    --shade-deep: rgba(0, 0, 0, 0.65);
+
+    /* Shape */
+    --radius-small: 4px;
+    --radius: 8px;
+    --radius-large: 14px;
+}

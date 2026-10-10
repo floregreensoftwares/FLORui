@@ -1,0 +1,19 @@
+.field {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.field .field-input {
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 14px;
+    color: #f1e6c8;
+    border: 1px solid;
+    border-color: rgba(0, 0, 0, 0.6) rgba(255, 255, 255, 0.12) rgba(255, 255, 255, 0.12) rgba(0, 0, 0, 0.6);
+}
+
+.field .field-input:focus {
+    box-shadow: inset 2px 2px 5px var(--shade-deep), 0 0 0 2px var(--brass);
+}
