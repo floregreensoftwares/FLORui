@@ -270,6 +270,17 @@ pub struct BoxShadow {
     pub inset: bool,
 }
 
+/// One layer of `text-shadow`: the glyphs again, in `color`, moved by the
+/// offsets and blurred, behind the text. Lengths are CSS pixels. Unlike
+/// `box-shadow` there is no spread and no `inset`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextShadow {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur_radius: f32,
+    pub color: Rgba,
+}
+
 /// A `<length-percentage>` still carrying its own percentage component
 /// unresolved — real CSS's own computed-value shape for this type. Every
 /// other length field in this crate ([`ComputedStyle::width`], `padding`,
@@ -546,6 +557,8 @@ pub struct ComputedStyle {
     pub text_decoration_underline: bool,
     /// Inherited; see [`TextAlign`].
     pub text_align: TextAlign,
+    /// Inherited `text-shadow`, the first layer on top.
+    pub text_shadow: Vec<TextShadow>,
     /// The opt-in glass material, read from `--florui-glass` and its
     /// parameters. Like any custom property it inherits.
     pub glass: GlassSpec,
@@ -660,6 +673,7 @@ impl ComputedStyle {
             opacity,
             text_decoration_underline,
             text_align,
+            text_shadow,
             glass,
             backdrop_blur,
             cursor_pointer,
@@ -728,6 +742,7 @@ impl ComputedStyle {
         self.opacity = *opacity;
         self.text_decoration_underline = *text_decoration_underline;
         self.text_align = *text_align;
+        self.text_shadow.clone_from(text_shadow);
         self.glass = *glass;
         self.backdrop_blur = *backdrop_blur;
         self.cursor_pointer = *cursor_pointer;
@@ -2677,6 +2692,56 @@ mod tests {
         assert_eq!(
             all[2].repeat,
             (BackgroundRepeat::Repeat, BackgroundRepeat::NoRepeat)
+        );
+    }
+
+    #[test]
+    fn text_shadow_keeps_its_layers_offsets_blur_and_color_and_inherits() {
+        use crate::TextShadow;
+        let tree: Element = view! {
+            <div class="none"></div>
+            <div class="outer"><span class="inner"></span></div>
+            <div class="own"></div>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".outer { color: #102030; text-shadow: 2px 3px 4px rgba(255, 0, 0, 0.5), -1px 0 currentcolor; }              .own { text-shadow: 1px 1px #00ff00; } .reset { text-shadow: none; }",
+            &InteractionState::new(),
+        );
+        let roots = arena.roots();
+        assert!(
+            computed[&roots[0]].text_shadow.is_empty(),
+            "none by default"
+        );
+        let outer = &computed[&roots[1]].text_shadow;
+        assert_eq!(
+            outer[..],
+            [
+                TextShadow {
+                    offset_x: 2.0,
+                    offset_y: 3.0,
+                    blur_radius: 4.0,
+                    color: Rgba {
+                        r: 255,
+                        g: 0,
+                        b: 0,
+                        a: 128
+                    }
+                },
+                TextShadow {
+                    offset_x: -1.0,
+                    offset_y: 0.0,
+                    blur_radius: 0.0,
+                    color: Rgba::opaque(0x10, 0x20, 0x30)
+                },
+            ]
+        );
+        let inner = arena.children(roots[1])[0];
+        assert_eq!(&computed[&inner].text_shadow, outer, "inherited");
+        assert_eq!(
+            computed[&roots[2]].text_shadow[0].color,
+            Rgba::opaque(0, 255, 0),
+            "a shadow with no blur"
         );
     }
 
