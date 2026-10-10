@@ -1973,6 +1973,7 @@ dependencies = [
  "florui-style",
  "florui-text",
  "png 0.17.16",
+ "rayon",
  "skrifa 0.44.0",
  "taffy",
  "tiny-skia 0.11.4",
