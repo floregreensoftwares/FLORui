@@ -824,6 +824,9 @@ fn paint_nodes(
                 scale_factor,
             ),
         };
+        // A clip wholly outside this surface (a band or a part of the frame that
+        // lies elsewhere) has no mask, and no mask must not mean no clip.
+        let invisible = invisible || (node_clip.is_some() && node_mask.is_none());
         if !invisible {
             paint_node(
                 buffer,
@@ -8473,6 +8476,70 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn what_a_clip_hides_is_not_painted_on_a_surface_that_lies_elsewhere() {
+        // A box that clips, at rows 0..40, over a child that is far taller than it
+        // is. A surface that shows rows 100..150 only sees what the child would
+        // paint beyond the clip, which is nothing.
+        let tree: Element = view! { <div class="wrap"><div class="inner"></div></div> };
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(
+            ".wrap { overflow: hidden; } .inner { background-color: #ff0000; }",
+        )
+        .expect("a stylesheet");
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let wrap = arena.roots()[0];
+        let inner = arena.children(wrap)[0];
+        let mut layouts = HashMap::new();
+        layouts.insert(
+            wrap,
+            BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: 60.0,
+                height: 40.0,
+            },
+        );
+        layouts.insert(
+            inner,
+            BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: 60.0,
+                height: 200.0,
+            },
+        );
+        let mut font = Font::load_embedded();
+        let mut surface = Surface::new(60, 50, (0, 100)).expect("a surface");
+        paint_nodes(
+            &mut surface,
+            &arena,
+            &styles,
+            &layouts,
+            &mut font,
+            None,
+            arena.roots(),
+            1.0,
+            None,
+            None,
+            None,
+        );
+        assert!(
+            surface
+                .pixmap
+                .pixels()
+                .iter()
+                .all(|pixel| pixel.alpha() == 0),
+            "the clip hides the child here, and nothing is painted"
+        );
     }
 
     #[test]
