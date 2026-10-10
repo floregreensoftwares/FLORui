@@ -30,6 +30,7 @@ const CONIC: &str =
     "background-image: conic-gradient(from 20deg, #e63946, #e9c46a, #2a9d8f, #3a86ff, #e63946);";
 const TILED: &str =
     "background-image: linear-gradient(to right, #e63946, #e9c46a); background-size: 24px 24px;";
+const TEXTURE: &str = "background-image: url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24'><rect width='24' height='24' fill='%23f4e9d8'/><circle cx='12' cy='12' r='8' fill='%23c1440e'/></svg>\");";
 const LAYERS: &str = "background-color: #264653; background-image: radial-gradient(circle at 80% 20%, rgba(255, 255, 255, 0.6), transparent 40%), linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.5)), repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.15) 0 6px, transparent 6px 12px);";
 
 /// How many 25 px tiles fill the 800 x 600 window.
@@ -406,6 +407,12 @@ pub fn all() -> Vec<Workload> {
             description: "A 600 x 400 panel with three background layers over its color",
             exercises: "layers painted bottom to top, each into its own surface",
             build: || with_effect(one(600, 400, Effect::Background(LAYERS), false, 1.0)),
+        },
+        Workload {
+            name: "effects_background_svg_tiled_large",
+            description: "A 600 x 400 panel tiled with a 24 px SVG texture",
+            exercises: "an image layer: the SVG is drawn once, then its tiles are copied",
+            build: || with_effect(one(600, 400, Effect::Background(TEXTURE), false, 1.0)),
         },
         Workload {
             name: "effects_gradient_linear_large_dpr2",

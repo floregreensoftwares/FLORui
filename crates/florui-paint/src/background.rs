@@ -9,6 +9,7 @@ use florui_style::{
 use tiny_skia::{FillRule, Mask, Pixmap, PixmapPaint};
 
 use crate::gradient::{self, Shader};
+use crate::image_source;
 use crate::layer_cache;
 use crate::rounded::RoundedRectPath;
 use crate::{Surface, draw_shifted, mul_div_255, surface_transform};
@@ -53,15 +54,46 @@ fn resolve(value: LengthPercentage, basis: f32, scale: f32) -> f32 {
     value.length * scale + value.percentage * basis
 }
 
-/// The size of one tile of the image: gradients have no size or ratio of their
-/// own, so `auto`, `cover` and `contain` all mean the positioning area.
-fn tile_size(size: BackgroundSize, area: (f32, f32), scale: f32) -> (f32, f32) {
+/// The size of one tile of the image. A gradient has no size or ratio of its
+/// own, so `auto`, `cover` and `contain` all mean the positioning area; an
+/// image has its intrinsic size (CSS pixels, so it scales with the display) and
+/// ratio: an `auto` axis follows the other one, `cover` and `contain` scale
+/// it to just fill or just fit the area.
+fn tile_size(
+    size: BackgroundSize,
+    area: (f32, f32),
+    scale: f32,
+    intrinsic: Option<(f32, f32)>,
+) -> (f32, f32) {
+    let Some((iw, ih)) = intrinsic.filter(|(w, h)| *w > 0.0 && *h > 0.0) else {
+        return match size {
+            BackgroundSize::Cover | BackgroundSize::Contain => area,
+            BackgroundSize::Explicit(width, height) => (
+                width.map_or(area.0, |w| resolve(w, area.0, scale)),
+                height.map_or(area.1, |h| resolve(h, area.1, scale)),
+            ),
+        };
+    };
     match size {
-        BackgroundSize::Cover | BackgroundSize::Contain => area,
-        BackgroundSize::Explicit(width, height) => (
-            width.map_or(area.0, |w| resolve(w, area.0, scale)),
-            height.map_or(area.1, |h| resolve(h, area.1, scale)),
-        ),
+        BackgroundSize::Cover | BackgroundSize::Contain => {
+            let (across, down) = (area.0 / iw, area.1 / ih);
+            let factor = if size == BackgroundSize::Cover {
+                across.max(down)
+            } else {
+                across.min(down)
+            };
+            (iw * factor, ih * factor)
+        }
+        BackgroundSize::Explicit(width, height) => {
+            let width = width.map(|w| resolve(w, area.0, scale));
+            let height = height.map(|h| resolve(h, area.1, scale));
+            match (width, height) {
+                (Some(w), Some(h)) => (w, h),
+                (Some(w), None) => (w, w * ih / iw),
+                (None, Some(h)) => (h * iw / ih, h),
+                (None, None) => (iw * scale, ih * scale),
+            }
+        }
     }
 }
 
@@ -151,7 +183,24 @@ fn paint_layer(
     if cut.width <= 0.0 || cut.height <= 0.0 || origin.width <= 0.0 || origin.height <= 0.0 {
         return;
     }
-    let (tile_w, tile_h) = tile_size(layer.size, (origin.width, origin.height), scale);
+    // An image is read (or found already read) before anything is sized by it.
+    let loaded = match &layer.image {
+        BackgroundImage::Url(url) => match image_source::load(url) {
+            Some(loaded) => Some(loaded),
+            None => return,
+        },
+        _ => None,
+    };
+    let (mut tile_w, mut tile_h) = tile_size(
+        layer.size,
+        (origin.width, origin.height),
+        scale,
+        loaded.as_ref().map(|loaded| loaded.intrinsic),
+    );
+    if loaded.is_some() {
+        // An image is drawn at whole pixels, so its edges stay sharp.
+        (tile_w, tile_h) = (tile_w.round(), tile_h.round());
+    }
     if tile_w <= 0.0 || tile_h <= 0.0 {
         return;
     }
@@ -186,14 +235,29 @@ fn paint_layer(
         offset_y,
         (cut_y, cut_y + cut.height),
     );
+    let (xs, ys, tile_w, tile_h) = if loaded.is_some() {
+        let whole = |values: Vec<f32>| values.into_iter().map(f32::round).collect::<Vec<_>>();
+        (
+            whole(xs),
+            whole(ys),
+            tile_w.round().max(1.0),
+            tile_h.round().max(1.0),
+        )
+    } else {
+        (xs, ys, tile_w, tile_h)
+    };
 
     // The pixels of the layer depend on nothing but these, so a layer that is
     // painted again unchanged is not rendered again.
     let (keep_x0, keep_x1) = center_range(cut_x, cut_x + cut.width, x0, x1);
     let (keep_y0, keep_y1) = center_range(cut_y, cut_y + cut.height, y0, y1);
     let bits = |values: &[f32]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    let source = match &layer.image {
+        BackgroundImage::Url(url) => image_source::identity(url),
+        _ => String::new(),
+    };
     let key = format!(
-        "{:?}|{}|{width}x{height}|{:?}|{:?}|{:?}|{:?}|{keep_x0},{keep_x1},{keep_y0},{keep_y1}|{:?}",
+        "{:?}|{source}|{}|{width}x{height}|{:?}|{:?}|{:?}|{:?}|{keep_x0},{keep_x1},{keep_y0},{keep_y1}|{:?}",
         layer.image,
         scale.to_bits(),
         bits(&xs),
@@ -205,9 +269,9 @@ fn paint_layer(
     let Some(pixels) = layer_cache::get_or_render(key, || {
         let mut pixels = Pixmap::new(width as u32, height as u32)?;
         render_layer(
-            pixels.data_mut(),
-            width,
+            &mut pixels,
             &layer.image,
+            loaded.as_deref(),
             scale,
             (tile_w, tile_h),
             (&xs, &ys),
@@ -229,25 +293,50 @@ fn paint_layer(
     );
 }
 
-/// Draws every tile of the layer into `data` (`width` pixels wide, whose
-/// top-left pixel is at `(x0, y0)` of the surface), within the pixels the cut
-/// keeps.
+/// Draws every tile of the layer into `pixels` (whose top-left pixel is at
+/// `(x0, y0)` of the surface), within the pixels the cut keeps. `loaded` is the
+/// image of a `url()` layer.
 #[allow(clippy::too_many_arguments)]
 fn render_layer(
-    data: &mut [u8],
-    width: usize,
+    pixels: &mut Pixmap,
     image: &BackgroundImage,
+    loaded: Option<&image_source::Loaded>,
     scale: f32,
     (tile_w, tile_h): (f32, f32),
     (xs, ys): (&[f32], &[f32]),
     (x0, y0): (i32, i32),
     (keep_x0, keep_x1, keep_y0, keep_y1): (i32, i32, i32, i32),
 ) {
+    let width = pixels.width() as usize;
     let shader = match image {
         BackgroundImage::Linear(g) => Shader::linear(g, tile_w, tile_h, scale),
         BackgroundImage::Radial(g) => Shader::radial(g, tile_w, tile_h, scale),
         BackgroundImage::Conic(g) => Shader::conic(g, tile_w, tile_h, scale),
+        BackgroundImage::Url(_) => {
+            let Some(tile) =
+                loaded.and_then(|loaded| image_source::tile(loaded, tile_w as u32, tile_h as u32))
+            else {
+                return;
+            };
+            let (limit_w, limit_h) = (pixels.width() as i32, pixels.height() as i32);
+            for &ty in ys {
+                for &tx in xs {
+                    let (px, py) = (tx as i32 - x0, ty as i32 - y0);
+                    let bounds = (
+                        px.max(keep_x0 - x0).max(0),
+                        py.max(keep_y0 - y0).max(0),
+                        (px + tile.width() as i32).min(keep_x1 - x0).min(limit_w),
+                        (py + tile.height() as i32).min(keep_y1 - y0).min(limit_h),
+                    );
+                    if bounds.2 > bounds.0 && bounds.3 > bounds.1 {
+                        crate::blit_over(pixels, &tile, (px, py), bounds);
+                    }
+                }
+            }
+            return;
+        }
     };
+    let data = pixels.data_mut();
     // A tile that does not start on a whole pixel covers its edge pixels only
     // in part, which `gradient::fill` blends in.
     let (shift_x, shift_y) = (x0 as f32, y0 as f32);
@@ -317,16 +406,17 @@ mod tests {
     fn auto_cover_and_contain_are_the_whole_area_for_a_gradient() {
         let area = (200.0, 100.0);
         assert_eq!(
-            tile_size(BackgroundSize::Explicit(None, None), area, 1.0),
+            tile_size(BackgroundSize::Explicit(None, None), area, 1.0, None),
             area
         );
-        assert_eq!(tile_size(BackgroundSize::Cover, area, 1.0), area);
-        assert_eq!(tile_size(BackgroundSize::Contain, area, 1.0), area);
+        assert_eq!(tile_size(BackgroundSize::Cover, area, 1.0, None), area);
+        assert_eq!(tile_size(BackgroundSize::Contain, area, 1.0, None), area);
         assert_eq!(
             tile_size(
                 BackgroundSize::Explicit(Some(lp(20.0, 0.0)), Some(lp(0.0, 0.5))),
                 area,
-                2.0
+                2.0,
+                None
             ),
             (40.0, 50.0),
             "lengths scale, percentages are of the area"
@@ -335,10 +425,50 @@ mod tests {
             tile_size(
                 BackgroundSize::Explicit(Some(lp(10.0, 0.0)), None),
                 area,
-                1.0
+                1.0,
+                None
             ),
             (10.0, 100.0),
             "an auto axis is the area on that axis"
+        );
+    }
+
+    #[test]
+    fn an_image_tile_is_its_own_size_scaled_by_the_display_and_keeps_its_ratio() {
+        let area = (200.0, 100.0);
+        let image = Some((40.0, 20.0));
+        let auto = BackgroundSize::Explicit(None, None);
+        assert_eq!(tile_size(auto, area, 1.0, image), (40.0, 20.0));
+        assert_eq!(
+            tile_size(auto, area, 2.0, image),
+            (80.0, 40.0),
+            "css pixels scale"
+        );
+        // One axis given: the other follows the ratio.
+        let width = BackgroundSize::Explicit(Some(lp(60.0, 0.0)), None);
+        assert_eq!(tile_size(width, area, 1.0, image), (60.0, 30.0));
+        let height = BackgroundSize::Explicit(None, Some(lp(0.0, 0.5)));
+        assert_eq!(tile_size(height, area, 1.0, image), (100.0, 50.0));
+        // Both given: stretched.
+        let both = BackgroundSize::Explicit(Some(lp(30.0, 0.0)), Some(lp(30.0, 0.0)));
+        assert_eq!(tile_size(both, area, 1.0, image), (30.0, 30.0));
+        // 200 x 100 for a 2:1 image fits exactly; a 1:1 one covers or is contained.
+        assert_eq!(
+            tile_size(BackgroundSize::Cover, area, 1.0, Some((10.0, 10.0))),
+            (200.0, 200.0)
+        );
+        assert_eq!(
+            tile_size(BackgroundSize::Contain, area, 1.0, Some((10.0, 10.0))),
+            (100.0, 100.0)
+        );
+        assert_eq!(
+            tile_size(BackgroundSize::Cover, area, 1.0, image),
+            (200.0, 100.0)
+        );
+        // An image with no size is sized like a gradient.
+        assert_eq!(
+            tile_size(BackgroundSize::Cover, area, 1.0, Some((0.0, 0.0))),
+            area
         );
     }
 

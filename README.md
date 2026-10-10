@@ -232,13 +232,39 @@ the box it is clipped to, and painted under the inset shadows and the border.
 
 Limits: a color interpolation method other than the default (`in oklab`, `in hsl longer hue`) is read but
 the colors are interpolated in sRGB; `background-clip: text`, `background-attachment`, `background-blend-mode`
-and the `-webkit-` gradient syntax are not supported; `url()` images are not painted yet. A tile that does
+and the `-webkit-` gradient syntax are not supported. A tile that does
 not start on a whole pixel (`space` and `round` give them) has soft edges that differ from Chromium's along
 the seams. Chromium dithers gradients, so a smooth gradient differs from this engine by one level of 255 on
 a third of its pixels; the reference fixtures allow two levels. A gradient is rendered once and reused while
 nothing about it changes, so a still gradient costs a copy per frame; one that changes every frame (an
 animated angle, a moving tile) renders again each time, about 3 ms for a 600 x 400 linear one, 5 ms for a
 radial one and 11 ms for a conic one in a release build.
+
+A layer can also be an image, `background-image: url(...)`, with the same size, position, repeat, origin
+and clip:
+
+```css
+.desk {
+  background-image: url("textures/wood.png"), url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='8'>...</svg>");
+  background-size: 256px auto, 8px 8px;
+}
+```
+
+A PNG or an SVG, named by a path (read against the working directory, as `<img src>` is) or carried in the
+stylesheet as a `data:` URL (plain, percent-encoded or base64), which keeps a texture with the stylesheet and
+out of the file system. An image has its own size in CSS pixels, so it scales with the display; `auto`
+follows its ratio, and `cover` and `contain` fit it to the box. A PNG is resampled to the size it is shown at
+(averaged over blocks when it is made much smaller, then bilinear), an SVG is drawn at that size, and tiles
+sit on whole pixels so their edges stay sharp. A PNG at its own size matches Chromium exactly; an SVG
+differs along its anti-aliased edges, because the two engines draw vectors differently.
+
+Limits: an image is read and decoded on the painting thread the first time a layer needs it, then kept, and
+read again when its file changes; a large image therefore pauses the first frame that shows it, so a big
+picture belongs in an `<img>`, which loads in the background. An image that cannot be read or decoded paints
+nothing and is reported once on standard error. Only PNG and SVG are supported (no other raster format,
+no `image-set()`, no `http` addresses), and a relative path is read against the working directory, which a
+packaged application does not share with a development checkout, so ship textures as `data:` URLs or as
+files the application places itself.
 
 ## Glass
 
