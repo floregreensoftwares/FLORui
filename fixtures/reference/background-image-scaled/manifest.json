@@ -1,0 +1,24 @@
+{
+  "id": "background-image-scaled",
+  "description": "A PNG and an SVG background at device pixel ratio 2: css pixels scale, vectors stay sharp.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 120,
+    "height_css_px": 80,
+    "device_pixel_ratio": 2
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "box",
+    "css": ".box { width: 100px; height: 60px; background-image: url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24'><rect width='24' height='24' fill='%23f4e9d8'/><circle cx='12' cy='12' r='8' fill='%23c1440e'/><rect x='10' y='2' width='4' height='8' fill='%231b1b2f'/></svg>\"), url(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAAUUlEQVR4nGP4////gmdRAf9hWMOmAgUjy4EwA4hA1kSUBmRNRGuAaSKoAV0BIT9haCDkJ6wa8PkJpwZcfmJA9xQhPxHUgO4nojQgayJaA0wTALpXUCi3BUCiAAAAAElFTkSuQmCC\"); background-size: 24px 24px, 12px 12px; background-repeat: no-repeat, repeat; background-position: 4px 4px, 0 0; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 3.5,
+    "channel_tolerance": 2,
+    "reason": "At device pixel ratio 2 the SVG is drawn by a different rasterizer from Chromium's, so its anti-aliased edge pixels differ, by up to 66 levels in 2.2% of the pixels; the PNG tiles match. Geometry an exact match. Measured against desktop Chrome."
+  }
+}

@@ -57,6 +57,7 @@ mod background;
 mod blur;
 mod glyph_cache;
 mod gradient;
+mod image_source;
 mod layer_cache;
 mod material;
 mod rounded;
@@ -8401,6 +8402,212 @@ mod tests {
         assert_eq!(layer_cache::rendered_on_this_thread() - before, 2);
         background_box(css, (100, 47.0, 47.0), 2.0);
         assert_eq!(layer_cache::rendered_on_this_thread() - before, 3);
+    }
+
+    /// A `data:` URL of a `width x height` PNG, `left` on its left half and
+    /// `right` on its right half.
+    fn two_color_png_url(width: u32, height: u32, left: [u8; 4], right: [u8; 4]) -> String {
+        use base64::Engine as _;
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, width, height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().expect("a header");
+            let data: Vec<u8> = (0..height)
+                .flat_map(|_| (0..width).flat_map(|x| if x < width / 2 { left } else { right }))
+                .collect();
+            writer.write_image_data(&data).expect("pixels");
+        }
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        )
+    }
+
+    #[test]
+    fn a_png_background_is_drawn_at_its_own_size_and_tiles() {
+        let url = two_color_png_url(10, 10, [255, 0, 0, 255], [0, 0, 255, 255]);
+        let page = background_box(
+            &format!(".box {{ background-image: url({url}); }}"),
+            (40, 40.0, 40.0),
+            1.0,
+        );
+        assert_eq!(
+            rgba(&page, 2, 2),
+            [255, 0, 0, 255],
+            "the left half of the first tile"
+        );
+        assert_eq!(rgba(&page, 7, 2), [0, 0, 255, 255], "the right half");
+        assert_eq!(
+            rgba(&page, 12, 2),
+            [255, 0, 0, 255],
+            "the next tile starts again"
+        );
+        assert_eq!(
+            rgba(&page, 37, 37),
+            [0, 0, 255, 255],
+            "down to the far corner"
+        );
+        let once = background_box(
+            &format!(".box {{ background-image: url({url}); background-repeat: no-repeat; }}"),
+            (40, 40.0, 40.0),
+            1.0,
+        );
+        assert_eq!(rgba(&once, 2, 2), [255, 0, 0, 255]);
+        assert_eq!(rgba(&once, 12, 2)[3], 0, "no second tile");
+    }
+
+    #[test]
+    fn a_png_background_follows_background_size_and_the_display_scale() {
+        let url = two_color_png_url(10, 10, [255, 0, 0, 255], [0, 0, 255, 255]);
+        let covered = background_box(
+            &format!(".box {{ background-image: url({url}); background-size: cover; }}"),
+            (40, 40.0, 40.0),
+            1.0,
+        );
+        assert_eq!(
+            rgba(&covered, 10, 20),
+            [255, 0, 0, 255],
+            "stretched to the box"
+        );
+        assert_eq!(rgba(&covered, 30, 20), [0, 0, 255, 255]);
+        let scaled = background_box(
+            &format!(".box {{ background-image: url({url}); background-repeat: no-repeat; }}"),
+            (80, 40.0, 40.0),
+            2.0,
+        );
+        assert_eq!(
+            rgba(&scaled, 8, 5),
+            [255, 0, 0, 255],
+            "ten css pixels are twenty painted ones"
+        );
+        assert_eq!(rgba(&scaled, 15, 5), [0, 0, 255, 255]);
+        assert_eq!(rgba(&scaled, 22, 5)[3], 0, "and no more");
+    }
+
+    #[test]
+    fn an_svg_background_is_drawn_sharp_at_the_size_it_is_shown() {
+        let svg = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='5' height='10' fill='#ff0000'/><rect x='5' width='5' height='10' fill='#0000ff'/></svg>";
+        let page = background_box(
+            &format!(
+                ".box {{ background-image: url(\"{svg}\"); background-size: 40px 40px; background-repeat: no-repeat; }}"
+            ),
+            (40, 40.0, 40.0),
+            1.0,
+        );
+        assert_eq!(rgba(&page, 10, 20), [255, 0, 0, 255]);
+        assert_eq!(
+            rgba(&page, 19, 20),
+            [255, 0, 0, 255],
+            "the edge is where the SVG puts it, at 40px"
+        );
+        assert_eq!(rgba(&page, 21, 20), [0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn a_file_image_is_painted_again_when_the_file_changes() {
+        let dir =
+            std::env::temp_dir().join(format!("florui-background-file-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a directory");
+        let path = dir.join("tile.png");
+        let write = |color: [u8; 4], side: u32| {
+            let url = two_color_png_url(side, side, color, color);
+            let encoded = url.split(',').nth(1).expect("base64");
+            use base64::Engine as _;
+            std::fs::write(
+                &path,
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .expect("bytes"),
+            )
+            .expect("written");
+        };
+        let css = format!(
+            ".box {{ background-image: url({}); background-repeat: no-repeat; }}",
+            path.display().to_string().replace('\\', "/")
+        );
+        write([255, 0, 0, 255], 4);
+        let first = background_box(&css, (20, 10.0, 10.0), 1.0);
+        assert_eq!(rgba(&first, 1, 1), [255, 0, 0, 255]);
+        // A new color, the same size and the same stylesheet: the new file shows.
+        write([0, 255, 0, 255], 4);
+        let second = background_box(&css, (20, 10.0, 10.0), 1.0);
+        assert_eq!(rgba(&second, 1, 1), [0, 255, 0, 255]);
+        std::fs::remove_file(&path).expect("removed");
+        std::fs::remove_dir(&dir).ok();
+    }
+
+    #[test]
+    fn an_image_sits_on_whole_pixels_even_when_the_free_space_is_odd() {
+        // 25px wide, a 10px image centered: 7.5px from the left, drawn at 8.
+        let url = two_color_png_url(10, 10, [255, 0, 0, 255], [255, 0, 0, 255]);
+        let page = background_box(
+            &format!(
+                ".box {{ background-image: url({url}); background-repeat: no-repeat; background-position: 50% 0; }}"
+            ),
+            (25, 25.0, 25.0),
+            1.0,
+        );
+        assert_eq!(rgba(&page, 7, 2)[3], 0, "not blended into pixel 7");
+        assert_eq!(rgba(&page, 8, 2), [255, 0, 0, 255]);
+        assert_eq!(rgba(&page, 17, 2), [255, 0, 0, 255]);
+        assert_eq!(rgba(&page, 18, 2)[3], 0);
+    }
+
+    #[test]
+    fn an_image_that_cannot_be_read_paints_nothing_and_the_rest_still_paints() {
+        let page = background_box(
+            ".box { background-color: #00ff00; background-image: url(no/such/file.png), linear-gradient(#ff0000, #ff0000); background-size: auto, 10px 10px; background-repeat: repeat, no-repeat; }",
+            (30, 20.0, 20.0),
+            1.0,
+        );
+        assert_eq!(rgba(&page, 5, 5), [255, 0, 0, 255], "the gradient layer");
+        assert_eq!(
+            rgba(&page, 15, 15),
+            [0, 255, 0, 255],
+            "the color under the missing image"
+        );
+    }
+
+    #[test]
+    fn an_image_layer_is_under_the_layers_before_it() {
+        let url = two_color_png_url(10, 10, [255, 0, 0, 255], [255, 0, 0, 255]);
+        let page = background_box(
+            &format!(
+                ".box {{ background-image: linear-gradient(#00ff00, #00ff00), url({url}); background-size: 5px 5px, auto; background-repeat: no-repeat; }}"
+            ),
+            (30, 20.0, 20.0),
+            1.0,
+        );
+        assert_eq!(
+            rgba(&page, 2, 2),
+            [0, 255, 0, 255],
+            "the gradient first in the list is on top"
+        );
+        assert_eq!(
+            rgba(&page, 7, 7),
+            [255, 0, 0, 255],
+            "the image shows where it does not reach"
+        );
+    }
+
+    #[test]
+    fn a_translucent_image_blends_over_the_color_under_it() {
+        let url = two_color_png_url(4, 4, [0, 0, 255, 128], [0, 0, 255, 128]);
+        let page = background_box(
+            &format!(
+                ".box {{ background-color: #ff0000; background-image: url({url}); background-repeat: no-repeat; }}"
+            ),
+            (20, 10.0, 10.0),
+            1.0,
+        );
+        let [r, _, b, a] = rgba(&page, 1, 1);
+        assert_eq!(a, 255);
+        assert!(
+            (120..=135).contains(&r) && (120..=135).contains(&b),
+            "half red, half blue: {r} {b}"
+        );
     }
 
     #[test]

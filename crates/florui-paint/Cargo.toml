@@ -14,6 +14,7 @@ florui-assets = { path = "../florui-assets" }
 florui-layout = { path = "../florui-layout" }
 florui-style = { path = "../florui-style" }
 florui-text = { path = "../florui-text" }
+base64 = "0.22"
 png = "0.17"
 skrifa = "0.44"
 taffy = "0.14"

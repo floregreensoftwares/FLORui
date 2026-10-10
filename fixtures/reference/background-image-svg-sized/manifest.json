@@ -1,0 +1,24 @@
+{
+  "id": "background-image-svg-sized",
+  "description": "An SVG background stretched to a different size is redrawn there, sharp.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 120,
+    "height_css_px": 80,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "box",
+    "css": ".box { width: 100px; height: 60px; background-image: url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24'><rect width='24' height='24' fill='%23f4e9d8'/><circle cx='12' cy='12' r='8' fill='%23c1440e'/><rect x='10' y='2' width='4' height='8' fill='%231b1b2f'/></svg>\"); background-size: 50px 30px; background-repeat: no-repeat; background-position: center; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 2,
+    "channel_tolerance": 2,
+    "reason": "An SVG is drawn by different rasterizers (this engine's resvg and Chromium's own), so the anti-aliased edge pixels of its circle differ, by up to 35 levels in 1.2% of the pixels; the pixels inside the shapes match, and so does the geometry. Measured against desktop Chrome."
+  }
+}
