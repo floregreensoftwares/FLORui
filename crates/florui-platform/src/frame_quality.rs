@@ -10,7 +10,7 @@ use std::time::Duration;
 pub(crate) const SETTLE: Duration = Duration::from_millis(140);
 
 /// What a frame painted while resizing should cost, in milliseconds.
-const TARGET_MS: f32 = 26.0;
+const TARGET_MS: f32 = 34.0;
 
 /// The fractions of the window's size a frame may be painted at, largest first.
 const STEPS: [f32; 3] = [1.0, 0.75, 0.5];
@@ -76,7 +76,11 @@ mod tests {
         );
         let mut quality = FrameQuality::default();
         quality.record(1.0, 50.0);
-        assert_eq!(quality.pick(), 0.5);
+        assert_eq!(
+            quality.pick(),
+            0.75,
+            "50 ms wants about four fifths of a side"
+        );
     }
 
     #[test]
@@ -84,9 +88,9 @@ mod tests {
         let mut quality = FrameQuality::default();
         // A half-size frame is a quarter of the pixels: 12 ms there is 48 here.
         quality.record(0.5, 12.0);
-        assert_eq!(quality.pick(), 0.5);
+        assert_eq!(quality.pick(), 0.75);
         quality.record(0.5, 12.0);
-        assert_eq!(quality.pick(), 0.5);
+        assert_eq!(quality.pick(), 0.75);
     }
 
     #[test]

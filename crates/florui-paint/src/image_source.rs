@@ -9,10 +9,9 @@
 //! registry to feed, at the price of a short pause for a large file: an
 //! image that big belongs in an `<img>`, which loads in the background.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 
 use base64::Engine as _;
@@ -67,35 +66,43 @@ pub(crate) fn identity(url: &str) -> String {
 }
 
 /// What was found when an image was last read, and the file's stamp then.
-type Kept = (Stamp, Option<Rc<Loaded>>);
+type Kept = (Stamp, Option<Arc<Loaded>>);
 
-thread_local! {
-    static SOURCES: RefCell<HashMap<String, Kept>> = RefCell::new(HashMap::new());
-}
+/// Every thread that paints reads the same images, so what was read is kept for
+/// all of them, not once for each.
+static SOURCES: Mutex<Option<HashMap<String, Kept>>> = Mutex::new(None);
 
 /// The image `url` names, loaded now if it has not been (or its file has
 /// changed since), or `None` when it cannot be read or decoded; that is said
 /// once, on standard error, and not again until the file changes.
-pub(crate) fn load(url: &str) -> Option<Rc<Loaded>> {
+pub(crate) fn load(url: &str) -> Option<Arc<Loaded>> {
     let now = stamp(url);
-    SOURCES.with(|sources| {
-        let mut sources = sources.borrow_mut();
-        if let Some((kept, loaded)) = sources.get(url)
+    {
+        let sources = SOURCES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((kept, loaded)) = sources.as_ref().and_then(|sources| sources.get(url))
             && *kept == now
         {
             return loaded.clone();
         }
+    }
+    {
         let loaded = match read(url) {
-            Ok(loaded) => Some(Rc::new(loaded)),
+            Ok(loaded) => Some(Arc::new(loaded)),
             Err(reason) => {
                 let shown: String = url.chars().take(80).collect();
                 eprintln!("florui-paint: background-image url({shown}) is not painted: {reason}");
                 None
             }
         };
-        sources.insert(url.to_string(), (now, loaded.clone()));
+        SOURCES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_or_insert_with(HashMap::new)
+            .insert(url.to_string(), (now, loaded.clone()));
         loaded
-    })
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -271,12 +278,31 @@ fn resample(source: Vec<u8>, (sw, sh): (usize, usize), (width, height): (usize, 
 /// One tile of `loaded` drawn at `width x height` pixels, premultiplied: an SVG
 /// is drawn at that size, a PNG is resampled to it. `None` when the size is
 /// empty or absurd.
-pub(crate) fn tile(url: &str, loaded: &Loaded, width: u32, height: u32) -> Option<Rc<Pixmap>> {
-    // Drawing an SVG is the costly part and a resized box asks for the same
-    // tile again, so it is kept.
-    let key = format!("tile|{}|{width}x{height}", identity(url));
-    crate::layer_cache::get_or_render(key, || draw_tile(loaded, width, height))
+pub(crate) fn tile(url: &str, loaded: &Loaded, width: u32, height: u32) -> Option<Arc<Pixmap>> {
+    // Drawing an SVG is the costly part, a resized box asks for the same tile
+    // again, and so does every thread painting a band of the frame: it is kept
+    // for all of them, drawn once by whichever asks first.
+    let key = format!("{}|{width}x{height}", identity(url));
+    let cell = {
+        let mut tiles = TILES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tiles = tiles.get_or_insert_with(HashMap::new);
+        if tiles.len() >= MOST_TILES {
+            tiles.clear();
+        }
+        Arc::clone(tiles.entry(key).or_default())
+    };
+    cell.get_or_init(|| draw_tile(loaded, width, height).map(Arc::new))
+        .clone()
 }
+
+type TileCell = Arc<OnceLock<Option<Arc<Pixmap>>>>;
+
+static TILES: Mutex<Option<HashMap<String, TileCell>>> = Mutex::new(None);
+
+/// How many tiles are kept before they start over.
+const MOST_TILES: usize = 256;
 
 fn draw_tile(loaded: &Loaded, width: u32, height: u32) -> Option<Pixmap> {
     if width == 0
@@ -477,9 +503,9 @@ mod tests {
         let loaded = load(svg).expect("an SVG");
         let first = tile(svg, &loaded, 12, 7).expect("a tile");
         let again = tile(svg, &loaded, 12, 7).expect("a tile");
-        assert!(Rc::ptr_eq(&first, &again), "asked twice, drawn once");
+        assert!(Arc::ptr_eq(&first, &again), "asked twice, drawn once");
         let other = tile(svg, &loaded, 12, 8).expect("a tile");
-        assert!(!Rc::ptr_eq(&first, &other), "another size is another tile");
+        assert!(!Arc::ptr_eq(&first, &other), "another size is another tile");
     }
 
     #[test]

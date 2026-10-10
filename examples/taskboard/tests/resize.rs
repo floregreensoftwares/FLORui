@@ -27,6 +27,7 @@ fn mounted() -> Mounted {
         .css(&taskboard::stylesheet())
         .viewport(1180.0, 760.0)
         .dpr(dpr)
+        .parallel_paint(std::env::var_os("TASKBOARD_BANDS").is_some())
         .mount()
 }
 
@@ -53,6 +54,9 @@ fn a_frame_says_where_its_painting_went() {
     let mut mounted = mounted();
     let stack = mounted.get(by_id("nav-stack"));
     mounted.click(stack);
+    // A layer is kept the second time it is painted, not the first.
+    let _ = mounted.frame();
+    let _ = mounted.frame();
 
     let ((), profile) = mounted.profile(|m| m.resize(1000.0, 700.0));
     let frame = &profile.frames()[0];
@@ -87,6 +91,10 @@ fn each_size_of_a_resize_as_a_frame() {
     for (screen, key) in SCREENS {
         let node = mounted.get(by_id(key));
         mounted.click(node);
+        // The first sizes warm the caches of every thread.
+        for step in 0..2 {
+            mounted.resize(1000.0 + step as f32, 700.0);
+        }
         let sizes = 12;
         let (mut wall, mut raster) = (0.0, 0.0);
         let mut parts = [0.0f64; PARTS.len()];

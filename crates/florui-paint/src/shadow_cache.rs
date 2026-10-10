@@ -13,12 +13,23 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use florui_style::RoundedRect;
 
 /// Budget for the masks one thread keeps between paints.
 const CAPACITY_BYTES: usize = 16 * 1024 * 1024;
+
+/// What a worker thread of the pool keeps: every thread has a cache of its own.
+const WORKER_CAPACITY_BYTES: usize = 4 * 1024 * 1024;
+
+fn capacity() -> usize {
+    if rayon::current_thread_index().is_some() {
+        WORKER_CAPACITY_BYTES
+    } else {
+        CAPACITY_BYTES
+    }
+}
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ShadowKey {
@@ -49,7 +60,7 @@ impl ShadowKey {
 }
 
 struct Entry {
-    coverage: Rc<Vec<u8>>,
+    coverage: Arc<Vec<u8>>,
     last_used: u64,
 }
 
@@ -73,16 +84,20 @@ impl ShadowCache {
     }
 
     /// The mask for `key`, computing and keeping it on a miss.
-    fn get_or_compute(&mut self, key: ShadowKey, compute: impl FnOnce() -> Vec<u8>) -> Rc<Vec<u8>> {
+    fn get_or_compute(
+        &mut self,
+        key: ShadowKey,
+        compute: impl FnOnce() -> Vec<u8>,
+    ) -> Arc<Vec<u8>> {
         self.tick += 1;
         if let Some(entry) = self.entries.get_mut(&key) {
             entry.last_used = self.tick;
             florui_profile::count(florui_profile::Counter::ShadowMasksReused, 1);
-            return Rc::clone(&entry.coverage);
+            return Arc::clone(&entry.coverage);
         }
         florui_profile::count(florui_profile::Counter::ShadowMasksBlurred, 1);
         self.computed += 1;
-        let coverage = Rc::new(compute());
+        let coverage = Arc::new(compute());
         let size = coverage.len();
         if size > self.capacity / 4 {
             return coverage;
@@ -104,7 +119,7 @@ impl ShadowCache {
         self.entries.insert(
             key,
             Entry {
-                coverage: Rc::clone(&coverage),
+                coverage: Arc::clone(&coverage),
                 last_used: self.tick,
             },
         );
@@ -113,12 +128,98 @@ impl ShadowCache {
 }
 
 thread_local! {
-    static CACHE: RefCell<ShadowCache> = RefCell::new(ShadowCache::with_capacity(CAPACITY_BYTES));
+    static CACHE: RefCell<ShadowCache> = RefCell::new(ShadowCache::with_capacity(capacity()));
+}
+
+/// The masks the threads painting bands of a frame share: a shadow that crosses
+/// several bands is blurred once, by whichever band asks first, not once for each.
+struct SharedMasks {
+    entries: HashMap<ShadowKey, SharedEntry>,
+    bytes: usize,
+    tick: u64,
+}
+
+struct SharedEntry {
+    cell: Arc<OnceLock<Arc<Vec<u8>>>>,
+    /// Zero until the mask exists.
+    size: usize,
+    last_used: u64,
+}
+
+/// What the shared masks may hold in all.
+const SHARED_CAPACITY_BYTES: usize = 64 * 1024 * 1024;
+
+static SHARED: Mutex<Option<SharedMasks>> = Mutex::new(None);
+
+fn shared_coverage(key: ShadowKey, compute: impl FnOnce() -> Vec<u8>) -> Arc<Vec<u8>> {
+    let (cell, fresh) = {
+        let mut guard = SHARED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let shared = guard.get_or_insert_with(|| SharedMasks {
+            entries: HashMap::new(),
+            bytes: 0,
+            tick: 0,
+        });
+        shared.tick += 1;
+        let tick = shared.tick;
+        let fresh = !shared.entries.contains_key(&key);
+        let entry = shared
+            .entries
+            .entry(key.clone())
+            .or_insert_with(|| SharedEntry {
+                cell: Arc::new(OnceLock::new()),
+                size: 0,
+                last_used: tick,
+            });
+        entry.last_used = tick;
+        (Arc::clone(&entry.cell), fresh)
+    };
+    let mut computed_here = false;
+    let mask = Arc::clone(cell.get_or_init(|| {
+        computed_here = true;
+        florui_profile::count(florui_profile::Counter::ShadowMasksBlurred, 1);
+        Arc::new(compute())
+    }));
+    if !computed_here {
+        florui_profile::count(florui_profile::Counter::ShadowMasksReused, 1);
+    }
+    if fresh {
+        let mut guard = SHARED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(shared) = guard.as_mut() {
+            let size = mask.len();
+            if let Some(entry) = shared.entries.get_mut(&key) {
+                entry.size = size;
+            }
+            shared.bytes += size;
+            while shared.bytes > SHARED_CAPACITY_BYTES {
+                let Some(oldest) = shared
+                    .entries
+                    .iter()
+                    .filter(|(_, entry)| entry.size > 0)
+                    .min_by_key(|(_, entry)| entry.last_used)
+                    .map(|(key, _)| key.clone())
+                else {
+                    break;
+                };
+                if let Some(evicted) = shared.entries.remove(&oldest) {
+                    shared.bytes -= evicted.size;
+                }
+            }
+        }
+    }
+    mask
 }
 
 /// The mask for `key` from this thread's cache, computed with `compute` if
-/// it is not there. `compute` must not paint a shadow itself.
-pub(crate) fn coverage(key: ShadowKey, compute: impl FnOnce() -> Vec<u8>) -> Rc<Vec<u8>> {
+/// it is not there; on a thread of the pool, from the cache the pool shares.
+/// `compute` must not paint a shadow itself.
+pub(crate) fn coverage(key: ShadowKey, compute: impl FnOnce() -> Vec<u8>) -> Arc<Vec<u8>> {
+    if rayon::current_thread_index().is_some() {
+        return shared_coverage(key, compute);
+    }
     CACHE.with(|cache| cache.borrow_mut().get_or_compute(key, compute))
 }
 
@@ -156,7 +257,7 @@ mod tests {
         let mut cache = ShadowCache::with_capacity(1000);
         let first = cache.get_or_compute(key(1), || vec![7; 100]);
         let second = cache.get_or_compute(key(1), || panic!("must not recompute"));
-        assert!(Rc::ptr_eq(&first, &second));
+        assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(cache.computed, 1);
     }
 
