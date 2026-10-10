@@ -96,6 +96,37 @@ thread_local! {
     static CACHE: RefCell<LayerCache> = RefCell::new(LayerCache::with_capacity(CAPACITY_BYTES));
 }
 
+/// The pixels for `key` if this thread's cache has them.
+pub(crate) fn peek(key: &str) -> Option<Rc<Pixmap>> {
+    let hit = CACHE.with(|cache| cache.borrow_mut().get(key))?;
+    florui_profile::count(florui_profile::Counter::LayersReused, 1);
+    Some(hit)
+}
+
+thread_local! {
+    static SEEN: RefCell<std::collections::HashSet<u64>> = RefCell::new(std::collections::HashSet::new());
+}
+
+/// How many keys are remembered as seen before the memory starts over.
+const SEEN_LIMIT: usize = 4096;
+
+/// Whether `key` has been asked about before, remembering it now. A layer
+/// that is painted once and never again (every size of a resize) is cheaper
+/// drawn straight onto the frame than kept; one that comes back is kept.
+pub(crate) fn seen_before(key: &str) -> bool {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    let id = hasher.finish();
+    SEEN.with(|seen| {
+        let mut seen = seen.borrow_mut();
+        if seen.len() >= SEEN_LIMIT {
+            seen.clear();
+        }
+        !seen.insert(id)
+    })
+}
+
 /// The pixels for `key` from this thread's cache, rendered with `render` if
 /// they are not there. `render` runs with the cache free, so it may use it.
 pub(crate) fn get_or_render(
@@ -109,6 +140,12 @@ pub(crate) fn get_or_render(
     florui_profile::count(florui_profile::Counter::LayersRendered, 1);
     let pixels = render()?;
     Some(CACHE.with(|cache| cache.borrow_mut().insert(key, pixels)))
+}
+
+/// How many bytes of layers this thread keeps, for tests.
+#[cfg(test)]
+pub(crate) fn bytes_on_this_thread() -> usize {
+    CACHE.with(|cache| cache.borrow().bytes)
 }
 
 /// How many layers this thread has rendered (misses), for tests.

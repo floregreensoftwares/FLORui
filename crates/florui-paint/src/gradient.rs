@@ -147,9 +147,8 @@ fn resolve(items: &[Item], end: f32) -> Vec<Stop> {
 #[derive(Debug, Clone)]
 pub(crate) struct Table {
     entries: Vec<[u8; 4]>,
-    /// Where the first and last stops are, in the gradient's unit.
+    /// Where the first stop is, in the gradient's unit.
     first: f32,
-    last: f32,
     repeating: bool,
     /// `(TABLE_SIZE - 1)` over the span, so a position is one multiply from
     /// its entry.
@@ -196,7 +195,6 @@ impl Table {
         Some(Self {
             entries,
             first,
-            last,
             repeating,
             steps_per_unit: (TABLE_SIZE - 1) as f32 / span,
             before: to_bytes(stops.first()?.color),
@@ -208,21 +206,17 @@ impl Table {
     /// or repeated.
     #[inline]
     fn at(&self, position: f32) -> [u8; 4] {
-        if !self.repeating {
-            if position < self.first {
-                return self.before;
-            }
-            if position > self.last {
-                return self.after;
-            }
-        }
+        const TOP: f32 = (TABLE_SIZE - 1) as f32;
         let mut steps = (position - self.first) * self.steps_per_unit;
         if self.repeating {
-            let turns = steps / (TABLE_SIZE - 1) as f32;
-            steps = (turns - turns.floor()) * (TABLE_SIZE - 1) as f32;
+            let turns = steps / TOP;
+            steps = (turns - turns.floor()) * TOP;
+        } else if steps < 0.0 {
+            return self.before;
+        } else if steps > TOP {
+            return self.after;
         }
-        let index = (steps.clamp(0.0, (TABLE_SIZE - 1) as f32) + 0.5) as usize;
-        self.entries[index.min(TABLE_SIZE - 1)]
+        self.entries[((steps + 0.5) as usize).min(TABLE_SIZE - 1)]
     }
 
     /// For a repeating gradient whose stops all sit at one place, CSS paints
@@ -417,6 +411,49 @@ impl Shader {
         }
     }
 
+    /// [`Self::fill_row`], each color put over the pixel it lands on.
+    pub(crate) fn over_row(&self, out: &mut [u8], first: f32, y: f32) {
+        match self {
+            Self::Solid(color) => {
+                for pixel in out.chunks_exact_mut(4) {
+                    over(pixel, *color);
+                }
+            }
+            Self::Linear {
+                table,
+                center,
+                direction,
+                length,
+            } => {
+                let row = (y - center.1) * direction.1 + length / 2.0;
+                let mut along = (first - center.0) * direction.0 + row;
+                for pixel in out.chunks_exact_mut(4) {
+                    over(pixel, table.at(along));
+                    along += direction.0;
+                }
+            }
+            Self::Radial {
+                table,
+                center,
+                radius_x,
+                radius_y,
+            } => {
+                let dy = (y - center.1) * (radius_x / radius_y);
+                let dy_squared = dy * dy;
+                let mut dx = first - center.0;
+                for pixel in out.chunks_exact_mut(4) {
+                    over(pixel, table.at((dx * dx + dy_squared).sqrt()));
+                    dx += 1.0;
+                }
+            }
+            Self::Conic { .. } => {
+                for (offset, pixel) in out.chunks_exact_mut(4).enumerate() {
+                    over(pixel, self.color_at(first + offset as f32, y));
+                }
+            }
+        }
+    }
+
     /// The premultiplied color at the center of the pixel at `(x, y)` of the tile.
     #[inline]
     pub(crate) fn color_at(&self, x: f32, y: f32) -> [u8; 4] {
@@ -577,6 +614,89 @@ pub(crate) fn fill(
         }
         blend_edges(row, x0, left, right, row_share, shader, top, local_y);
     }
+}
+
+/// [`fill`] for a target that already has pixels: every pixel the tile covers
+/// is put over what is there, the way a layer is composited.
+pub(crate) fn fill_over(
+    target: &mut [u8],
+    width: usize,
+    rect: (usize, usize, usize, usize),
+    tile: (f32, f32, f32, f32),
+    shader: &Shader,
+) {
+    let (x0, y0, x1, y1) = rect;
+    let (left, top, right, bottom) = tile;
+    for y in y0..y1 {
+        let row_share = coverage(y, top, bottom);
+        if row_share <= 0.0 {
+            continue;
+        }
+        let local_y = y as f32 + 0.5 - top;
+        let whole_from = (left.ceil().max(x0 as f32) as usize).min(x1);
+        let whole_to = (right.floor().max(whole_from as f32) as usize).min(x1);
+        let row = &mut target[(y * width + x0) * 4..(y * width + x1) * 4];
+        let whole = row_share >= 1.0 && whole_to > whole_from;
+        if whole {
+            let start = (whole_from - x0) * 4;
+            let span = (whole_to - whole_from) * 4;
+            shader.over_row(
+                &mut row[start..start + span],
+                whole_from as f32 + 0.5 - left,
+                local_y,
+            );
+        }
+        for (offset, pixel) in row.chunks_exact_mut(4).enumerate() {
+            let x = x0 + offset;
+            if whole && x >= whole_from && x < whole_to {
+                continue;
+            }
+            let share = row_share * coverage(x, left, right);
+            if share <= 0.0 {
+                continue;
+            }
+            let color = shader.color_at(x as f32 + 0.5 - left, local_y);
+            if share >= 1.0 {
+                over(pixel, color);
+            } else {
+                over(pixel, color.map(|c| (f32::from(c) * share + 0.5) as u8));
+            }
+        }
+    }
+}
+
+/// `color` (premultiplied) over `pixel`, rounded the way compositing a layer is.
+#[inline]
+pub(crate) fn over(pixel: &mut [u8], color: [u8; 4]) {
+    match color[3] {
+        0 => {}
+        255 => pixel.copy_from_slice(&color),
+        alpha => {
+            let keep = 255 - u32::from(alpha);
+            let [d0, d1, d2, d3] = [pixel[0], pixel[1], pixel[2], pixel[3]];
+            let destination = u32::from_le_bytes([d0, d1, d2, d3]);
+            let source = u32::from_le_bytes(color);
+            pixel.copy_from_slice(&over_packed(destination, source, keep).to_le_bytes());
+        }
+    }
+}
+
+/// `source` over `destination` (four premultiplied bytes each) where `keep` is
+/// `255 - alpha`, two channels at a time: each product is divided by 255
+/// rounded to nearest, as `(x + 127) / 255` does, and the sum stops at 255.
+#[inline]
+fn over_packed(destination: u32, source: u32, keep: u32) -> u32 {
+    const LANES: u32 = 0x00FF_00FF;
+    let scale = |lanes: u32| {
+        let product = lanes * keep + 0x0080_0080;
+        ((product + ((product >> 8) & LANES)) >> 8) & LANES
+    };
+    let blend = |source: u32, destination: u32| {
+        let sum = (source & LANES) + scale(destination & LANES);
+        let spill = (sum >> 8) & 0x0001_0001;
+        (sum | (spill * 0xFF)) & LANES
+    };
+    blend(source, destination) | (blend(source >> 8, destination >> 8) << 8)
 }
 
 /// The pixels of `row` (the first at column `x0`) the tile covers in part or
@@ -1074,6 +1194,34 @@ mod tests {
                         assert!(
                             got.abs_diff(want) <= 2,
                             "shader {which} at ({x}, {y}): {pixel:?} against {expected:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn two_channels_at_a_time_blend_as_one_at_a_time_does() {
+        for alpha in 1..=254u32 {
+            let keep = 255 - alpha;
+            for destination in 0..=255u32 {
+                for source in 0..=alpha {
+                    let alone = |d: u32, s: u32| (s + (d * keep + 127) / 255).min(255);
+                    let packed = over_packed(
+                        destination
+                            | (destination << 8)
+                            | (destination << 16)
+                            | (destination << 24),
+                        source | (source << 8) | (source << 16) | (source << 24),
+                        keep,
+                    );
+                    let want = alone(destination, source);
+                    for lane in 0..4 {
+                        assert_eq!(
+                            (packed >> (8 * lane)) & 0xFF,
+                            want,
+                            "alpha {alpha}, destination {destination}, source {source}"
                         );
                     }
                 }
