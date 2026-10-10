@@ -863,15 +863,18 @@ fn ink_is_outside_clip(
         return true;
     }
 
-    let border = style.map_or(NO_BORDER, |s| s.border);
-    let padding = style.map_or(
-        florui_style::Edges {
-            top: 0.0,
-            right: 0.0,
-            bottom: 0.0,
-            left: 0.0,
-        },
-        |s| s.padding,
+    let border = scaled_border(style.map_or(NO_BORDER, |s| s.border), scale_factor);
+    let padding = scaled_padding(
+        style.map_or(
+            florui_style::Edges {
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+                left: 0.0,
+            },
+            |s| s.padding,
+        ),
+        scale_factor,
     );
     let content_x = x + border.left.width + padding.left;
     let content_y = y + border.top.width + padding.top;
@@ -956,7 +959,10 @@ fn clip_for_children(
         return incoming;
     };
     let (x, y) = absolute_position(arena, layouts, node);
-    let border = styles.get(&node).map_or(NO_BORDER, |s| s.border);
+    let border = scaled_border(
+        styles.get(&node).map_or(NO_BORDER, |s| s.border),
+        scale_factor,
+    );
     let mut padding_box = ClipRect::from_xywh(
         x + border.left.width,
         y + border.top.width,
@@ -986,6 +992,36 @@ fn clip_for_children(
         Some(parent) => parent.intersect(&padding_box),
         None => padding_box,
     })
+}
+
+/// `border` with its widths in painted pixels: they are authored in logical
+/// pixels, like every length, and the boxes they sit in are already scaled.
+fn scaled_border(
+    mut border: florui_style::Edges<florui_style::BorderSide>,
+    scale_factor: f32,
+) -> florui_style::Edges<florui_style::BorderSide> {
+    for side in [
+        &mut border.top,
+        &mut border.right,
+        &mut border.bottom,
+        &mut border.left,
+    ] {
+        side.width *= scale_factor;
+    }
+    border
+}
+
+/// `padding` in painted pixels, as [`scaled_border`] does for a border.
+fn scaled_padding(
+    padding: florui_style::Edges<f32>,
+    scale_factor: f32,
+) -> florui_style::Edges<f32> {
+    florui_style::Edges {
+        top: padding.top * scale_factor,
+        right: padding.right * scale_factor,
+        bottom: padding.bottom * scale_factor,
+        left: padding.left * scale_factor,
+    }
 }
 
 const NO_BORDER: florui_style::Edges<florui_style::BorderSide> = florui_style::Edges {
@@ -1429,14 +1465,14 @@ fn subtree_extent(
         }
     }
 
-    let border = style.map_or(NO_BORDER, |s| s.border);
+    let border = scaled_border(style.map_or(NO_BORDER, |s| s.border), scale_factor);
     let no_padding = florui_style::Edges {
         top: 0.0,
         right: 0.0,
         bottom: 0.0,
         left: 0.0,
     };
-    let padding = style.map_or(no_padding, |s| s.padding);
+    let padding = scaled_padding(style.map_or(no_padding, |s| s.padding), scale_factor);
     let content_x = abs_x + border.left.width + padding.left;
     let content_y = abs_y + border.top.width + padding.top;
     let content_width =
@@ -2777,7 +2813,7 @@ fn paint_node(
             );
         }
 
-        let border = style.map_or(NO_BORDER, |s| s.border);
+        let border = scaled_border(style.map_or(NO_BORDER, |s| s.border), scale_factor);
         let box_shadow: &[florui_style::BoxShadow] = style.map_or(&[][..], |s| &s.box_shadow[..]);
 
         // Real CSS's own painting order for a normal-flow box with no
@@ -2809,7 +2845,7 @@ fn paint_node(
                 buffer,
                 &outline,
                 border,
-                style.padding,
+                scaled_padding(style.padding, scale_factor),
                 &style.background_layers,
                 scale_factor,
                 clip,
@@ -2843,7 +2879,7 @@ fn paint_node(
             bottom: 0.0,
             left: 0.0,
         };
-        let padding = style.map_or(no_padding, |s| s.padding);
+        let padding = scaled_padding(style.map_or(no_padding, |s| s.padding), scale_factor);
         // Content starts inside both the border and the padding — the same
         // content-box math `florui_layout`'s own `to_taffy_style` doc
         // describes for sizing applies to painting's own offset too.
@@ -7992,10 +8028,10 @@ mod tests {
 
     #[test]
     fn a_rounded_border_of_four_colors_is_painted_all_round_its_corners() {
-        // 6px sides on a 60px box with 25.8px corners: the arc of each corner lies
-        // well inside the box's corner square, along its diagonal.
+        // 6px sides (1px at a scale of 6) on a 60px box with 25.8px corners: the arc
+        // of each corner lies well inside the box's corner square, along its diagonal.
         let page = single_box_buffer_at(
-            ".box { background-color: #000000; border: 6px solid; border-radius: 4.3px; \
+            ".box { background-color: #000000; border: 1px solid; border-radius: 4.3px; \
              border-color: #ff0000 #00ff00 #0000ff #ffff00; }",
             80,
             6.0,
@@ -8151,6 +8187,39 @@ mod tests {
             .map(|y| wide.pixel(4, y).expect("inside").red())
             .collect();
         assert_eq!(rows[0], rows[2], "rows of a one row frame are alike");
+    }
+
+    #[test]
+    fn a_border_and_padding_scale_with_the_display() {
+        // 10px box at a scale of 3: a 30px box, its 1px border 3px wide and its
+        // 1px padding 3px, so the content box starts 6px in.
+        let page = single_box_buffer_at(
+            ".box { border: 1px solid #0000ff; padding: 1px; \
+             background-clip: content-box; \
+             background-image: linear-gradient(#ff0000, #ff0000); }",
+            40,
+            3.0,
+            0.0,
+            0.0,
+        );
+        let at = |x, y| {
+            let p = page.pixel(x, y).expect("inside the page");
+            [p.red(), p.green(), p.blue()]
+        };
+        assert_eq!(at(1, 15), [0, 0, 255], "inside the border");
+        assert_eq!(at(4, 15), [0, 0, 0], "the padding is neither");
+        assert_eq!(at(5, 15), [0, 0, 0], "to its last pixel");
+        assert_eq!(at(6, 15), [255, 0, 0], "the content box starts after both");
+        assert_eq!(at(23, 15), [255, 0, 0], "to its last pixel");
+        assert_eq!(at(24, 15), [0, 0, 0], "before the padding on the far side");
+        assert_eq!(at(28, 15), [0, 0, 255], "and the border");
+        // The same down the page.
+        assert_eq!(at(15, 1), [0, 0, 255]);
+        assert_eq!(at(15, 5), [0, 0, 0]);
+        assert_eq!(at(15, 6), [255, 0, 0]);
+        assert_eq!(at(15, 23), [255, 0, 0]);
+        assert_eq!(at(15, 24), [0, 0, 0]);
+        assert_eq!(at(15, 28), [0, 0, 255]);
     }
 
     #[test]
