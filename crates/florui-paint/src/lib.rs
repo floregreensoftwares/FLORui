@@ -889,7 +889,7 @@ fn ink_is_outside_clip(
         text,
         font_size,
         style.map_or(400.0, |s| s.font_weight),
-        Some(content_width / scale_factor),
+        Some(wrap_width(content_width, scale_factor)),
     );
     // A glyph can overhang its advance box, and right-to-left lines start at
     // the far edge; one em of slack on every side, and the wider of the
@@ -992,6 +992,18 @@ fn clip_for_children(
         Some(parent) => parent.intersect(&padding_box),
         None => padding_box,
     })
+}
+
+/// How much wider than the box a line of text may be before it wraps, in
+/// logical pixels. A box sized to its text is exactly as wide as the text, and
+/// scaling that width to painted pixels and back by another factor can come
+/// out a hair short, wrapping the last word.
+const WRAP_SLACK: f32 = 0.05;
+
+/// The width, in logical pixels, text is wrapped at in a box whose content is
+/// `content_width` painted pixels wide.
+fn wrap_width(content_width: f32, scale_factor: f32) -> f32 {
+    content_width / scale_factor + WRAP_SLACK
 }
 
 /// `border` with its widths in painted pixels: they are authored in logical
@@ -1478,7 +1490,7 @@ fn subtree_extent(
     let content_width =
         (layout.width - border.left.width - border.right.width - padding.left - padding.right)
             .max(0.0);
-    let wrap_width = content_width / scale_factor;
+    let wrap_width = wrap_width(content_width, scale_factor);
     let font_size = style.map_or(16.0, |s| s.font_size);
     // Glyph ink can overhang its own advance/line box (an italic swash,
     // a tall diacritic) — one `font_size` of slack on every side, same
@@ -2911,7 +2923,7 @@ fn paint_node(
         // `scale_factor` at rasterization time, the other half of the same
         // split: shape at the size layout actually measured, paint at the
         // size the canvas actually needs.
-        let wrap_width = content_width / scale_factor;
+        let wrap_width = wrap_width(content_width, scale_factor);
 
         if is_control_icon_node(arena, node)
             && style.is_some_and(|s| s.appearance != florui_style::Appearance::None)
@@ -8220,6 +8232,26 @@ mod tests {
         assert_eq!(at(15, 23), [255, 0, 0]);
         assert_eq!(at(15, 24), [0, 0, 0]);
         assert_eq!(at(15, 28), [0, 0, 255]);
+    }
+
+    #[test]
+    fn a_line_in_a_box_sized_to_it_does_not_wrap_at_any_scale() {
+        let text = "A WORKSHOP DESK FOR THINGS TO DO";
+        let mut font = Font::load_embedded();
+        let family = florui_text::FontFamily::SansSerif;
+        let line = font.measure(family, text, 11.0, 700.0);
+        // Scaling the width of the line to painted pixels and back by another
+        // factor can come out a hair short of it, which wrapped its last word.
+        for scale in (0..400).map(|step| 0.3 + step as f32 * 0.0071) {
+            let wrapped = font.measure_wrapped(
+                family,
+                text,
+                11.0,
+                700.0,
+                wrap_width(line.width * scale, scale),
+            );
+            assert_eq!(wrapped.height, line.height, "wrapped at a scale of {scale}");
+        }
     }
 
     #[test]
