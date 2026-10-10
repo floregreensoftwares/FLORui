@@ -1,0 +1,24 @@
+{
+  "id": "background-image-placed",
+  "description": "A PNG background not repeated, placed at the bottom right, over a color.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 120,
+    "height_css_px": 80,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "box",
+    "css": ".box { width: 100px; height: 60px; background-color: #1b1b2f; background-image: url(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAAUUlEQVR4nGP4////gmdRAf9hWMOmAgUjy4EwA4hA1kSUBmRNRGuAaSKoAV0BIT9haCDkJ6wa8PkJpwZcfmJA9xQhPxHUgO4nojQgayJaA0wTALpXUCi3BUCiAAAAAElFTkSuQmCC\"); background-repeat: no-repeat; background-position: right 8px bottom 8px; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 0.2,
+    "channel_tolerance": 2,
+    "reason": "A background PNG at its own size is the same pixels in both engines; where it is placed on whole pixels nothing differs. channel_tolerance 2 allows for the rounding of the translucent pixels."
+  }
+}

@@ -1,0 +1,8 @@
+.box {
+    width: 100px;
+    height: 60px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24'><rect width='24' height='24' fill='%23f4e9d8'/><circle cx='12' cy='12' r='8' fill='%23c1440e'/><rect x='10' y='2' width='4' height='8' fill='%231b1b2f'/></svg>"), url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAAUUlEQVR4nGP4////gmdRAf9hWMOmAgUjy4EwA4hA1kSUBmRNRGuAaSKoAV0BIT9haCDkJ6wa8PkJpwZcfmJA9xQhPxHUgO4nojQgayJaA0wTALpXUCi3BUCiAAAAAElFTkSuQmCC");
+    background-size: 24px 24px, 12px 12px;
+    background-repeat: no-repeat, repeat;
+    background-position: 4px 4px, 0 0;
+}

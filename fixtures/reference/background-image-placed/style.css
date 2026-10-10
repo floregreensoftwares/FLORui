@@ -1,0 +1,8 @@
+.box {
+    width: 100px;
+    height: 60px;
+    background-color: #1b1b2f;
+    background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAAUUlEQVR4nGP4////gmdRAf9hWMOmAgUjy4EwA4hA1kSUBmRNRGuAaSKoAV0BIT9haCDkJ6wa8PkJpwZcfmJA9xQhPxHUgO4nojQgayJaA0wTALpXUCi3BUCiAAAAAElFTkSuQmCC");
+    background-repeat: no-repeat;
+    background-position: right 8px bottom 8px;
+}
