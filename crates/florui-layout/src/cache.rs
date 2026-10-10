@@ -1,0 +1,545 @@
+use super::*;
+
+/// A Taffy tree kept from one layout to the next, so what did not change is
+/// not laid out again.
+///
+/// Taffy remembers, per node, what it measured at each size it was asked; a
+/// tree built anew for every layout starts with nothing remembered. Here each
+/// arena node keeps its Taffy node, and a layout compares the node's style,
+/// its measured content and its children with what the Taffy node already
+/// holds, writing (and so marking dirty, with its ancestors) only the ones
+/// that differ. The result is exactly what a tree built anew would give.
+///
+/// Arena ids follow the order the tree was built in, so a node that moved
+/// because an earlier one appeared or went away simply differs from what its
+/// id held and is written again; correctness never depends on ids being
+/// stable, only the saving does.
+pub struct LayoutCache {
+    tree: TaffyTree<LeafContext>,
+    /// The Taffy node of each arena node laid out last time, by arena id.
+    slots: Vec<Option<Slot>>,
+    /// The synthetic block wrapping the roots of the document and of the
+    /// overlays, which Taffy lays out as two separate trees.
+    groups: [Option<Group>; 2],
+    /// The fonts the cached measures were made with.
+    font_generation: u64,
+    /// Which layout last wrote a slot; a slot that is older is gone.
+    epoch: u64,
+}
+
+struct Slot {
+    id: taffy::NodeId,
+    children: Vec<taffy::NodeId>,
+    /// The layout that last wrote this slot; one that is older is gone.
+    epoch: u64,
+    /// The layout that created it: a node made in this layout has no parent yet.
+    created: u64,
+}
+
+struct Group {
+    id: taffy::NodeId,
+    children: Vec<taffy::NodeId>,
+}
+
+enum Step {
+    Visit(NodeId),
+    Build(NodeId),
+}
+
+impl Default for LayoutCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LayoutCache {
+    pub fn new() -> Self {
+        let mut tree = TaffyTree::new();
+        // Text is measured at its exact width and paint reshapes it at the
+        // laid out width: see `compute_layout_with_content_extents`.
+        tree.disable_rounding();
+        LayoutCache {
+            tree,
+            slots: Vec::new(),
+            groups: [None, None],
+            font_generation: 0,
+            epoch: 0,
+        }
+    }
+
+    /// Same as [`compute_layout_with_content_extents`], remembering the tree
+    /// for the next call.
+    pub fn compute(
+        &mut self,
+        font: &mut florui_text::Font,
+        arena: &Arena,
+        styles: &HashMap<NodeId, ComputedStyle>,
+        available: Size<AvailableSpace>,
+    ) -> Result<LayoutsAndContentExtents, LayoutError> {
+        if font.generation() != self.font_generation {
+            *self = LayoutCache::new();
+            self.font_generation = font.generation();
+        }
+        self.epoch += 1;
+        if self.slots.is_empty() {
+            // A first layout: room for every node at once, as a tree built anew has.
+            let mut tree = TaffyTree::with_capacity(styles.len() + 2);
+            tree.disable_rounding();
+            self.tree = tree;
+            self.slots.reserve(styles.len());
+        }
+
+        let mut inline_leaves: Vec<(NodeId, Vec<InlineContentItem>)> = Vec::new();
+        self.sync_group(
+            0,
+            font,
+            arena,
+            styles,
+            arena.document_roots(),
+            &mut inline_leaves,
+        )
+        .map_err(LayoutError)?;
+        self.sync_group(
+            1,
+            font,
+            arena,
+            styles,
+            arena.overlay_roots(),
+            &mut inline_leaves,
+        )
+        .map_err(LayoutError)?;
+        self.drop_unused().map_err(LayoutError)?;
+
+        let node_count = self.slots.len();
+        for group in self.groups.iter().flatten() {
+            run_layout(font, &mut self.tree, group.id, available, node_count)?;
+        }
+
+        let slots = &self.slots;
+        collect_layouts(
+            font,
+            styles,
+            &self.tree,
+            slots
+                .iter()
+                .enumerate()
+                .filter_map(|(node, slot)| slot.as_ref().map(|slot| (node, slot.id))),
+            node_count,
+            &inline_leaves,
+            |node| {
+                slots[node]
+                    .as_ref()
+                    .map_or_else(|| unreachable!(), |s| s.id)
+            },
+        )
+    }
+
+    /// Brings the Taffy nodes of `roots` and everything under them to what
+    /// the arena says, and the group wrapping them to hold exactly them.
+    fn sync_group(
+        &mut self,
+        group: usize,
+        font: &mut florui_text::Font,
+        arena: &Arena,
+        styles: &HashMap<NodeId, ComputedStyle>,
+        roots: &[NodeId],
+        inline_leaves: &mut Vec<(NodeId, Vec<InlineContentItem>)>,
+    ) -> Result<(), taffy::TaffyError> {
+        if roots.is_empty() {
+            if let Some(unused) = self.groups[group].take() {
+                self.tree.remove(unused.id)?;
+            }
+            return Ok(());
+        }
+        for &root in roots {
+            self.sync_subtree(font, arena, styles, root, inline_leaves)?;
+        }
+        let children: Vec<taffy::NodeId> = roots.iter().map(|&root| self.id_of(root)).collect();
+        match &mut self.groups[group] {
+            Some(existing) => {
+                if existing.children != children {
+                    self.tree.set_children(existing.id, &children)?;
+                    existing.children = children;
+                }
+            }
+            slot @ None => {
+                let id = self.tree.new_leaf(taffy::Style {
+                    display: Display::Block,
+                    ..Default::default()
+                })?;
+                self.tree.set_children(id, &children)?;
+                *slot = Some(Group { id, children });
+            }
+        }
+        Ok(())
+    }
+
+    fn id_of(&self, node: NodeId) -> taffy::NodeId {
+        self.slots[node].as_ref().map_or_else(
+            || unreachable!("a child is synced before its parent"),
+            |s| s.id,
+        )
+    }
+
+    /// The walk of `build_node`, writing into the kept tree instead of
+    /// creating a new one.
+    fn sync_subtree(
+        &mut self,
+        font: &mut florui_text::Font,
+        arena: &Arena,
+        styles: &HashMap<NodeId, ComputedStyle>,
+        root: NodeId,
+        inline_leaves: &mut Vec<(NodeId, Vec<InlineContentItem>)>,
+    ) -> Result<(), taffy::TaffyError> {
+        let mut stack = vec![Step::Visit(root)];
+        while let Some(step) = stack.pop() {
+            match step {
+                Step::Visit(node) => {
+                    let arena_children = arena.children(node);
+                    if arena_children.is_empty() {
+                        let context = leaf_context(font, arena, styles, node);
+                        self.place(node, to_taffy_style(styles.get(&node)), context, &[], false)?;
+                    } else if needs_inline_layout(arena, styles, node) {
+                        let items = build_inline_content_items(font, arena, styles, node);
+                        self.place(
+                            node,
+                            to_taffy_style(styles.get(&node)),
+                            Some(LeafContext::Inline(items.clone())),
+                            &[],
+                            false,
+                        )?;
+                        inline_leaves.push((node, items));
+                    } else {
+                        stack.push(Step::Build(node));
+                        for &child in arena_children.iter().rev() {
+                            stack.push(Step::Visit(child));
+                        }
+                    }
+                }
+                Step::Build(node) => {
+                    let children: Vec<taffy::NodeId> = arena
+                        .children(node)
+                        .iter()
+                        .map(|&child| self.id_of(child))
+                        .collect();
+                    let children_are_new = arena.children(node).iter().all(|&child| {
+                        self.slots[child]
+                            .as_ref()
+                            .is_some_and(|slot| slot.created == self.epoch)
+                    });
+                    self.place(
+                        node,
+                        to_taffy_style(styles.get(&node)),
+                        None,
+                        &children,
+                        children_are_new,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Makes the Taffy node of `node` hold this style, context and children,
+    /// creating it if the node is new and writing only what differs if not.
+    fn place(
+        &mut self,
+        node: NodeId,
+        style: taffy::Style,
+        context: Option<LeafContext>,
+        children: &[taffy::NodeId],
+        children_are_new: bool,
+    ) -> Result<(), taffy::TaffyError> {
+        if self.slots.len() <= node {
+            self.slots.resize_with(node + 1, || None);
+        }
+        let epoch = self.epoch;
+        let Some(slot) = &mut self.slots[node] else {
+            // `new_with_children` links a child to its new parent without
+            // leaving the one it had, whose own later `set_children` would then
+            // cut the new link. That cannot happen to a child made in this
+            // layout, which has no parent yet; any other child goes through
+            // `set_children`, which leaves its old parent first.
+            let id = match context {
+                Some(context) => self.tree.new_leaf_with_context(style, context)?,
+                None if children_are_new && !children.is_empty() => {
+                    self.tree.new_with_children(style, children)?
+                }
+                None => {
+                    let id = self.tree.new_leaf(style)?;
+                    if !children.is_empty() {
+                        self.tree.set_children(id, children)?;
+                    }
+                    id
+                }
+            };
+            self.slots[node] = Some(Slot {
+                id,
+                children: children.to_vec(),
+                epoch,
+                created: epoch,
+            });
+            return Ok(());
+        };
+        slot.epoch = epoch;
+        let id = slot.id;
+        if *self.tree.style(id)? != style {
+            self.tree.set_style(id, style)?;
+        }
+        if self.tree.get_node_context(id) != context.as_ref() {
+            self.tree.set_node_context(id, context)?;
+        }
+        if slot.children != children {
+            self.tree.set_children(id, children)?;
+            slot.children = children.to_vec();
+        }
+        Ok(())
+    }
+
+    /// Removes the Taffy nodes of arena nodes that are not in the tree any
+    /// more.
+    fn drop_unused(&mut self) -> Result<(), taffy::TaffyError> {
+        let epoch = self.epoch;
+        for slot in &mut self.slots {
+            if slot.as_ref().is_some_and(|s| s.epoch != epoch)
+                && let Some(gone) = slot.take()
+            {
+                self.tree.remove(gone.id)?;
+            }
+        }
+        while matches!(self.slots.last(), Some(None)) {
+            self.slots.pop();
+        }
+        Ok(())
+    }
+}
+
+/// What the measure closure needs to size a leaf with no element children, as
+/// `build_node` creates it; `None` for a leaf with nothing to measure.
+fn leaf_context(
+    font: &mut florui_text::Font,
+    arena: &Arena,
+    styles: &HashMap<NodeId, ComputedStyle>,
+    node: NodeId,
+) -> Option<LeafContext> {
+    let style = styles.get(&node);
+    if matches!(arena.tag(node), "img" | "icon") {
+        return Some(LeafContext::Image(ImageContext {
+            intrinsic_size: None,
+            aspect_ratio: style.map_or_else(Default::default, |s| s.aspect_ratio),
+        }));
+    }
+    if arena.tag(node) == "textarea" {
+        return Some(LeafContext::Fixed(textarea_intrinsic_size(
+            font, arena, node, style,
+        )));
+    }
+    let text = leaf_text(arena, node);
+    if text.is_empty() {
+        return None;
+    }
+    Some(LeafContext::Text(TextContext {
+        text: text.to_string(),
+        font_size: style.map_or(16.0, |s| s.font_size),
+        font_weight: style.map_or(400.0, |s| s.font_weight),
+        font_family: style.map_or(florui_text::FontFamily::SansSerif, |s| {
+            to_text_font_family(s.font_family)
+        }),
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use florui::prelude::*;
+    use florui_style::InteractionState;
+
+    use super::*;
+
+    const CSS: &str = ".root { display: flex; flex-wrap: wrap; width: 300px; } \
+         .col { display: flex; flex-direction: column; padding: 4px; } \
+         .c0 { width: 60px; height: 40px; } \
+         .c1 { flex-grow: 1; padding: 3px; border: 2px solid red; } \
+         .c2 { width: 50%; margin-left: 7.5px; } \
+         .c3 { position: absolute; left: 30px; top: 20px; width: 50px; height: 50px; } \
+         .c4 { display: inline-block; width: 24px; height: 12px; } \
+         .big { font-size: 22px; font-weight: 700; } \
+         .over { position: absolute; width: 120px; padding: 5px; }";
+
+    /// A tree of nested boxes, text leaves and a mixed inline paragraph; the
+    /// same `seed` and `edit` give the same tree.
+    fn tree(seed: u32, edit: u32) -> Element {
+        fn next(state: &mut u32) -> u32 {
+            *state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *state >> 8
+        }
+        fn node(state: &mut u32, depth: u32, edit: u32, counter: &mut u32) -> Element {
+            *counter += 1;
+            let class = format!("c{}", next(state) % 5);
+            if depth >= 4 || next(state).is_multiple_of(3) {
+                let words = 1 + next(state) % 6;
+                let mut text = (0..words)
+                    .map(|w| format!("word{w}"))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if *counter == edit {
+                    text.push_str(" edited");
+                }
+                let class = if (*counter).is_multiple_of(4) {
+                    format!("{class} big")
+                } else {
+                    class
+                };
+                return Element::node(
+                    "div",
+                    vec![("class".into(), class)],
+                    vec![Element::text(&text)],
+                );
+            }
+            if next(state).is_multiple_of(6) {
+                return Element::node(
+                    "p",
+                    vec![("class".into(), class)],
+                    vec![
+                        Element::text("Hello "),
+                        Element::node("span", vec![], vec![Element::text("world")]),
+                        Element::node("span", vec![("class".into(), "c4".into())], vec![]),
+                        Element::text("!"),
+                    ],
+                );
+            }
+            let children = (0..1 + next(state) % 4)
+                .map(|_| node(state, depth + 1, edit, counter))
+                .collect();
+            Element::node(
+                "div",
+                vec![("class".into(), format!("{class} col"))],
+                children,
+            )
+        }
+        let mut state = seed.wrapping_mul(2_654_435_761).wrapping_add(7);
+        let mut counter = 0;
+        let children = (0..3)
+            .map(|_| node(&mut state, 1, edit, &mut counter))
+            .collect();
+        Element::node("div", vec![("class".into(), "root".into())], children)
+    }
+
+    fn styled(arena: &Arena) -> HashMap<NodeId, ComputedStyle> {
+        let rules = florui_style::parse_stylesheet(CSS).unwrap();
+        florui_style::compute(
+            arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        )
+    }
+
+    /// Lays `arena` out in `cache` and from scratch, and fails if they differ.
+    fn assert_same(
+        cache: &mut LayoutCache,
+        font: &mut florui_text::Font,
+        arena: &Arena,
+        available: Size<AvailableSpace>,
+        what: &str,
+    ) {
+        let styles = styled(arena);
+        let kept = cache.compute(font, arena, &styles, available).unwrap();
+        let fresh = compute_layout_with_content_extents(font, arena, &styles, available).unwrap();
+        assert_eq!(kept.0.len(), fresh.0.len(), "{what}: node count");
+        for (node, layout) in &fresh.0 {
+            assert_eq!(kept.0.get(node), Some(layout), "{what}: box of node {node}");
+        }
+        for (node, extent) in &fresh.1 {
+            assert_eq!(
+                kept.1.get(node),
+                Some(extent),
+                "{what}: extent of node {node}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_kept_tree_lays_out_as_one_built_anew_through_any_sequence_of_changes() {
+        let mut font = florui_text::Font::load_embedded();
+        let mut cache = LayoutCache::new();
+        let wide = Size::MAX_CONTENT;
+        let narrow = Size {
+            width: AvailableSpace::Definite(220.0),
+            height: AvailableSpace::MaxContent,
+        };
+        for seed in 0..40u32 {
+            // The same tree twice (nothing changed), then one text edited at a
+            // few places, then a different tree altogether (ids all move).
+            for (edit, what) in [(0, "first"), (0, "unchanged"), (3, "edit 3"), (9, "edit 9")] {
+                let arena = Arena::build(&tree(seed, edit));
+                assert_same(
+                    &mut cache,
+                    &mut font,
+                    &arena,
+                    wide,
+                    &format!("seed {seed} {what}"),
+                );
+            }
+            let arena = Arena::build(&tree(seed, 0));
+            assert_same(
+                &mut cache,
+                &mut font,
+                &arena,
+                narrow,
+                &format!("seed {seed} narrow"),
+            );
+            assert_same(
+                &mut cache,
+                &mut font,
+                &arena,
+                wide,
+                &format!("seed {seed} wide again"),
+            );
+        }
+    }
+
+    #[test]
+    fn overlays_come_and_go_in_a_kept_tree() {
+        let mut font = florui_text::Font::load_embedded();
+        let mut cache = LayoutCache::new();
+        let document = tree(5, 0);
+        let overlay = |n: u32| {
+            Element::node(
+                "div",
+                vec![("class".into(), "over".into())],
+                (0..n)
+                    .map(|i| Element::text(format!("overlay {i}")))
+                    .collect(),
+            )
+        };
+        let available = Size::MAX_CONTENT;
+        let none = Arena::build(&document);
+        assert_same(&mut cache, &mut font, &none, available, "no overlay");
+        for n in [1, 2, 0, 3] {
+            let arena = Arena::build_with_overlays(&document, &overlay(n));
+            assert_same(
+                &mut cache,
+                &mut font,
+                &arena,
+                available,
+                &format!("overlay of {n}"),
+            );
+            assert_same(&mut cache, &mut font, &none, available, "overlay gone");
+        }
+    }
+
+    #[test]
+    fn a_registered_font_empties_the_kept_tree() {
+        let mut font = florui_text::Font::load_embedded();
+        let mut cache = LayoutCache::new();
+        let arena = Arena::build(&tree(11, 0));
+        assert_same(&mut cache, &mut font, &arena, Size::MAX_CONTENT, "before");
+        let generation = font.generation();
+        // Registering the same bytes again still bumps the generation.
+        let _ = font.register(florui_text::EMBEDDED_SANS_SERIF_FONT);
+        if font.generation() != generation {
+            assert_same(&mut cache, &mut font, &arena, Size::MAX_CONTENT, "after");
+        }
+    }
+}

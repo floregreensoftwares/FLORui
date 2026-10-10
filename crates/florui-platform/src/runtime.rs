@@ -125,6 +125,9 @@ pub struct UiRuntime {
     /// [`Self::with_rules_and_context`] — see
     /// [`florui_style::AnimationTimeline`]'s own doc.
     animation_timeline: AnimationTimeline,
+    /// The layout tree kept between updates, so an update lays out only what
+    /// changed since the last.
+    layout_cache: florui_layout::LayoutCache,
     /// Whether a hover change that only changes how nodes paint is answered
     /// without a full update; a test turns it off to compare the two.
     hover_repaint: bool,
@@ -305,6 +308,7 @@ impl UiRuntime {
             validation_bubble: RefCell::new(None),
             resized: RefCell::new(HashMap::new()),
             animation_timeline,
+            layout_cache: florui_layout::LayoutCache::new(),
             hover_repaint: true,
             animation_epoch: std::time::Instant::now(),
             clock_override: None,
@@ -584,7 +588,8 @@ impl UiRuntime {
             styles,
             layouts,
             content_extents,
-        } = florui_layout::compute_with_style(
+        } = florui_layout::compute_with_style_cached(
+            &mut self.layout_cache,
             &mut self.font,
             &self.arena,
             &self.rules,

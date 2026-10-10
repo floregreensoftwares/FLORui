@@ -244,7 +244,7 @@ fn a_change_is_traced_to_the_event_that_caused_it_and_the_work_it_did() {
 }
 
 #[test]
-fn text_that_did_not_change_is_answered_from_the_cache_and_changed_text_is_measured_again() {
+fn text_that_did_not_change_is_not_measured_again_and_changed_text_is() {
     use florui_profile::Counter;
 
     let mut mounted = mount_panel();
@@ -253,11 +253,10 @@ fn text_that_did_not_change_is_answered_from_the_cache_and_changed_text_is_measu
     // A resize to the size it already has re-renders without changing anything.
     let ((), idle) = mounted.profile(|m| m.resize(160.0, 120.0));
     assert_eq!(
-        idle.counter(Counter::TextMemoMisses),
+        idle.counter(Counter::TextMemoMisses) + idle.counter(Counter::TextMemoHits),
         0,
-        "nothing changed, so no text is measured again"
+        "nothing changed, so no text is measured again, the layout kept its answers"
     );
-    assert!(idle.counter(Counter::TextMemoHits) > 0);
 
     let ((), changed) = mounted.profile(|m| m.click(add));
     assert!(
