@@ -64,6 +64,22 @@ pub enum Phase {
     Accessibility,
     /// CPU rasterization into the frame buffer.
     Raster,
+    /// Within `Raster`: the backdrop filter and the glass rim of a box.
+    RasterBackdrop,
+    /// Within `Raster`: box shadows, outer and inner.
+    RasterShadows,
+    /// Within `Raster`: the background color.
+    RasterFill,
+    /// Within `Raster`: background images and gradients.
+    RasterLayers,
+    /// Within `Raster`: borders.
+    RasterBorders,
+    /// Within `Raster`: what is inside the box: text, images, controls.
+    RasterContent,
+    /// Within `Raster`: putting a finished group (opacity, transform, filter)
+    /// over what is beneath it, with its filters. The group's own contents
+    /// count under the phases above.
+    RasterComposite,
     /// What an observer draws or reads after the frame is painted.
     Overlay,
     /// Handing the finished buffer to the window: the stages below on the GPU
@@ -80,7 +96,7 @@ pub enum Phase {
 }
 
 impl Phase {
-    pub const ALL: [Phase; 21] = [
+    pub const ALL: [Phase; 28] = [
         Phase::StylesheetRead,
         Phase::StylesheetParse,
         Phase::Update,
@@ -96,6 +112,13 @@ impl Phase {
         Phase::PaintParts,
         Phase::Accessibility,
         Phase::Raster,
+        Phase::RasterBackdrop,
+        Phase::RasterShadows,
+        Phase::RasterFill,
+        Phase::RasterLayers,
+        Phase::RasterBorders,
+        Phase::RasterContent,
+        Phase::RasterComposite,
         Phase::Overlay,
         Phase::Present,
         Phase::Upload,
@@ -121,6 +144,13 @@ impl Phase {
             Phase::PaintParts => "paint-parts",
             Phase::Accessibility => "accessibility",
             Phase::Raster => "raster",
+            Phase::RasterBackdrop => "raster-backdrop",
+            Phase::RasterShadows => "raster-shadows",
+            Phase::RasterFill => "raster-fill",
+            Phase::RasterLayers => "raster-layers",
+            Phase::RasterBorders => "raster-borders",
+            Phase::RasterContent => "raster-content",
+            Phase::RasterComposite => "raster-composite",
             Phase::Overlay => "overlay",
             Phase::Present => "present",
             Phase::Upload => "upload",
@@ -167,10 +197,18 @@ pub enum Counter {
     GlassPixelsMoved,
     /// Glass panels whose requested refraction was cut to a limit.
     GlassClamped,
+    /// Background layers drawn because the layer cache had no copy.
+    LayersRendered,
+    /// Background layers answered from the layer cache.
+    LayersReused,
+    /// Shadow masks blurred because the shadow cache had no copy.
+    ShadowMasksBlurred,
+    /// Shadow masks answered from the shadow cache.
+    ShadowMasksReused,
 }
 
 impl Counter {
-    pub const ALL: [Counter; 13] = [
+    pub const ALL: [Counter; 17] = [
         Counter::NodesStyled,
         Counter::NodesLaidOut,
         Counter::NodesPainted,
@@ -184,6 +222,10 @@ impl Counter {
         Counter::GlassRefractions,
         Counter::GlassPixelsMoved,
         Counter::GlassClamped,
+        Counter::LayersRendered,
+        Counter::LayersReused,
+        Counter::ShadowMasksBlurred,
+        Counter::ShadowMasksReused,
     ];
 
     pub fn name(self) -> &'static str {
@@ -201,6 +243,10 @@ impl Counter {
             Counter::GlassRefractions => "glass-refractions",
             Counter::GlassPixelsMoved => "glass-pixels-moved",
             Counter::GlassClamped => "glass-clamped",
+            Counter::LayersRendered => "layers-rendered",
+            Counter::LayersReused => "layers-reused",
+            Counter::ShadowMasksBlurred => "shadow-masks-blurred",
+            Counter::ShadowMasksReused => "shadow-masks-reused",
         }
     }
 

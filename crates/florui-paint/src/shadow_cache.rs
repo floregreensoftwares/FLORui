@@ -77,8 +77,10 @@ impl ShadowCache {
         self.tick += 1;
         if let Some(entry) = self.entries.get_mut(&key) {
             entry.last_used = self.tick;
+            florui_profile::count(florui_profile::Counter::ShadowMasksReused, 1);
             return Rc::clone(&entry.coverage);
         }
+        florui_profile::count(florui_profile::Counter::ShadowMasksBlurred, 1);
         self.computed += 1;
         let coverage = Rc::new(compute());
         let size = coverage.len();
