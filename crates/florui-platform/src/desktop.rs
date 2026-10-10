@@ -1136,6 +1136,9 @@ struct WindowState {
     /// The last frame as the CPU presenter wants it, converted only where it
     /// changed.
     cpu_frame: Vec<u32>,
+    /// Whether a frame painted whole may be painted in bands on the thread pool.
+    /// Off when `FLORUI_NO_PARALLEL_PAINT` is set.
+    parallel_paint: bool,
     /// Whether a frame may be painted over the last. Off when `FLORUI_NO_REPAINT`
     /// is set, to tell a picture the repainter got wrong from one that is.
     repaint_over_the_last: bool,
@@ -1523,12 +1526,18 @@ impl WindowState {
                 scale_factor: scale_factor as f32,
                 text_inputs: Some(&parts.text_inputs),
                 images: Some(&parts.images),
+                parallel: self.parallel_paint,
             });
             changed = self.repainter.last_parts().map(<[_]>::to_vec);
             self.repainter.canvas()
         } else {
             self.repainter.forget();
-            let mut canvas = florui_paint::paint_to_buffer_with_desktop_extras(
+            let paint_whole = if self.parallel_paint {
+                florui_paint::paint_to_buffer_banded
+            } else {
+                florui_paint::paint_to_buffer_with_desktop_extras
+            };
+            let mut canvas = paint_whole(
                 font,
                 paint_width,
                 paint_height,
@@ -2161,6 +2170,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 },
                 repainter: florui_paint::Repainter::new(),
                 cpu_frame: Vec::new(),
+                parallel_paint: std::env::var_os("FLORUI_NO_PARALLEL_PAINT").is_none(),
                 repaint_over_the_last: std::env::var_os("FLORUI_NO_REPAINT").is_none(),
                 css_path: spec.css_path,
                 applied_css: None,
