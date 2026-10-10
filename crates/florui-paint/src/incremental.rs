@@ -17,6 +17,7 @@ use florui_layout::BoxLayout;
 use florui_style::{Arena, ComputedStyle, NodeId, Rgba};
 use florui_text::Font;
 
+use super::material::Params;
 use super::{
     Canvas, ImagePaint, Surface, TextInputPaint, absolute_position, filter_inflation,
     map_rect_aabb, own_extent, paint_nodes, resolve_transform, subtree_extent, to_tiny_skia_color,
@@ -47,8 +48,13 @@ pub enum Repaint {
     Whole,
     /// Nothing had changed, so the frame is the one before it.
     Nothing,
-    /// Only this part, `(x0, y0, x1, y1)` in painted pixels, was painted again.
-    Part(i32, i32, i32, i32),
+    /// Only some parts were painted again: `rects` rectangles of the frame,
+    /// `pixels` painted pixels in all, within `bounds` (`x0, y0, x1, y1`).
+    Part {
+        rects: usize,
+        pixels: u64,
+        bounds: (i32, i32, i32, i32),
+    },
 }
 
 /// What a box looked like when it was last painted, so a change shows.
@@ -65,8 +71,9 @@ struct Note {
     always: bool,
     /// Which decoded image it paints, as an address.
     image: usize,
-    /// The reach of its backdrop filter or glass, `None` without one.
-    backdrop: Option<f32>,
+    /// The reach of its backdrop filter or glass and the box it filters, `None`
+    /// without one.
+    backdrop: Option<(f32, Area)>,
 }
 
 struct Memo {
@@ -151,26 +158,50 @@ impl Repainter {
 
         let (canvas, repaint) = match (kept_canvas, kept_notes, part) {
             (Some(canvas), Some(_), Some(Damage::Nothing)) => (canvas, Repaint::Nothing),
-            (Some(mut canvas), Some(_), Some(Damage::Part(area))) => {
-                let (x0, y0, x1, y1) = (
-                    (area.0.floor() as i32).max(0),
-                    (area.1.floor() as i32).max(0),
-                    (area.2.ceil() as i32).min(width as i32),
-                    (area.3.ceil() as i32).min(height as i32),
-                );
-                repaint_part(
-                    &mut canvas,
-                    (x0, y0, x1, y1),
-                    font,
-                    canvas_color,
-                    arena,
-                    styles,
-                    layouts,
-                    scale_factor,
-                    text_inputs,
-                    images,
-                );
-                (canvas, Repaint::Part(x0, y0, x1, y1))
+            (Some(mut canvas), Some(_), Some(Damage::Parts(areas))) => {
+                let mut pixels = 0u64;
+                let mut bounds = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+                let rects: Vec<(i32, i32, i32, i32)> = areas
+                    .iter()
+                    .map(|area| {
+                        (
+                            (area.0.floor() as i32).max(0),
+                            (area.1.floor() as i32).max(0),
+                            (area.2.ceil() as i32).min(width as i32),
+                            (area.3.ceil() as i32).min(height as i32),
+                        )
+                    })
+                    .filter(|&(x0, y0, x1, y1)| x1 > x0 && y1 > y0)
+                    .collect();
+                for &(x0, y0, x1, y1) in &rects {
+                    repaint_part(
+                        &mut canvas,
+                        (x0, y0, x1, y1),
+                        font,
+                        canvas_color,
+                        arena,
+                        styles,
+                        layouts,
+                        scale_factor,
+                        text_inputs,
+                        images,
+                    );
+                    pixels += ((x1 - x0) as u64) * ((y1 - y0) as u64);
+                    bounds = (
+                        bounds.0.min(x0),
+                        bounds.1.min(y0),
+                        bounds.2.max(x1),
+                        bounds.3.max(y1),
+                    );
+                }
+                (
+                    canvas,
+                    Repaint::Part {
+                        rects: rects.len(),
+                        pixels,
+                        bounds,
+                    },
+                )
             }
             _ => (
                 super::paint_to_buffer_with_desktop_extras(
@@ -205,84 +236,110 @@ impl Repainter {
 
 enum Damage {
     Nothing,
-    Part(Area),
+    Parts(Vec<Area>),
 }
 
-/// The part of the frame that has to be painted again, or `None` when that is
+/// The parts of the frame that have to be painted again, or `None` when that is
 /// too much to be worth it.
 fn damage(
     old: &HashMap<NodeId, Note>,
     new: &HashMap<NodeId, Note>,
     size: (u32, u32),
 ) -> Option<Damage> {
-    let mut part: Option<Area> = None;
-    let mut add = |ink: Area| {
-        part = Some(match part {
-            None => ink,
-            Some(held) => union(held, ink),
-        });
-    };
+    let mut parts: Vec<Area> = Vec::new();
     for (id, note) in new {
         match old.get(id) {
             Some(before) if same(before, note) && !note.always => {}
             Some(before) => {
-                add(before.ink);
-                add(note.ink);
+                parts.push(before.ink);
+                parts.push(note.ink);
             }
-            None => add(note.ink),
+            None => parts.push(note.ink),
         }
     }
     for (id, before) in old {
         if !new.contains_key(id) {
-            add(before.ink);
+            parts.push(before.ink);
         }
     }
-    let Some(mut part) = part else {
+    if parts.is_empty() {
         return Some(Damage::Nothing);
-    };
+    }
     // A backdrop filter or glass reads the pixels around the box it filters, so a
     // change within its reach changes it, and what it filters has to be there to
     // be filtered: the whole box is painted again.
     loop {
-        let mut grew = false;
+        let before = parts.len();
         for note in new.values() {
-            let Some(reach) = note.backdrop else { continue };
-            let near = (
-                part.0 - reach,
-                part.1 - reach,
-                part.2 + reach,
-                part.3 + reach,
-            );
-            if overlaps(near, note.ink) && !contains(part, note.ink) {
-                part = union(part, note.ink);
-                grew = true;
+            let Some((reach, area)) = note.backdrop else {
+                continue;
+            };
+            let touched = parts.iter().any(|&part| {
+                overlaps(
+                    (
+                        part.0 - reach,
+                        part.1 - reach,
+                        part.2 + reach,
+                        part.3 + reach,
+                    ),
+                    area,
+                )
+            });
+            if touched && !parts.iter().any(|&part| contains(part, area)) {
+                parts.push(area);
             }
         }
-        if !grew {
+        if parts.len() == before {
             break;
         }
     }
-    let part = (
-        part.0 - FRINGE,
-        part.1 - FRINGE,
-        part.2 + FRINGE,
-        part.3 + FRINGE,
-    );
-    let clamped = (
-        part.0.max(0.0),
-        part.1.max(0.0),
-        part.2.min(size.0 as f32),
-        part.3.min(size.1 as f32),
-    );
-    if clamped.2 <= clamped.0 || clamped.3 <= clamped.1 {
+    let frame = (0.0, 0.0, size.0 as f32, size.1 as f32);
+    let mut parts: Vec<Area> = parts
+        .into_iter()
+        .map(|part| {
+            (
+                (part.0 - FRINGE).max(frame.0),
+                (part.1 - FRINGE).max(frame.1),
+                (part.2 + FRINGE).min(frame.2),
+                (part.3 + FRINGE).min(frame.3),
+            )
+        })
+        .filter(|part| part.2 > part.0 && part.3 > part.1)
+        .collect();
+    if parts.is_empty() {
         return Some(Damage::Nothing);
     }
-    let area = (clamped.2 - clamped.0) * (clamped.3 - clamped.1);
-    if area > MOST_OF_THE_WINDOW * size.0 as f32 * size.1 as f32 {
+    merge(&mut parts);
+    let pixels: f32 = parts.iter().map(|p| (p.2 - p.0) * (p.3 - p.1)).sum();
+    if pixels > MOST_OF_THE_WINDOW * size.0 as f32 * size.1 as f32 {
         return None;
     }
-    Some(Damage::Part(clamped))
+    Some(Damage::Parts(parts))
 }
+
+/// Joins parts that touch, or whose joint rectangle is hardly larger than they
+/// are together, until none is left to join.
+fn merge(parts: &mut Vec<Area>) {
+    let area = |p: Area| (p.2 - p.0) * (p.3 - p.1);
+    'again: loop {
+        for i in 0..parts.len() {
+            for j in i + 1..parts.len() {
+                let (a, b) = (parts[i], parts[j]);
+                let joined = union(a, b);
+                if overlaps(a, b) || area(joined) <= JOIN_WASTE * (area(a) + area(b)) {
+                    parts[i] = joined;
+                    parts.swap_remove(j);
+                    continue 'again;
+                }
+            }
+        }
+        break;
+    }
+}
+
+/// How much larger than two parts together the rectangle holding both may be
+/// for them to be painted as one.
+const JOIN_WASTE: f32 = 1.25;
 
 fn same(a: &Note, b: &Note) -> bool {
     a.shape == b.shape
@@ -340,16 +397,16 @@ fn take_notes(
             None => own_extent(arena, styles, layouts, font, id, x, y, scale_factor)
                 .unwrap_or((x, y, x, y)),
         };
-        let backdrop = style.and_then(|s| {
-            let blur = filter_inflation(&s.backdrop_filter, scale_factor);
-            let glass = matches!(s.glass, florui_style::GlassSpec::Material(_));
-            (!s.backdrop_filter.is_empty() || glass).then_some(
-                blur + if glass {
-                    GLASS_REACH * scale_factor
-                } else {
-                    0.0
-                },
-            )
+        let backdrop = style.zip(layout).and_then(|(s, layout)| {
+            // A blur reads only the box it filters; glass can read a little beyond it.
+            let moved = match &s.glass {
+                florui_style::GlassSpec::Material(material) => {
+                    Params::resolve(material, scale_factor).map_or(0.0, |p| p.reach() as f32)
+                }
+                _ => 0.0,
+            };
+            let filters = !s.backdrop_filter.is_empty() || moved > 0.0;
+            filters.then_some((moved, (x, y, x + layout.width, y + layout.height)))
         });
         notes.insert(
             id,
@@ -368,10 +425,6 @@ fn take_notes(
     }
     notes
 }
-
-/// How far, in logical pixels, a glass panel's refraction can move what lies
-/// behind it, beyond its blur.
-const GLASS_REACH: f32 = 64.0;
 
 /// What `top` and everything under it paint, once it is moved or filtered.
 fn group_extent(
