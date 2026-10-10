@@ -3733,6 +3733,9 @@ fn paint_rounded_shadow(
         &blurred,
         shadow.color,
         shadow.inset,
+        if shadow.inset { &padding } else { outline }
+            .solid_interior()
+            .map(|rect| (rect, shadow.inset)),
         |canvas_x, canvas_y| {
             if shadow.inset {
                 outline_contains_pixel(&padding, canvas_x, canvas_y)
@@ -4106,6 +4109,7 @@ fn paint_outset_shadow_blurred(
         &blurred,
         shadow.color,
         false,
+        Some(((x + 1.0, y + 1.0, x + width - 1.0, y + height - 1.0), false)),
         |canvas_x, canvas_y| {
             // Excluded from the box's own border box — the hard clip real
             // CSS applies to an outer shadow regardless of its own blur.
@@ -4157,6 +4161,15 @@ fn paint_inset_shadow_blurred(
         &blurred,
         shadow.color,
         true,
+        Some((
+            (
+                padding_x + 1.0,
+                padding_y + 1.0,
+                padding_x + padding_width - 1.0,
+                padding_y + padding_height - 1.0,
+            ),
+            true,
+        )),
         |canvas_x, canvas_y| {
             // The hard clip real CSS applies to an inset shadow: never past
             // its own padding box, regardless of its own blur.
@@ -4177,6 +4190,7 @@ fn composite_blurred_shadow(
     blurred: &BlurredShape,
     color: Rgba,
     invert: bool,
+    known: Option<((f32, f32, f32, f32), bool)>,
     allowed: impl Fn(f32, f32) -> bool,
 ) {
     // `blurred.origin_x/y` are absolute canvas coordinates (computed from
@@ -4209,7 +4223,29 @@ fn composite_blurred_shadow(
         }
         let coverage_row =
             &blurred.coverage[(local_y * blurred.width) as usize..][..blurred.width as usize];
-        for local_x in first_column..end_column {
+        // The columns of this row whose answer from `allowed` is already known
+        // (the centers of those pixels lie in the rectangle `known` names).
+        let (known_from, known_to, known_allowed) = match known {
+            Some(((kx0, ky0, kx1, ky1), result))
+                if (canvas_y as f32 + 0.5) >= ky0 && (canvas_y as f32 + 0.5) < ky1 =>
+            {
+                let from = ((kx0 - 0.5).ceil() as i64 - mask_x).clamp(first_column, end_column);
+                let to = ((kx1 - 0.5).ceil() as i64 - mask_x).clamp(from, end_column);
+                (from, to, result)
+            }
+            _ => (end_column, end_column, false),
+        };
+        let mut local_x = first_column;
+        while local_x < end_column {
+            let known_here = local_x >= known_from && local_x < known_to;
+            if known_here && !known_allowed {
+                // Nothing in the known stretch is drawn: on to its end.
+                local_x = known_to;
+                continue;
+            }
+            let column = local_x;
+            local_x += 1;
+            let local_x = column;
             // Checked first: most of a mask is zero, and `allowed` (a
             // rounded-outline test) is the dearest part of a pixel.
             let raw = coverage_row[local_x as usize];
@@ -4219,7 +4255,7 @@ fn composite_blurred_shadow(
             }
 
             let canvas_x = mask_x + local_x;
-            if !allowed(canvas_x as f32, canvas_y as f32) {
+            if !known_here && !allowed(canvas_x as f32, canvas_y as f32) {
                 continue;
             }
 
@@ -7797,6 +7833,41 @@ mod tests {
             &layouts,
             scale_factor,
         )
+    }
+
+    #[test]
+    fn a_shadow_skips_the_pixels_whose_answer_is_known_without_changing_any() {
+        let outline = RoundedRect {
+            x: 20.5,
+            y: 18.0,
+            width: 90.0,
+            height: 70.0,
+            radii: [(14.0, 14.0), (6.0, 6.0), (20.0, 20.0), (0.0, 0.0)],
+        };
+        for inset in [false, true] {
+            let shape = if inset {
+                outline.inset(3.0, 3.0, 3.0, 3.0)
+            } else {
+                outline.grown(4.0)
+            };
+            let blurred =
+                rasterize_and_blur(shape.x, shape.y, shape.width, shape.height, &shape, 12.0)
+                    .expect("a shadow");
+            let draw = |known| {
+                let mut surface = Surface::new(140, 110, (0, 0)).expect("a surface");
+                composite_blurred_shadow(
+                    &mut surface,
+                    &blurred,
+                    Rgba::opaque(200, 30, 30),
+                    inset,
+                    known,
+                    |x, y| outline_contains_pixel(&outline, x, y) == inset,
+                );
+                surface.pixmap.data().to_vec()
+            };
+            let interior = outline.solid_interior().expect("room inside");
+            assert_eq!(draw(Some((interior, inset))), draw(None), "inset: {inset}");
+        }
     }
 
     #[test]

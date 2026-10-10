@@ -69,6 +69,16 @@ impl RoundedRect {
         }
     }
 
+    /// A rectangle every point of which is inside the outline: the rows
+    /// between the tallest top corner and the tallest bottom one, across the
+    /// whole width. `None` when the corners leave no such row.
+    pub fn solid_interior(&self) -> Option<(f32, f32, f32, f32)> {
+        let [tl, tr, br, bl] = self.radii;
+        let y0 = self.y + tl.1.max(tr.1);
+        let y1 = self.y + self.height - bl.1.max(br.1);
+        (y1 > y0 && self.width > 0.0).then_some((self.x, y0, self.x + self.width, y1))
+    }
+
     pub fn is_square(&self) -> bool {
         self.radii.iter().all(|&(h, v)| h <= 0.0 || v <= 0.0)
     }
