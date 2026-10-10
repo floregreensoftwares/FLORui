@@ -2650,6 +2650,37 @@ mod tests {
     }
 
     #[test]
+    fn a_url_layer_keeps_its_path_or_its_data_and_its_place_among_the_others() {
+        use crate::{BackgroundImage, BackgroundRepeat};
+        let all = layers(
+            ".a { background-image: url(textures/paper.png), linear-gradient(red, blue), url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'/>\");              background-repeat: repeat-x, no-repeat; }",
+        );
+        assert_eq!(all.len(), 3);
+        assert_eq!(
+            all[0].image,
+            BackgroundImage::Url("textures/paper.png".to_string())
+        );
+        assert!(matches!(all[1].image, BackgroundImage::Linear(_)));
+        let BackgroundImage::Url(data) = &all[2].image else {
+            panic!("a url")
+        };
+        assert!(data.starts_with("data:image/svg+xml;utf8,<svg"), "{data}");
+        // The properties cycle against the images, url ones included.
+        assert_eq!(
+            all[0].repeat,
+            (BackgroundRepeat::Repeat, BackgroundRepeat::NoRepeat)
+        );
+        assert_eq!(
+            all[1].repeat,
+            (BackgroundRepeat::NoRepeat, BackgroundRepeat::NoRepeat)
+        );
+        assert_eq!(
+            all[2].repeat,
+            (BackgroundRepeat::Repeat, BackgroundRepeat::NoRepeat)
+        );
+    }
+
+    #[test]
     fn a_node_without_a_background_image_has_no_layers() {
         assert!(layers(".a { background-color: red; }").is_empty());
         assert!(layers(".a { background-image: none; }").is_empty());
