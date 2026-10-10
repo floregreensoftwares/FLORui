@@ -122,3 +122,61 @@ fn each_size_of_a_resize_as_a_frame() {
         }
     }
 }
+
+/// What it costs when the pointer goes over a key or a card: the frame painted
+/// over the last one, per screen, and where in the painting the time goes.
+#[test]
+#[ignore = "prints timings"]
+fn each_hover_as_a_frame() {
+    let mut mounted = Harness::new(|| App(AppProps {}))
+        .css(&taskboard::stylesheet())
+        .viewport(1180.0, 760.0)
+        .repaint(true)
+        .mount();
+    for (screen, key) in SCREENS {
+        let node = mounted.get(by_id(key));
+        mounted.click(node);
+        let _ = mounted.frame();
+        let mut targets = Vec::new();
+        for id in ["nav-desk", "nav-stack", "nav-settings"] {
+            targets.push(mounted.get(by_id(id)));
+        }
+        targets.extend(
+            mounted
+                .all(florui_test::by_class("paper-card"))
+                .into_iter()
+                .take(4),
+        );
+        targets.extend(
+            mounted
+                .all(florui_test::by_class("segment"))
+                .into_iter()
+                .take(3),
+        );
+        let rounds = 4;
+        let (mut wall, mut raster) = (0.0, 0.0);
+        let mut parts = [0.0f64; PARTS.len()];
+        let mut frames = 0;
+        for _ in 0..rounds {
+            for &target in &targets {
+                let (_, profile) = mounted.profile(|mounted| mounted.hover(target));
+                let frame = &profile.frames()[0];
+                wall += frame.wall().as_secs_f64() * 1000.0;
+                raster += frame.total(Phase::Raster).as_secs_f64() * 1000.0;
+                for (sum, phase) in parts.iter_mut().zip(PARTS) {
+                    *sum += frame.total(phase).as_secs_f64() * 1000.0;
+                }
+                frames += 1;
+            }
+        }
+        let each = frames as f64;
+        println!(
+            "{screen}: {:.1} ms a hover, {:.1} of it painting",
+            wall / each,
+            raster / each
+        );
+        for (sum, phase) in parts.iter().zip(PARTS) {
+            println!("    {:<16} {:>6.2} ms", phase.name(), sum / each);
+        }
+    }
+}
