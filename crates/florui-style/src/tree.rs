@@ -124,11 +124,6 @@ struct ArenaNode {
     /// of a collapsible dropdown; `open` has no meaning for it. See
     /// [`Arena::is_multiple`].
     multiple: bool,
-    /// `onselectionchange` on `<select multiple>` — see
-    /// [`Arena::selection_handler`].
-    selection_handlers: Vec<(String, SelectionHandler)>,
-    /// `onsubmit` on `<form>` -- see [`Arena::submit_handler`].
-    submit_handlers: Vec<(String, SubmitHandler)>,
     /// The raw, unparsed `style="..."` attribute text, if declared — see
     /// [`Arena::style_attr`].
     style: Option<String>,
@@ -183,14 +178,6 @@ struct ArenaNode {
     /// interleaving between them that both those flattened views lose —
     /// see [`Arena::inline_items`].
     inline_items: Vec<InlineItem>,
-    handlers: Vec<(String, Handler)>,
-    /// A typed write-back channel for a primitive attribute (today, only
-    /// `value` on `<input>`) — see [`Arena::value_binding`]. Mutually
-    /// exclusive with `value_handlers` for the same attribute.
-    bindings: Vec<(String, Binding<String>)>,
-    /// The explicit (non-`Binding`) controlled-value channel — see
-    /// [`Arena::value_handler`].
-    value_handlers: Vec<(String, ValueHandler)>,
     parent: Option<NodeId>,
     children: Vec<NodeId>,
     /// How many earlier siblings have this node's tag, counted as the node
@@ -201,10 +188,14 @@ struct ArenaNode {
     child_tag_counts: Vec<(&'static str, usize)>,
 }
 
+/// The shape of a tree and everything a node says about itself, without the
+/// handlers it declared: what painting, layout and styling read. It can be shared
+/// between threads, which the [`Arena`] it lives in cannot (a handler is an `Rc`).
+///
 /// A tree may have more than one root: `view!` can produce an
 /// [`Element::Fragment`] at the top level, and a `Text`-only tree has
 /// none at all (there is nothing selectable to style).
-pub struct Arena {
+pub struct Tree {
     nodes: Vec<ArenaNode>,
     roots: Vec<NodeId>,
     /// How many of `roots`' leading entries are document roots — the
@@ -221,6 +212,54 @@ pub struct Arena {
     root_tag_counts: Vec<(&'static str, usize)>,
 }
 
+/// The handlers one node declared, which are the part of a node that cannot be
+/// shared between threads.
+#[derive(Default)]
+struct NodeHandlers {
+    /// `onselectionchange` on `<select multiple>` — see [`Arena::selection_handler`].
+    selection: Vec<(String, SelectionHandler)>,
+    /// `onsubmit` on `<form>` -- see [`Arena::submit_handler`].
+    submit: Vec<(String, SubmitHandler)>,
+    events: Vec<(String, Handler)>,
+    /// A typed write-back channel for a primitive attribute (today, only
+    /// `value` on `<input>`) — see [`Arena::value_binding`]. Mutually
+    /// exclusive with `value_handlers` for the same attribute.
+    bindings: Vec<(String, Binding<String>)>,
+    /// The explicit (non-`Binding`) controlled-value channel — see
+    /// [`Arena::value_handler`].
+    value_handlers: Vec<(String, ValueHandler)>,
+}
+
+/// An indexed, parent-linked view of an element tree: its [`Tree`], and the
+/// handlers each node declared. It reads as the [`Tree`] it holds for everything
+/// but those handlers.
+pub struct Arena {
+    tree: Tree,
+    handlers: Vec<NodeHandlers>,
+}
+
+impl std::ops::Deref for Arena {
+    type Target = Tree;
+
+    fn deref(&self) -> &Tree {
+        &self.tree
+    }
+}
+
+impl Arena {
+    fn empty() -> Self {
+        Arena {
+            tree: Tree {
+                nodes: Vec::new(),
+                roots: Vec::new(),
+                document_root_count: 0,
+                root_tag_counts: Vec::new(),
+            },
+            handlers: Vec::new(),
+        }
+    }
+}
+
 /// One still-unprocessed slice of sibling [`Element`]s, and where their
 /// [`NodeId`]s attach — a real parent, or the root list.
 struct Frame<'a> {
@@ -229,63 +268,7 @@ struct Frame<'a> {
     parent: Option<NodeId>,
 }
 
-impl Arena {
-    /// Walks `root`, discovering any [`Element::Portal`] structurally
-    /// (no side-channel registry) and extracting each one into its own
-    /// overlay root — level by level, so a portal nested inside another
-    /// portal's own content always lands in a *later* pass than its
-    /// ancestor, and so always later in [`Self::roots`] ("later root
-    /// wins/paints on top" — see [`Self::document_root_count`]'s own
-    /// doc). `document_root_count` is captured after the very first
-    /// pass, before any portal becomes a real root, so every document
-    /// root precedes every portal root regardless of nesting depth.
-    pub fn build(root: &Element) -> Self {
-        let mut arena = Arena {
-            nodes: Vec::new(),
-            roots: Vec::new(),
-            document_root_count: 0,
-            root_tag_counts: Vec::new(),
-        };
-        let mut next_level = Vec::new();
-        arena.push_all(std::slice::from_ref(root), &mut next_level);
-        arena.document_root_count = arena.roots.len();
-        arena.drain_levels(next_level);
-        arena
-    }
-
-    /// Like [`Self::build`], but `overlays` becomes a second group of
-    /// roots — [`Self::overlay_roots`] — appended after `document`'s
-    /// own, for a caller that already has two independently-built trees
-    /// rather than a single one with `Portal`s inside it. `overlays`
-    /// itself may still contain `Portal`s of its own.
-    pub fn build_with_overlays(document: &Element, overlays: &Element) -> Self {
-        let mut arena = Arena {
-            nodes: Vec::new(),
-            roots: Vec::new(),
-            document_root_count: 0,
-            root_tag_counts: Vec::new(),
-        };
-        let mut next_level = Vec::new();
-        arena.push_all(std::slice::from_ref(document), &mut next_level);
-        arena.document_root_count = arena.roots.len();
-        next_level.push(std::slice::from_ref(overlays));
-        arena.drain_levels(next_level);
-        arena
-    }
-
-    /// Runs one more [`Self::push_all`] pass per entry already queued,
-    /// then repeats for whatever `Portal`s that pass itself discovers,
-    /// until a pass finds none — see [`Self::build`]'s own doc for why
-    /// this level-by-level order is what makes nesting paint correctly.
-    fn drain_levels(&mut self, mut next_level: Vec<&[Element]>) {
-        while !next_level.is_empty() {
-            let this_level = std::mem::take(&mut next_level);
-            for children in this_level {
-                self.push_all(children, &mut next_level);
-            }
-        }
-    }
-
+impl Tree {
     /// Whether a child with tag `child_tag` under `parent` is disabled by
     /// `parent`'s own `<fieldset disabled>`, or by one already disabling
     /// `parent` itself.
@@ -299,133 +282,6 @@ impl Arena {
                 .iter()
                 .all(|&sibling| self.nodes[sibling].tag != "legend");
         p.in_disabled_fieldset || !first_legend
-    }
-
-    /// Iterative pre-order walk: an explicit stack instead of one call
-    /// frame per tree level, so a deep tree can't overflow the stack.
-    /// A [`Element::Portal`] contributes nothing at its own position
-    /// (like an empty [`Element::Fragment`]) and instead queues its own
-    /// content into `next_level` for [`Self::drain_levels`] to expand
-    /// into a real root afterward.
-    fn push_all<'a>(&mut self, root_elements: &'a [Element], next_level: &mut Vec<&'a [Element]>) {
-        let mut stack = vec![Frame {
-            elements: root_elements,
-            index: 0,
-            parent: None,
-        }];
-
-        while let Some(frame) = stack.last_mut() {
-            let Some(element) = frame.elements.get(frame.index) else {
-                stack.pop();
-                continue;
-            };
-            frame.index += 1;
-            let parent = frame.parent;
-
-            match element {
-                Element::Node(node) => {
-                    let id = self.nodes.len();
-                    let tag_ordinal = {
-                        let counts = match parent {
-                            Some(p) => &mut self.nodes[p].child_tag_counts,
-                            None => &mut self.root_tag_counts,
-                        };
-                        match counts.iter_mut().find(|(tag, _)| *tag == node.tag) {
-                            Some((_, seen)) => {
-                                *seen += 1;
-                                *seen - 1
-                            }
-                            None => {
-                                counts.push((node.tag, 1));
-                                0
-                            }
-                        }
-                    };
-                    // Real HTML's own default `value` when absent is the
-                    // midpoint of `min`/`max`, so it needs those already
-                    // parsed rather than a fixed literal default.
-                    let range_min = attr_f32(&node.attrs, "min", 0.0);
-                    let range_max = attr_f32(&node.attrs, "max", 100.0);
-                    self.nodes.push(ArenaNode {
-                        tag: node.tag,
-                        source: node.source,
-                        attrs: node.attrs.clone(),
-                        classes: class_list(&node.attrs),
-                        id: attr_value(&node.attrs, "id"),
-                        disabled: attr_bool(&node.attrs, "disabled"),
-                        in_disabled_fieldset: parent
-                            .is_some_and(|p| self.disabled_by_fieldset(p, node.tag)),
-                        checked: attr_bool(&node.attrs, "checked"),
-                        indeterminate: attr_bool(&node.attrs, "indeterminate"),
-                        range_min,
-                        range_max,
-                        range_step: attr_f32(&node.attrs, "step", 1.0),
-                        range_value: attr_f32(&node.attrs, "value", (range_min + range_max) / 2.0),
-                        selected: attr_bool(&node.attrs, "selected"),
-                        active: attr_bool(&node.attrs, "active"),
-                        open: attr_bool(&node.attrs, "open"),
-                        group_label: attr_value(&node.attrs, "label"),
-                        multiple: attr_bool(&node.attrs, "multiple"),
-                        selection_handlers: node.selection_handlers.clone(),
-                        submit_handlers: node.submit_handlers.clone(),
-                        style: attr_value(&node.attrs, "style"),
-                        value: attr_value(&node.attrs, "value"),
-                        input_type: attr_value(&node.attrs, "type"),
-                        name: attr_value(&node.attrs, "name"),
-                        label_for: attr_value(&node.attrs, "for"),
-                        accessible_label: attr_value(&node.attrs, "accessible_label"),
-                        role: attr_value(&node.attrs, "role"),
-                        set_size: attr_value(&node.attrs, "set_size").and_then(|v| v.parse().ok()),
-                        position_in_set: attr_value(&node.attrs, "position_in_set")
-                            .and_then(|v| v.parse().ok()),
-                        href: attr_value(&node.attrs, "href"),
-                        src: attr_value(&node.attrs, "src"),
-                        alt: attr_value(&node.attrs, "alt"),
-                        text: collect_text(&node.children),
-                        inline_items: Vec::new(),
-                        handlers: node.handlers.clone(),
-                        bindings: node.bindings.clone(),
-                        value_handlers: node.value_handlers.clone(),
-                        parent,
-                        children: Vec::new(),
-                        tag_ordinal,
-                        child_tag_counts: Vec::new(),
-                    });
-                    match parent {
-                        Some(p) => {
-                            self.nodes[p].children.push(id);
-                            self.nodes[p].inline_items.push(InlineItem::Element(id));
-                        }
-                        None => self.roots.push(id),
-                    }
-                    stack.push(Frame {
-                        elements: &node.children,
-                        index: 0,
-                        parent: Some(id),
-                    });
-                }
-                Element::Fragment(nested) => {
-                    stack.push(Frame {
-                        elements: nested,
-                        index: 0,
-                        parent,
-                    });
-                }
-                Element::Portal(children) => {
-                    next_level.push(children.as_slice());
-                }
-                Element::Text(value) => {
-                    if let Some(p) = parent {
-                        match self.nodes[p].inline_items.last_mut() {
-                            Some(InlineItem::Text(existing)) => existing.push_str(value),
-                            _ => self.nodes[p]
-                                .inline_items
-                                .push(InlineItem::Text(value.clone())),
-                        }
-                    }
-                }
-            }
-        }
     }
 
     pub fn roots(&self) -> &[NodeId] {
@@ -589,21 +445,6 @@ impl Arena {
         self.nodes[id].multiple
     }
 
-    /// The [`SubmitHandler`] `<form onsubmit>` declared, if any.
-    pub fn submit_handler(&self, id: NodeId) -> Option<&SubmitHandler> {
-        self.nodes[id].submit_handlers.first().map(|(_, h)| h)
-    }
-
-    /// The [`SelectionHandler`] this node declared for `attr` (today,
-    /// only `"selection"` for `onselectionchange`), if any.
-    pub fn selection_handler(&self, id: NodeId, attr: &str) -> Option<&SelectionHandler> {
-        self.nodes[id]
-            .selection_handlers
-            .iter()
-            .find(|(name, _)| name == attr)
-            .map(|(_, handler)| handler)
-    }
-
     /// This node's raw, unparsed `style="..."` attribute text, if it
     /// declared one — a real, cascade-honoring inline declaration (highest
     /// specificity, same as real CSS), not an inert string; see
@@ -720,44 +561,10 @@ impl Arena {
         &self.nodes[id].inline_items
     }
 
-    /// The handler this node declared for `event` (e.g. `"click"` for an
-    /// `onclick={...}` attribute), if any.
-    pub fn handler(&self, id: NodeId, event: &str) -> Option<&Handler> {
-        self.nodes[id]
-            .handlers
-            .iter()
-            .find(|(name, _)| name == event)
-            .map(|(_, handler)| handler)
-    }
-
-    /// The typed write-back channel this node declared for `attr` (e.g.
-    /// `"value"` for a `value={binding}` attribute on `<input>`), if any
-    /// — `None` both when the node declared no such attribute at all and
-    /// when it declared a plain string literal instead (nothing to write
-    /// back to either way).
-    pub fn value_binding(&self, id: NodeId, attr: &str) -> Option<&Binding<String>> {
-        self.nodes[id]
-            .bindings
-            .iter()
-            .find(|(name, _)| name == attr)
-            .map(|(_, binding)| binding)
-    }
-
-    /// The explicit (non-`Binding`) write-back channel this node declared
-    /// for `attr`, if any — mutually exclusive with [`Self::value_binding`]
-    /// for the same `attr`; `view!`'s own codegen never emits both.
-    pub fn value_handler(&self, id: NodeId, attr: &str) -> Option<&ValueHandler> {
-        self.nodes[id]
-            .value_handlers
-            .iter()
-            .find(|(name, _)| name == attr)
-            .map(|(_, handler)| handler)
-    }
-
     /// Depth-first pre-order search across every root, for tests and
     /// callers that need to locate a node before marking it in an
     /// [`crate::InteractionState`].
-    pub fn find(&self, mut predicate: impl FnMut(&Self, NodeId) -> bool) -> Option<NodeId> {
+    pub fn find(&self, mut predicate: impl FnMut(&Tree, NodeId) -> bool) -> Option<NodeId> {
         let mut stack: Vec<NodeId> = self.roots.iter().rev().copied().collect();
         while let Some(id) = stack.pop() {
             if predicate(self, id) {
@@ -771,9 +578,262 @@ impl Arena {
     /// Like [`Self::find`], but collects every match in document order
     /// instead of stopping at the first — the shared primitive both tab
     /// order and [`crate::focus::FocusPath::resolve`] need.
-    pub fn find_all(&self, mut predicate: impl FnMut(&Self, NodeId) -> bool) -> Vec<NodeId> {
+    pub fn find_all(&self, mut predicate: impl FnMut(&Tree, NodeId) -> bool) -> Vec<NodeId> {
         let mut matches = Vec::new();
         let mut stack: Vec<NodeId> = self.roots.iter().rev().copied().collect();
+        while let Some(id) = stack.pop() {
+            if predicate(self, id) {
+                matches.push(id);
+            }
+            stack.extend(self.children(id).iter().rev());
+        }
+        matches
+    }
+}
+
+impl Arena {
+    /// Walks `root`, discovering any [`Element::Portal`] structurally
+    /// (no side-channel registry) and extracting each one into its own
+    /// overlay root — level by level, so a portal nested inside another
+    /// portal's own content always lands in a *later* pass than its
+    /// ancestor, and so always later in [`Self::roots`] ("later root
+    /// wins/paints on top" — see [`Self::document_root_count`]'s own
+    /// doc). `document_root_count` is captured after the very first
+    /// pass, before any portal becomes a real root, so every document
+    /// root precedes every portal root regardless of nesting depth.
+    pub fn build(root: &Element) -> Self {
+        let mut arena = Arena::empty();
+        let mut next_level = Vec::new();
+        arena.push_all(std::slice::from_ref(root), &mut next_level);
+        arena.tree.document_root_count = arena.tree.roots.len();
+        arena.drain_levels(next_level);
+        arena
+    }
+
+    /// Like [`Self::build`], but `overlays` becomes a second group of
+    /// roots — [`Self::overlay_roots`] — appended after `document`'s
+    /// own, for a caller that already has two independently-built trees
+    /// rather than a single one with `Portal`s inside it. `overlays`
+    /// itself may still contain `Portal`s of its own.
+    pub fn build_with_overlays(document: &Element, overlays: &Element) -> Self {
+        let mut arena = Arena::empty();
+        let mut next_level = Vec::new();
+        arena.push_all(std::slice::from_ref(document), &mut next_level);
+        arena.tree.document_root_count = arena.tree.roots.len();
+        next_level.push(std::slice::from_ref(overlays));
+        arena.drain_levels(next_level);
+        arena
+    }
+
+    /// Runs one more [`Self::push_all`] pass per entry already queued,
+    /// then repeats for whatever `Portal`s that pass itself discovers,
+    /// until a pass finds none — see [`Self::build`]'s own doc for why
+    /// this level-by-level order is what makes nesting paint correctly.
+    fn drain_levels(&mut self, mut next_level: Vec<&[Element]>) {
+        while !next_level.is_empty() {
+            let this_level = std::mem::take(&mut next_level);
+            for children in this_level {
+                self.push_all(children, &mut next_level);
+            }
+        }
+    }
+
+    /// Iterative pre-order walk: an explicit stack instead of one call
+    /// frame per tree level, so a deep tree can't overflow the stack.
+    /// A [`Element::Portal`] contributes nothing at its own position
+    /// (like an empty [`Element::Fragment`]) and instead queues its own
+    /// content into `next_level` for [`Self::drain_levels`] to expand
+    /// into a real root afterward.
+    fn push_all<'a>(&mut self, root_elements: &'a [Element], next_level: &mut Vec<&'a [Element]>) {
+        let mut stack = vec![Frame {
+            elements: root_elements,
+            index: 0,
+            parent: None,
+        }];
+
+        while let Some(frame) = stack.last_mut() {
+            let Some(element) = frame.elements.get(frame.index) else {
+                stack.pop();
+                continue;
+            };
+            frame.index += 1;
+            let parent = frame.parent;
+
+            match element {
+                Element::Node(node) => {
+                    let id = self.tree.nodes.len();
+                    let tag_ordinal = {
+                        let counts = match parent {
+                            Some(p) => &mut self.tree.nodes[p].child_tag_counts,
+                            None => &mut self.tree.root_tag_counts,
+                        };
+                        match counts.iter_mut().find(|(tag, _)| *tag == node.tag) {
+                            Some((_, seen)) => {
+                                *seen += 1;
+                                *seen - 1
+                            }
+                            None => {
+                                counts.push((node.tag, 1));
+                                0
+                            }
+                        }
+                    };
+                    // Real HTML's own default `value` when absent is the
+                    // midpoint of `min`/`max`, so it needs those already
+                    // parsed rather than a fixed literal default.
+                    let range_min = attr_f32(&node.attrs, "min", 0.0);
+                    let range_max = attr_f32(&node.attrs, "max", 100.0);
+                    self.tree.nodes.push(ArenaNode {
+                        tag: node.tag,
+                        source: node.source,
+                        attrs: node.attrs.clone(),
+                        classes: class_list(&node.attrs),
+                        id: attr_value(&node.attrs, "id"),
+                        disabled: attr_bool(&node.attrs, "disabled"),
+                        in_disabled_fieldset: parent
+                            .is_some_and(|p| self.tree.disabled_by_fieldset(p, node.tag)),
+                        checked: attr_bool(&node.attrs, "checked"),
+                        indeterminate: attr_bool(&node.attrs, "indeterminate"),
+                        range_min,
+                        range_max,
+                        range_step: attr_f32(&node.attrs, "step", 1.0),
+                        range_value: attr_f32(&node.attrs, "value", (range_min + range_max) / 2.0),
+                        selected: attr_bool(&node.attrs, "selected"),
+                        active: attr_bool(&node.attrs, "active"),
+                        open: attr_bool(&node.attrs, "open"),
+                        group_label: attr_value(&node.attrs, "label"),
+                        multiple: attr_bool(&node.attrs, "multiple"),
+                        style: attr_value(&node.attrs, "style"),
+                        value: attr_value(&node.attrs, "value"),
+                        input_type: attr_value(&node.attrs, "type"),
+                        name: attr_value(&node.attrs, "name"),
+                        label_for: attr_value(&node.attrs, "for"),
+                        accessible_label: attr_value(&node.attrs, "accessible_label"),
+                        role: attr_value(&node.attrs, "role"),
+                        set_size: attr_value(&node.attrs, "set_size").and_then(|v| v.parse().ok()),
+                        position_in_set: attr_value(&node.attrs, "position_in_set")
+                            .and_then(|v| v.parse().ok()),
+                        href: attr_value(&node.attrs, "href"),
+                        src: attr_value(&node.attrs, "src"),
+                        alt: attr_value(&node.attrs, "alt"),
+                        text: collect_text(&node.children),
+                        inline_items: Vec::new(),
+                        parent,
+                        children: Vec::new(),
+                        tag_ordinal,
+                        child_tag_counts: Vec::new(),
+                    });
+                    self.handlers.push(NodeHandlers {
+                        selection: node.selection_handlers.clone(),
+                        submit: node.submit_handlers.clone(),
+                        events: node.handlers.clone(),
+                        bindings: node.bindings.clone(),
+                        value_handlers: node.value_handlers.clone(),
+                    });
+                    match parent {
+                        Some(p) => {
+                            self.tree.nodes[p].children.push(id);
+                            self.tree.nodes[p]
+                                .inline_items
+                                .push(InlineItem::Element(id));
+                        }
+                        None => self.tree.roots.push(id),
+                    }
+                    stack.push(Frame {
+                        elements: &node.children,
+                        index: 0,
+                        parent: Some(id),
+                    });
+                }
+                Element::Fragment(nested) => {
+                    stack.push(Frame {
+                        elements: nested,
+                        index: 0,
+                        parent,
+                    });
+                }
+                Element::Portal(children) => {
+                    next_level.push(children.as_slice());
+                }
+                Element::Text(value) => {
+                    if let Some(p) = parent {
+                        match self.tree.nodes[p].inline_items.last_mut() {
+                            Some(InlineItem::Text(existing)) => existing.push_str(value),
+                            _ => self.tree.nodes[p]
+                                .inline_items
+                                .push(InlineItem::Text(value.clone())),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The [`SubmitHandler`] `<form onsubmit>` declared, if any.
+    pub fn submit_handler(&self, id: NodeId) -> Option<&SubmitHandler> {
+        self.handlers[id].submit.first().map(|(_, h)| h)
+    }
+
+    /// The [`SelectionHandler`] this node declared for `attr` (today,
+    /// only `"selection"` for `onselectionchange`), if any.
+    pub fn selection_handler(&self, id: NodeId, attr: &str) -> Option<&SelectionHandler> {
+        self.handlers[id]
+            .selection
+            .iter()
+            .find(|(name, _)| name == attr)
+            .map(|(_, handler)| handler)
+    }
+
+    /// The handler this node declared for `event` (e.g. `"click"` for an
+    /// `onclick={...}` attribute), if any.
+    pub fn handler(&self, id: NodeId, event: &str) -> Option<&Handler> {
+        self.handlers[id]
+            .events
+            .iter()
+            .find(|(name, _)| name == event)
+            .map(|(_, handler)| handler)
+    }
+
+    /// The typed write-back channel this node declared for `attr` (e.g.
+    /// `"value"` for a `value={binding}` attribute on `<input>`), if any
+    /// — `None` both when the node declared no such attribute at all and
+    /// when it declared a plain string literal instead (nothing to write
+    /// back to either way).
+    pub fn value_binding(&self, id: NodeId, attr: &str) -> Option<&Binding<String>> {
+        self.handlers[id]
+            .bindings
+            .iter()
+            .find(|(name, _)| name == attr)
+            .map(|(_, binding)| binding)
+    }
+
+    /// The explicit (non-`Binding`) write-back channel this node declared
+    /// for `attr`, if any — mutually exclusive with [`Self::value_binding`]
+    /// for the same `attr`; `view!`'s own codegen never emits both.
+    pub fn value_handler(&self, id: NodeId, attr: &str) -> Option<&ValueHandler> {
+        self.handlers[id]
+            .value_handlers
+            .iter()
+            .find(|(name, _)| name == attr)
+            .map(|(_, handler)| handler)
+    }
+
+    /// [`Tree::find`], with the predicate given the whole [`Arena`].
+    pub fn find(&self, mut predicate: impl FnMut(&Self, NodeId) -> bool) -> Option<NodeId> {
+        let mut stack: Vec<NodeId> = self.roots().iter().rev().copied().collect();
+        while let Some(id) = stack.pop() {
+            if predicate(self, id) {
+                return Some(id);
+            }
+            stack.extend(self.children(id).iter().rev());
+        }
+        None
+    }
+
+    /// [`Tree::find_all`], with the predicate given the whole [`Arena`].
+    pub fn find_all(&self, mut predicate: impl FnMut(&Self, NodeId) -> bool) -> Vec<NodeId> {
+        let mut matches = Vec::new();
+        let mut stack: Vec<NodeId> = self.roots().iter().rev().copied().collect();
         while let Some(id) = stack.pop() {
             if predicate(self, id) {
                 matches.push(id);
@@ -1528,5 +1588,14 @@ mod tests {
             .expect("the portal's content becomes a root of its own");
         let at = arena.source(overlay).expect("view! records it");
         assert_eq!(at.line, marker + 2);
+    }
+
+    /// The tree is what other threads read while a frame is painted in bands, so
+    /// whatever is added to a node must be shareable: a handler (an `Rc`) belongs
+    /// with the [`Arena`]'s, not the [`Tree`]'s.
+    #[test]
+    fn the_tree_can_be_shared_between_threads() {
+        fn is_sync<T: Sync>() {}
+        is_sync::<Tree>();
     }
 }
