@@ -14,6 +14,7 @@
 //! Cursor positions (physical, from `winit`) are converted the other way
 //! before hit-testing against that same logical layout.
 
+use florui_style::StyleMap;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
@@ -573,7 +574,7 @@ pub(crate) fn layout_viewport(scale: ViewportScale) -> Size<AvailableSpace> {
 /// rationale; that method just delegates here.
 pub(crate) fn text_input_content_origin(
     position: (f32, f32),
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     node: NodeId,
 ) -> (f32, f32) {
     let (x, y) = position;
@@ -612,7 +613,7 @@ pub(crate) fn scale_layouts(
 #[derive(Clone, Copy)]
 pub(crate) struct TextInputPaintContext<'a> {
     pub(crate) arena: &'a florui_style::Arena,
-    pub(crate) styles: &'a HashMap<NodeId, ComputedStyle>,
+    pub(crate) styles: &'a StyleMap,
     pub(crate) layouts: &'a HashMap<NodeId, BoxLayout>,
     pub(crate) registry: &'a crate::text_input::TextInputRegistry,
     pub(crate) focused: Option<NodeId>,
@@ -793,7 +794,7 @@ pub(crate) fn build_text_input_paint(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_image_paint(
     arena: &florui_style::Arena,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, florui_layout::BoxLayout>,
     registry: &crate::image::ImageRegistry,
     cache: &Arc<florui_assets::AssetCache>,
@@ -832,7 +833,7 @@ pub(crate) fn build_image_paint(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_icon_paint(
     arena: &florui_style::Arena,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, florui_layout::BoxLayout>,
     registry: &crate::icon::IconRegistry,
     cache: &Arc<florui_assets::AssetCache>,
@@ -883,7 +884,7 @@ pub(crate) fn build_icon_paint(
 /// control-icon paint branch, which reads that same constant.
 pub(crate) fn build_control_icon_paint(
     arena: &florui_style::Arena,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     registry: &crate::icon::IconRegistry,
     cache: &Arc<florui_assets::AssetCache>,
     executor: &dyn florui_reactive::Executor,

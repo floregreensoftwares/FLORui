@@ -4,6 +4,7 @@
 //!
 //! `cargo run --example live -p florui-example-app`
 
+use florui_style::StyleMap;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::path::Path;
@@ -12,7 +13,7 @@ use std::rc::Rc;
 use florui::Element;
 use florui_example_app::components::card::{Card, CardProps};
 use florui_layout::BoxLayout;
-use florui_style::{Arena, ComputedStyle, InteractionState, NodeId, Rgba};
+use florui_style::{Arena, InteractionState, NodeId, Rgba};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use taffy::prelude::*;
 use winit::application::ApplicationHandler;
@@ -111,7 +112,7 @@ impl App {
         }
     }
 
-    fn compute(&mut self) -> (HashMap<NodeId, ComputedStyle>, HashMap<NodeId, BoxLayout>) {
+    fn compute(&mut self) -> (StyleMap, HashMap<NodeId, BoxLayout>) {
         let styles = florui_style::compute(
             &self.arena,
             &self.rules,

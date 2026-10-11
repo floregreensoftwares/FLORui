@@ -24,13 +24,14 @@
 //! has no dependency on `florui-platform` and the scaling itself is a
 //! few lines, not worth a new shared crate for.
 
+use florui_style::StyleMap;
 use std::collections::HashMap;
 use std::fmt;
 
 use florui::Element;
 use florui_layout::{BoxLayout, LayoutError, absolute_position};
 use florui_paint::paint_to_buffer;
-use florui_style::{Arena, ComputedStyle, InteractionState, NodeId, Rgba, parse_stylesheet};
+use florui_style::{Arena, InteractionState, NodeId, Rgba, parse_stylesheet};
 use image::RgbaImage;
 use taffy::prelude::{AvailableSpace, Size};
 
@@ -243,7 +244,7 @@ fn scale_layouts(layouts: &HashMap<NodeId, BoxLayout>, factor: f32) -> HashMap<N
 /// DPR-independent.
 pub(crate) fn box_geometry_of(
     arena: &Arena,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     node: NodeId,
 ) -> Option<BoxGeometryPx> {

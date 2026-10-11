@@ -36,12 +36,13 @@
 //! CSS's own unknown-syntax recovery), the same as an unsupported form
 //! reaching Stylo directly would.
 
+use crate::style_map::StyleMap;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
 use cssparser::{Delimiter, Parser, ParserInput, Token};
 
-use crate::cascade::{ComputedStyle, ContainerType};
+use crate::cascade::ContainerType;
 use crate::stylesheet_parse::Rule;
 use crate::tree::{Arena, NodeId};
 
@@ -210,7 +211,7 @@ pub(crate) fn literalize<'a>(
 pub fn resolve_container_query_signatures(
     arena: &Arena,
     rules: &[Rule],
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     sizes: &HashMap<NodeId, ContentBoxSize>,
 ) -> HashMap<NodeId, Vec<bool>> {
     let blocks: Vec<&ContainerQueryBlock> = rules
@@ -242,7 +243,7 @@ pub fn resolve_container_query_signatures(
 /// requirement.
 fn find_container(
     arena: &Arena,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     sizes: &HashMap<NodeId, ContentBoxSize>,
     start: NodeId,
     block: &ContainerQueryBlock,

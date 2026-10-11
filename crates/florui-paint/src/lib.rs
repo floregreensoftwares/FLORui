@@ -82,6 +82,7 @@ thread_local! {
     static BAND_VIEW: RefCell<Option<Rc<BandView>>> = const { RefCell::new(None) };
 }
 
+use florui_style::StyleMap;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -404,7 +405,7 @@ pub fn paint_to_png(
     height: u32,
     canvas: Rgba,
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
 ) -> Result<(), PaintError> {
@@ -504,7 +505,7 @@ pub fn paint_to_buffer(
     height: u32,
     canvas: Rgba,
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
 ) -> Canvas {
@@ -536,7 +537,7 @@ pub fn paint_to_buffer_with_desktop_extras(
     height: u32,
     canvas: Rgba,
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
     text_inputs: Option<&HashMap<NodeId, TextInputPaint>>,
@@ -645,7 +646,7 @@ pub fn paint_to_buffer_banded(
     height: u32,
     canvas: Rgba,
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
     text_inputs: Option<&HashMap<NodeId, TextInputPaint>>,
@@ -715,7 +716,7 @@ pub fn paint_to_buffer_banded(
 fn paint_nodes(
     buffer: &mut Surface,
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     font: &mut Font,
     parent_display: Option<Display>,
@@ -878,7 +879,7 @@ thread_local! {
 #[allow(clippy::too_many_arguments)]
 fn ink_is_outside_clip(
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     font: &mut Font,
     node: NodeId,
@@ -1026,7 +1027,7 @@ fn padding_box_mask(
 /// container) works correctly today.
 fn clip_for_children(
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     node: NodeId,
     incoming: Option<ClipRect>,
@@ -1507,7 +1508,7 @@ fn filter_inflation(filters: &[FilterFunction], scale_factor: f32) -> f32 {
 #[allow(clippy::too_many_arguments)]
 fn own_extent(
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     font: &mut Font,
     node: NodeId,
@@ -1618,7 +1619,7 @@ fn own_extent(
 #[allow(clippy::too_many_arguments)]
 fn subtree_extent(
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     font: &mut Font,
     node: NodeId,
@@ -1803,7 +1804,7 @@ struct TargetRegion {
 #[allow(clippy::too_many_arguments)]
 fn group_extent(
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     font: &mut Font,
     node: NodeId,
@@ -1929,7 +1930,7 @@ fn group_extent(
 fn paint_group(
     buffer: &mut Surface,
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     font: &mut Font,
     node: NodeId,
@@ -2853,7 +2854,7 @@ fn saturate_by_unpremultiplying(pixel: PremultipliedColorU8, factor: f32) -> Pre
 /// the tree) are not implemented — this only ever reorders siblings
 /// within the one shared parent `nodes` already came from.
 pub fn paint_order(
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     parent_display: Option<Display>,
     nodes: &[NodeId],
 ) -> Vec<NodeId> {
@@ -2894,7 +2895,7 @@ pub fn paint_order(
 fn paint_node(
     buffer: &mut Surface,
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     font: &mut Font,
     node: NodeId,

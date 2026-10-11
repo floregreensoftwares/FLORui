@@ -20,6 +20,7 @@
 //! the ordinary [`TextInputRegistry::apply`] like any other insert) ever
 //! reaches those.
 
+use florui_style::StyleMap;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
@@ -309,7 +310,7 @@ impl TextInputRegistry {
     pub(crate) fn sync(
         &self,
         arena: &Arena,
-        styles: &HashMap<NodeId, ComputedStyle>,
+        styles: &StyleMap,
         layouts: &HashMap<NodeId, florui_layout::BoxLayout>,
         font: &mut Font,
     ) {
@@ -736,7 +737,7 @@ mod tests {
         let tree: Element = view! { <input type="text" id="x" value={binding} /> };
         let arena = Arena::build(&tree);
         let mut font = Font::load_embedded();
-        let styles: HashMap<NodeId, ComputedStyle> = HashMap::new();
+        let styles = StyleMap::new();
         let registry = TextInputRegistry::new();
         registry.sync(&arena, &styles, &HashMap::new(), &mut font);
         (registry, font)
@@ -817,7 +818,7 @@ mod tests {
         let tree: Element = view! { <input type="text" id="x" value={binding} /> };
         let mut arena = Arena::build(&tree);
         let mut font = Font::load_embedded();
-        let styles: HashMap<NodeId, ComputedStyle> = HashMap::new();
+        let styles = StyleMap::new();
         let registry = TextInputRegistry::new();
         registry.sync(&arena, &styles, &HashMap::new(), &mut font);
 

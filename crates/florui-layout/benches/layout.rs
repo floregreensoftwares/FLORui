@@ -10,15 +10,15 @@
 //! only [`compute_layout`] itself is measured — tree/cascade construction
 //! is real cost elsewhere, but not the declared metric here.
 
-use std::collections::HashMap;
+use florui_style::StyleMap;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use florui::Element;
 use florui_layout::compute_layout;
-use florui_style::{Arena, ComputedStyle, InteractionState, NodeId};
+use florui_style::{Arena, InteractionState};
 use taffy::prelude::*;
 
-fn arena_and_styles(tree: &Element, css: &str) -> (Arena, HashMap<NodeId, ComputedStyle>) {
+fn arena_and_styles(tree: &Element, css: &str) -> (Arena, StyleMap) {
     let arena = Arena::build(tree);
     let rules = florui_style::parse_stylesheet(css).expect("benchmark CSS must be valid");
     let styles = florui_style::compute(

@@ -7,6 +7,7 @@
 //! any other platform type; a game or mobile host could drive this the
 //! same way [`crate::run`] does.
 
+use florui_style::StyleMap;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -17,7 +18,7 @@ use florui_layout::BoxLayout;
 use florui_reactive::executor::{Executor, LocalExecutor};
 use florui_reactive::{ComponentScope, DirtyFlag, FocusHost, provide_context};
 use florui_style::{
-    AnimationTimeline, Arena, ComputedStyle, FocusPath, InteractionState, NodeId, Rule, StyleError,
+    AnimationTimeline, Arena, FocusPath, InteractionState, NodeId, Rule, StyleError,
 };
 use taffy::prelude::*;
 
@@ -94,7 +95,7 @@ pub struct UiRuntime {
     /// precedent).
     range_dragging: Option<FocusPath>,
     arena: Arena,
-    styles: HashMap<NodeId, ComputedStyle>,
+    styles: StyleMap,
     layouts: HashMap<NodeId, BoxLayout>,
     /// Every select's own options, by the select's `id` — see
     /// [`crate::select::normalize`]'s own doc for why this exists
@@ -299,7 +300,7 @@ impl UiRuntime {
             menu_return_paths: Vec::new(),
             range_dragging: None,
             arena: Arena::build(&Element::Fragment(Vec::new())),
-            styles: HashMap::new(),
+            styles: StyleMap::new(),
             layouts: HashMap::new(),
             option_summaries: HashMap::new(),
             multiselect_anchor: None,
@@ -459,11 +460,13 @@ impl UiRuntime {
                 _ => return false,
             }
         }
-        for (id, style) in restyled {
-            if let Some(old) = self.styles.get_mut(&id)
-                && *old != style
+        for (id, style) in &restyled {
+            // Looked at before it is written: a style another node shares is
+            // copied by `get_mut`, which only a node that differs should pay.
+            if self.styles.get(id) != Some(style)
+                && let Some(old) = self.styles.get_mut(id)
             {
-                old.copy_paint_from(&style);
+                old.copy_paint_from(style);
             }
         }
         true
@@ -853,13 +856,7 @@ impl UiRuntime {
     }
 
     /// The geometry computed by the most recent [`Self::update`].
-    pub fn geometry(
-        &self,
-    ) -> (
-        &Arena,
-        &HashMap<NodeId, ComputedStyle>,
-        &HashMap<NodeId, BoxLayout>,
-    ) {
+    pub fn geometry(&self) -> (&Arena, &StyleMap, &HashMap<NodeId, BoxLayout>) {
         (&self.arena, &self.styles, &self.layouts)
     }
 
@@ -872,7 +869,7 @@ impl UiRuntime {
         &mut self,
     ) -> (
         &Arena,
-        &HashMap<NodeId, ComputedStyle>,
+        &StyleMap,
         &HashMap<NodeId, BoxLayout>,
         &mut florui_text::Font,
     ) {
@@ -1450,7 +1447,7 @@ impl UiRuntime {
         &mut self,
     ) -> (
         &Arena,
-        &HashMap<NodeId, ComputedStyle>,
+        &StyleMap,
         &HashMap<NodeId, BoxLayout>,
         &mut florui_text::Font,
         &InteractionState,
