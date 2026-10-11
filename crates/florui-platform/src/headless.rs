@@ -1003,7 +1003,11 @@ mod tests {
         let unchanged = &frames[0];
         let nodes = unchanged.counter(Counter::NodesLaidOut);
         assert!(nodes > 0);
-        assert_eq!(unchanged.counter(Counter::NodesStyled), nodes);
+        assert_eq!(
+            unchanged.counter(Counter::NodesStyled),
+            0,
+            "nothing the cascade reads changed, so it did not run"
+        );
         assert!(unchanged.counter(Counter::NodesPainted) > 0);
         assert_eq!(
             unchanged.counter(Counter::TextMemoHits) + unchanged.counter(Counter::TextMemoMisses),

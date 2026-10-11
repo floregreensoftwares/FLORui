@@ -406,6 +406,7 @@ impl UiRuntime {
     /// call [`Self::update`] afterward to see the new rules take effect.
     pub fn set_rules(&mut self, rules: Vec<Rule>) {
         self.rules = rules;
+        self.layout_cache.forget_styles();
     }
 
     /// Turns off answering a paint-only hover change without a full update, so

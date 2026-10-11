@@ -25,6 +25,22 @@ pub struct LayoutCache {
     font_generation: u64,
     /// Which layout last wrote a slot; a slot that is older is gone.
     epoch: u64,
+    /// What the cascade last gave, and what it was given.
+    styles: Option<StyleMemo>,
+}
+
+/// One set of inputs to the cascade and, once they have come twice in a row,
+/// the styles it gave. A tree that differs only in the text inside its
+/// elements has the same styles, which is most updates. The styles are kept
+/// only for inputs seen twice, so a first frame, or a tree that changes on
+/// every update, does not pay for a copy it will not use.
+struct StyleMemo {
+    shape: u64,
+    rules: (usize, usize),
+    state: InteractionState,
+    viewport: Viewport,
+    settings: (bool, bool, bool),
+    styles: Option<HashMap<NodeId, ComputedStyle>>,
 }
 
 struct Slot {
@@ -64,7 +80,55 @@ impl LayoutCache {
             groups: [None, None],
             font_generation: 0,
             epoch: 0,
+            styles: None,
         }
+    }
+
+    /// Forgets the styles the cascade gave, for a caller that changed
+    /// something the cascade reads and this cannot see.
+    pub fn forget_styles(&mut self) {
+        self.styles = None;
+    }
+
+    /// The styles of `arena`: the ones the last call gave if the tree
+    /// (leaving out its text), the rules, the interaction state, the viewport
+    /// and the animation settings are the same and nothing is animating, the
+    /// cascade's otherwise. The second value is whether the cascade ran.
+    pub(crate) fn styles(
+        &mut self,
+        arena: &Arena,
+        rules: &[Rule],
+        state: &InteractionState,
+        viewport: Viewport,
+        timeline: &mut AnimationTimeline,
+    ) -> (HashMap<NodeId, ComputedStyle>, bool) {
+        let shape = arena.style_shape();
+        let rules_key = (rules.as_ptr() as usize, rules.len());
+        let settings = timeline.settings();
+        let seen_before = self.styles.as_ref().is_some_and(|memo| {
+            memo.shape == shape
+                && memo.rules == rules_key
+                && memo.viewport == viewport
+                && memo.settings == settings
+                && memo.state == *state
+        });
+        if seen_before
+            && timeline.is_still()
+            && let Some(styles) = self.styles.as_ref().and_then(|memo| memo.styles.as_ref())
+        {
+            return (styles.clone(), false);
+        }
+        let styles = florui_style::compute(arena, rules, state, viewport, timeline);
+        let keep = seen_before && timeline.is_still();
+        self.styles = timeline.is_still().then(|| StyleMemo {
+            shape,
+            rules: rules_key,
+            state: state.clone(),
+            viewport,
+            settings,
+            styles: keep.then(|| styles.clone()),
+        });
+        (styles, true)
     }
 
     /// Same as [`compute_layout_with_content_extents`], remembering the tree
@@ -527,6 +591,208 @@ mod tests {
             );
             assert_same(&mut cache, &mut font, &none, available, "overlay gone");
         }
+    }
+
+    const STYLE_CSS: &str = ".a { color: #ff0000; width: 10px; } .b { color: #00ff00; }          .a:hover { color: #0000ff; } .a + .b { width: 20px; }          @media (min-width: 500px) { .b { width: 90px; } }";
+    const ANIMATED_CSS: &str = "@keyframes grow { from { width: 10px; } to { width: 90px; } }          .a { animation: grow 2s linear infinite; }";
+
+    fn simple(a_class: &str, text: &str) -> Arena {
+        Arena::build(&Element::node(
+            "div",
+            vec![],
+            vec![
+                Element::node(
+                    "p",
+                    vec![("class".into(), a_class.into())],
+                    vec![Element::text(text)],
+                ),
+                Element::node(
+                    "p",
+                    vec![("class".into(), "b".into())],
+                    vec![Element::text("fixed")],
+                ),
+            ],
+        ))
+    }
+
+    /// Runs `cache.styles` and the cascade on the same inputs and fails if they
+    /// differ; returns whether the cascade ran in the cache.
+    fn styles_match(
+        cache: &mut LayoutCache,
+        timelines: &mut (
+            florui_style::AnimationTimeline,
+            florui_style::AnimationTimeline,
+        ),
+        arena: &Arena,
+        rules: &[Rule],
+        state: &InteractionState,
+        viewport: florui_style::Viewport,
+        what: &str,
+    ) -> bool {
+        let (kept, ran) = cache.styles(arena, rules, state, viewport, &mut timelines.0);
+        let fresh = florui_style::compute(arena, rules, state, viewport, &mut timelines.1);
+        assert_eq!(kept, fresh, "{what}");
+        ran
+    }
+
+    #[test]
+    fn the_styles_of_a_tree_that_did_not_change_are_kept_and_nothing_else_is() {
+        let rules = florui_style::parse_stylesheet(STYLE_CSS).unwrap();
+        let other_rules =
+            florui_style::parse_stylesheet(&STYLE_CSS.replace("#ff0000", "#123456")).unwrap();
+        let mut cache = LayoutCache::new();
+        let mut timelines = Default::default();
+        let state = InteractionState::new();
+        let viewport = florui_style::Viewport::default();
+        let mut run = |cache: &mut LayoutCache,
+                       arena: &Arena,
+                       rules: &[Rule],
+                       state: &InteractionState,
+                       viewport,
+                       what: &str| {
+            styles_match(cache, &mut timelines, arena, rules, state, viewport, what)
+        };
+
+        let one = simple("a", "text");
+        // The first two calls run the cascade (the second one keeps the styles);
+        // from the third on they are kept.
+        assert!(run(&mut cache, &one, &rules, &state, viewport, "first"));
+        assert!(run(&mut cache, &one, &rules, &state, viewport, "second"));
+        assert!(!run(&mut cache, &one, &rules, &state, viewport, "third"));
+        assert!(!run(&mut cache, &one, &rules, &state, viewport, "fourth"));
+
+        // Only the text changed: the styles are the same.
+        let text = simple("a", "another text, longer");
+        assert!(!run(
+            &mut cache,
+            &text,
+            &rules,
+            &state,
+            viewport,
+            "text only"
+        ));
+
+        // A class changed: the cascade runs.
+        let class = simple("b", "text");
+        assert!(run(
+            &mut cache,
+            &class,
+            &rules,
+            &state,
+            viewport,
+            "class changed"
+        ));
+        assert!(run(
+            &mut cache,
+            &class,
+            &rules,
+            &state,
+            viewport,
+            "class changed, again"
+        ));
+        assert!(!run(
+            &mut cache,
+            &class,
+            &rules,
+            &state,
+            viewport,
+            "class kept"
+        ));
+
+        // Hover on a node, a different viewport (a media query), other rules.
+        let hovered = InteractionState::new().with_hovered(0);
+        assert!(run(&mut cache, &class, &rules, &hovered, viewport, "hover"));
+        let wide = florui_style::Viewport {
+            width: 800.0,
+            height: 600.0,
+        };
+        assert!(run(&mut cache, &class, &rules, &state, wide, "viewport"));
+        assert!(run(
+            &mut cache,
+            &class,
+            &rules,
+            &state,
+            wide,
+            "viewport, again"
+        ));
+        assert!(!run(
+            &mut cache,
+            &class,
+            &rules,
+            &state,
+            wide,
+            "viewport kept"
+        ));
+        assert!(run(
+            &mut cache,
+            &class,
+            &other_rules,
+            &state,
+            wide,
+            "other rules"
+        ));
+    }
+
+    #[test]
+    fn styles_that_change_with_time_are_never_kept() {
+        let rules = florui_style::parse_stylesheet(ANIMATED_CSS).unwrap();
+        let mut cache = LayoutCache::new();
+        let mut timelines: (
+            florui_style::AnimationTimeline,
+            florui_style::AnimationTimeline,
+        ) = Default::default();
+        let arena = simple("a", "text");
+        let state = InteractionState::new();
+        let viewport = florui_style::Viewport::default();
+        for step in 0..8 {
+            let now = step as f64 * 0.37;
+            timelines.0.advance_to(now);
+            timelines.1.advance_to(now);
+            let ran = styles_match(
+                &mut cache,
+                &mut timelines,
+                &arena,
+                &rules,
+                &state,
+                viewport,
+                &format!("animated, step {step}"),
+            );
+            assert!(
+                ran,
+                "an animation is running, so the cascade runs (step {step})"
+            );
+        }
+    }
+
+    #[test]
+    fn forgetting_the_styles_runs_the_cascade_again() {
+        let rules = florui_style::parse_stylesheet(STYLE_CSS).unwrap();
+        let mut cache = LayoutCache::new();
+        let mut timelines = Default::default();
+        let arena = simple("a", "text");
+        let state = InteractionState::new();
+        let viewport = florui_style::Viewport::default();
+        for _ in 0..3 {
+            styles_match(
+                &mut cache,
+                &mut timelines,
+                &arena,
+                &rules,
+                &state,
+                viewport,
+                "warm",
+            );
+        }
+        cache.forget_styles();
+        assert!(styles_match(
+            &mut cache,
+            &mut timelines,
+            &arena,
+            &rules,
+            &state,
+            viewport,
+            "forgotten"
+        ));
     }
 
     #[test]
