@@ -172,6 +172,30 @@ impl AnimationTimeline {
             .any(ElementAnimationSet::needs_animation_ticks)
     }
 
+    /// Whether no animation or transition is running or waiting for a tick, so
+    /// the styles of a tree that did not change cannot change with time.
+    /// Unlike [`Self::is_animating`] this does not look away from an
+    /// animation that motion settings suppress.
+    pub fn is_still(&self) -> bool {
+        !self
+            .sets
+            .sets
+            .read()
+            .values()
+            .any(ElementAnimationSet::needs_animation_ticks)
+    }
+
+    /// The host settings that change how the cascade resolves a tree: the
+    /// operating system's reduced-motion preference, whether it is acted on,
+    /// and the color scheme.
+    pub fn settings(&self) -> (bool, bool, bool) {
+        (
+            self.os_prefers_reduced_motion,
+            self.auto_suppress_motion_disabled,
+            self.prefers_dark_color_scheme,
+        )
+    }
+
     /// Looks up (or assigns) `id`'s stable identity, given its already-
     /// resolved parent identity (`None` for a document root). Must be
     /// called in preorder — a node's own identity has to exist before any
