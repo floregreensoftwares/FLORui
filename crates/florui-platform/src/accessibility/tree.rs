@@ -57,9 +57,21 @@ fn overlay_role(role: AccessibleRole) -> Option<Role> {
     }
 }
 
+/// What a build learned about who each node is, kept for the next one: the
+/// elements of a tree that did not change have the same identities, and
+/// working them out (a path from the root for every node, looked up in the
+/// interner) was most of what a build cost.
+struct Identity {
+    /// The [`Arena::style_shape`] it was learned for.
+    shape: u64,
+    ids: Vec<Option<AccessKitId>>,
+    reverse: HashMap<AccessKitId, NodeId>,
+}
+
 pub(crate) struct AccessibilityTree {
     interner: HashMap<FocusPath, u64>,
     next_id: u64,
+    identity: Option<Identity>,
     /// How many trees this has built, for tests that check one was not.
     #[cfg(test)]
     builds: u64,
@@ -70,6 +82,7 @@ impl AccessibilityTree {
         Self {
             interner: HashMap::new(),
             next_id: 1,
+            identity: None,
             #[cfg(test)]
             builds: 0,
         }
@@ -116,10 +129,12 @@ impl AccessibilityTree {
             }
         }
 
+        let shape = arena.style_shape();
+        let known = self.identity.take().filter(|known| known.shape == shape);
         let mut nodes = Vec::new();
         let mut reverse = HashMap::new();
-        let mut forward = HashMap::new();
-        let mut index_by_ak_id = HashMap::new();
+        let mut ids: Vec<Option<AccessKitId>> = Vec::new();
+        let mut position: Vec<usize> = Vec::new();
         let mut seen = HashSet::new();
         // `(label's own id, the control's florui id)` -- the control's own
         // `AccessKitId` isn't known until the whole walk finishes (it may
@@ -127,7 +142,8 @@ impl AccessibilityTree {
         let mut label_targets: Vec<(AccessKitId, NodeId)> = Vec::new();
         // `(select's own ak_id, its currently active option's florui id)` --
         // same deferred-association reason as `label_targets`.
-        let mut active_targets: Vec<(AccessKitId, NodeId)> = Vec::new();
+        let mut active_targets: Vec<(NodeId, NodeId)> = Vec::new();
+        let known_ids = known.as_ref().map(|known| known.ids.as_slice());
 
         let root_children: Vec<AccessKitId> = arena
             .roots()
@@ -140,9 +156,10 @@ impl AccessibilityTree {
                     interaction,
                     &id_index,
                     &mut nodes,
+                    known_ids,
                     &mut reverse,
-                    &mut forward,
-                    &mut index_by_ak_id,
+                    &mut ids,
+                    &mut position,
                     &mut seen,
                     &mut label_targets,
                     &mut active_targets,
@@ -152,38 +169,46 @@ impl AccessibilityTree {
 
         let mut root = Node::new(Role::Window);
         root.set_children(root_children);
-        let root_index = nodes.len();
         nodes.push((ROOT_ID, root));
-        index_by_ak_id.insert(ROOT_ID, root_index);
 
-        for (label_ak_id, target_florui_id) in label_targets {
-            if let Some(&target_ak_id) = forward.get(&target_florui_id)
-                && let Some(&target_index) = index_by_ak_id.get(&target_ak_id)
-            {
-                nodes[target_index].1.push_labelled_by(label_ak_id);
+        let index_of = |node: NodeId| position.get(node).copied().filter(|&at| at != usize::MAX);
+        for (label_ak_id, target) in label_targets {
+            if let Some(index) = index_of(target) {
+                nodes[index].1.push_labelled_by(label_ak_id);
             }
         }
-        for (select_ak_id, active_florui_id) in active_targets {
-            if let Some(&active_ak_id) = forward.get(&active_florui_id)
-                && let Some(&select_index) = index_by_ak_id.get(&select_ak_id)
+        for (select, active) in active_targets {
+            if let Some(&Some(active_ak_id)) = ids.get(active)
+                && let Some(index) = index_of(select)
             {
-                nodes[select_index].1.set_active_descendant(active_ak_id);
+                nodes[index].1.set_active_descendant(active_ak_id);
             }
         }
 
         for (control, open) in crate::components::popover::trigger_controls(arena) {
-            if let Some(&ak_id) = forward.get(&control)
-                && let Some(&index) = index_by_ak_id.get(&ak_id)
-            {
+            if let Some(index) = index_of(control) {
                 nodes[index].1.set_expanded(open);
             }
         }
 
-        self.interner.retain(|_, id| seen.contains(id));
-
+        let reverse = match known {
+            Some(known) => known.reverse,
+            None => {
+                self.interner.retain(|_, id| seen.contains(id));
+                reverse
+            }
+        };
         let focus = focused
-            .map(|id| self.stable_id(&FocusPath::of(arena, id)))
+            .map(|id| match ids.get(id) {
+                Some(&Some(ak_id)) => ak_id,
+                _ => self.stable_id(&FocusPath::of(arena, id)),
+            })
             .unwrap_or(ROOT_ID);
+        self.identity = Some(Identity {
+            shape,
+            ids,
+            reverse: reverse.clone(),
+        });
 
         let update = TreeUpdate {
             nodes,
@@ -203,18 +228,28 @@ impl AccessibilityTree {
         interaction: &InteractionState,
         id_index: &HashMap<&str, NodeId>,
         nodes: &mut Vec<(AccessKitId, Node)>,
+        known_ids: Option<&[Option<AccessKitId>]>,
         reverse: &mut HashMap<AccessKitId, NodeId>,
-        forward: &mut HashMap<NodeId, AccessKitId>,
-        index_by_ak_id: &mut HashMap<AccessKitId, usize>,
+        ids: &mut Vec<Option<AccessKitId>>,
+        position: &mut Vec<usize>,
         seen: &mut HashSet<u64>,
         label_targets: &mut Vec<(AccessKitId, NodeId)>,
-        active_targets: &mut Vec<(AccessKitId, NodeId)>,
+        active_targets: &mut Vec<(NodeId, NodeId)>,
     ) -> AccessKitId {
-        let path = FocusPath::of(arena, id);
-        let ak_id = self.stable_id(&path);
-        seen.insert(ak_id.0);
-        reverse.insert(ak_id, id);
-        forward.insert(id, ak_id);
+        // A tree whose elements did not change has the identities it had.
+        let ak_id = match known_ids.and_then(|known| known.get(id).copied().flatten()) {
+            Some(ak_id) => ak_id,
+            None => {
+                let ak_id = self.stable_id(&FocusPath::of(arena, id));
+                seen.insert(ak_id.0);
+                reverse.insert(ak_id, id);
+                ak_id
+            }
+        };
+        if ids.len() <= id {
+            ids.resize(id + 1, None);
+        }
+        ids[id] = Some(ak_id);
 
         let children = arena.children(id);
         let mut node = Node::new(Role::GenericContainer);
@@ -408,7 +443,7 @@ impl AccessibilityTree {
                     }
                 }
                 if let Some(active) = crate::select::active_option(arena, id) {
-                    active_targets.push((ak_id, active));
+                    active_targets.push((id, active));
                 }
             }
             "option" => {
@@ -520,9 +555,10 @@ impl AccessibilityTree {
                     interaction,
                     id_index,
                     nodes,
+                    known_ids,
                     reverse,
-                    forward,
-                    index_by_ak_id,
+                    ids,
+                    position,
                     seen,
                     label_targets,
                     active_targets,
@@ -531,7 +567,10 @@ impl AccessibilityTree {
             .collect();
         node.set_children(child_ids);
 
-        index_by_ak_id.insert(ak_id, nodes.len());
+        if position.len() <= id {
+            position.resize(id + 1, usize::MAX);
+        }
+        position[id] = nodes.len();
         nodes.push((ak_id, node));
         ak_id
     }
@@ -1249,6 +1288,71 @@ mod tests {
         let id2 = *reverse2.iter().find(|&(_, &n)| n == second2).unwrap().0;
 
         assert_eq!(id1, id2);
+    }
+
+    /// A form with a label, a select with an active option, buttons and text,
+    /// written with `suffix` in the text of each so a rebuild has something to
+    /// bring up to date.
+    fn busy_form(suffix: &str, extra: bool) -> Element {
+        let mut children = vec![
+            Element::node(
+                "label",
+                vec![("for".into(), "name".into())],
+                vec![Element::text(format!("Name{suffix}"))],
+            ),
+            Element::node(
+                "input",
+                vec![("id".into(), "name".into()), ("type".into(), "text".into())],
+                vec![],
+            ),
+            Element::node(
+                "button",
+                vec![],
+                vec![Element::text(format!("Save{suffix}"))],
+            ),
+            Element::node("p", vec![], vec![Element::text(format!("Note{suffix}"))]),
+        ];
+        if extra {
+            children.push(Element::node("button", vec![], vec![Element::text("More")]));
+        }
+        Element::node("form", vec![("name".into(), "f".into())], children)
+    }
+
+    #[test]
+    fn a_tree_whose_elements_did_not_change_is_described_as_one_built_anew_would_be() {
+        let bounds = NodeBounds::new();
+        let state = InteractionState::new();
+        let mut kept = AccessibilityTree::new();
+        let mut arena = Arena::build(&busy_form("", false));
+        let focused = arena.find(|a, id| a.tag(id) == "button");
+
+        for (round, suffix) in ["", "", " two", " three", ""].into_iter().enumerate() {
+            arena.rebuild(&busy_form(suffix, false));
+            let (update, reverse) = kept.build(&arena, focused, &bounds, &state);
+
+            // The same elements and the same text, from nothing kept.
+            let fresh_arena = Arena::build(&busy_form(suffix, false));
+            let mut fresh = AccessibilityTree::new();
+            let (expected, expected_reverse) = fresh.build(&fresh_arena, focused, &bounds, &state);
+
+            assert_eq!(update.nodes, expected.nodes, "round {round}: nodes");
+            assert_eq!(update.focus, expected.focus, "round {round}: focus");
+            assert_eq!(reverse, expected_reverse, "round {round}: reverse table");
+        }
+
+        // The elements changed: built anew, and the ids of what stayed are the
+        // ones it had.
+        let button = arena.find(|a, id| a.tag(id) == "button").unwrap();
+        let (_, before) = kept.build(&arena, None, &bounds, &state);
+        let button_id = *before.iter().find(|&(_, &n)| n == button).unwrap().0;
+        arena.rebuild(&busy_form("", true));
+        let (_, after) = kept.build(&arena, None, &bounds, &state);
+        assert_eq!(
+            after.get(&button_id),
+            Some(&button),
+            "the button keeps its id"
+        );
+        assert_eq!(after.len(), before.len() + 1, "the new button");
     }
 
     #[test]
