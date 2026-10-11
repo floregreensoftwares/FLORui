@@ -210,7 +210,15 @@ pub struct Tree {
     /// How many roots of each tag there are so far, the root-level
     /// counterpart of an [`ArenaNode`]'s own `child_tag_counts`.
     root_tag_counts: Vec<(&'static str, usize)>,
+    /// Names the elements, tags and attributes this tree was built from: it
+    /// changes whenever the tree is built anew and stays while
+    /// [`Arena::rebuild`] finds them the same and only brings text and
+    /// handlers up to date.
+    shape_id: u64,
 }
+
+/// Where the next [`Tree::style_shape`] number comes from.
+static NEXT_SHAPE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// The handlers one node declared, which are the part of a node that cannot be
 /// shared between threads.
@@ -254,10 +262,21 @@ impl Arena {
                 roots: Vec::new(),
                 document_root_count: 0,
                 root_tag_counts: Vec::new(),
+                shape_id: NEXT_SHAPE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             },
             handlers: Vec::new(),
         }
     }
+}
+
+/// What [`Arena::refresh`] carries along its walk.
+struct Refresh {
+    /// The id the next element node would have been given.
+    next: usize,
+    /// How many of each node's inline items the walk has met.
+    cursor: Vec<usize>,
+    /// How many nodes with no parent the walk has met.
+    roots: usize,
 }
 
 /// One still-unprocessed slice of sibling [`Element`]s, and where their
@@ -288,24 +307,15 @@ impl Tree {
         &self.roots
     }
 
-    /// A number that is the same for two trees the cascade styles alike: the
-    /// same elements in the same places with the same tags and attributes.
-    /// What is written as text inside an element is left out, so changing it
-    /// does not change this. The cascade reads nothing but this (and the
-    /// state, rules and viewport it is given), so a tree with the same number
-    /// as the one it was last run on has the styles that run gave.
+    /// A number that is the same for as long as the elements of this tree,
+    /// in the same places with the same tags and attributes, are the same: it
+    /// changes when the tree is built anew and stays when [`Arena::rebuild`]
+    /// finds them unchanged. What is written as text inside an element is not
+    /// part of it. The cascade reads nothing but the elements (and the state,
+    /// rules and viewport it is given), so a tree with the number it was last
+    /// run on has the styles that run gave.
     pub fn style_shape(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.roots.hash(&mut hasher);
-        self.document_root_count.hash(&mut hasher);
-        self.nodes.len().hash(&mut hasher);
-        for node in &self.nodes {
-            node.tag.hash(&mut hasher);
-            node.attrs.hash(&mut hasher);
-            node.children.hash(&mut hasher);
-        }
-        hasher.finish()
+        self.shape_id
     }
 
     /// How many earlier siblings of `id` have its tag (its place among
@@ -643,6 +653,143 @@ impl Arena {
         next_level.push(std::slice::from_ref(overlays));
         arena.drain_levels(next_level);
         arena
+    }
+
+    /// Makes this arena what [`Self::build`] of `root` would give. When `root`
+    /// has the same elements, in the same places, with the same tags and
+    /// attributes as the tree this arena was built from, nothing is built:
+    /// the text of each element and the handlers it declared are written in
+    /// place and [`Tree::style_shape`] stays. Otherwise the arena is built
+    /// anew. Returns whether it was kept.
+    pub fn rebuild(&mut self, root: &Element) -> bool {
+        if self.refresh(root) {
+            return true;
+        }
+        *self = Arena::build(root);
+        false
+    }
+
+    /// The walk of [`Self::build`], checking each element against the node it
+    /// would become and writing what a rebuild may change into it. False as
+    /// soon as anything differs, with the arena then half written: the caller
+    /// replaces it.
+    fn refresh(&mut self, root: &Element) -> bool {
+        let mut state = Refresh {
+            next: 0,
+            cursor: vec![0; self.tree.nodes.len()],
+            roots: 0,
+        };
+        let mut next_level = Vec::new();
+        if !self.refresh_all(std::slice::from_ref(root), &mut next_level, &mut state)
+            || state.roots != self.tree.document_root_count
+        {
+            return false;
+        }
+        while !next_level.is_empty() {
+            for children in std::mem::take(&mut next_level) {
+                if !self.refresh_all(children, &mut next_level, &mut state) {
+                    return false;
+                }
+            }
+        }
+        state.next == self.tree.nodes.len()
+            && self
+                .tree
+                .nodes
+                .iter()
+                .zip(&state.cursor)
+                .all(|(node, &used)| node.inline_items.len() == used)
+    }
+
+    fn refresh_all<'a>(
+        &mut self,
+        root_elements: &'a [Element],
+        next_level: &mut Vec<&'a [Element]>,
+        state: &mut Refresh,
+    ) -> bool {
+        let mut stack = vec![Frame {
+            elements: root_elements,
+            index: 0,
+            parent: None,
+        }];
+        while let Some(frame) = stack.last_mut() {
+            let Some(element) = frame.elements.get(frame.index) else {
+                stack.pop();
+                continue;
+            };
+            frame.index += 1;
+            let parent = frame.parent;
+            match element {
+                Element::Node(node) => {
+                    let id = state.next;
+                    state.next += 1;
+                    let Some(slot) = self.tree.nodes.get_mut(id) else {
+                        return false;
+                    };
+                    if slot.tag != node.tag || slot.parent != parent || slot.attrs != node.attrs {
+                        return false;
+                    }
+                    slot.source = node.source;
+                    slot.text.clear();
+                    for item in &mut slot.inline_items {
+                        if let InlineItem::Text(text) = item {
+                            text.clear();
+                        }
+                    }
+                    let handlers = &mut self.handlers[id];
+                    handlers.selection.clone_from(&node.selection_handlers);
+                    handlers.submit.clone_from(&node.submit_handlers);
+                    handlers.events.clone_from(&node.handlers);
+                    handlers.bindings.clone_from(&node.bindings);
+                    handlers.value_handlers.clone_from(&node.value_handlers);
+                    match parent {
+                        Some(p) => {
+                            let used = state.cursor[p];
+                            if self.tree.nodes[p].inline_items.get(used)
+                                != Some(&InlineItem::Element(id))
+                            {
+                                return false;
+                            }
+                            state.cursor[p] = used + 1;
+                        }
+                        None => state.roots += 1,
+                    }
+                    stack.push(Frame {
+                        elements: &node.children,
+                        index: 0,
+                        parent: Some(id),
+                    });
+                }
+                Element::Fragment(nested) => {
+                    stack.push(Frame {
+                        elements: nested,
+                        index: 0,
+                        parent,
+                    });
+                }
+                Element::Portal(children) => {
+                    next_level.push(children.as_slice());
+                }
+                Element::Text(value) => {
+                    if let Some(p) = parent {
+                        let used = state.cursor[p];
+                        let items = &mut self.tree.nodes[p].inline_items;
+                        if used > 0
+                            && let Some(InlineItem::Text(existing)) = items.get_mut(used - 1)
+                        {
+                            existing.push_str(value);
+                        } else if let Some(InlineItem::Text(existing)) = items.get_mut(used) {
+                            existing.push_str(value);
+                            state.cursor[p] = used + 1;
+                        } else {
+                            return false;
+                        }
+                        self.tree.nodes[p].text.push_str(value);
+                    }
+                }
+            }
+        }
+        true
     }
 
     /// Runs one more [`Self::push_all`] pass per entry already queued,
@@ -1251,6 +1398,196 @@ mod tests {
             "",
             "the text belongs to the span, not its ancestor"
         );
+    }
+
+    /// A tree of boxes, text (sometimes in runs of several pieces), fragments
+    /// and portals. `seed` decides the elements and their places; `variant`
+    /// decides the text written in them and which of them declare a handler.
+    fn varied(seed: u32, variant: u32) -> Element {
+        fn next(state: &mut u32) -> u32 {
+            *state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *state >> 8
+        }
+        fn children(state: &mut u32, depth: u32, variant: u32, count: &mut u32) -> Vec<Element> {
+            let mut out = Vec::new();
+            for _ in 0..next(state) % 4 {
+                *count += 1;
+                match next(state) % 7 {
+                    0 => out.push(Element::text(format!("t{}-{}", *count, variant))),
+                    1 => out.push(Element::Fragment(children(
+                        state,
+                        depth + 1,
+                        variant,
+                        count,
+                    ))),
+                    2 if depth < 3 => out.push(Element::Portal(vec![Element::node(
+                        "aside",
+                        vec![("class".into(), "overlay".into())],
+                        children(state, depth + 1, variant, count),
+                    )])),
+                    _ if depth < 5 => {
+                        let tag = ["div", "p", "span", "button"][(next(state) % 4) as usize];
+                        let mut attrs =
+                            vec![("class".to_string(), format!("c{}", next(state) % 3))];
+                        if next(state).is_multiple_of(4) {
+                            attrs.push(("value".into(), format!("v{}", next(state) % 3)));
+                        }
+                        let mut node = florui::ElementNode {
+                            tag,
+                            attrs,
+                            handlers: Vec::new(),
+                            bindings: Vec::new(),
+                            value_handlers: Vec::new(),
+                            selection_handlers: Vec::new(),
+                            submit_handlers: Vec::new(),
+                            children: children(state, depth + 1, variant, count),
+                            source: Default::default(),
+                        };
+                        if (*count + variant).is_multiple_of(3) {
+                            node.handlers.push(("click".into(), Handler::new(|| ())));
+                        }
+                        out.push(Element::Node(node));
+                    }
+                    _ => out.push(Element::text(format!("leaf{variant}"))),
+                }
+            }
+            out
+        }
+        let mut state = seed.wrapping_mul(2_654_435_761).wrapping_add(7);
+        let mut count = 0;
+        Element::node(
+            "div",
+            vec![("class".into(), "root".into())],
+            children(&mut state, 0, variant, &mut count),
+        )
+    }
+
+    /// Everything a consumer can ask of two arenas, which must agree.
+    fn assert_same_arena(kept: &Arena, built: &Arena, what: &str) {
+        assert_eq!(kept.roots(), built.roots(), "{what}: roots");
+        assert_eq!(
+            kept.document_roots(),
+            built.document_roots(),
+            "{what}: document roots"
+        );
+        assert_eq!(
+            kept.overlay_roots(),
+            built.overlay_roots(),
+            "{what}: overlay roots"
+        );
+        let ids: Vec<NodeId> = kept.find_all(|_, _| true);
+        assert_eq!(ids, built.find_all(|_, _| true), "{what}: nodes");
+        for &id in &ids {
+            assert_eq!(kept.tag(id), built.tag(id), "{what}: tag of {id}");
+            assert_eq!(kept.attrs(id), built.attrs(id), "{what}: attrs of {id}");
+            assert_eq!(
+                kept.classes(id),
+                built.classes(id),
+                "{what}: classes of {id}"
+            );
+            assert_eq!(kept.parent(id), built.parent(id), "{what}: parent of {id}");
+            assert_eq!(
+                kept.children(id),
+                built.children(id),
+                "{what}: children of {id}"
+            );
+            assert_eq!(
+                kept.text_content(id),
+                built.text_content(id),
+                "{what}: text of {id}"
+            );
+            assert_eq!(
+                kept.inline_items(id),
+                built.inline_items(id),
+                "{what}: inline items of {id}"
+            );
+            assert_eq!(
+                kept.tag_ordinal(id),
+                built.tag_ordinal(id),
+                "{what}: ordinal of {id}"
+            );
+            assert_eq!(
+                kept.value_attr(id),
+                built.value_attr(id),
+                "{what}: value of {id}"
+            );
+            assert_eq!(
+                kept.handler(id, "click").is_some(),
+                built.handler(id, "click").is_some(),
+                "{what}: handler of {id}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_rebuilt_arena_is_the_arena_a_build_gives_and_keeps_its_shape_only_when_the_elements_are_the_same()
+     {
+        let mut kept_shapes = 0;
+        let mut changed_shapes = 0;
+        for seed in 0..60u32 {
+            let first = varied(seed, 0);
+            let mut arena = Arena::build(&first);
+            let shape = arena.style_shape();
+            // The same elements with other text and other handlers: kept.
+            for variant in [1, 2, 0, 5] {
+                let tree = varied(seed, variant);
+                assert!(
+                    arena.rebuild(&tree),
+                    "seed {seed} variant {variant} was not kept"
+                );
+                assert_eq!(arena.style_shape(), shape, "seed {seed}: the shape stays");
+                assert_same_arena(
+                    &arena,
+                    &Arena::build(&tree),
+                    &format!("seed {seed} variant {variant}"),
+                );
+                kept_shapes += 1;
+            }
+            // Other elements: built anew, with a new shape.
+            let other = varied(seed + 1000, 0);
+            let kept = arena.rebuild(&other);
+            if !kept {
+                assert_ne!(arena.style_shape(), shape, "seed {seed}: a new shape");
+                changed_shapes += 1;
+            }
+            assert_same_arena(&arena, &Arena::build(&other), &format!("seed {seed} other"));
+        }
+        assert_eq!(kept_shapes, 240);
+        assert!(
+            changed_shapes > 50,
+            "most other trees are different: {changed_shapes}"
+        );
+    }
+
+    #[test]
+    fn a_change_of_an_attribute_a_tag_or_the_place_of_text_is_not_a_kept_shape() {
+        let base = |class: &str, tag: &'static str, text_first: bool| {
+            let text = Element::text("x");
+            let child = Element::node(tag, vec![("class".into(), class.into())], vec![]);
+            Element::node(
+                "div",
+                vec![],
+                if text_first {
+                    vec![text, child]
+                } else {
+                    vec![child, text]
+                },
+            )
+        };
+        let mut arena = Arena::build(&base("a", "p", true));
+        let shape = arena.style_shape();
+        assert!(arena.rebuild(&base("a", "p", true)));
+        assert_eq!(arena.style_shape(), shape);
+        for (what, tree) in [
+            ("an attribute", base("b", "p", true)),
+            ("a tag", base("a", "span", true)),
+            ("the place of the text", base("a", "p", false)),
+        ] {
+            let mut arena = Arena::build(&base("a", "p", true));
+            assert!(!arena.rebuild(&tree), "{what} is not a kept shape");
+            assert_ne!(arena.style_shape(), shape, "{what}");
+            assert_same_arena(&arena, &Arena::build(&tree), what);
+        }
     }
 
     #[test]

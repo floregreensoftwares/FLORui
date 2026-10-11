@@ -571,7 +571,7 @@ impl UiRuntime {
         }
         {
             let _span = florui_profile::span(florui_profile::Phase::ArenaBuild);
-            self.arena = Arena::build(&tree);
+            self.arena.rebuild(&tree);
         }
         let sync_span = florui_profile::span(florui_profile::Phase::Sync);
         self.drop_validation_bubble_if_orphaned();
