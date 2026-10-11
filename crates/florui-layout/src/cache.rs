@@ -103,6 +103,21 @@ impl LayoutCache {
             .compute(arena, rules, state, viewport, timeline)
     }
 
+    /// [`Self::cascade`], and which nodes may have a style other than the one the
+    /// call before gave: `None` when that is not known, otherwise the nodes that
+    /// were styled again (a change of state restyles only what it can reach).
+    pub fn cascade_changed(
+        &mut self,
+        arena: &Arena,
+        rules: &[Rule],
+        state: &InteractionState,
+        viewport: Viewport,
+        timeline: &mut AnimationTimeline,
+    ) -> (StyleMap, Option<Vec<NodeId>>) {
+        self.session
+            .compute_changed(arena, rules, state, viewport, timeline)
+    }
+
     /// Forgets the styles the cascade gave, for a caller that changed
     /// something the cascade reads and this cannot see.
     pub fn forget_styles(&mut self) {

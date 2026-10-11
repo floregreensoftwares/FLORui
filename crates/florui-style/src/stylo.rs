@@ -409,6 +409,38 @@ impl StyloTree {
         self.number_contexts(arena);
     }
 
+    /// How many nodes the tree has.
+    pub(crate) fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// Where `node` sits in the tree, and the node at a place.
+    pub(crate) fn slot_of(&self, node: NodeId) -> usize {
+        self.index_of[node]
+    }
+
+    pub(crate) fn node_of(&self, slot: usize) -> NodeId {
+        self.order[slot]
+    }
+
+    /// Reads the state flags of every node again under `state` and returns the
+    /// slots of those that changed. Nothing else in the tree is touched: what
+    /// the last cascade left in the nodes stays.
+    pub(crate) fn update_states(&self, arena: &Arena, state: &InteractionState) -> Vec<usize> {
+        let mut changed = Vec::new();
+        for (index, (slot, &id)) in self.slots.iter().zip(&self.order).enumerate() {
+            let now = node_state_of(arena, state, id);
+            if now != slot.state.get() {
+                slot.state.set(now);
+                changed.push(index);
+            }
+        }
+        if !changed.is_empty() {
+            self.number_contexts(arena);
+        }
+        changed
+    }
+
     /// The identity each node has on the animation timeline.
     pub(crate) fn stable_ids(&self) -> impl Iterator<Item = usize> + '_ {
         self.slots.iter().map(|slot| slot.stable_id)
@@ -1159,7 +1191,144 @@ pub(crate) fn compute_with_tree(
     // One entry per node: growing a table of styles this big copies every
     // entry it already holds each time it doubles.
     let mut result = StyleMap::with_capacity(tree.order.len());
+    with_style_context(
+        tree,
+        rules,
+        viewport,
+        timeline,
+        container_query_signature,
+        |shared, thread_local, timeline| {
+            // Converting a node's computed values is the same work for every
+            // node that shares them, so it is done once per distinct set of
+            // values. Every key is an `Arc` still held by its node's
+            // `ElementData`, so no address is reused while the map is alive.
+            let mut converted = Converted::new();
+            // Level by level, so an ancestor's style is already committed to
+            // its `ElementData` when a descendant resolves and Stylo's style
+            // sharing cache sees every node of one depth together. One bloom
+            // filter is kept across the whole walk instead of
+            // `resolve_style`'s per-call `rebuild`, which re-hashes every
+            // ancestor and made deep chains quadratic.
+            for id in tree.level_order() {
+                let styled = style_node(
+                    shared,
+                    thread_local,
+                    tree.node(id),
+                    timeline,
+                    &mut converted,
+                );
+                result.insert_shared(id, styled.style);
+            }
+        },
+    );
+    timeline.sweep();
+    result
+}
 
+/// Styles again `start` (slots of `tree`) and, below each node whose new values
+/// can change what its children inherit, the children, in the order a cascade
+/// would (a parent before its children). The other nodes keep what the last
+/// cascade left in them, which is what a node reads of its parent. Returns the
+/// new style of each node styled. The caller marks the nodes it did not style
+/// as met on the timeline.
+pub(crate) fn restyle_nodes(
+    tree: &StyloTree,
+    arena: &Arena,
+    start: &[usize],
+    rules: &[Rule],
+    viewport: FlorViewport,
+    timeline: &mut AnimationTimeline,
+) -> Vec<(NodeId, std::sync::Arc<ComputedStyle>)> {
+    with_style_context(
+        tree,
+        rules,
+        viewport,
+        timeline,
+        &[],
+        |shared, thread_local, timeline| {
+            let mut converted = Converted::new();
+            let mut work: std::collections::BTreeSet<(usize, usize)> = start
+                .iter()
+                .map(|&index| (tree.slots[index].depth, index))
+                .collect();
+            let mut styled = Vec::with_capacity(work.len());
+            while let Some((_, index)) = work.pop_first() {
+                let slot = &tree.slots[index];
+                *slot.data.borrow_mut() = ElementData::default();
+                let id = tree.order[index];
+                let node = style_node(
+                    shared,
+                    thread_local,
+                    StyloNode(slot),
+                    timeline,
+                    &mut converted,
+                );
+                let reaches_children = node
+                    .previous
+                    .as_ref()
+                    .is_none_or(|old| may_change_children(old, &node.primary));
+                if reaches_children {
+                    for &child in arena.children(id) {
+                        let child_index = tree.index_of[child];
+                        work.insert((tree.slots[child_index].depth, child_index));
+                    }
+                }
+                styled.push((id, node.style));
+            }
+            styled
+        },
+    )
+}
+
+/// Whether a node whose style was `old` and is now `new` may have changed what
+/// its children inherit: anything but equal inherited structs (Stylo shares each
+/// between a parent and a child that inherits it unchanged, so an equal pointer
+/// is the common case), the same custom properties, writing mode and zoom.
+/// When it says yes the children are styled again, which costs and never gives a
+/// wrong style.
+fn may_change_children(old: &ComputedValues, new: &ComputedValues) -> bool {
+    fn same<T: PartialEq>(a: &T, b: &T) -> bool {
+        std::ptr::eq(a, b) || a == b
+    }
+    !(same(old.get_font(), new.get_font())
+        && same(old.get_inherited_box(), new.get_inherited_box())
+        && same(old.get_inherited_table(), new.get_inherited_table())
+        && same(old.get_inherited_text(), new.get_inherited_text())
+        && same(old.get_inherited_ui(), new.get_inherited_ui())
+        && same(old.get_list(), new.get_list())
+        && same(old.get_svg(), new.get_svg())
+        && old.custom_properties_equal(new)
+        && old.writing_mode == new.writing_mode
+        && old.effective_zoom == new.effective_zoom)
+}
+
+/// Converted styles by the cascaded values they came from.
+type Converted = HashMap<*const ComputedValues, std::sync::Arc<ComputedStyle>>;
+
+/// What styling one node gave.
+struct Styled {
+    /// Its style, the same one for every node whose values are the same.
+    style: std::sync::Arc<ComputedStyle>,
+    /// The cascaded values the timeline had for the node before this, if any.
+    previous: Option<Arc<ComputedValues>>,
+    /// The cascaded values now.
+    primary: Arc<ComputedValues>,
+}
+
+/// Runs `walk` with what the cascade of `tree` needs: a stylist holding the
+/// sheets, the shared style context over it and the context of one thread.
+fn with_style_context<'t, R>(
+    tree: &'t StyloTree,
+    rules: &[Rule],
+    viewport: FlorViewport,
+    timeline: &mut AnimationTimeline,
+    container_query_signature: &[bool],
+    walk: impl FnOnce(
+        &SharedStyleContext<'_>,
+        &mut ThreadLocalStyleContext<StyloNode<'t>>,
+        &mut AnimationTimeline,
+    ) -> R,
+) -> R {
     let prefers_color_scheme = if timeline.prefers_dark_color_scheme() {
         PrefersColorScheme::Dark
     } else {
@@ -1245,78 +1414,78 @@ pub(crate) fn compute_with_tree(
         snapshot_map: &snapshot_map,
         registered_speculative_painters: &NoPainters,
     };
+    let mut thread_local = ThreadLocalStyleContext::<StyloNode<'t>>::new();
+    walk(&shared, &mut thread_local, timeline)
+}
 
-    // Level by level, so an ancestor's style is already committed to its
-    // `ElementData` when a descendant resolves and Stylo's style sharing
-    // cache sees every node of one depth together. One bloom filter is kept
-    // across the whole walk instead of `resolve_style`'s per-call `rebuild`,
-    // which re-hashes every ancestor and made deep chains quadratic.
-    let mut thread_local = ThreadLocalStyleContext::<StyloNode<'_>>::new();
-    // Converting a node's computed values is the same work for every node that
-    // shares them, so it is done once per distinct set of values. Every key
-    // is an `Arc` still held by its node's `ElementData`, so no address is
-    // reused while the map is alive.
-    let mut converted: HashMap<*const ComputedValues, std::sync::Arc<ComputedStyle>> =
-        HashMap::new();
-    for id in tree.level_order() {
-        let mut context = StyleContext {
-            shared: &shared,
-            thread_local: &mut thread_local,
-        };
-        let target = tree.node(id);
-        let styles = resolve_sharing_styles(&mut context, target);
+/// Styles one node of a tree whose ancestors already have a committed primary
+/// style.
+fn style_node<'t>(
+    shared: &SharedStyleContext<'_>,
+    thread_local: &mut ThreadLocalStyleContext<StyloNode<'t>>,
+    target: StyloNode<'t>,
+    timeline: &mut AnimationTimeline,
+    converted: &mut Converted,
+) -> Styled {
+    let mut context = StyleContext {
+        shared,
+        thread_local,
+    };
+    let styles = resolve_sharing_styles(&mut context, target);
 
-        // Nothing here starts or samples a transition/animation; real Servo
-        // does that in a step its traversal driver runs after cascading
-        // (private to Stylo), so it is replicated by hand for this node.
-        let stable_id = target.0.stable_id;
-        let primary = styles.primary().clone();
-        // Keyframe resolution reads the parent style from `ElementData` and
-        // panics if it is unpopulated, so commit it before animating.
-        if let Some(mut data) = target.mutate_data() {
-            data.styles.primary = Some(primary.clone());
-        }
-        let old_values = timeline.previous_style(stable_id);
-        let has_active_animation =
-            process_animations_for_style(target, &mut context, &old_values, &primary);
-        // `process_animations_for_style` still runs unconditionally above —
-        // its own `animation_set` bookkeeping (registering, updating,
-        // pruning a transition/animation) stays fully consistent regardless
-        // of suppression, so nothing needs special handling for when
-        // suppression later turns back off. Only which value actually
-        // renders changes here: suppressed means the plain cascaded value,
-        // un-interpolated, every frame — not "duration forced near zero."
-        let final_values = if has_active_animation && !timeline.should_suppress_animations() {
-            splice_animation_declarations(target, &mut context, &primary, timeline.now)
-        } else {
-            primary.clone()
-        };
-
-        if has_active_animation && !timeline.should_suppress_animations() {
-            result.insert(id, to_computed_style(&final_values));
-        } else {
-            let shared = converted
-                .entry(&*primary as *const ComputedValues)
-                .or_insert_with(|| std::sync::Arc::new(to_computed_style(&final_values)));
-            result.insert_shared(id, std::sync::Arc::clone(shared));
-        }
-        // `primary` (the raw cascade result), not `final_values` (already
-        // spliced with any in-progress transition/animation) -- Stylo's own
-        // `update_transitions_for_new_style` compares next frame's `primary`
-        // against *this* value to decide whether a transitionable property
-        // actually changed. Feeding it back the already-animated midpoint
-        // instead makes every still-converging frame look like a fresh
-        // change, since the animated value never quite equals the settled
-        // target -- restarting the transition from scratch every frame
-        // forever instead of continuing the one already running, and
-        // leaving `animation_set.transitions` growing without bound (each
-        // fresh start is `AnimationState::Running`, never `Finished`, so
-        // `process_animations_for_style`'s own `retain` never prunes it).
-        timeline.set_current_style(stable_id, primary);
+    // Nothing here starts or samples a transition/animation; real Servo
+    // does that in a step its traversal driver runs after cascading
+    // (private to Stylo), so it is replicated by hand for this node.
+    let stable_id = target.0.stable_id;
+    let primary = styles.primary().clone();
+    // Keyframe resolution reads the parent style from `ElementData` and
+    // panics if it is unpopulated, so commit it before animating.
+    if let Some(mut data) = target.mutate_data() {
+        data.styles.primary = Some(primary.clone());
     }
-    timeline.sweep();
+    let old_values = timeline.previous_style(stable_id);
+    let has_active_animation =
+        process_animations_for_style(target, &mut context, &old_values, &primary);
+    // `process_animations_for_style` still runs unconditionally above —
+    // its own `animation_set` bookkeeping (registering, updating,
+    // pruning a transition/animation) stays fully consistent regardless
+    // of suppression, so nothing needs special handling for when
+    // suppression later turns back off. Only which value actually
+    // renders changes here: suppressed means the plain cascaded value,
+    // un-interpolated, every frame — not "duration forced near zero."
+    let final_values = if has_active_animation && !timeline.should_suppress_animations() {
+        splice_animation_declarations(target, &mut context, &primary, timeline.now)
+    } else {
+        primary.clone()
+    };
 
-    result
+    let style = if has_active_animation && !timeline.should_suppress_animations() {
+        std::sync::Arc::new(to_computed_style(&final_values))
+    } else {
+        std::sync::Arc::clone(
+            converted
+                .entry(&*primary as *const ComputedValues)
+                .or_insert_with(|| std::sync::Arc::new(to_computed_style(&final_values))),
+        )
+    };
+    // `primary` (the raw cascade result), not `final_values` (already
+    // spliced with any in-progress transition/animation) -- Stylo's own
+    // `update_transitions_for_new_style` compares next frame's `primary`
+    // against *this* value to decide whether a transitionable property
+    // actually changed. Feeding it back the already-animated midpoint
+    // instead makes every still-converging frame look like a fresh
+    // change, since the animated value never quite equals the settled
+    // target -- restarting the transition from scratch every frame
+    // forever instead of continuing the one already running, and
+    // leaving `animation_set.transitions` growing without bound (each
+    // fresh start is `AnimationState::Running`, never `Finished`, so
+    // `process_animations_for_style`'s own `retain` never prunes it).
+    timeline.set_current_style(stable_id, primary.clone());
+    Styled {
+        style,
+        previous: old_values,
+        primary,
+    }
 }
 
 /// Stylo's `resolve_style` body for a node whose ancestors already have a committed
