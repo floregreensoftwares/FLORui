@@ -597,7 +597,11 @@ mod tests {
     const ANIMATED_CSS: &str = "@keyframes grow { from { width: 10px; } to { width: 90px; } }          .a { animation: grow 2s linear infinite; }";
 
     fn simple(a_class: &str, text: &str) -> Arena {
-        Arena::build(&Element::node(
+        Arena::build(&simple_tree(a_class, text))
+    }
+
+    fn simple_tree(a_class: &str, text: &str) -> Element {
+        Element::node(
             "div",
             vec![],
             vec![
@@ -612,7 +616,7 @@ mod tests {
                     vec![Element::text("fixed")],
                 ),
             ],
-        ))
+        )
     }
 
     /// Runs `cache.styles` and the cascade on the same inputs and fails if they
@@ -653,19 +657,19 @@ mod tests {
             styles_match(cache, &mut timelines, arena, rules, state, viewport, what)
         };
 
-        let one = simple("a", "text");
+        let mut arena = simple("a", "text");
         // The first two calls run the cascade (the second one keeps the styles);
         // from the third on they are kept.
-        assert!(run(&mut cache, &one, &rules, &state, viewport, "first"));
-        assert!(run(&mut cache, &one, &rules, &state, viewport, "second"));
-        assert!(!run(&mut cache, &one, &rules, &state, viewport, "third"));
-        assert!(!run(&mut cache, &one, &rules, &state, viewport, "fourth"));
+        assert!(run(&mut cache, &arena, &rules, &state, viewport, "first"));
+        assert!(run(&mut cache, &arena, &rules, &state, viewport, "second"));
+        assert!(!run(&mut cache, &arena, &rules, &state, viewport, "third"));
+        assert!(!run(&mut cache, &arena, &rules, &state, viewport, "fourth"));
 
         // Only the text changed: the styles are the same.
-        let text = simple("a", "another text, longer");
+        arena.rebuild(&simple_tree("a", "another text, longer"));
         assert!(!run(
             &mut cache,
-            &text,
+            &arena,
             &rules,
             &state,
             viewport,
@@ -673,10 +677,10 @@ mod tests {
         ));
 
         // A class changed: the cascade runs.
-        let class = simple("b", "text");
+        arena.rebuild(&simple_tree("b", "text"));
         assert!(run(
             &mut cache,
-            &class,
+            &arena,
             &rules,
             &state,
             viewport,
@@ -684,7 +688,7 @@ mod tests {
         ));
         assert!(run(
             &mut cache,
-            &class,
+            &arena,
             &rules,
             &state,
             viewport,
@@ -692,7 +696,7 @@ mod tests {
         ));
         assert!(!run(
             &mut cache,
-            &class,
+            &arena,
             &rules,
             &state,
             viewport,
@@ -701,15 +705,15 @@ mod tests {
 
         // Hover on a node, a different viewport (a media query), other rules.
         let hovered = InteractionState::new().with_hovered(0);
-        assert!(run(&mut cache, &class, &rules, &hovered, viewport, "hover"));
+        assert!(run(&mut cache, &arena, &rules, &hovered, viewport, "hover"));
         let wide = florui_style::Viewport {
             width: 800.0,
             height: 600.0,
         };
-        assert!(run(&mut cache, &class, &rules, &state, wide, "viewport"));
+        assert!(run(&mut cache, &arena, &rules, &state, wide, "viewport"));
         assert!(run(
             &mut cache,
-            &class,
+            &arena,
             &rules,
             &state,
             wide,
@@ -717,7 +721,7 @@ mod tests {
         ));
         assert!(!run(
             &mut cache,
-            &class,
+            &arena,
             &rules,
             &state,
             wide,
@@ -725,7 +729,7 @@ mod tests {
         ));
         assert!(run(
             &mut cache,
-            &class,
+            &arena,
             &other_rules,
             &state,
             wide,
