@@ -101,6 +101,10 @@ struct NodeSlot {
     /// `#id` rules silently never even considered a candidate.
     id_atom: Option<WeakAtom>,
     state: Cell<ElementState>,
+    /// The state of the nodes above this one, as a number: two nodes with the same
+    /// number have the same state in every ancestor. See
+    /// [`StyloTree::number_contexts`].
+    context: Cell<u32>,
     data: AtomicRefCell<ElementData>,
     dirty_descendants: Cell<bool>,
     local_name: BorrowedLocalName,
@@ -125,6 +129,15 @@ pub(crate) struct StyloTree {
     /// the same user-agent reset an author sheet declaring it does.
     uses_inline_scroll_behavior: bool,
 }
+
+/// Where the number of a node's context sits in the state style sharing sees:
+/// in the eight bits above the ones Stylo gives meaning to.
+const CONTEXT_SHIFT: u32 = 56;
+const _: () = assert!(ElementState::all().bits() < 1 << CONTEXT_SHIFT);
+
+/// The context of every node past the 254 distinct ones the bits can name.
+/// Such a node does not take part in style sharing at all.
+const OVERFLOW_CONTEXT: u32 = (1 << (64 - CONTEXT_SHIFT)) - 1;
 
 /// The state flags of node `id`: its markup state (`disabled`, `checked`, ...) read
 /// from `arena`, and its interaction state (hover, focus, form validity, visited)
@@ -305,6 +318,7 @@ impl StyloTree {
                 id_atom: arena.id_attr(id).map(WeakAtom::from),
                 style_pdb: arena.style_attr(id).map(parse_inline_style),
                 state: Cell::new(node_state),
+                context: Cell::new(0),
                 data: AtomicRefCell::new(ElementData::default()),
                 dirty_descendants: Cell::new(false),
                 local_name: arena.tag(id).into(),
@@ -341,15 +355,45 @@ impl StyloTree {
                 .style_attr(id)
                 .is_some_and(|css| css.to_ascii_lowercase().contains("scroll-behavior"))
         });
-        (
-            Self {
-                slots,
-                index_of,
-                order,
-                uses_inline_scroll_behavior,
-            },
-            primary_root,
-        )
+        let tree = Self {
+            slots,
+            index_of,
+            order,
+            uses_inline_scroll_behavior,
+        };
+        tree.number_contexts(arena);
+        (tree, primary_root)
+    }
+
+    /// Numbers each node by the state of the nodes above it. A selector such as
+    /// `.row:hover .cell` matches two cells that are alike in everything else, under
+    /// rows that differ only in their state, differently; Stylo's style sharing
+    /// looks at the nodes and at the style of their parents, which is the same for
+    /// such rows when no rule of their own tells them apart, and would take the
+    /// cells for the same. Nodes with the same number have the same state in every
+    /// ancestor, and share. (What a sibling before a node has is covered by
+    /// Stylo's own check of the selectors with a sibling combinator.)
+    fn number_contexts(&self, arena: &Arena) {
+        let mut numbers: HashMap<(u32, u64), u32> = HashMap::new();
+        let mut of_slot: Vec<u32> = vec![0; self.slots.len()];
+        for (index, &id) in self.order.iter().enumerate() {
+            // What is above: the number of the parent, and the parent's own state.
+            let above = match arena.parent(id).map(|parent| self.index_of[parent]) {
+                Some(parent) => (of_slot[parent], self.slots[parent].state.get().bits()),
+                None => (0, 0),
+            };
+            let next = numbers.len() as u32 + 1;
+            let number = match numbers.get(&above) {
+                Some(&number) => number,
+                None if next < OVERFLOW_CONTEXT => {
+                    numbers.insert(above, next);
+                    next
+                }
+                None => OVERFLOW_CONTEXT,
+            };
+            of_slot[index] = number;
+            self.slots[index].context.set(number);
+        }
     }
 
     /// Sets a tree built before to be styled under `state`: each node's state
@@ -362,6 +406,7 @@ impl StyloTree {
             *slot.data.borrow_mut() = ElementData::default();
             slot.dirty_descendants.set(false);
         }
+        self.number_contexts(arena);
     }
 
     /// The identity each node has on the animation timeline.
@@ -775,8 +820,15 @@ impl<'a> TElement for StyloNode<'a> {
         None
     }
 
+    /// The state Stylo's style sharing tells nodes apart by: the node's own, and
+    /// in the bits above it the number of its context (see [`NodeSlot::context`]),
+    /// so that two nodes only share a style when the state of their ancestors is
+    /// the same, which `.row:hover .cell` reads. Matching reads the state itself
+    /// and does not see the number.
     fn state(&self) -> ElementState {
-        self.0.state.get()
+        ElementState::from_bits_retain(
+            self.0.state.get().bits() | (u64::from(self.0.context.get()) << CONTEXT_SHIFT),
+        )
     }
 
     fn has_part_attr(&self) -> bool {
@@ -1300,8 +1352,9 @@ fn resolve_sharing_styles<'a>(
         (None, None) => true,
         _ => false,
     };
+    let may_share = layout_parent_is_parent && element.0.context.get() != OVERFLOW_CONTEXT;
     let mut target = StyleSharingTarget::new(element);
-    if layout_parent_is_parent && let Some(shared) = target.share_style_if_possible(context) {
+    if may_share && let Some(shared) = target.share_style_if_possible(context) {
         return shared.into();
     }
     let resolved = StyleResolverForElement::new(
@@ -1311,7 +1364,7 @@ fn resolve_sharing_styles<'a>(
         PseudoElementResolution::Force,
     )
     .resolve_style(parent_style.as_deref(), layout_parent_style.as_deref());
-    if layout_parent_is_parent {
+    if may_share {
         context.thread_local.sharing_cache.insert_if_possible(
             &element,
             &resolved.primary,
@@ -2988,5 +3041,198 @@ mod placeholder_color_tests {
         assert_eq!(parse_color("transparent"), Some(Rgba::TRANSPARENT));
         assert_eq!(parse_color("not-a-color"), None);
         assert_eq!(parse_color("rgb(1, 2)"), None);
+    }
+}
+
+#[cfg(test)]
+mod style_sharing_tests {
+    use florui::prelude::*;
+
+    use crate::{
+        AnimationTimeline, Arena, InteractionState, StyleMap, Viewport, compute, parse_stylesheet,
+    };
+
+    const GREEN: u8 = 255;
+
+    fn class(name: &str) -> Vec<(String, String)> {
+        vec![("class".to_string(), name.to_string())]
+    }
+
+    /// `rows` rows of one cell each under one list.
+    fn rows(count: usize) -> Element {
+        Element::node(
+            "div",
+            class("list"),
+            (0..count)
+                .map(|_| {
+                    Element::node(
+                        "div",
+                        class("row"),
+                        vec![Element::node("span", class("cell"), vec![])],
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    /// The styles of `arena` under `css` with `hovered` and its ancestors hovered.
+    fn styles(arena: &Arena, css: &str, hovered: Option<usize>) -> StyleMap {
+        let mut state = InteractionState::new();
+        if let Some(node) = hovered {
+            state = state.with_hovered(node);
+            let mut up = arena.parent(node);
+            while let Some(parent) = up {
+                state = state.with_hovered(parent);
+                up = arena.parent(parent);
+            }
+        }
+        compute(
+            arena,
+            &parse_stylesheet(css).unwrap(),
+            &state,
+            Viewport::default(),
+            &mut AnimationTimeline::default(),
+        )
+    }
+
+    /// The nodes with `class` that the styles turn green.
+    fn green(arena: &Arena, styles: &StyleMap, class: &str) -> Vec<usize> {
+        arena
+            .find_all(|a, id| a.classes(id).iter().any(|c| c == class))
+            .into_iter()
+            .enumerate()
+            .filter(|&(_, id)| styles[&id].color.g == GREEN && styles[&id].color.r == 0)
+            .map(|(position, _)| position)
+            .collect()
+    }
+
+    #[test]
+    fn the_cell_of_the_hovered_row_alone_takes_the_rule_of_a_hovered_ancestor() {
+        let arena = Arena::build(&rows(6));
+        let all = arena.find_all(|a, id| a.classes(id).iter().any(|c| c == "row"));
+        // Rows alike in every style but their state, with and without a rule of
+        // their own, which is what makes Stylo take their cells for the same.
+        for css in [
+            ".row:hover .cell { color: #00ff00; }",
+            ".row:hover .cell { color: #00ff00; } .row { opacity: 0.9; }",
+            ".row:hover > .cell { color: #00ff00; } .cell { width: 3px; }",
+        ] {
+            for (position, &row) in all.iter().enumerate() {
+                let result = styles(&arena, css, Some(row));
+                assert_eq!(
+                    green(&arena, &result, "cell"),
+                    vec![position],
+                    "hovering row {position} under {css}"
+                );
+            }
+            let none = styles(&arena, css, None);
+            assert!(green(&arena, &none, "cell").is_empty(), "nothing hovered");
+        }
+    }
+
+    #[test]
+    fn the_rows_after_the_hovered_one_take_the_sibling_rules_and_no_other() {
+        let arena = Arena::build(&rows(6));
+        let all = arena.find_all(|a, id| a.classes(id).iter().any(|c| c == "row"));
+        for (position, &hovered) in all.iter().enumerate() {
+            let adjacent = styles(
+                &arena,
+                ".row:hover + .row { color: #00ff00; }",
+                Some(hovered),
+            );
+            let expected: Vec<usize> = (position + 1 < 6)
+                .then_some(position + 1)
+                .into_iter()
+                .collect();
+            assert_eq!(
+                green(&arena, &adjacent, "row"),
+                expected,
+                "next sibling of {position}"
+            );
+
+            // The same below the sibling: nodes under rows that differ only in what
+            // is before them.
+            let below = styles(
+                &arena,
+                ".row:hover + .row .cell { color: #00ff00; }",
+                Some(hovered),
+            );
+            assert_eq!(
+                green(&arena, &below, "cell"),
+                expected,
+                "cell of the next sibling of {position}"
+            );
+
+            let later = styles(
+                &arena,
+                ".row:hover ~ .row { color: #00ff00; }",
+                Some(hovered),
+            );
+            assert_eq!(
+                green(&arena, &later, "row"),
+                (position + 1..6).collect::<Vec<_>>(),
+                "later siblings of {position}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_label_after_a_checked_box_alone_takes_the_checked_sibling_rule() {
+        let pair = |checked: bool| {
+            let mut attrs = vec![("type".to_string(), "checkbox".to_string())];
+            if checked {
+                attrs.push(("checked".to_string(), "true".to_string()));
+            }
+            vec![
+                Element::node("input", attrs, vec![]),
+                Element::node("label", class("name"), vec![]),
+            ]
+        };
+        let tree = Element::node(
+            "div",
+            vec![],
+            [true, false, false, true, false]
+                .into_iter()
+                .flat_map(pair)
+                .collect(),
+        );
+        let arena = Arena::build(&tree);
+        let result = styles(&arena, "input:checked + .name { color: #00ff00; }", None);
+        assert_eq!(green(&arena, &result, "name"), vec![0, 3]);
+    }
+
+    #[test]
+    fn the_cells_of_the_hovered_card_alone_take_a_rule_two_levels_down() {
+        let card = |rows: usize| {
+            Element::node(
+                "div",
+                class("card"),
+                (0..rows)
+                    .map(|_| {
+                        Element::node(
+                            "div",
+                            class("row"),
+                            vec![Element::node("span", class("cell"), vec![])],
+                        )
+                    })
+                    .collect(),
+            )
+        };
+        let tree = Element::node("div", vec![], vec![card(3), card(3), card(3)]);
+        let arena = Arena::build(&tree);
+        let cards = arena.find_all(|a, id| a.classes(id).iter().any(|c| c == "card"));
+        for (position, &hovered) in cards.iter().enumerate() {
+            let result = styles(
+                &arena,
+                ".card:hover .row .cell { color: #00ff00; }",
+                Some(hovered),
+            );
+            let expected: Vec<usize> = (position * 3..position * 3 + 3).collect();
+            assert_eq!(
+                green(&arena, &result, "cell"),
+                expected,
+                "hovering card {position}"
+            );
+        }
     }
 }
