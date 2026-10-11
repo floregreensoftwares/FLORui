@@ -288,6 +288,26 @@ impl Tree {
         &self.roots
     }
 
+    /// A number that is the same for two trees the cascade styles alike: the
+    /// same elements in the same places with the same tags and attributes.
+    /// What is written as text inside an element is left out, so changing it
+    /// does not change this. The cascade reads nothing but this (and the
+    /// state, rules and viewport it is given), so a tree with the same number
+    /// as the one it was last run on has the styles that run gave.
+    pub fn style_shape(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.roots.hash(&mut hasher);
+        self.document_root_count.hash(&mut hasher);
+        self.nodes.len().hash(&mut hasher);
+        for node in &self.nodes {
+            node.tag.hash(&mut hasher);
+            node.attrs.hash(&mut hasher);
+            node.children.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
     /// How many earlier siblings of `id` have its tag (its place among
     /// same-tag siblings, which a node without an `id` is identified by),
     /// read from a count kept while building rather than found by scanning
