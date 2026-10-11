@@ -443,27 +443,37 @@ impl UiRuntime {
             self.clock_override
                 .unwrap_or_else(|| self.animation_epoch.elapsed().as_secs_f64()),
         );
-        let restyled = self.layout_cache.cascade(
+        let (restyled, styled) = self.layout_cache.cascade_changed(
             &self.arena,
             &self.rules,
             &self.interaction,
             media_viewport(viewport),
             &mut self.animation_timeline,
         );
-        florui_profile::count(florui_profile::Counter::NodesStyled, restyled.len() as u64);
+        florui_profile::count(
+            florui_profile::Counter::NodesStyled,
+            styled.as_ref().map_or(restyled.len(), Vec::len) as u64,
+        );
         if restyled.len() != self.styles.len() {
             return false;
         }
-        for (id, style) in &restyled {
-            match self.styles.get(id) {
-                Some(old) if old.differs_only_in_paint(style) => {}
+        // The nodes whose style may differ from the one they have: those the
+        // cascade styled again, or every one when it could not say which.
+        let nodes: Vec<NodeId> = match styled {
+            Some(nodes) => nodes,
+            None => restyled.keys().copied().collect(),
+        };
+        for id in &nodes {
+            match (self.styles.get(id), restyled.get(id)) {
+                (Some(old), Some(style)) if old.differs_only_in_paint(style) => {}
                 _ => return false,
             }
         }
-        for (id, style) in &restyled {
+        for id in &nodes {
             // Looked at before it is written: a style another node shares is
             // copied by `get_mut`, which only a node that differs should pay.
-            if self.styles.get(id) != Some(style)
+            if let Some(style) = restyled.get(id)
+                && self.styles.get(id) != Some(style)
                 && let Some(old) = self.styles.get_mut(id)
             {
                 old.copy_paint_from(style);
