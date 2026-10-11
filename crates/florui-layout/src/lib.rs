@@ -992,7 +992,7 @@ pub fn compute_with_style_cached(
 
 #[allow(clippy::too_many_arguments)]
 fn compute_with_style_in(
-    cache: Option<&mut LayoutCache>,
+    mut cache: Option<&mut LayoutCache>,
     font: &mut florui_text::Font,
     arena: &Arena,
     rules: &[Rule],
@@ -1001,18 +1001,29 @@ fn compute_with_style_in(
     timeline: &mut AnimationTimeline,
     available: Size<AvailableSpace>,
 ) -> Result<LayoutResult, LayoutError> {
-    let base_styles = {
+    let has_container_queries = rules.iter().any(Rule::has_container_queries);
+    let (base_styles, restyled) = {
         let _span = florui_profile::span(florui_profile::Phase::Cascade);
-        florui_style::compute(arena, rules, state, viewport, timeline)
+        match cache.as_deref_mut() {
+            Some(cache) if !has_container_queries => {
+                cache.styles(arena, rules, state, viewport, timeline)
+            }
+            _ => (
+                florui_style::compute(arena, rules, state, viewport, timeline),
+                true,
+            ),
+        }
     };
-    florui_profile::count(
-        florui_profile::Counter::NodesStyled,
-        base_styles.len() as u64,
-    );
+    if restyled {
+        florui_profile::count(
+            florui_profile::Counter::NodesStyled,
+            base_styles.len() as u64,
+        );
+    }
     let (base_layouts, base_content_extents) = {
         let _span = florui_profile::span(florui_profile::Phase::Layout);
         match cache {
-            Some(cache) if !rules.iter().any(Rule::has_container_queries) => {
+            Some(cache) if !has_container_queries => {
                 cache.compute(font, arena, &base_styles, available)?
             }
             _ => compute_layout_with_content_extents(font, arena, &base_styles, available)?,
@@ -1023,7 +1034,7 @@ fn compute_with_style_in(
         base_layouts.len() as u64,
     );
 
-    if !rules.iter().any(Rule::has_container_queries) {
+    if !has_container_queries {
         return Ok(LayoutResult {
             styles: base_styles,
             layouts: base_layouts,
