@@ -365,9 +365,24 @@ impl StyloTree {
         let mut start = 0;
         for end in 1..=self.order.len() {
             if end == self.order.len() || depth(self.order[end]) == 0 {
-                let mut tree = self.order[start..end].to_vec();
-                tree.sort_by_key(|&id| depth(id));
-                levels.extend(tree);
+                // Stable by depth, by counting: how many nodes sit at each
+                // depth gives where each depth's run starts.
+                let tree = &self.order[start..end];
+                let deepest = tree.iter().map(|&id| depth(id)).max().unwrap_or(0);
+                let mut next = vec![0usize; deepest + 2];
+                for &id in tree {
+                    next[depth(id) + 1] += 1;
+                }
+                for level in 1..next.len() {
+                    next[level] += next[level - 1];
+                }
+                let base = levels.len();
+                levels.resize(base + tree.len(), 0);
+                for &id in tree {
+                    let at = &mut next[depth(id)];
+                    levels[base + *at] = id;
+                    *at += 1;
+                }
                 start = end;
             }
         }
@@ -1049,12 +1064,14 @@ fn compute_in_layout_state(
     timeline: &mut AnimationTimeline,
     container_query_signature: &[bool],
 ) -> HashMap<NodeId, ComputedStyle> {
-    let mut result = HashMap::new();
     if arena.roots().is_empty() {
-        return result;
+        return HashMap::new();
     }
 
     let (tree, _primary_root) = StyloTree::new(arena, state, timeline);
+    // One entry per node: growing a table of styles this big copies every
+    // entry it already holds each time it doubles.
+    let mut result = HashMap::with_capacity(tree.order.len());
 
     let prefers_color_scheme = if timeline.prefers_dark_color_scheme() {
         PrefersColorScheme::Dark
