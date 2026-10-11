@@ -16,6 +16,7 @@
 //! measurement runs, so the timed loops and the other paint benchmarks are
 //! unaffected apart from one relaxed load per allocation.
 
+use florui_style::StyleMap;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
@@ -26,7 +27,7 @@ use criterion::{
 use florui::Element;
 use florui_layout::{BoxLayout, compute_layout};
 use florui_paint::{Canvas, paint_to_buffer};
-use florui_style::{Arena, ComputedStyle, InteractionState, NodeId, Rgba};
+use florui_style::{Arena, InteractionState, NodeId, Rgba};
 use florui_text::Font;
 use taffy::prelude::*;
 
@@ -72,7 +73,7 @@ fn peak_heap<R>(f: impl FnOnce() -> R) -> (R, usize) {
 
 struct Scene {
     arena: Arena,
-    styles: HashMap<NodeId, ComputedStyle>,
+    styles: StyleMap,
     layouts: HashMap<NodeId, BoxLayout>,
     side: u32,
 }

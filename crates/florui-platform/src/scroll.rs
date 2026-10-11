@@ -8,13 +8,14 @@
 //! [`ScrollHandle::offset`], so a scroll box nothing rendered from just
 //! repaints.
 
+use florui_style::StyleMap;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use florui_layout::{BoxLayout, ContentExtent};
 use florui_reactive::{Cleanup, Signal, use_attachment, use_context, use_signal};
-use florui_style::{Arena, ComputedStyle, NodeId};
+use florui_style::{Arena, NodeId};
 
 use crate::scroll_animation::{ScrollAnimation, ScrollKind};
 
@@ -112,7 +113,7 @@ impl ScrollRegistry {
     pub(crate) fn sync(
         &self,
         arena: &Arena,
-        styles: &HashMap<NodeId, ComputedStyle>,
+        styles: &StyleMap,
         layouts: &HashMap<NodeId, BoxLayout>,
         content_extents: &HashMap<NodeId, ContentExtent>,
     ) {

@@ -50,6 +50,7 @@
 //! internally and would otherwise overflow the default stack well under
 //! 1,000 levels.
 
+use florui_style::StyleMap;
 use std::collections::HashMap;
 
 use florui_style::{
@@ -108,7 +109,7 @@ pub struct ContentExtent {
 /// alongside each node's real scrollable content extent, the same trio
 /// `UiRuntime::geometry` hands callers.
 pub struct LayoutResult {
-    pub styles: HashMap<NodeId, ComputedStyle>,
+    pub styles: StyleMap,
     pub layouts: HashMap<NodeId, BoxLayout>,
     pub content_extents: HashMap<NodeId, ContentExtent>,
 }
@@ -349,11 +350,7 @@ struct ImageContext {
 /// own (one level of mixed inline content, not arbitrarily deep
 /// inline-in-inline-in-inline nesting — see this crate's own top-level
 /// scope doc for why).
-fn needs_inline_layout(
-    arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
-    node: NodeId,
-) -> bool {
+fn needs_inline_layout(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
     let items = arena.inline_items(node);
     if items.is_empty() {
         return false;
@@ -401,7 +398,7 @@ fn needs_inline_layout(
 fn measure_inline_block_intrinsic_size(
     font: &mut florui_text::Font,
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     child: NodeId,
 ) -> (f32, f32) {
     let style = styles.get(&child);
@@ -470,7 +467,7 @@ fn measure_inline_block_intrinsic_size(
 fn build_inline_content_items(
     font: &mut florui_text::Font,
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     node: NodeId,
 ) -> Vec<InlineContentItem> {
     let container_style = styles.get(&node);
@@ -529,11 +526,7 @@ fn build_inline_content_items(
 /// own painting matches exactly what [`compute_layout`] actually did for
 /// this node, rather than duplicating (and risking drifting from) this
 /// logic in a second crate.
-pub fn is_inline_formatting_context(
-    arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
-    node: NodeId,
-) -> bool {
+pub fn is_inline_formatting_context(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
     needs_inline_layout(arena, styles, node)
 }
 
@@ -546,7 +539,7 @@ pub fn is_inline_formatting_context(
 pub fn shape_inline_formatting_context(
     font: &mut florui_text::Font,
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     node: NodeId,
     wrap_width: f32,
 ) -> Option<std::sync::Arc<florui_text::InlineLayout>> {
@@ -572,7 +565,7 @@ pub fn shape_inline_formatting_context(
 pub fn compute_layout(
     font: &mut florui_text::Font,
     arena: &Arena,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     available: Size<AvailableSpace>,
 ) -> Result<HashMap<NodeId, BoxLayout>, LayoutError> {
     compute_layout_with_content_extents(font, arena, styles, available).map(|(layouts, _)| layouts)
@@ -597,7 +590,7 @@ type LayoutsAndContentExtents = (HashMap<NodeId, BoxLayout>, HashMap<NodeId, Con
 pub fn compute_layout_with_content_extents(
     font: &mut florui_text::Font,
     arena: &Arena,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     available: Size<AvailableSpace>,
 ) -> Result<LayoutsAndContentExtents, LayoutError> {
     let mut tree: TaffyTree<LeafContext> = TaffyTree::with_capacity(styles.len() + 2);
@@ -658,7 +651,7 @@ pub fn compute_layout_with_content_extents(
 /// the second pass below). `id_of` finds the Taffy node of an arena node.
 fn collect_layouts(
     font: &mut florui_text::Font,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     tree: &TaffyTree<LeafContext>,
     nodes: impl Iterator<Item = (NodeId, taffy::NodeId)>,
     node_count: usize,
@@ -773,7 +766,7 @@ fn collect_layouts(
 fn layout_root_group(
     font: &mut florui_text::Font,
     arena: &Arena,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     roots: &[NodeId],
     available: Size<AvailableSpace>,
     tree: &mut TaffyTree<LeafContext>,
@@ -1065,7 +1058,7 @@ fn compute_with_style_in(
         }
     }
 
-    let mut final_styles = HashMap::with_capacity(base_styles.len());
+    let mut final_styles = StyleMap::with_capacity(base_styles.len());
     for signature in &distinct_signatures {
         let mut disposable_timeline = AnimationTimeline::default();
         let pass_styles = florui_style::compute_with_container_query_signature(
@@ -1385,7 +1378,7 @@ enum BuildStep {
 fn build_node(
     font: &mut florui_text::Font,
     arena: &Arena,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     root: NodeId,
     tree: &mut TaffyTree<LeafContext>,
     taffy_ids: &mut HashMap<NodeId, taffy::NodeId>,
@@ -1811,7 +1804,7 @@ pub fn apply_scroll_offsets(
 pub fn hit_test(
     arena: &Arena,
     layouts: &HashMap<NodeId, BoxLayout>,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     x: f32,
     y: f32,
 ) -> Option<NodeId> {
@@ -1900,7 +1893,7 @@ pub fn hit_test(
 /// `node`'s border box with its `border-radius` applied. Layout runs in
 /// logical pixels, so lengths resolve at scale `1.0`.
 fn border_box_outline(
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     node: NodeId,
     x: f32,
     y: f32,
@@ -1948,7 +1941,7 @@ pub enum SizeCause {
 /// own output.
 pub fn compute_size_causes(
     arena: &Arena,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
 ) -> HashMap<NodeId, SizeCause> {
     let mut font = florui_text::Font::load_embedded();
@@ -2033,7 +2026,7 @@ fn is_row(direction: StyleFlexDirection) -> bool {
 fn flex_main_axis_causes(
     font: &mut florui_text::Font,
     arena: &Arena,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     children: &[NodeId],
     parent_style: &ComputedStyle,
@@ -2177,7 +2170,7 @@ mod tests {
         x: f32,
         y: f32,
     ) -> Option<NodeId> {
-        super::hit_test(arena, layouts, &HashMap::new(), x, y)
+        super::hit_test(arena, layouts, &StyleMap::new(), x, y)
     }
 
     /// The walk [`super::hit_test`] replaced: every node found its own
@@ -2186,7 +2179,7 @@ mod tests {
     fn reference_hit_test(
         arena: &Arena,
         layouts: &HashMap<NodeId, BoxLayout>,
-        styles: &HashMap<NodeId, ComputedStyle>,
+        styles: &StyleMap,
         x: f32,
         y: f32,
     ) -> Option<NodeId> {
@@ -2365,11 +2358,7 @@ mod tests {
     fn layout_with_styles(
         tree: &Element,
         css: &str,
-    ) -> (
-        Arena,
-        HashMap<NodeId, ComputedStyle>,
-        HashMap<NodeId, BoxLayout>,
-    ) {
+    ) -> (Arena, StyleMap, HashMap<NodeId, BoxLayout>) {
         let arena = Arena::build(tree);
         let rules = florui_style::parse_stylesheet(css).unwrap();
         let styles = florui_style::compute(
@@ -4819,11 +4808,7 @@ mod tests {
             tree: &Element,
             css: &str,
             available: Size<AvailableSpace>,
-        ) -> (
-            Arena,
-            HashMap<NodeId, ComputedStyle>,
-            HashMap<NodeId, BoxLayout>,
-        ) {
+        ) -> (Arena, StyleMap, HashMap<NodeId, BoxLayout>) {
             let arena = Arena::build(tree);
             let rules = florui_style::parse_stylesheet(css).unwrap();
             let mut font = florui_text::Font::load_embedded();

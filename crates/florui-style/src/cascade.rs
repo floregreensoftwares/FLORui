@@ -4,13 +4,13 @@
 //! inheritance behind `compute` is Stylo's, in [`crate::stylo`]; this
 //! module owns the public shape, not the resolution logic.
 
-use std::collections::HashMap;
+use crate::style_map::StyleMap;
 
 use crate::color::Rgba;
 use crate::interaction::InteractionState;
 use crate::stylesheet_parse::Rule;
 use crate::stylo;
-use crate::tree::{Arena, NodeId};
+use crate::tree::Arena;
 
 /// One edge's value on each of the four sides of the box, in that order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -891,7 +891,7 @@ pub fn compute(
     state: &InteractionState,
     viewport: Viewport,
     timeline: &mut crate::animation::AnimationTimeline,
-) -> HashMap<NodeId, ComputedStyle> {
+) -> StyleMap {
     stylo::compute(arena, rules, state, viewport, timeline, &[])
 }
 
@@ -911,7 +911,7 @@ pub fn compute_with_container_query_signature(
     viewport: Viewport,
     timeline: &mut crate::animation::AnimationTimeline,
     container_query_signature: &[bool],
-) -> HashMap<NodeId, ComputedStyle> {
+) -> StyleMap {
     stylo::compute(
         arena,
         rules,
@@ -1165,11 +1165,7 @@ mod tests {
     use super::*;
     use crate::stylesheet_parse::parse_stylesheet;
 
-    fn styles(
-        tree: &Element,
-        css: &str,
-        state: &InteractionState,
-    ) -> (Arena, HashMap<NodeId, ComputedStyle>) {
+    fn styles(tree: &Element, css: &str, state: &InteractionState) -> (Arena, StyleMap) {
         let arena = Arena::build(tree);
         let rules = parse_stylesheet(css).unwrap();
         let computed = compute(

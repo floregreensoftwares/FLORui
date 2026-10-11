@@ -46,7 +46,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use florui_reactive::Executor;
-use florui_style::{Arena, FocusPath, NodeId};
+use florui_style::{Arena, FocusPath};
 use taffy::geometry::Size;
 
 /// `<select>`'s own built-in dropdown chevron — see
@@ -214,7 +214,7 @@ impl IconRegistry {
     pub(crate) fn sync_controls(
         &self,
         arena: &Arena,
-        styles: &HashMap<NodeId, florui_style::ComputedStyle>,
+        styles: &florui_style::StyleMap,
         executor: &dyn Executor,
     ) {
         let mut entries = self.entries.borrow_mut();
@@ -646,10 +646,7 @@ mod tests {
         assert_eq!(registry.entries.borrow().len(), 0);
     }
 
-    fn styles_for(
-        arena: &Arena,
-        css: &str,
-    ) -> HashMap<florui_style::NodeId, florui_style::ComputedStyle> {
+    fn styles_for(arena: &Arena, css: &str) -> florui_style::StyleMap {
         let rules = florui_style::parse_stylesheet(css).unwrap();
         florui_style::compute(
             arena,

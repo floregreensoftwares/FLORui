@@ -7,6 +7,7 @@
 //! a selection outline over it. Nothing the observer does changes the
 //! application's state.
 
+use florui_style::StyleMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -16,7 +17,7 @@ use florui_platform::{
     HostObserver, ObservedFrame, OverlayCanvas, RunError, WindowOptions, WindowSpec,
     run_windows_observed,
 };
-use florui_style::{Arena, ComputedStyle, Display, Edges, NodeId, Rgba};
+use florui_style::{Arena, Display, Edges, NodeId, Rgba};
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId};
@@ -91,7 +92,7 @@ fn display_name(display: Display) -> &'static str {
 /// Flattens `arena` pre-order into real [`InspectorNode`]s.
 fn build_inspector_model(
     arena: &Arena,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     selected: Option<NodeId>,
     picking: bool,
@@ -140,7 +141,7 @@ fn format_size_cause(cause: &SizeCause) -> String {
 
 fn push_node(
     arena: &Arena,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     causes: &HashMap<NodeId, SizeCause>,
     id: NodeId,

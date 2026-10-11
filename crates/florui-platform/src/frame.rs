@@ -4,11 +4,12 @@
 //! icons. The desktop host and the headless window build it the same way, so
 //! what a test paints is what a window paints.
 
+use florui_style::StyleMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use florui_layout::BoxLayout;
-use florui_style::{Arena, ComputedStyle, NodeId};
+use florui_style::{Arena, NodeId};
 
 use crate::desktop::{
     TextInputPaintContext, build_control_icon_paint, build_icon_paint, build_image_paint,
@@ -19,7 +20,7 @@ use crate::scroll::ScrollRegistry;
 /// The inputs of [`build_paint_parts`].
 pub(crate) struct PaintSources<'a> {
     pub(crate) arena: &'a Arena,
-    pub(crate) styles: &'a HashMap<NodeId, ComputedStyle>,
+    pub(crate) styles: &'a StyleMap,
     pub(crate) layouts: &'a HashMap<NodeId, BoxLayout>,
     pub(crate) font: &'a mut florui_text::Font,
     pub(crate) scroll_registry: &'a ScrollRegistry,

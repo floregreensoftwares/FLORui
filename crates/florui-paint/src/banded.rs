@@ -12,13 +12,14 @@
 //! [`florui_style::Arena`] that holds them cannot be shared); painting is given
 //! the tree alone, so it cannot reach a handler and nothing here is unsafe.
 
+use florui_style::StyleMap;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Mutex;
 
 use florui_layout::BoxLayout;
-use florui_style::{ComputedStyle, NodeId, Rgba, Tree};
+use florui_style::{NodeId, Rgba, Tree};
 use florui_text::{Font, FontSeed};
 
 use super::incremental::node_inks;
@@ -41,7 +42,7 @@ type Band<'a> = (i32, i32, &'a mut [u8]);
 /// What every band reads.
 struct Shared<'a> {
     arena: &'a Tree,
-    styles: &'a HashMap<NodeId, ComputedStyle>,
+    styles: &'a StyleMap,
     layouts: &'a HashMap<NodeId, BoxLayout>,
     text_inputs: Option<&'a HashMap<NodeId, TextInputPaint>>,
     images: Option<&'a HashMap<NodeId, ImagePaint>>,
@@ -55,7 +56,7 @@ impl<'a> Shared<'a> {
         &self,
     ) -> (
         &'a Tree,
-        &'a HashMap<NodeId, ComputedStyle>,
+        &'a StyleMap,
         &'a HashMap<NodeId, BoxLayout>,
         Option<&'a HashMap<NodeId, TextInputPaint>>,
         Option<&'a HashMap<NodeId, ImagePaint>>,
@@ -110,7 +111,7 @@ pub(crate) fn worth_it(width: u32, height: u32) -> bool {
 /// blurs, refracts, turns or scales, which is sampled between pixels.
 fn filtered_rows(
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     inks: &HashMap<NodeId, Ink>,
     scale_factor: f32,
@@ -171,7 +172,7 @@ pub(crate) fn paint(
     height: u32,
     canvas_color: Rgba,
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
     text_inputs: Option<&HashMap<NodeId, TextInputPaint>>,

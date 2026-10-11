@@ -3,10 +3,11 @@
 //! first, with where each was written when the tree recorded it, so a
 //! difference points at code and not only at a rectangle.
 
+use florui_style::StyleMap;
 use std::collections::HashMap;
 
 use florui_layout::BoxLayout;
-use florui_style::{Arena, ComputedStyle, NodeId};
+use florui_style::{Arena, NodeId};
 
 use crate::engine::box_geometry_of;
 use crate::geometry::BoxGeometryPx;
@@ -29,7 +30,7 @@ pub struct ElementInfo {
 /// (`skip_roots` of them at the top are left out), in document order.
 pub fn describe_elements(
     arena: &Arena,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     skip_roots: usize,
 ) -> Vec<ElementInfo> {

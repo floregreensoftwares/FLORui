@@ -3,13 +3,14 @@
 //! and never hands out anything mutable, so a window behaves the same with or
 //! without an observer.
 
+use florui_style::StyleMap;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use florui_layout::BoxLayout;
-use florui_style::{Arena, ComputedStyle, NodeId};
+use florui_style::{Arena, NodeId};
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId};
@@ -17,7 +18,7 @@ use winit::window::{Window, WindowId};
 /// A window's laid-out tree as of a finished frame, read-only.
 pub struct ObservedFrame<'a> {
     pub arena: &'a Arena,
-    pub styles: &'a HashMap<NodeId, ComputedStyle>,
+    pub styles: &'a StyleMap,
     /// Physical pixels, scroll offsets applied.
     pub layouts: &'a HashMap<NodeId, BoxLayout>,
     /// Each node's box `(x, y, width, height)` in physical pixels, where it is

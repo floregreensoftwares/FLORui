@@ -1,6 +1,7 @@
 //! The 2D affine matrix a node's `transform` resolves to. Painting and hit
 //! testing both read it from here, so a node is hit exactly where it is drawn.
 
+use florui_style::StyleMap;
 use std::collections::HashMap;
 
 use florui_style::{ComputedStyle, NodeId, TransformFunction, Tree};
@@ -148,7 +149,7 @@ pub fn resolve_transform(
 pub fn screen_bounds(
     arena: &Tree,
     layouts: &HashMap<NodeId, BoxLayout>,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     scale_factor: f32,
 ) -> HashMap<NodeId, (f32, f32, f32, f32)> {
     let mut bounds = HashMap::with_capacity(layouts.len());

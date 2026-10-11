@@ -9,24 +9,21 @@
 //!
 //! [`florui-layout`'s own baseline]: https://github.com/floregreensoftwares/florui/blob/grow/main/crates/florui-layout/benches/layout.rs
 
+use florui_style::StyleMap;
 use std::collections::HashMap;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use florui::Element;
 use florui_layout::compute_layout;
 use florui_paint::paint_to_buffer;
-use florui_style::{Arena, ComputedStyle, InteractionState, NodeId, Rgba};
+use florui_style::{Arena, InteractionState, NodeId, Rgba};
 use florui_text::Font;
 use taffy::prelude::*;
 
 fn arena_styles_layouts(
     tree: &Element,
     css: &str,
-) -> (
-    Arena,
-    HashMap<NodeId, ComputedStyle>,
-    HashMap<NodeId, florui_layout::BoxLayout>,
-) {
+) -> (Arena, StyleMap, HashMap<NodeId, florui_layout::BoxLayout>) {
     let arena = Arena::build(tree);
     let rules = florui_style::parse_stylesheet(css).expect("benchmark CSS must be valid");
     let styles = florui_style::compute(

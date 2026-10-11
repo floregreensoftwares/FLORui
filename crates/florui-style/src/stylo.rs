@@ -13,6 +13,7 @@
 //! once every slot has a stable address, so the handle never needs a
 //! second reference back to any shared context.
 
+use crate::style_map::StyleMap;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
@@ -1042,7 +1043,7 @@ pub(crate) fn compute(
     viewport: FlorViewport,
     timeline: &mut AnimationTimeline,
     container_query_signature: &[bool],
-) -> HashMap<NodeId, ComputedStyle> {
+) -> StyleMap {
     style::thread_state::enter(style::thread_state::ThreadState::LAYOUT);
     let result = compute_in_layout_state(
         arena,
@@ -1063,15 +1064,15 @@ fn compute_in_layout_state(
     viewport: FlorViewport,
     timeline: &mut AnimationTimeline,
     container_query_signature: &[bool],
-) -> HashMap<NodeId, ComputedStyle> {
+) -> StyleMap {
     if arena.roots().is_empty() {
-        return HashMap::new();
+        return StyleMap::new();
     }
 
     let (tree, _primary_root) = StyloTree::new(arena, state, timeline);
     // One entry per node: growing a table of styles this big copies every
     // entry it already holds each time it doubles.
-    let mut result = HashMap::with_capacity(tree.order.len());
+    let mut result = StyleMap::with_capacity(tree.order.len());
 
     let prefers_color_scheme = if timeline.prefers_dark_color_scheme() {
         PrefersColorScheme::Dark
@@ -1169,7 +1170,8 @@ fn compute_in_layout_state(
     // shares them, so it is done once per distinct set of values. Every key
     // is an `Arc` still held by its node's `ElementData`, so no address is
     // reused while the map is alive.
-    let mut converted: HashMap<*const ComputedValues, ComputedStyle> = HashMap::new();
+    let mut converted: HashMap<*const ComputedValues, std::sync::Arc<ComputedStyle>> =
+        HashMap::new();
     for id in tree.level_order() {
         let mut context = StyleContext {
             shared: &shared,
@@ -1204,15 +1206,14 @@ fn compute_in_layout_state(
             primary.clone()
         };
 
-        let computed = if has_active_animation && !timeline.should_suppress_animations() {
-            to_computed_style(&final_values)
+        if has_active_animation && !timeline.should_suppress_animations() {
+            result.insert(id, to_computed_style(&final_values));
         } else {
-            converted
+            let shared = converted
                 .entry(&*primary as *const ComputedValues)
-                .or_insert_with(|| to_computed_style(&final_values))
-                .clone()
-        };
-        result.insert(id, computed);
+                .or_insert_with(|| std::sync::Arc::new(to_computed_style(&final_values)));
+            result.insert_shared(id, std::sync::Arc::clone(shared));
+        }
         // `primary` (the raw cascade result), not `final_values` (already
         // spliced with any in-progress transition/animation) -- Stylo's own
         // `update_transitions_for_new_style` compares next frame's `primary`

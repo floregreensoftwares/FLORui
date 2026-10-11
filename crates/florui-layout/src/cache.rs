@@ -1,4 +1,5 @@
 use super::*;
+use florui_style::StyleMap;
 
 /// A Taffy tree kept from one layout to the next, so what did not change is
 /// not laid out again.
@@ -40,7 +41,7 @@ struct StyleMemo {
     state: InteractionState,
     viewport: Viewport,
     settings: (bool, bool, bool),
-    styles: Option<HashMap<NodeId, ComputedStyle>>,
+    styles: Option<StyleMap>,
 }
 
 struct Slot {
@@ -101,7 +102,7 @@ impl LayoutCache {
         state: &InteractionState,
         viewport: Viewport,
         timeline: &mut AnimationTimeline,
-    ) -> (HashMap<NodeId, ComputedStyle>, bool) {
+    ) -> (StyleMap, bool) {
         let shape = arena.style_shape();
         let rules_key = (rules.as_ptr() as usize, rules.len());
         let settings = timeline.settings();
@@ -137,7 +138,7 @@ impl LayoutCache {
         &mut self,
         font: &mut florui_text::Font,
         arena: &Arena,
-        styles: &HashMap<NodeId, ComputedStyle>,
+        styles: &StyleMap,
         available: Size<AvailableSpace>,
     ) -> Result<LayoutsAndContentExtents, LayoutError> {
         if font.generation() != self.font_generation {
@@ -205,7 +206,7 @@ impl LayoutCache {
         group: usize,
         font: &mut florui_text::Font,
         arena: &Arena,
-        styles: &HashMap<NodeId, ComputedStyle>,
+        styles: &StyleMap,
         roots: &[NodeId],
         inline_leaves: &mut Vec<(NodeId, Vec<InlineContentItem>)>,
     ) -> Result<(), taffy::TaffyError> {
@@ -251,7 +252,7 @@ impl LayoutCache {
         &mut self,
         font: &mut florui_text::Font,
         arena: &Arena,
-        styles: &HashMap<NodeId, ComputedStyle>,
+        styles: &StyleMap,
         root: NodeId,
         inline_leaves: &mut Vec<(NodeId, Vec<InlineContentItem>)>,
     ) -> Result<(), taffy::TaffyError> {
@@ -383,7 +384,7 @@ impl LayoutCache {
 fn leaf_context(
     font: &mut florui_text::Font,
     arena: &Arena,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     node: NodeId,
 ) -> Option<LeafContext> {
     let style = styles.get(&node);
@@ -488,7 +489,7 @@ mod tests {
         Element::node("div", vec![("class".into(), "root".into())], children)
     }
 
-    fn styled(arena: &Arena) -> HashMap<NodeId, ComputedStyle> {
+    fn styled(arena: &Arena) -> StyleMap {
         let rules = florui_style::parse_stylesheet(CSS).unwrap();
         florui_style::compute(
             arena,

@@ -9,6 +9,7 @@
 //! scale, a part that is most of the window) it paints whole, so the result is
 //! always the pixels a whole paint gives.
 
+use florui_style::StyleMap;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -33,7 +34,7 @@ pub struct PaintInputs<'a> {
     pub height: u32,
     pub canvas_color: Rgba,
     pub arena: &'a Tree,
-    pub styles: &'a HashMap<NodeId, ComputedStyle>,
+    pub styles: &'a StyleMap,
     /// In painted pixels.
     pub layouts: &'a HashMap<NodeId, BoxLayout>,
     pub scale_factor: f32,
@@ -417,7 +418,7 @@ fn contains(outer: Area, inner: Area) -> bool {
 fn take_notes(
     font: &mut Font,
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
     text_inputs: Option<&HashMap<NodeId, TextInputPaint>>,
@@ -464,7 +465,7 @@ fn take_notes(
 fn group_extent(
     font: &mut Font,
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     top: NodeId,
     scale_factor: f32,
@@ -488,7 +489,7 @@ fn group_extent(
 pub(crate) fn node_inks(
     font: &mut Font,
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
 ) -> HashMap<NodeId, Area> {
@@ -550,7 +551,7 @@ fn repaint_part(
     font: &mut Font,
     canvas_color: Rgba,
     arena: &Tree,
-    styles: &HashMap<NodeId, ComputedStyle>,
+    styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
     scale_factor: f32,
     text_inputs: Option<&HashMap<NodeId, TextInputPaint>>,
