@@ -28,6 +28,8 @@ pub struct LayoutCache {
     epoch: u64,
     /// What the cascade last gave, and what it was given.
     styles: Option<StyleMemo>,
+    /// The tree the cascade walks, kept for as long as the elements are the same.
+    session: florui_style::StyleSession,
 }
 
 /// One set of inputs to the cascade and, once they have come twice in a row,
@@ -82,7 +84,23 @@ impl LayoutCache {
             font_generation: 0,
             epoch: 0,
             styles: None,
+            session: florui_style::StyleSession::new(),
         }
+    }
+
+    /// [`florui_style::compute`] on the tree kept from the last call, for a
+    /// caller that runs the cascade often on the same elements (a state change
+    /// that does not go through [`Self::styles`]).
+    pub fn cascade(
+        &mut self,
+        arena: &Arena,
+        rules: &[Rule],
+        state: &InteractionState,
+        viewport: Viewport,
+        timeline: &mut AnimationTimeline,
+    ) -> StyleMap {
+        self.session
+            .compute(arena, rules, state, viewport, timeline)
     }
 
     /// Forgets the styles the cascade gave, for a caller that changed
@@ -119,7 +137,9 @@ impl LayoutCache {
         {
             return (styles.clone(), false);
         }
-        let styles = florui_style::compute(arena, rules, state, viewport, timeline);
+        let styles = self
+            .session
+            .compute(arena, rules, state, viewport, timeline);
         let keep = seen_before && timeline.is_still();
         self.styles = timeline.is_still().then(|| StyleMemo {
             shape,

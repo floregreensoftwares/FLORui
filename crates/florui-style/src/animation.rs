@@ -55,8 +55,21 @@ struct PathKey {
 /// break two public signatures (`crate::cascade::compute`/
 /// `compute_with_container_query_signature`, and
 /// `florui_layout::compute_with_style`) for no functional gain.
+/// Tells one timeline from another, for what is kept only while the same one
+/// is used (the identities it handed out mean nothing to any other).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct TimelineId(u64);
+
+impl Default for TimelineId {
+    fn default() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        TimelineId(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
 #[derive(Default)]
 pub struct AnimationTimeline {
+    id: TimelineId,
     pub(crate) now: f64,
     interner: HashMap<PathKey, usize>,
     next_id: usize,
@@ -220,6 +233,16 @@ impl AnimationTimeline {
         id
     }
 
+    pub(crate) fn id(&self) -> TimelineId {
+        self.id
+    }
+
+    /// Counts identities as met by this call without looking each one up, for a
+    /// caller that kept the tree they were handed out for.
+    pub(crate) fn touch(&mut self, ids: impl IntoIterator<Item = usize>) {
+        self.touched_this_call.extend(ids);
+    }
+
     pub(crate) fn previous_style(&self, id: usize) -> Option<StyloArc<ComputedValues>> {
         self.previous_styles.get(&id).cloned()
     }
@@ -233,11 +256,12 @@ impl AnimationTimeline {
     /// element leaves the document, not something worth keeping around on
     /// the chance it reappears.
     pub(crate) fn sweep(&mut self) {
-        let touched: std::collections::HashSet<usize> = self.touched_this_call.drain(..).collect();
-        self.previous_styles.retain(|id, _| touched.contains(id));
-        self.sets
-            .sets
-            .write()
-            .retain(|key, _| touched.contains(&key.node.0));
+        let mut touched = vec![false; self.next_id];
+        for id in self.touched_this_call.drain(..) {
+            touched[id] = true;
+        }
+        let met = |id: &usize| touched.get(*id).copied().unwrap_or(false);
+        self.previous_styles.retain(|id, _| met(id));
+        self.sets.sets.write().retain(|key, _| met(&key.node.0));
     }
 }

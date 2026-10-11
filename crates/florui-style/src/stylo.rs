@@ -100,7 +100,7 @@ struct NodeSlot {
     /// node whose `id()` doesn't match its own `has_id` would have its
     /// `#id` rules silently never even considered a candidate.
     id_atom: Option<WeakAtom>,
-    state: ElementState,
+    state: Cell<ElementState>,
     data: AtomicRefCell<ElementData>,
     dirty_descendants: Cell<bool>,
     local_name: BorrowedLocalName,
@@ -111,7 +111,7 @@ struct NodeSlot {
 /// front, so pushing never reallocates and the raw pointers `NodeSlot`s
 /// hold to each other (set in a second pass, once every slot has its
 /// final address) stay valid for the tree's whole lifetime.
-struct StyloTree {
+pub(crate) struct StyloTree {
     slots: Vec<NodeSlot>,
     /// Where each node sits in `slots`, indexed by its `NodeId` (a pre-order
     /// index, so small and dense); `usize::MAX` for an id not in the tree.
@@ -126,12 +126,127 @@ struct StyloTree {
     uses_inline_scroll_behavior: bool,
 }
 
+/// The state flags of node `id`: its markup state (`disabled`, `checked`, ...) read
+/// from `arena`, and its interaction state (hover, focus, form validity, visited)
+/// from `state`.
+fn node_state_of(arena: &Arena, state: &InteractionState, id: NodeId) -> ElementState {
+    let mut node_state = ElementState::empty();
+    if state.is_hovered(id) {
+        node_state |= ElementState::HOVER;
+    }
+    if state.is_focused(id) {
+        node_state |= ElementState::FOCUS;
+    }
+    if state.is_active(id) {
+        node_state |= ElementState::ACTIVE;
+    }
+    if state.is_focus_visible(id) {
+        node_state |= ElementState::FOCUSRING;
+    }
+    // Markup state, not runtime interaction state like hover/
+    // focus above -- read straight from `arena` rather than
+    // threaded through `InteractionState`. Tag-gated to match
+    // `florui_platform::focus::is_focusable`'s own v1 scope:
+    // `disabled` has no wired behavior outside these tags yet, and
+    // leaving `state` untouched for every other tag means neither
+    // :disabled nor :enabled ever matches there either -- the same
+    // as real HTML, where both pseudo-classes only apply to form
+    // controls.
+    if matches!(
+        arena.tag(id),
+        "button" | "select" | "textarea" | "fieldset" | "input"
+    ) {
+        if arena.is_disabled(id) {
+            node_state |= ElementState::DISABLED;
+        } else {
+            node_state |= ElementState::ENABLED;
+        }
+    }
+    // Same markup-state contract as the `<button>` block above,
+    // for `<input type="checkbox"|"radio">` -- plus `:checked`,
+    // which `<button>` has no equivalent of.
+    if arena.tag(id) == "input" && matches!(arena.input_type(id), Some("checkbox") | Some("radio"))
+    {
+        if arena.is_disabled(id) {
+            node_state |= ElementState::DISABLED;
+        } else {
+            node_state |= ElementState::ENABLED;
+        }
+        if arena.is_checked(id) {
+            node_state |= ElementState::CHECKED;
+        }
+        // Real HTML: `indeterminate` only exists on a checkbox,
+        // never a radio.
+        if arena.input_type(id) == Some("checkbox") && arena.is_indeterminate(id) {
+            node_state |= ElementState::INDETERMINATE;
+        }
+    }
+    // Same markup-state contract again, for `<input type="range">`
+    // -- no `:checked`/`:indeterminate` equivalent for a slider.
+    if arena.tag(id) == "input" && arena.input_type(id) == Some("range") {
+        if arena.is_disabled(id) {
+            node_state |= ElementState::DISABLED;
+        } else {
+            node_state |= ElementState::ENABLED;
+        }
+    }
+    if let Some(form) = state.form_state(id) {
+        for (on, flag) in [
+            (form.required, ElementState::REQUIRED),
+            (form.optional, ElementState::OPTIONAL_),
+            (form.valid, ElementState::VALID),
+            (form.invalid, ElementState::INVALID),
+            (form.user_valid, ElementState::USER_VALID),
+            (form.user_invalid, ElementState::USER_INVALID),
+            (form.read_only, ElementState::READONLY),
+            (form.read_write, ElementState::READWRITE),
+            (form.default, ElementState::DEFAULT),
+            (form.in_range, ElementState::INRANGE),
+            (form.out_of_range, ElementState::OUTOFRANGE),
+            (form.placeholder_shown, ElementState::PLACEHOLDER_SHOWN),
+        ] {
+            if on {
+                node_state |= flag;
+            }
+        }
+    }
+    // `:link`/`:visited` for `<a href>` -- exactly one of the two
+    // bits, never both, never neither, matching real Gecko's own
+    // `is_link()` invariant. An `<a>` with no `href` is not a
+    // hyperlink at all (real CSS: neither `:link` nor `:visited`
+    // matches it), so `node_state` is left untouched there, same
+    // as `is_focusable`'s own href gate. Deliberately simpler than
+    // a real browser otherwise: this crate doesn't implement
+    // `is_link()`/`visited_handling()`, or Stylo's dual primary/
+    // visited cascade those exist to keep `:visited` from leaking
+    // into -- `match_non_ts_pseudo_class`'s existing plain
+    // state-bit check (same one `:hover`/`:focus`/`:active`
+    // already use) is already correct here without a special
+    // case, precisely because there's only one cascade pass in
+    // this crate's own usage, so there's no primary/visited split
+    // for a raw bit check to leak between. Real browsers need
+    // that extra machinery to stop `:visited`-authored styles
+    // (layout-affecting properties especially) from being
+    // detectable by a script probing computed styles; florui has
+    // no such script layer for a leak to reach.
+    if arena.tag(id) == "a"
+        && let Some(href) = arena.href(id)
+    {
+        node_state |= if state.is_visited(href) {
+            ElementState::VISITED
+        } else {
+            ElementState::UNVISITED
+        };
+    }
+    node_state
+}
+
 impl StyloTree {
     /// Builds a self-contained copy of every node reachable from `arena`'s
     /// roots, synthesizing a single container root when there is more
     /// than one (a `view!` `Fragment` can produce several) so Stylo
     /// always has exactly one document element to resolve from.
-    fn new(
+    pub(crate) fn new(
         arena: &Arena,
         state: &InteractionState,
         timeline: &mut AnimationTimeline,
@@ -171,115 +286,7 @@ impl StyloTree {
         let mut slots: Vec<NodeSlot> = Vec::with_capacity(order.len());
         let mut stable_ids: Vec<usize> = Vec::with_capacity(order.len());
         for &id in &order {
-            let mut node_state = ElementState::empty();
-            if state.is_hovered(id) {
-                node_state |= ElementState::HOVER;
-            }
-            if state.is_focused(id) {
-                node_state |= ElementState::FOCUS;
-            }
-            if state.is_active(id) {
-                node_state |= ElementState::ACTIVE;
-            }
-            if state.is_focus_visible(id) {
-                node_state |= ElementState::FOCUSRING;
-            }
-            // Markup state, not runtime interaction state like hover/
-            // focus above -- read straight from `arena` rather than
-            // threaded through `InteractionState`. Tag-gated to match
-            // `florui_platform::focus::is_focusable`'s own v1 scope:
-            // `disabled` has no wired behavior outside these tags yet, and
-            // leaving `state` untouched for every other tag means neither
-            // :disabled nor :enabled ever matches there either -- the same
-            // as real HTML, where both pseudo-classes only apply to form
-            // controls.
-            if matches!(
-                arena.tag(id),
-                "button" | "select" | "textarea" | "fieldset" | "input"
-            ) {
-                if arena.is_disabled(id) {
-                    node_state |= ElementState::DISABLED;
-                } else {
-                    node_state |= ElementState::ENABLED;
-                }
-            }
-            // Same markup-state contract as the `<button>` block above,
-            // for `<input type="checkbox"|"radio">` -- plus `:checked`,
-            // which `<button>` has no equivalent of.
-            if arena.tag(id) == "input"
-                && matches!(arena.input_type(id), Some("checkbox") | Some("radio"))
-            {
-                if arena.is_disabled(id) {
-                    node_state |= ElementState::DISABLED;
-                } else {
-                    node_state |= ElementState::ENABLED;
-                }
-                if arena.is_checked(id) {
-                    node_state |= ElementState::CHECKED;
-                }
-                // Real HTML: `indeterminate` only exists on a checkbox,
-                // never a radio.
-                if arena.input_type(id) == Some("checkbox") && arena.is_indeterminate(id) {
-                    node_state |= ElementState::INDETERMINATE;
-                }
-            }
-            // Same markup-state contract again, for `<input type="range">`
-            // -- no `:checked`/`:indeterminate` equivalent for a slider.
-            if arena.tag(id) == "input" && arena.input_type(id) == Some("range") {
-                if arena.is_disabled(id) {
-                    node_state |= ElementState::DISABLED;
-                } else {
-                    node_state |= ElementState::ENABLED;
-                }
-            }
-            if let Some(form) = state.form_state(id) {
-                for (on, flag) in [
-                    (form.required, ElementState::REQUIRED),
-                    (form.optional, ElementState::OPTIONAL_),
-                    (form.valid, ElementState::VALID),
-                    (form.invalid, ElementState::INVALID),
-                    (form.user_valid, ElementState::USER_VALID),
-                    (form.user_invalid, ElementState::USER_INVALID),
-                    (form.read_only, ElementState::READONLY),
-                    (form.read_write, ElementState::READWRITE),
-                    (form.default, ElementState::DEFAULT),
-                    (form.in_range, ElementState::INRANGE),
-                    (form.out_of_range, ElementState::OUTOFRANGE),
-                    (form.placeholder_shown, ElementState::PLACEHOLDER_SHOWN),
-                ] {
-                    if on {
-                        node_state |= flag;
-                    }
-                }
-            }
-            // `:link`/`:visited` for `<a href>` -- exactly one of the two
-            // bits, never both, never neither, matching real Gecko's own
-            // `is_link()` invariant. An `<a>` with no `href` is not a
-            // hyperlink at all (real CSS: neither `:link` nor `:visited`
-            // matches it), so `node_state` is left untouched there, same
-            // as `is_focusable`'s own href gate. Deliberately simpler than
-            // a real browser otherwise: this crate doesn't implement
-            // `is_link()`/`visited_handling()`, or Stylo's dual primary/
-            // visited cascade those exist to keep `:visited` from leaking
-            // into -- `match_non_ts_pseudo_class`'s existing plain
-            // state-bit check (same one `:hover`/`:focus`/`:active`
-            // already use) is already correct here without a special
-            // case, precisely because there's only one cascade pass in
-            // this crate's own usage, so there's no primary/visited split
-            // for a raw bit check to leak between. Real browsers need
-            // that extra machinery to stop `:visited`-authored styles
-            // (layout-affecting properties especially) from being
-            // detectable by a script probing computed styles; florui has
-            // no such script layer for a leak to reach.
-            if arena.tag(id) == "a"
-                && let Some(href) = arena.href(id)
-            {
-                node_state |= if state.is_visited(href) {
-                    ElementState::VISITED
-                } else {
-                    ElementState::UNVISITED
-                };
-            }
+            let node_state = node_state_of(arena, state, id);
             let parent_stable = arena
                 .parent(id)
                 .map(|parent_id| stable_ids[index_of[parent_id]]);
@@ -297,7 +304,7 @@ impl StyloTree {
                 id_attr: arena.id_attr(id).map(str::to_owned),
                 id_atom: arena.id_attr(id).map(WeakAtom::from),
                 style_pdb: arena.style_attr(id).map(parse_inline_style),
-                state: node_state,
+                state: Cell::new(node_state),
                 data: AtomicRefCell::new(ElementData::default()),
                 dirty_descendants: Cell::new(false),
                 local_name: arena.tag(id).into(),
@@ -343,6 +350,23 @@ impl StyloTree {
             },
             primary_root,
         )
+    }
+
+    /// Sets a tree built before to be styled under `state`: each node's state
+    /// flags are read again and what a cascade left in it is cleared. All else a
+    /// node holds comes from the elements, which are the same for as long as the
+    /// tree is kept.
+    pub(crate) fn refresh(&self, arena: &Arena, state: &InteractionState) {
+        for (slot, &id) in self.slots.iter().zip(&self.order) {
+            slot.state.set(node_state_of(arena, state, id));
+            *slot.data.borrow_mut() = ElementData::default();
+            slot.dirty_descendants.set(false);
+        }
+    }
+
+    /// The identity each node has on the animation timeline.
+    pub(crate) fn stable_ids(&self) -> impl Iterator<Item = usize> + '_ {
+        self.slots.iter().map(|slot| slot.stable_id)
     }
 
     fn collect_order(arena: &Arena, id: NodeId, order: &mut Vec<NodeId>) {
@@ -639,7 +663,7 @@ impl<'a> SelectorsElement for StyloNode<'a> {
         // auto-matched by selectors from `state()` — the element is
         // expected to consult its own state against the pseudo-class's
         // flag itself, same as Servo's own TElement impls do.
-        self.0.state.intersects(pseudo_class.state_flag())
+        self.0.state.get().intersects(pseudo_class.state_flag())
     }
 
     fn match_pseudo_element(
@@ -752,7 +776,7 @@ impl<'a> TElement for StyloNode<'a> {
     }
 
     fn state(&self) -> ElementState {
-        self.0.state
+        self.0.state.get()
     }
 
     fn has_part_attr(&self) -> bool {
@@ -1068,8 +1092,18 @@ fn compute_in_layout_state(
     if arena.roots().is_empty() {
         return StyleMap::new();
     }
-
     let (tree, _primary_root) = StyloTree::new(arena, state, timeline);
+    compute_with_tree(&tree, rules, viewport, timeline, container_query_signature)
+}
+
+/// The cascade over a tree already built and set to the state to style it in.
+pub(crate) fn compute_with_tree(
+    tree: &StyloTree,
+    rules: &[Rule],
+    viewport: FlorViewport,
+    timeline: &mut AnimationTimeline,
+    container_query_signature: &[bool],
+) -> StyleMap {
     // One entry per node: growing a table of styles this big copies every
     // entry it already holds each time it doubles.
     let mut result = StyleMap::with_capacity(tree.order.len());

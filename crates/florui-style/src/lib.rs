@@ -45,6 +45,7 @@ mod rounded;
 mod scope_adapter;
 mod scroll_behavior_adapter;
 mod style_map;
+mod style_session;
 mod stylesheet_parse;
 mod stylo;
 mod tree;
@@ -69,6 +70,7 @@ pub use focus::FocusPath;
 pub use interaction::{FormState, InteractionState};
 pub use rounded::RoundedRect;
 pub use style_map::StyleMap;
+pub use style_session::StyleSession;
 pub use stylesheet_parse::{Rule, compile_sources, parse_stylesheet};
 pub use tree::{AccessibleRole, Arena, InlineItem, NodeId, Tree};
 
