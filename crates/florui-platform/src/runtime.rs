@@ -443,7 +443,7 @@ impl UiRuntime {
             self.clock_override
                 .unwrap_or_else(|| self.animation_epoch.elapsed().as_secs_f64()),
         );
-        let restyled = florui_style::compute(
+        let restyled = self.layout_cache.cascade(
             &self.arena,
             &self.rules,
             &self.interaction,
