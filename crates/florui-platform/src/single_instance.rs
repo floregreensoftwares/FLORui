@@ -21,21 +21,24 @@ mod stub {
 
     use crate::activation::ActivationEvent;
 
-    /// `Primary`'s `()` payload stands in for the real build's
-    /// `MutexOwnership` guard, so call sites can bind and hold it
-    /// uniformly across platforms without caring what it actually is.
+    /// Stands in for the real build's `MutexOwnership` guard, so call sites
+    /// can bind and hold it uniformly across platforms.
+    pub(crate) struct NoOwnership;
+
+    #[allow(dead_code)] // Only the Windows implementation builds `Secondary`.
     pub(crate) enum InstanceRole {
-        Primary(()),
+        Primary(NoOwnership),
         Secondary,
     }
 
+    #[allow(dead_code)] // Only the Windows implementation builds `Delivered`.
     pub(crate) enum HandoffOutcome {
         Delivered,
         Failed,
     }
 
     pub(crate) fn acquire(_app_identifier: &str) -> std::io::Result<InstanceRole> {
-        Ok(InstanceRole::Primary(()))
+        Ok(InstanceRole::Primary(NoOwnership))
     }
 
     pub(crate) fn spawn_activation_listener(

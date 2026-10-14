@@ -69,6 +69,7 @@ pub enum SaveFileDialogOutcome {
 /// than panicking or matching everything -- a filter entry with nothing
 /// to filter on is a caller mistake this function doesn't need an opinion
 /// about beyond not crashing.
+#[cfg(any(windows, test))]
 pub(crate) fn filter_patterns(filters: &[FileDialogFilter]) -> Vec<(String, String)> {
     filters
         .iter()
