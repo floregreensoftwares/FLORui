@@ -16,39 +16,23 @@ use std::sync::Arc;
 
 use rustc_hash::{FxHashMap, FxHasher};
 
-use crate::{FontFamily, InlineContent, InlineLayout};
+use crate::{InlineContent, InlineLayout, StyleBits};
 
 /// Bytes kept in total, across both generations.
 pub(crate) const INLINE_MEMO_BYTES: usize = 16 * 1024 * 1024;
 
 /// One item of a stored key, owning its text.
 enum Item {
-    Text {
-        text: Box<str>,
-        font_size: u32,
-        font_weight: u32,
-        family: FontFamily,
-    },
-    Box {
-        id: u64,
-        width: u32,
-        height: u32,
-    },
+    Text { text: Box<str>, style: StyleBits },
+    Box { id: u64, width: u32, height: u32 },
 }
 
 impl Item {
     fn of(item: &InlineContent<'_>) -> Self {
         match *item {
-            InlineContent::Text {
-                text,
-                font_size,
-                font_weight,
-                family,
-            } => Item::Text {
+            InlineContent::Text { text, style } => Item::Text {
                 text: text.into(),
-                font_size: font_size.to_bits(),
-                font_weight: font_weight.to_bits(),
-                family,
+                style: style.bits(),
             },
             InlineContent::Box { id, width, height } => Item::Box {
                 id,
@@ -61,24 +45,12 @@ impl Item {
     fn is(&self, other: &InlineContent<'_>) -> bool {
         match (self, other) {
             (
-                Item::Text {
-                    text,
-                    font_size,
-                    font_weight,
-                    family,
-                },
+                Item::Text { text, style },
                 InlineContent::Text {
                     text: other_text,
-                    font_size: other_size,
-                    font_weight: other_weight,
-                    family: other_family,
+                    style: other_style,
                 },
-            ) => {
-                **text == **other_text
-                    && *font_size == other_size.to_bits()
-                    && *font_weight == other_weight.to_bits()
-                    && family == other_family
-            }
+            ) => **text == **other_text && *style == other_style.bits(),
             (
                 Item::Box { id, width, height },
                 InlineContent::Box {
@@ -138,17 +110,10 @@ fn hash_of(items: &[InlineContent<'_>], width: Option<u32>) -> u64 {
     width.hash(&mut hasher);
     for item in items {
         match *item {
-            InlineContent::Text {
-                text,
-                font_size,
-                font_weight,
-                family,
-            } => {
+            InlineContent::Text { text, style } => {
                 0u8.hash(&mut hasher);
                 text.hash(&mut hasher);
-                font_size.to_bits().hash(&mut hasher);
-                font_weight.to_bits().hash(&mut hasher);
-                (family as u8).hash(&mut hasher);
+                style.bits().hash(&mut hasher);
             }
             InlineContent::Box { id, width, height } => {
                 1u8.hash(&mut hasher);

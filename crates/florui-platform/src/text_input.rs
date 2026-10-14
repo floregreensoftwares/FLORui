@@ -202,7 +202,13 @@ fn mask_advance(
         florui_layout::to_text_font_family(s.font_family)
     });
     let (size, weight) = style.map_or((16.0, 400.0), |s| (s.font_size, s.font_weight));
-    Some(font.measure(family, "\u{2022}", size, weight).width)
+    Some(
+        font.measure(
+            florui_text::TextStyle::new(family, size, weight),
+            "\u{2022}",
+        )
+        .width,
+    )
 }
 
 /// `maxlength` for a text field that enforces it as the user types (every

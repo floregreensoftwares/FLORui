@@ -332,7 +332,7 @@ impl Font {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::FontFamily;
+    use crate::{FontFamily, TextStyle};
 
     #[test]
     fn select_byte_range_restores_an_exact_prior_selection() {
@@ -575,7 +575,7 @@ mod tests {
             400.0,
         );
         let edited_runs = font.shaped_runs_for_edit(&mut editor);
-        let plain = font.shape(FontFamily::SansSerif, "Hi", 16.0, 400.0);
+        let plain = font.shape(TextStyle::new(FontFamily::SansSerif, 16.0, 400.0), "Hi");
         assert_eq!(edited_runs.len(), plain.runs.len());
         assert_eq!(edited_runs[0].glyphs.len(), plain.runs[0].glyphs.len());
     }

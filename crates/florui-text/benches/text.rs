@@ -25,10 +25,20 @@ fn bench_shape(c: &mut Criterion) {
     let mut font = Font::load_embedded();
     let mut group = c.benchmark_group("text/shape");
     group.bench_function("short", |b| {
-        b.iter(|| font.shape(FontFamily::SansSerif, SHORT, 16.0, 400.0));
+        b.iter(|| {
+            font.shape(
+                florui_text::TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
+                SHORT,
+            )
+        });
     });
     group.bench_function("long", |b| {
-        b.iter(|| font.shape(FontFamily::SansSerif, LONG, 16.0, 400.0));
+        b.iter(|| {
+            font.shape(
+                florui_text::TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
+                LONG,
+            )
+        });
     });
     group.finish();
 }
@@ -36,14 +46,25 @@ fn bench_shape(c: &mut Criterion) {
 fn bench_shape_wrapped(c: &mut Criterion) {
     let mut font = Font::load_embedded();
     c.bench_function("text/shape_wrapped_narrow", |b| {
-        b.iter(|| font.shape_wrapped(FontFamily::SansSerif, LONG, 16.0, 400.0, 120.0));
+        b.iter(|| {
+            font.shape_wrapped(
+                florui_text::TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
+                LONG,
+                120.0,
+            )
+        });
     });
 }
 
 fn bench_fallback(c: &mut Criterion) {
     let mut font = Font::load_embedded();
     c.bench_function("text/fallback_emoji", |b| {
-        b.iter(|| font.shape(FontFamily::Monospace, EMOJI, 16.0, 400.0));
+        b.iter(|| {
+            font.shape(
+                florui_text::TextStyle::new(FontFamily::Monospace, 16.0, 400.0),
+                EMOJI,
+            )
+        });
     });
 }
 
