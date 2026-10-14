@@ -8,7 +8,7 @@
 //! one was used. Nothing here touches the network or the file system beyond
 //! checking that a license file exists.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use crate::schema::Spanned;
 
@@ -102,18 +102,18 @@ pub(crate) fn license_problem(value: &str) -> Option<String> {
 }
 
 /// Why `value` cannot name a license file inside the package: it must be a
-/// relative path that does not climb out of it.
+/// relative path that does not climb out of it. Judged on the text with both
+/// separators, so a configuration written on Windows is refused on any host.
 pub(crate) fn license_file_problem(value: &str) -> Option<String> {
-    let path = Path::new(value);
     if value.trim().is_empty() {
         return Some("must not be empty".to_string());
     }
-    let escapes = path.is_absolute()
-        || path.has_root()
-        || path
-            .components()
-            .any(|c| matches!(c, Component::ParentDir | Component::Prefix(_)));
-    escapes.then(|| "must be a relative path inside the package, without \"..\"".to_string())
+    let bytes = value.as_bytes();
+    let drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+    let rooted = value.starts_with(['/', '\\']);
+    let climbs = value.split(['/', '\\']).any(|part| part == "..");
+    (drive || rooted || climbs)
+        .then(|| "must be a relative path inside the package, without \"..\"".to_string())
 }
 
 fn invalid(
@@ -383,12 +383,18 @@ mod tests {
     fn a_license_file_stays_inside_the_package() {
         assert!(license_file_problem("LICENSE-MIT").is_none());
         assert!(license_file_problem("legal/NOTICE.txt").is_none());
+        assert!(license_file_problem("legal\\NOTICE.txt").is_none());
+        assert!(license_file_problem("a..b/LICENSE").is_none());
         for bad in [
             "../LICENSE",
             "a/../../LICENSE",
+            "a\\..\\..\\LICENSE",
             "/etc/passwd",
+            "\\LICENSE",
+            "\\\\server\\share\\LICENSE",
             "",
             "C:\\x\\LICENSE",
+            "c:LICENSE",
         ] {
             assert!(license_file_problem(bad).is_some(), "{bad}");
         }
