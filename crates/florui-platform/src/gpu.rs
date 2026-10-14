@@ -453,7 +453,7 @@ impl GpuPresenter {
     }
 
     /// Destroys the device, as a driver reset would lose it.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "windows"))]
     pub(crate) fn lose_device(&self) {
         self.device.destroy();
     }

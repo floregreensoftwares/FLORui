@@ -90,6 +90,7 @@ use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
+#[cfg(windows)]
 use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{Window, WindowAttributes, WindowId};
 
@@ -228,17 +229,18 @@ impl ApplicationHandler for App {
             .with_title(
                 "gpu_transparency_probe — Space cycles states, watch stdout and this window",
             )
-            .with_transparent(true)
-            // Windows-specific, and separate from `with_transparent`
-            // above: without `WS_EX_NOREDIRECTIONBITMAP`, the window's
-            // own default redirection bitmap stays opaque behind
-            // whatever DirectComposition draws, silently defeating
-            // per-pixel alpha even when the surface itself configures
-            // without error. Missing this exact flag is what made the
-            // very first pass of this probe (`with_transparent(true)`
-            // alone, `Surface::configure` succeeding either way) show
-            // solid color with no desktop showing through.
-            .with_no_redirection_bitmap(true);
+            .with_transparent(true);
+        // Windows-specific, and separate from `with_transparent`
+        // above: without `WS_EX_NOREDIRECTIONBITMAP`, the window's
+        // own default redirection bitmap stays opaque behind
+        // whatever DirectComposition draws, silently defeating
+        // per-pixel alpha even when the surface itself configures
+        // without error. Missing this exact flag is what made the
+        // very first pass of this probe (`with_transparent(true)`
+        // alone, `Surface::configure` succeeding either way) show
+        // solid color with no desktop showing through.
+        #[cfg(windows)]
+        let attrs = attrs.with_no_redirection_bitmap(true);
         let window = Arc::new(
             event_loop
                 .create_window(attrs)

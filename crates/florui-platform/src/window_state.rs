@@ -350,6 +350,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)] // The path comes from `LOCALAPPDATA`, which only Windows sets.
     fn distinct_keys_never_alias_the_same_path() {
         let a = window_state_path("com.floregreen.garden", "main").unwrap();
         let b = window_state_path("com.floregreen.garden", "editor").unwrap();
