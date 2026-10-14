@@ -42,7 +42,7 @@ use std::sync::Arc;
 
 use parley::{
     FontContext, FontData, FontFamily as ParleyFontFamily, FontWeight, InlineBox, InlineBoxKind,
-    LayoutContext, PositionedLayoutItem, StyleProperty,
+    LayoutContext, LineHeight as ParleyLineHeight, PositionedLayoutItem, StyleProperty,
 };
 use peniko::Blob;
 
@@ -67,6 +67,34 @@ pub enum FontFamily {
     Monospace,
 }
 
+/// `line-height` of a run of text: `Normal` is the font's own line height, a
+/// number is a multiple of the font size and a length is in pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum LineHeight {
+    #[default]
+    Normal,
+    Number(f32),
+    Length(f32),
+}
+
+impl LineHeight {
+    fn parley(self) -> Option<ParleyLineHeight> {
+        match self {
+            LineHeight::Normal => None,
+            LineHeight::Number(n) => Some(ParleyLineHeight::FontSizeRelative(n)),
+            LineHeight::Length(px) => Some(ParleyLineHeight::Absolute(px)),
+        }
+    }
+
+    fn bits(self) -> (u8, u32) {
+        match self {
+            LineHeight::Normal => (0, 0),
+            LineHeight::Number(n) => (1, n.to_bits()),
+            LineHeight::Length(px) => (2, px.to_bits()),
+        }
+    }
+}
+
 /// What a run of text is shaped with. Two runs shape alike only when every field
 /// matches bit for bit, which is also what the memos key on.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -74,10 +102,15 @@ pub struct TextStyle {
     pub family: FontFamily,
     pub font_size: f32,
     pub font_weight: f32,
+    pub line_height: LineHeight,
+    /// Added after every character, in pixels.
+    pub letter_spacing: f32,
+    /// Added after every space, in pixels.
+    pub word_spacing: f32,
 }
 
 /// A [`TextStyle`] as the bits the memos compare and hash.
-pub(crate) type StyleBits = (u8, u32, u32);
+pub(crate) type StyleBits = (u8, u32, u32, (u8, u32), u32, u32);
 
 impl TextStyle {
     pub fn new(family: FontFamily, font_size: f32, font_weight: f32) -> Self {
@@ -85,7 +118,21 @@ impl TextStyle {
             family,
             font_size,
             font_weight,
+            line_height: LineHeight::Normal,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
         }
+    }
+
+    pub fn with_line_height(mut self, line_height: LineHeight) -> Self {
+        self.line_height = line_height;
+        self
+    }
+
+    pub fn with_spacing(mut self, letter_spacing: f32, word_spacing: f32) -> Self {
+        self.letter_spacing = letter_spacing;
+        self.word_spacing = word_spacing;
+        self
     }
 
     pub(crate) fn bits(&self) -> StyleBits {
@@ -93,7 +140,21 @@ impl TextStyle {
             self.family as u8,
             self.font_size.to_bits(),
             self.font_weight.to_bits(),
+            self.line_height.bits(),
+            self.letter_spacing.to_bits(),
+            self.word_spacing.to_bits(),
         )
+    }
+
+    /// The Parley properties that differ from Parley's own defaults, so a
+    /// plain style adds nothing to the builder.
+    fn parley_extras(&self) -> [Option<StyleProperty<'static, [u8; 4]>>; 3] {
+        [
+            self.line_height.parley().map(StyleProperty::LineHeight),
+            (self.letter_spacing != 0.0)
+                .then_some(StyleProperty::LetterSpacing(self.letter_spacing)),
+            (self.word_spacing != 0.0).then_some(StyleProperty::WordSpacing(self.word_spacing)),
+        ]
     }
 }
 
@@ -747,6 +808,9 @@ impl Font {
                             )),
                             offset..end,
                         );
+                        for extra in style.parley_extras().into_iter().flatten() {
+                            builder.push(extra, offset..end);
+                        }
                     }
                     offset = end;
                 }
@@ -868,6 +932,9 @@ impl Font {
         builder.push_default(StyleProperty::FontWeight(FontWeight::new(
             style.font_weight,
         )));
+        for extra in style.parley_extras().into_iter().flatten() {
+            builder.push_default(extra);
+        }
         builder.build(text)
     }
 }
@@ -993,19 +1060,25 @@ mod tests {
     fn what_keeps_being_asked_for_survives_while_the_unused_is_dropped() {
         // Two generations of two entries each.
         let mut memo = MetricsMemo::with_capacity(4);
-        memo.insert((0, 0, 0), "hot", None, metrics(1.0));
-        memo.insert((0, 0, 0), "cold", None, metrics(2.0));
-        memo.insert((0, 0, 0), "c", None, metrics(3.0));
+        memo.insert((0, 0, 0, (0, 0), 0, 0), "hot", None, metrics(1.0));
+        memo.insert((0, 0, 0, (0, 0), 0, 0), "cold", None, metrics(2.0));
+        memo.insert((0, 0, 0, (0, 0), 0, 0), "c", None, metrics(3.0));
         // "hot" and "cold" are now the previous generation; asking for "hot"
         // brings it back into the current one.
-        assert_eq!(memo.get((0, 0, 0), "hot", None), Some(metrics(1.0)));
+        assert_eq!(
+            memo.get((0, 0, 0, (0, 0), 0, 0), "hot", None),
+            Some(metrics(1.0))
+        );
 
-        memo.insert((0, 0, 0), "d", None, metrics(4.0));
-        memo.insert((0, 0, 0), "e", None, metrics(5.0));
+        memo.insert((0, 0, 0, (0, 0), 0, 0), "d", None, metrics(4.0));
+        memo.insert((0, 0, 0, (0, 0), 0, 0), "e", None, metrics(5.0));
 
-        assert_eq!(memo.get((0, 0, 0), "hot", None), Some(metrics(1.0)));
+        assert_eq!(
+            memo.get((0, 0, 0, (0, 0), 0, 0), "hot", None),
+            Some(metrics(1.0))
+        );
         assert!(
-            memo.get((0, 0, 0), "cold", None).is_none(),
+            memo.get((0, 0, 0, (0, 0), 0, 0), "cold", None).is_none(),
             "never asked for again"
         );
     }
@@ -1014,7 +1087,12 @@ mod tests {
     fn the_memo_never_holds_more_than_its_capacity() {
         let mut memo = MetricsMemo::with_capacity(10);
         for i in 0..200 {
-            memo.insert((0, 0, 0), &format!("text {i}"), None, metrics(i as f32));
+            memo.insert(
+                (0, 0, 0, (0, 0), 0, 0),
+                &format!("text {i}"),
+                None,
+                metrics(i as f32),
+            );
             assert!(
                 memo.entries() <= 10,
                 "after {i} inserts: {}",
@@ -1026,13 +1104,22 @@ mod tests {
     #[test]
     fn a_promoted_entry_keeps_its_exact_answer_and_width() {
         let mut memo = MetricsMemo::with_capacity(6);
-        memo.insert((0, 0, 0), "wide", Some(40), metrics(7.0));
-        memo.insert((0, 0, 0), "wide", None, metrics(9.0));
-        memo.insert((0, 0, 0), "other", None, metrics(1.0));
+        memo.insert((0, 0, 0, (0, 0), 0, 0), "wide", Some(40), metrics(7.0));
+        memo.insert((0, 0, 0, (0, 0), 0, 0), "wide", None, metrics(9.0));
+        memo.insert((0, 0, 0, (0, 0), 0, 0), "other", None, metrics(1.0));
 
-        assert_eq!(memo.get((0, 0, 0), "wide", Some(40)), Some(metrics(7.0)));
-        assert_eq!(memo.get((0, 0, 0), "wide", None), Some(metrics(9.0)));
-        assert!(memo.get((0, 0, 0), "wide", Some(41)).is_none());
+        assert_eq!(
+            memo.get((0, 0, 0, (0, 0), 0, 0), "wide", Some(40)),
+            Some(metrics(7.0))
+        );
+        assert_eq!(
+            memo.get((0, 0, 0, (0, 0), 0, 0), "wide", None),
+            Some(metrics(9.0))
+        );
+        assert!(
+            memo.get((0, 0, 0, (0, 0), 0, 0), "wide", Some(41))
+                .is_none()
+        );
     }
 
     #[test]
@@ -1322,6 +1409,100 @@ mod tests {
             "the emoji glyph must come from neither embedded font"
         );
         assert_ne!(font_data, EMBEDDED_MONOSPACE_FONT);
+    }
+
+    fn sans(size: f32) -> TextStyle {
+        TextStyle::new(FontFamily::SansSerif, size, 400.0)
+    }
+
+    fn close(a: f32, b: f32) {
+        assert!((a - b).abs() < 0.01, "{a} is not {b}");
+    }
+
+    const PANGRAM: &str = "The quick brown fox jumps over the lazy dog";
+
+    #[test]
+    fn line_height_sets_the_height_of_every_line() {
+        let mut font = Font::load_embedded();
+        let normal = font.measure_wrapped(sans(16.0), PANGRAM, 200.0);
+        let length = font.measure_wrapped(
+            sans(16.0).with_line_height(LineHeight::Length(30.0)),
+            PANGRAM,
+            200.0,
+        );
+        let number = font.measure_wrapped(
+            sans(16.0).with_line_height(LineHeight::Number(2.0)),
+            PANGRAM,
+            200.0,
+        );
+        // Two lines each: 2 x 30 px, and 2 x (2 x the 16 px font size).
+        close(length.height, 60.0);
+        close(number.height, 64.0);
+        assert!(normal.height < 50.0, "normal is the font's own height");
+        close(
+            font.measure(sans(16.0).with_line_height(LineHeight::Length(30.0)), "Hi")
+                .height,
+            30.0,
+        );
+        // The extra space is split above and below, so the baseline moves down
+        // but stays inside the line.
+        assert!(length.baseline > normal.baseline && length.baseline < 30.0);
+    }
+
+    #[test]
+    fn letter_and_word_spacing_widen_by_the_exact_amount() {
+        let mut font = Font::load_embedded();
+        let text = "Spaced out text";
+        let plain = font.measure(sans(16.0), text).width;
+        let letters = font.measure(sans(16.0).with_spacing(3.0, 0.0), text).width;
+        close(letters - plain, 3.0 * text.chars().count() as f32);
+
+        let words_text = "a b c d e";
+        let plain = font.measure(sans(16.0), words_text).width;
+        let words = font
+            .measure(sans(16.0).with_spacing(0.0, 14.0), words_text)
+            .width;
+        close(words - plain, 14.0 * 4.0);
+    }
+
+    #[test]
+    fn measuring_and_shaping_agree_on_a_styled_run() {
+        let mut font = Font::load_embedded();
+        let style = sans(16.0)
+            .with_line_height(LineHeight::Length(30.0))
+            .with_spacing(1.5, 4.0);
+        let measured = font.measure_wrapped(style, PANGRAM, 160.0);
+        let shaped = font.shape_wrapped(style, PANGRAM, 160.0);
+        close(measured.width, shaped.width);
+        close(measured.height, shaped.height);
+        let inline = font.shape_inline(
+            &[InlineContent::Text {
+                text: PANGRAM,
+                style,
+            }],
+            Some(160.0),
+        );
+        close(measured.width, inline.width);
+        close(measured.height, inline.height);
+        close(measured.baseline, inline.baseline);
+    }
+
+    #[test]
+    fn the_metrics_memo_tells_styles_that_differ_only_in_spacing_apart() {
+        let mut font = Font::load_embedded();
+        let ask = |font: &mut Font, style: TextStyle| {
+            font.measure_memoized(&mut None, style, PANGRAM, Some(200.0))
+        };
+        let tall = sans(16.0).with_line_height(LineHeight::Length(30.0));
+        let spaced = sans(16.0).with_spacing(2.0, 0.0);
+        let plain = ask(&mut font, sans(16.0));
+        let tall_metrics = ask(&mut font, tall);
+        let spaced_metrics = ask(&mut font, spaced);
+        assert_ne!(plain.height, tall_metrics.height);
+        assert_ne!(plain.width, spaced_metrics.width);
+        assert_eq!(font.metrics_memo.entries(), 3);
+        assert_eq!(ask(&mut font, tall), tall_metrics, "a repeat is a hit");
+        assert_eq!(font.metrics_memo.entries(), 3);
     }
 
     #[test]
@@ -1770,6 +1951,21 @@ mod tests {
         font.shape_inline_memoized(&mixed(15.0, 400.0, " tail"), Some(100.0));
         font.shape_inline_memoized(&mixed(14.0, 700.0, " tail"), Some(100.0));
         font.shape_inline_memoized(&mixed(14.0, 400.0, " tale"), Some(100.0));
+        for styled in [
+            TextStyle::new(FontFamily::SansSerif, 14.0, 400.0)
+                .with_line_height(LineHeight::Length(30.0)),
+            TextStyle::new(FontFamily::SansSerif, 14.0, 400.0)
+                .with_line_height(LineHeight::Number(2.0)),
+            TextStyle::new(FontFamily::SansSerif, 14.0, 400.0).with_spacing(2.0, 0.0),
+            TextStyle::new(FontFamily::SansSerif, 14.0, 400.0).with_spacing(0.0, 6.0),
+        ] {
+            let mut items = base;
+            items[2] = InlineContent::Text {
+                text: " tail",
+                style: styled,
+            };
+            font.shape_inline_memoized(&items, Some(100.0));
+        }
         font.shape_inline_memoized(&base[..2], Some(100.0));
         font.shape_inline_memoized(&base, None);
         let mut boxed = base.to_vec();
@@ -1786,8 +1982,8 @@ mod tests {
             height: 12.0,
         };
         font.shape_inline_memoized(&taller, Some(100.0));
-        assert_eq!(font.inline_memo.misses, 9);
-        assert_eq!(font.inline_memo.entries(), 9);
+        assert_eq!(font.inline_memo.misses, 13);
+        assert_eq!(font.inline_memo.entries(), 13);
     }
 
     #[test]
