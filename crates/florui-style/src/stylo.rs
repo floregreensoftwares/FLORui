@@ -1810,6 +1810,9 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         },
         font_size: font.font_size.computed_size.0.px(),
         font_weight: font.font_weight.value(),
+        line_height: to_line_height(&font.line_height),
+        letter_spacing: text.letter_spacing.0.to_length().map_or(0.0, |l| l.px()),
+        word_spacing: text.word_spacing.to_length().map_or(0.0, |l| l.px()),
         display: to_display(values.get_box().display),
         flex_direction: to_flex_direction(position.flex_direction),
         flex_wrap: to_flex_wrap(position.flex_wrap),
@@ -3013,6 +3016,15 @@ fn to_min_size(
     match value {
         GenericSize::LengthPercentage(lp) => Some(to_length_percentage(&lp.0)),
         _ => None,
+    }
+}
+
+fn to_line_height(value: &style::values::computed::font::LineHeight) -> crate::LineHeight {
+    use style::values::computed::font::LineHeight as Stylo;
+    match value {
+        Stylo::Number(number) => crate::LineHeight::Number(number.0),
+        Stylo::Length(length) => crate::LineHeight::Length(length.0.px()),
+        _ => crate::LineHeight::Normal,
     }
 }
 
