@@ -3,15 +3,23 @@
 //! forget them again. See [`crate::registration`] for what is written and the
 //! rules it follows; nothing else in this CLI ever changes an association.
 
-use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
+#[cfg(windows)]
 use florui_config::{CargoProjectFacts, EnvironmentSelection, ResolvedConfig, Target};
-use florui_devtools::diagnostics::{dim_text, failure, success};
+use florui_devtools::diagnostics::failure;
+#[cfg(windows)]
+use florui_devtools::diagnostics::{dim_text, success};
+#[cfg(windows)]
 use serde_json::{Value, json};
 
+#[cfg(windows)]
 use crate::registration::{self, Association, Declaration, Registry};
 
+#[cfg_attr(not(windows), allow(dead_code))] // Only the Windows command reads the fields.
 pub struct Options {
     pub package: Option<String>,
     pub environment: Option<String>,
@@ -26,6 +34,7 @@ pub struct Options {
 
 /// The project in the current directory, resolved for the selected
 /// environment (`production` unless one is named).
+#[cfg(windows)]
 pub(crate) fn load_project(
     package: Option<&str>,
     environment: Option<&str>,
@@ -44,6 +53,7 @@ pub(crate) fn load_project(
 }
 
 /// What the configuration asks to be registered, or why it cannot be.
+#[cfg(windows)]
 pub(crate) fn declaration_from(config: &ResolvedConfig) -> Result<Declaration, String> {
     let app = &config.app;
     let identifier = app.identifier.clone().ok_or_else(|| {
@@ -70,6 +80,7 @@ pub(crate) fn declaration_from(config: &ResolvedConfig) -> Result<Declaration, S
 
 /// The staged executable to register: named by the build's report, and only
 /// if it is still the file the build wrote.
+#[cfg(windows)]
 fn staged_executable(
     facts: &CargoProjectFacts,
     artifacts: Option<&Path>,
@@ -176,6 +187,7 @@ pub fn unregister(package: Option<String>, environment: Option<String>, json: bo
     )
 }
 
+#[cfg(windows)]
 pub(crate) fn register_in(options: &Options, registry: &mut dyn Registry) -> ExitCode {
     let (facts, config) =
         match load_project(options.package.as_deref(), options.environment.as_deref()) {
@@ -245,6 +257,7 @@ pub(crate) fn register_in(options: &Options, registry: &mut dyn Registry) -> Exi
     }
 }
 
+#[cfg(windows)]
 pub(crate) fn unregister_in(
     package: Option<&str>,
     environment: Option<&str>,
@@ -289,6 +302,7 @@ pub(crate) fn unregister_in(
     ExitCode::SUCCESS
 }
 
+#[cfg(windows)]
 fn report(
     as_json: bool,
     outcome: &str,
