@@ -2690,10 +2690,12 @@ mod tests {
     }
 
     /// Records what the host offers an observer.
+    #[cfg(target_os = "windows")]
     struct Recorder {
         log: Rc<RefCell<Vec<String>>>,
     }
 
+    #[cfg(target_os = "windows")]
     impl HostObserver for Recorder {
         fn window_opened(&mut self, _: &ActiveEventLoop, _: &Arc<Window>) {
             self.log.borrow_mut().push("opened".to_string());
@@ -2714,6 +2716,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "windows")]
     #[ignore = "needs a real Windows session: cargo test -p florui-platform -- --ignored"]
     fn an_observer_sees_the_first_frame_then_the_window_and_a_canvas_of_the_right_size() {
         crate::test_event_loop::on_event_loop(|event_loop| {
