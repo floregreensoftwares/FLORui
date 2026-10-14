@@ -64,6 +64,7 @@ pub enum ContextMenuOutcome {
 /// text render right-aligned; no custom layout/measuring needed. Pure
 /// string building, kept separate from the real menu's HMENU/wide-string
 /// plumbing so it's testable without any real OS type.
+#[cfg(any(windows, test))]
 pub(crate) fn menu_label(label: &str, shortcut: Option<&str>) -> String {
     match shortcut {
         Some(shortcut) => format!("{label}\t{shortcut}"),

@@ -79,6 +79,7 @@ pub(crate) struct ScreenRect {
 }
 
 impl ScreenRect {
+    #[cfg(windows)]
     pub(crate) fn contains(&self, x: i32, y: i32) -> bool {
         x >= self.left && x < self.right && y >= self.top && y < self.bottom
     }
@@ -174,6 +175,7 @@ impl DragAcceptPolicy {
         *self.0.borrow_mut() = None;
     }
 
+    #[cfg(any(windows, test))]
     fn evaluate(&self, payload: &DragPayload) -> bool {
         match self.0.borrow().as_ref() {
             Some(policy) => policy(payload),
@@ -199,6 +201,7 @@ impl DragEventHandler {
         *self.0.borrow_mut() = None;
     }
 
+    #[cfg(any(windows, test))]
     fn dispatch(&self, event: DragEvent) {
         if let Some(handler) = self.0.borrow().as_ref() {
             handler(event);
@@ -568,10 +571,12 @@ impl WindowControls {
         self.drag_event_handler.clear();
     }
 
+    #[cfg(windows)]
     pub(crate) fn evaluate_drag_accept(&self, payload: &DragPayload) -> bool {
         self.drag_accept_policy.evaluate(payload)
     }
 
+    #[cfg(windows)]
     pub(crate) fn dispatch_drag_event(&self, event: DragEvent) {
         self.drag_event_handler.dispatch(event);
     }

@@ -90,6 +90,7 @@ pub fn request_default_handler(
 }
 
 /// The settings page that lists `application_name`'s defaults.
+#[cfg(any(windows, test))]
 pub(crate) fn settings_uri(application_name: &str) -> String {
     let mut encoded = String::new();
     for byte in application_name.bytes() {

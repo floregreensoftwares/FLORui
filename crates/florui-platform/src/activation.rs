@@ -125,6 +125,7 @@ fn matches_known_extension(arg: &str, file_extensions: &[String]) -> bool {
 /// looks like -- reverse-DNS-style, see `florui-config`'s own schema) so
 /// a stray character in a user-supplied identifier can never produce an
 /// invalid or surprising object name.
+#[cfg(any(windows, test))]
 fn sanitize_identifier(app_identifier: &str) -> String {
     app_identifier
         .chars()
@@ -146,6 +147,7 @@ fn sanitize_identifier(app_identifier: &str) -> String {
 /// `window_state.rs` documents for `LOCALAPPDATA`. Distinct dev/production
 /// identifiers (already how `WindowPersistence` avoids collisions) produce
 /// distinct names for free.
+#[cfg(any(windows, test))]
 pub(crate) fn mutex_name(app_identifier: &str) -> String {
     format!(
         "Local\\florui-single-instance-{}",
@@ -155,6 +157,7 @@ pub(crate) fn mutex_name(app_identifier: &str) -> String {
 
 /// Named pipes resolve through the same per-session object namespace as a
 /// named mutex, so this needs no separate session scoping either.
+#[cfg(any(windows, test))]
 pub(crate) fn pipe_name(app_identifier: &str) -> String {
     format!(
         "\\\\.\\pipe\\florui-single-instance-{}",
