@@ -440,11 +440,7 @@ fn leaf_context(
     }
     Some(LeafContext::Text(TextContext {
         text: text.to_string(),
-        font_size: style.map_or(16.0, |s| s.font_size),
-        font_weight: style.map_or(400.0, |s| s.font_weight),
-        font_family: style.map_or(florui_text::FontFamily::SansSerif, |s| {
-            to_text_font_family(s.font_family)
-        }),
+        style: style.map_or_else(default_text_style, text_style_of),
     }))
 }
 

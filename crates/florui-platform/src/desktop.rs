@@ -707,10 +707,18 @@ pub(crate) fn build_text_input_paint(
                 });
                 if arena.tag(node) == "textarea" {
                     let width = registry.viewport(id).0.max(1.0);
-                    font.shape_wrapped(family, text, font_size, font_weight, width)
-                        .runs
+                    font.shape_wrapped(
+                        florui_text::TextStyle::new(family, font_size, font_weight),
+                        text,
+                        width,
+                    )
+                    .runs
                 } else {
-                    font.shape(family, text, font_size, font_weight).runs
+                    font.shape(
+                        florui_text::TextStyle::new(family, font_size, font_weight),
+                        text,
+                    )
+                    .runs
                 }
             });
         let (scrollbar, resizer) = if arena.tag(node) == "textarea" {
@@ -982,7 +990,10 @@ fn masked_glyphs(
     font_weight: f32,
 ) -> (Vec<florui_text::ShapedRun>, Vec<f32>) {
     let probe_text = "\u{2022}".repeat(char_count + 1);
-    let mut shaped = font.shape(family, &probe_text, font_size, font_weight);
+    let mut shaped = font.shape(
+        florui_text::TextStyle::new(family, font_size, font_weight),
+        &probe_text,
+    );
     let positions: Vec<f32> = shaped
         .runs
         .iter()

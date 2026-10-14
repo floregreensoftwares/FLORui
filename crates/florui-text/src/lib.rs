@@ -67,6 +67,36 @@ pub enum FontFamily {
     Monospace,
 }
 
+/// What a run of text is shaped with. Two runs shape alike only when every field
+/// matches bit for bit, which is also what the memos key on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextStyle {
+    pub family: FontFamily,
+    pub font_size: f32,
+    pub font_weight: f32,
+}
+
+/// A [`TextStyle`] as the bits the memos compare and hash.
+pub(crate) type StyleBits = (u8, u32, u32);
+
+impl TextStyle {
+    pub fn new(family: FontFamily, font_size: f32, font_weight: f32) -> Self {
+        Self {
+            family,
+            font_size,
+            font_weight,
+        }
+    }
+
+    pub(crate) fn bits(&self) -> StyleBits {
+        (
+            self.family as u8,
+            self.font_size.to_bits(),
+            self.font_weight.to_bits(),
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextMetrics {
     /// The widest line's width — the whole (unwrapped) text's width for
@@ -130,17 +160,8 @@ pub struct ShapedText {
 /// [`Font::shape_inline`]'s own doc for why).
 #[derive(Debug, Clone, Copy)]
 pub enum InlineContent<'a> {
-    Text {
-        text: &'a str,
-        font_size: f32,
-        font_weight: f32,
-        family: FontFamily,
-    },
-    Box {
-        id: u64,
-        width: f32,
-        height: f32,
-    },
+    Text { text: &'a str, style: TextStyle },
+    Box { id: u64, width: f32, height: f32 },
 }
 
 /// Where [`Font::shape_inline`] placed one [`InlineContent::Box`] item,
@@ -196,8 +217,7 @@ impl std::error::Error for TextError {}
 /// back into [`Font::measure_cached`].
 pub struct CachedLayout(parley::Layout<[u8; 4]>);
 
-/// Family, font size bits and font weight bits.
-type MemoStyle = (u8, u32, u32);
+type MemoStyle = StyleBits;
 
 /// A wrap width (bits, `None` for unwrapped) and what it measured.
 type MemoWidth = (Option<u32>, TextMetrics);
@@ -418,33 +438,20 @@ impl Font {
         }
     }
 
-    /// Measures `text` in `family` at `font_size`/`font_weight`, as if
-    /// nothing constrained its width: no wrapping, a single line.
-    pub fn measure(
-        &mut self,
-        family: FontFamily,
-        text: &str,
-        font_size: f32,
-        font_weight: f32,
-    ) -> TextMetrics {
-        Self::metrics_of(self.layout_unwrapped(family, text, font_size, font_weight))
+    /// Measures `text` in `style`, as if nothing constrained its width: no
+    /// wrapping, a single line.
+    pub fn measure(&mut self, style: TextStyle, text: &str) -> TextMetrics {
+        Self::metrics_of(self.layout_unwrapped(style, text))
     }
 
-    /// Measures `text` in `family` at `font_size`/`font_weight`, wrapping
+    /// Measures `text` in `style`, wrapping
     /// at `max_width` — real multi-line layout. A single word wider than
     /// `max_width` still gets its own (overflowing) line rather than
     /// being broken mid-word or bleeding onto an adjacent line — Parley's
     /// own wrapping behavior, matching real CSS's default
     /// `overflow-wrap: normal`.
-    pub fn measure_wrapped(
-        &mut self,
-        family: FontFamily,
-        text: &str,
-        font_size: f32,
-        font_weight: f32,
-        max_width: f32,
-    ) -> TextMetrics {
-        Self::metrics_of(self.layout_wrapped(family, text, font_size, font_weight, max_width))
+    pub fn measure_wrapped(&mut self, style: TextStyle, text: &str, max_width: f32) -> TextMetrics {
+        Self::metrics_of(self.layout_wrapped(style, text, max_width))
     }
 
     /// Same measurement as [`Self::measure`] (`max_width: None`) or
@@ -469,10 +476,8 @@ impl Font {
     pub fn measure_cached(
         &mut self,
         cache: &mut Option<CachedLayout>,
-        family: FontFamily,
+        style: TextStyle,
         text: &str,
-        font_size: f32,
-        font_weight: f32,
         max_width: Option<f32>,
     ) -> TextMetrics {
         if text.is_empty() {
@@ -484,12 +489,7 @@ impl Font {
             };
         }
         if cache.is_none() {
-            *cache = Some(CachedLayout(self.build_unbroken(
-                family,
-                text,
-                font_size,
-                font_weight,
-            )));
+            *cache = Some(CachedLayout(self.build_unbroken(style, text)));
         }
         let layout = &mut cache
             .as_mut()
@@ -505,13 +505,11 @@ impl Font {
     pub fn measure_memoized(
         &mut self,
         cache: &mut Option<CachedLayout>,
-        family: FontFamily,
+        style: TextStyle,
         text: &str,
-        font_size: f32,
-        font_weight: f32,
         max_width: Option<f32>,
     ) -> TextMetrics {
-        self.memoized_metrics(cache, family, text, font_size, font_weight, max_width, true)
+        self.memoized_metrics(cache, style, text, max_width, true)
     }
 
     /// [`Self::measure_memoized`] for a caller asking how big text is rather
@@ -519,37 +517,24 @@ impl Font {
     /// profiler's text counters to the layout's own lookups.
     pub fn probe_memoized(
         &mut self,
-        family: FontFamily,
+        style: TextStyle,
         text: &str,
-        font_size: f32,
-        font_weight: f32,
         max_width: Option<f32>,
     ) -> TextMetrics {
-        self.memoized_metrics(
-            &mut None,
-            family,
-            text,
-            font_size,
-            font_weight,
-            max_width,
-            false,
-        )
+        self.memoized_metrics(&mut None, style, text, max_width, false)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn memoized_metrics(
         &mut self,
         cache: &mut Option<CachedLayout>,
-        family: FontFamily,
+        style: TextStyle,
         text: &str,
-        font_size: f32,
-        font_weight: f32,
         max_width: Option<f32>,
         counted: bool,
     ) -> TextMetrics {
-        let style = (family as u8, font_size.to_bits(), font_weight.to_bits());
+        let key = style.bits();
         let width = max_width.map(f32::to_bits);
-        if let Some(metrics) = self.metrics_memo.get(style, text, width) {
+        if let Some(metrics) = self.metrics_memo.get(key, text, width) {
             if counted {
                 florui_profile::count(florui_profile::Counter::TextMemoHits, 1);
             }
@@ -558,14 +543,14 @@ impl Font {
         if counted {
             florui_profile::count(florui_profile::Counter::TextMemoMisses, 1);
         }
-        let metrics = self.measure_cached(cache, family, text, font_size, font_weight, max_width);
+        let metrics = self.measure_cached(cache, style, text, max_width);
         #[cfg(test)]
         {
             self.metrics_memo.misses += 1;
         }
         // Empty text measures to zero without shaping; not worth an entry.
         if !text.is_empty() {
-            self.metrics_memo.insert(style, text, width, metrics);
+            self.metrics_memo.insert(key, text, width, metrics);
         }
         metrics
     }
@@ -598,36 +583,23 @@ impl Font {
         }
     }
 
-    /// Shapes `text` in `family` at `font_size`/`font_weight` into
+    /// Shapes `text` in `style` into
     /// paintable glyphs — same unwrapped, single-line layout as
     /// [`Self::measure`], but exposing glyph ids and pen positions instead
     /// of just overall width/height.
-    pub fn shape(
-        &mut self,
-        family: FontFamily,
-        text: &str,
-        font_size: f32,
-        font_weight: f32,
-    ) -> ShapedText {
-        Self::shaped_text_of(self.layout_unwrapped(family, text, font_size, font_weight))
+    pub fn shape(&mut self, style: TextStyle, text: &str) -> ShapedText {
+        Self::shaped_text_of(self.layout_unwrapped(style, text))
     }
 
-    /// Shapes `text` in `family` at `font_size`/`font_weight` into
+    /// Shapes `text` in `style` into
     /// paintable glyphs, wrapped at `max_width` — same wrapping behavior
     /// as [`Self::measure_wrapped`]. Every glyph's `x`/`y` stays absolute
     /// within the whole shaped block (not line-relative), so a caller
     /// paints this exactly like an unwrapped [`Self::shape`] result —
     /// later lines simply carry larger `y` values, with no separate
     /// per-line structure to unpack.
-    pub fn shape_wrapped(
-        &mut self,
-        family: FontFamily,
-        text: &str,
-        font_size: f32,
-        font_weight: f32,
-        max_width: f32,
-    ) -> ShapedText {
-        Self::shaped_text_of(self.layout_wrapped(family, text, font_size, font_weight, max_width))
+    pub fn shape_wrapped(&mut self, style: TextStyle, text: &str, max_width: f32) -> ShapedText {
+        Self::shaped_text_of(self.layout_wrapped(style, text, max_width))
     }
 
     fn shaped_text_of(layout: Option<parley::Layout<[u8; 4]>>) -> ShapedText {
@@ -759,16 +731,14 @@ impl Font {
             match item {
                 InlineContent::Text {
                     text: run_text,
-                    font_size,
-                    font_weight,
-                    family,
+                    style,
                 } => {
                     let end = offset + run_text.len();
                     if !run_text.is_empty() {
-                        let family_name = family_name(*family);
-                        builder.push(StyleProperty::FontSize(*font_size), offset..end);
+                        let family_name = family_name(style.family);
+                        builder.push(StyleProperty::FontSize(style.font_size), offset..end);
                         builder.push(
-                            StyleProperty::FontWeight(FontWeight::new(*font_weight)),
+                            StyleProperty::FontWeight(FontWeight::new(style.font_weight)),
                             offset..end,
                         );
                         builder.push(
@@ -845,12 +815,10 @@ impl Font {
     /// unwrapped line.
     fn layout_unwrapped(
         &mut self,
-        family: FontFamily,
+        style: TextStyle,
         text: &str,
-        font_size: f32,
-        font_weight: f32,
     ) -> Option<parley::Layout<[u8; 4]>> {
-        self.build_layout(family, text, font_size, font_weight, None)
+        self.build_layout(style, text, None)
     }
 
     /// Builds and line-breaks a Parley layout for `text` in `family` at
@@ -860,27 +828,23 @@ impl Font {
     /// lay out as one zero-width line with a nonzero line height.
     fn layout_wrapped(
         &mut self,
-        family: FontFamily,
+        style: TextStyle,
         text: &str,
-        font_size: f32,
-        font_weight: f32,
         max_width: f32,
     ) -> Option<parley::Layout<[u8; 4]>> {
-        self.build_layout(family, text, font_size, font_weight, Some(max_width))
+        self.build_layout(style, text, Some(max_width))
     }
 
     fn build_layout(
         &mut self,
-        family: FontFamily,
+        style: TextStyle,
         text: &str,
-        font_size: f32,
-        font_weight: f32,
         max_width: Option<f32>,
     ) -> Option<parley::Layout<[u8; 4]>> {
         if text.is_empty() {
             return None;
         }
-        let mut layout = self.build_unbroken(family, text, font_size, font_weight);
+        let mut layout = self.build_unbroken(style, text);
         layout.break_all_lines(max_width);
         Some(layout)
     }
@@ -892,22 +856,18 @@ impl Font {
     /// instead of redoing this). Callers with non-empty `text` only —
     /// unlike [`Self::build_layout`], this has nothing sensible to return
     /// for an empty string, so callers must check first.
-    fn build_unbroken(
-        &mut self,
-        family: FontFamily,
-        text: &str,
-        font_size: f32,
-        font_weight: f32,
-    ) -> parley::Layout<[u8; 4]> {
-        let family_name = self.family_name(family).to_owned();
+    fn build_unbroken(&mut self, style: TextStyle, text: &str) -> parley::Layout<[u8; 4]> {
+        let family_name = self.family_name(style.family).to_owned();
         let mut builder = self
             .layout_cx
             .ranged_builder(&mut self.font_cx, text, 1.0, true);
-        builder.push_default(StyleProperty::FontSize(font_size));
+        builder.push_default(StyleProperty::FontSize(style.font_size));
         builder.push_default(StyleProperty::FontFamily(ParleyFontFamily::named(
             family_name.as_str(),
         )));
-        builder.push_default(StyleProperty::FontWeight(FontWeight::new(font_weight)));
+        builder.push_default(StyleProperty::FontWeight(FontWeight::new(
+            style.font_weight,
+        )));
         builder.build(text)
     }
 }
@@ -967,8 +927,18 @@ mod tests {
         let mut reference = Font::load_embedded();
         for round in 0..3 {
             for (family, text, size, weight, width) in MEMO_CASES {
-                let memoized = font.measure_memoized(&mut None, family, text, size, weight, width);
-                let fresh = reference.measure_cached(&mut None, family, text, size, weight, width);
+                let memoized = font.measure_memoized(
+                    &mut None,
+                    TextStyle::new(family, size, weight),
+                    text,
+                    width,
+                );
+                let fresh = reference.measure_cached(
+                    &mut None,
+                    TextStyle::new(family, size, weight),
+                    text,
+                    width,
+                );
                 assert_eq!(memoized, fresh, "{text:?} at {width:?}, round {round}");
             }
             assert_eq!(
@@ -982,8 +952,12 @@ mod tests {
     #[test]
     fn empty_text_measures_to_zero_and_is_not_kept() {
         let mut font = Font::load_embedded();
-        let metrics =
-            font.measure_memoized(&mut None, FontFamily::SansSerif, "", 16.0, 400.0, None);
+        let metrics = font.measure_memoized(
+            &mut None,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
+            "",
+            None,
+        );
         assert_eq!(
             (metrics.width, metrics.height, metrics.baseline),
             (0.0, 0.0, 0.0)
@@ -994,7 +968,12 @@ mod tests {
     #[test]
     fn registering_a_font_empties_the_memo() {
         let mut font = Font::load_embedded();
-        font.measure_memoized(&mut None, FontFamily::SansSerif, "kept", 16.0, 400.0, None);
+        font.measure_memoized(
+            &mut None,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
+            "kept",
+            None,
+        );
         assert_eq!(font.metrics_memo.entries(), 1);
 
         font.register(EMBEDDED_MONOSPACE_FONT).unwrap();
@@ -1069,8 +1048,8 @@ mod tests {
     #[test]
     fn measures_a_monospace_run_proportionally_to_its_length() {
         let mut font = Font::load_embedded();
-        let one = font.measure(FontFamily::Monospace, "A", 16.0, 400.0);
-        let five = font.measure(FontFamily::Monospace, "AAAAA", 16.0, 400.0);
+        let one = font.measure(TextStyle::new(FontFamily::Monospace, 16.0, 400.0), "A");
+        let five = font.measure(TextStyle::new(FontFamily::Monospace, 16.0, 400.0), "AAAAA");
         // Every glyph in a monospace font has the same advance, so five
         // characters must measure to exactly five times one character's
         // width — this would not hold for a proportional font.
@@ -1088,8 +1067,8 @@ mod tests {
         // would be a coincidence rather than a guarantee — "i" and "M" are
         // about as different as two Latin letters get.
         let mut font = Font::load_embedded();
-        let narrow = font.measure(FontFamily::SansSerif, "iiiii", 16.0, 400.0);
-        let wide = font.measure(FontFamily::SansSerif, "MMMMM", 16.0, 400.0);
+        let narrow = font.measure(TextStyle::new(FontFamily::SansSerif, 16.0, 400.0), "iiiii");
+        let wide = font.measure(TextStyle::new(FontFamily::SansSerif, 16.0, 400.0), "MMMMM");
         assert!(
             narrow.width < wide.width,
             "Open Sans must not measure \"iiiii\" as wide as \"MMMMM\""
@@ -1099,8 +1078,8 @@ mod tests {
     #[test]
     fn larger_font_size_measures_wider_and_taller() {
         let mut font = Font::load_embedded();
-        let small = font.measure(FontFamily::SansSerif, "Hello", 16.0, 400.0);
-        let large = font.measure(FontFamily::SansSerif, "Hello", 32.0, 400.0);
+        let small = font.measure(TextStyle::new(FontFamily::SansSerif, 16.0, 400.0), "Hello");
+        let large = font.measure(TextStyle::new(FontFamily::SansSerif, 32.0, 400.0), "Hello");
         assert!(large.width > small.width);
         assert!(large.height > small.height);
     }
@@ -1111,15 +1090,15 @@ mod tests {
         // are wider, so this must actually differ, not just accept the
         // parameter and ignore it.
         let mut font = Font::load_embedded();
-        let regular = font.measure(FontFamily::SansSerif, "Hello", 16.0, 400.0);
-        let bold = font.measure(FontFamily::SansSerif, "Hello", 16.0, 700.0);
+        let regular = font.measure(TextStyle::new(FontFamily::SansSerif, 16.0, 400.0), "Hello");
+        let bold = font.measure(TextStyle::new(FontFamily::SansSerif, 16.0, 700.0), "Hello");
         assert!(bold.width > regular.width);
     }
 
     #[test]
     fn empty_text_measures_to_zero() {
         let mut font = Font::load_embedded();
-        let metrics = font.measure(FontFamily::SansSerif, "", 16.0, 400.0);
+        let metrics = font.measure(TextStyle::new(FontFamily::SansSerif, 16.0, 400.0), "");
         assert_eq!(
             metrics,
             TextMetrics {
@@ -1135,8 +1114,8 @@ mod tests {
         // Guards against a measurement that secretly only counts
         // characters rather than actually shaping them.
         let mut font = Font::load_embedded();
-        let dots = font.measure(FontFamily::Monospace, "iiiii", 16.0, 400.0);
-        let wide = font.measure(FontFamily::Monospace, "MMMMM", 16.0, 400.0);
+        let dots = font.measure(TextStyle::new(FontFamily::Monospace, 16.0, 400.0), "iiiii");
+        let wide = font.measure(TextStyle::new(FontFamily::Monospace, 16.0, 400.0), "MMMMM");
         // Fira Mono is monospace, so these happen to be equal — this test
         // exists to be revisited if the embedded monospace font ever
         // changes to a proportional one, where it would need to assert
@@ -1147,7 +1126,7 @@ mod tests {
     #[test]
     fn shape_produces_one_glyph_per_character_in_source_order() {
         let mut font = Font::load_embedded();
-        let shaped = font.shape(FontFamily::Monospace, "AB", 16.0, 400.0);
+        let shaped = font.shape(TextStyle::new(FontFamily::Monospace, 16.0, 400.0), "AB");
         assert_eq!(shaped.runs.len(), 1, "one plain run, one font, one style");
         assert_eq!(shaped.runs[0].glyphs.len(), 2);
     }
@@ -1155,12 +1134,13 @@ mod tests {
     #[test]
     fn shape_advances_each_glyph_by_the_monospace_width() {
         let mut font = Font::load_embedded();
-        let shaped = font.shape(FontFamily::Monospace, "AA", 16.0, 400.0);
+        let shaped = font.shape(TextStyle::new(FontFamily::Monospace, 16.0, 400.0), "AA");
         let glyphs = &shaped.runs[0].glyphs;
         let advance = glyphs[1].x - glyphs[0].x;
         assert_eq!(
             advance,
-            font.measure(FontFamily::Monospace, "A", 16.0, 400.0).width,
+            font.measure(TextStyle::new(FontFamily::Monospace, 16.0, 400.0), "A")
+                .width,
             "a monospace font's per-glyph advance equals a single character's measured width"
         );
         assert_eq!(
@@ -1172,14 +1152,14 @@ mod tests {
     #[test]
     fn shape_reports_the_run_actually_used_not_just_the_requested_size() {
         let mut font = Font::load_embedded();
-        let shaped = font.shape(FontFamily::Monospace, "A", 24.0, 400.0);
+        let shaped = font.shape(TextStyle::new(FontFamily::Monospace, 24.0, 400.0), "A");
         assert_eq!(shaped.runs[0].font_size, 24.0);
     }
 
     #[test]
     fn empty_text_shapes_to_no_runs() {
         let mut font = Font::load_embedded();
-        let shaped = font.shape(FontFamily::SansSerif, "", 16.0, 400.0);
+        let shaped = font.shape(TextStyle::new(FontFamily::SansSerif, 16.0, 400.0), "");
         assert!(shaped.runs.is_empty());
         assert_eq!(shaped.width, 0.0);
         assert_eq!(shaped.height, 0.0);
@@ -1188,12 +1168,13 @@ mod tests {
     #[test]
     fn wrapping_at_a_width_that_fits_everything_matches_unwrapped_measurement() {
         let mut font = Font::load_embedded();
-        let unwrapped = font.measure(FontFamily::Monospace, "one two three", 16.0, 400.0);
-        let wrapped = font.measure_wrapped(
-            FontFamily::Monospace,
+        let unwrapped = font.measure(
+            TextStyle::new(FontFamily::Monospace, 16.0, 400.0),
             "one two three",
-            16.0,
-            400.0,
+        );
+        let wrapped = font.measure_wrapped(
+            TextStyle::new(FontFamily::Monospace, 16.0, 400.0),
+            "one two three",
             unwrapped.width + 1.0,
         );
         assert_eq!(wrapped.width, unwrapped.width);
@@ -1206,16 +1187,17 @@ mod tests {
     #[test]
     fn wrapping_at_a_narrower_width_grows_the_height_and_shrinks_the_width() {
         let mut font = Font::load_embedded();
-        let one_word = font.measure(FontFamily::Monospace, "aaaaa", 16.0, 400.0);
-        let unwrapped = font.measure(FontFamily::Monospace, "aaaaa bbbbb ccccc", 16.0, 400.0);
+        let one_word = font.measure(TextStyle::new(FontFamily::Monospace, 16.0, 400.0), "aaaaa");
+        let unwrapped = font.measure(
+            TextStyle::new(FontFamily::Monospace, 16.0, 400.0),
+            "aaaaa bbbbb ccccc",
+        );
 
         // Just wide enough for the widest single word, not the whole line —
         // must wrap onto three lines, one per word.
         let wrapped = font.measure_wrapped(
-            FontFamily::Monospace,
+            TextStyle::new(FontFamily::Monospace, 16.0, 400.0),
             "aaaaa bbbbb ccccc",
-            16.0,
-            400.0,
             one_word.width + 1.0,
         );
 
@@ -1238,16 +1220,12 @@ mod tests {
         // split mid-word.
         let mut font = Font::load_embedded();
         let word = font.measure(
-            FontFamily::Monospace,
+            TextStyle::new(FontFamily::Monospace, 16.0, 400.0),
             "supercalifragilisticexpialidocious",
-            16.0,
-            400.0,
         );
         let wrapped = font.measure_wrapped(
-            FontFamily::Monospace,
+            TextStyle::new(FontFamily::Monospace, 16.0, 400.0),
             "supercalifragilisticexpialidocious",
-            16.0,
-            400.0,
             word.width / 2.0,
         );
         assert_eq!(
@@ -1260,7 +1238,11 @@ mod tests {
     #[test]
     fn empty_text_wraps_to_zero() {
         let mut font = Font::load_embedded();
-        let metrics = font.measure_wrapped(FontFamily::SansSerif, "", 16.0, 400.0, 100.0);
+        let metrics = font.measure_wrapped(
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
+            "",
+            100.0,
+        );
         assert_eq!(
             metrics,
             TextMetrics {
@@ -1274,12 +1256,10 @@ mod tests {
     #[test]
     fn shape_wrapped_keeps_every_glyph_and_spreads_them_across_lines() {
         let mut font = Font::load_embedded();
-        let one_word = font.measure(FontFamily::Monospace, "aaaaa", 16.0, 400.0);
+        let one_word = font.measure(TextStyle::new(FontFamily::Monospace, 16.0, 400.0), "aaaaa");
         let shaped = font.shape_wrapped(
-            FontFamily::Monospace,
+            TextStyle::new(FontFamily::Monospace, 16.0, 400.0),
             "aaaaa bbbbb",
-            16.0,
-            400.0,
             one_word.width + 1.0,
         );
 
@@ -1302,7 +1282,11 @@ mod tests {
     #[test]
     fn shape_wrapped_glyphs_on_the_same_line_share_a_y() {
         let mut font = Font::load_embedded();
-        let shaped = font.shape_wrapped(FontFamily::Monospace, "aaaaa", 16.0, 400.0, 1000.0);
+        let shaped = font.shape_wrapped(
+            TextStyle::new(FontFamily::Monospace, 16.0, 400.0),
+            "aaaaa",
+            1000.0,
+        );
         let glyphs = &shaped.runs[0].glyphs;
         assert_eq!(glyphs[0].y, glyphs[4].y, "one line, one shared baseline");
     }
@@ -1317,7 +1301,10 @@ mod tests {
     #[test]
     fn an_emoji_neither_embedded_font_covers_falls_back_to_a_real_glyph() {
         let mut font = Font::load_embedded();
-        let shaped = font.shape(FontFamily::Monospace, "\u{1F600}", 16.0, 400.0);
+        let shaped = font.shape(
+            TextStyle::new(FontFamily::Monospace, 16.0, 400.0),
+            "\u{1F600}",
+        );
 
         assert_eq!(shaped.runs.len(), 1);
         let run = &shaped.runs[0];
@@ -1340,7 +1327,7 @@ mod tests {
     #[test]
     fn baseline_sits_strictly_between_the_top_and_the_bottom_of_the_line() {
         let mut font = Font::load_embedded();
-        let metrics = font.measure(FontFamily::SansSerif, "Hg", 16.0, 400.0);
+        let metrics = font.measure(TextStyle::new(FontFamily::SansSerif, 16.0, 400.0), "Hg");
         assert!(
             metrics.baseline > 0.0 && metrics.baseline < metrics.height,
             "the baseline ({}) must fall strictly within the line's own height (0..{})",
@@ -1355,8 +1342,11 @@ mod tests {
         // two different strings at the same family/size must report the
         // same baseline offset even though their widths differ.
         let mut font = Font::load_embedded();
-        let short = font.measure(FontFamily::SansSerif, "x", 16.0, 400.0);
-        let long = font.measure(FontFamily::SansSerif, "Testing Baseline", 16.0, 400.0);
+        let short = font.measure(TextStyle::new(FontFamily::SansSerif, 16.0, 400.0), "x");
+        let long = font.measure(
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
+            "Testing Baseline",
+        );
         assert_eq!(short.baseline, long.baseline);
         assert_ne!(short.width, long.width, "sanity check: these really differ");
     }
@@ -1364,8 +1354,8 @@ mod tests {
     #[test]
     fn baseline_scales_with_font_size() {
         let mut font = Font::load_embedded();
-        let small = font.measure(FontFamily::SansSerif, "Hg", 16.0, 400.0);
-        let large = font.measure(FontFamily::SansSerif, "Hg", 32.0, 400.0);
+        let small = font.measure(TextStyle::new(FontFamily::SansSerif, 16.0, 400.0), "Hg");
+        let large = font.measure(TextStyle::new(FontFamily::SansSerif, 32.0, 400.0), "Hg");
         assert!(large.baseline > small.baseline);
     }
 
@@ -1376,13 +1366,14 @@ mod tests {
         // baseline offset from the very top of the block must be identical
         // either way.
         let mut font = Font::load_embedded();
-        let unwrapped = font.measure(FontFamily::SansSerif, "one two three", 16.0, 400.0);
-        let one_word = font.measure(FontFamily::SansSerif, "one", 16.0, 400.0);
-        let wrapped = font.measure_wrapped(
-            FontFamily::SansSerif,
+        let unwrapped = font.measure(
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
             "one two three",
-            16.0,
-            400.0,
+        );
+        let one_word = font.measure(TextStyle::new(FontFamily::SansSerif, 16.0, 400.0), "one");
+        let wrapped = font.measure_wrapped(
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
+            "one two three",
             one_word.width,
         );
         assert!(
@@ -1398,13 +1389,11 @@ mod tests {
         // plain (non-rich) shaping path — proves the rich-text builder
         // isn't secretly changing ordinary single-style shaping.
         let mut font = Font::load_embedded();
-        let plain = font.shape(FontFamily::SansSerif, "Hi", 16.0, 400.0);
+        let plain = font.shape(TextStyle::new(FontFamily::SansSerif, 16.0, 400.0), "Hi");
         let inline = font.shape_inline(
             &[InlineContent::Text {
                 text: "Hi",
-                font_size: 16.0,
-                font_weight: 400.0,
-                family: FontFamily::SansSerif,
+                style: TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
             }],
             None,
         );
@@ -1417,7 +1406,7 @@ mod tests {
     #[test]
     fn shape_inline_wraps_a_text_run_around_a_box_that_does_not_fit_on_the_same_line() {
         let mut font = Font::load_embedded();
-        let word = font.measure(FontFamily::SansSerif, "Hello", 16.0, 400.0);
+        let word = font.measure(TextStyle::new(FontFamily::SansSerif, 16.0, 400.0), "Hello");
 
         // A box wide enough that "Hello" plus the box can't share a line at
         // this width — must push the box (and nothing else, one item) onto
@@ -1426,9 +1415,7 @@ mod tests {
             &[
                 InlineContent::Text {
                     text: "Hello ",
-                    font_size: 16.0,
-                    font_weight: 400.0,
-                    family: FontFamily::SansSerif,
+                    style: TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
                 },
                 InlineContent::Box {
                     id: 1,
@@ -1442,9 +1429,7 @@ mod tests {
             &[
                 InlineContent::Text {
                     text: "Hello ",
-                    font_size: 16.0,
-                    font_weight: 400.0,
-                    family: FontFamily::SansSerif,
+                    style: TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
                 },
                 InlineContent::Box {
                     id: 1,
@@ -1472,9 +1457,7 @@ mod tests {
             &[
                 InlineContent::Text {
                     text: "Hi ",
-                    font_size: 16.0,
-                    font_weight: 400.0,
-                    family: FontFamily::SansSerif,
+                    style: TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
                 },
                 InlineContent::Box {
                     id: 42,
@@ -1529,9 +1512,7 @@ mod tests {
         let small_only = font.shape_inline(
             &[InlineContent::Text {
                 text: "Hg",
-                font_size: 16.0,
-                font_weight: 400.0,
-                family: FontFamily::SansSerif,
+                style: TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
             }],
             None,
         );
@@ -1539,15 +1520,11 @@ mod tests {
             &[
                 InlineContent::Text {
                     text: "Hg ",
-                    font_size: 16.0,
-                    font_weight: 400.0,
-                    family: FontFamily::SansSerif,
+                    style: TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
                 },
                 InlineContent::Text {
                     text: "Hg",
-                    font_size: 48.0,
-                    font_weight: 400.0,
-                    family: FontFamily::SansSerif,
+                    style: TextStyle::new(FontFamily::SansSerif, 48.0, 400.0),
                 },
             ],
             None,
@@ -1590,15 +1567,17 @@ mod tests {
     fn measure_cached_first_call_matches_measure_wrapped() {
         let mut font = Font::load_embedded();
         let text = "one two three four five six seven eight nine ten";
-        let expected = font.measure_wrapped(FontFamily::SansSerif, text, 16.0, 400.0, 120.0);
+        let expected = font.measure_wrapped(
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
+            text,
+            120.0,
+        );
 
         let mut cache = None;
         let cached = font.measure_cached(
             &mut cache,
-            FontFamily::SansSerif,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
             text,
-            16.0,
-            400.0,
             Some(120.0),
         );
         assert_eq!(cached, expected);
@@ -1619,18 +1598,14 @@ mod tests {
         let mut cache = None;
         let first = font.measure_cached(
             &mut cache,
-            FontFamily::SansSerif,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
             text,
-            16.0,
-            400.0,
             Some(400.0),
         );
         let second = font.measure_cached(
             &mut cache,
-            FontFamily::SansSerif,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
             text,
-            16.0,
-            400.0,
             Some(80.0),
         );
         assert!(
@@ -1638,7 +1613,11 @@ mod tests {
             "wrapping the same text at a much narrower width must take more lines"
         );
 
-        let expected_at_80 = font.measure_wrapped(FontFamily::SansSerif, text, 16.0, 400.0, 80.0);
+        let expected_at_80 = font.measure_wrapped(
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
+            text,
+            80.0,
+        );
         assert_eq!(
             second, expected_at_80,
             "re-breaking a cached layout at 80px must match a fresh measurement at 80px"
@@ -1646,10 +1625,8 @@ mod tests {
 
         let back_to_400 = font.measure_cached(
             &mut cache,
-            FontFamily::SansSerif,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
             text,
-            16.0,
-            400.0,
             Some(400.0),
         );
         assert_eq!(
@@ -1663,11 +1640,15 @@ mod tests {
     fn measure_cached_with_no_max_width_matches_unwrapped_measure() {
         let mut font = Font::load_embedded();
         let text = "Hello, Florui";
-        let expected = font.measure(FontFamily::SansSerif, text, 16.0, 400.0);
+        let expected = font.measure(TextStyle::new(FontFamily::SansSerif, 16.0, 400.0), text);
 
         let mut cache = None;
-        let cached =
-            font.measure_cached(&mut cache, FontFamily::SansSerif, text, 16.0, 400.0, None);
+        let cached = font.measure_cached(
+            &mut cache,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
+            text,
+            None,
+        );
         assert_eq!(cached, expected);
     }
 
@@ -1677,10 +1658,8 @@ mod tests {
         let mut cache = None;
         let metrics = font.measure_cached(
             &mut cache,
-            FontFamily::SansSerif,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
             "",
-            16.0,
-            400.0,
             Some(100.0),
         );
         assert_eq!(metrics.width, 0.0);
@@ -1696,15 +1675,21 @@ mod tests {
         let mut font = Font::load_embedded();
         florui_profile::start(false);
         // Miss then hit through the probe: neither is counted.
-        let probed = font.probe_memoized(FontFamily::SansSerif, "Hello", 14.0, 400.0, Some(80.0));
-        font.probe_memoized(FontFamily::SansSerif, "Hello", 14.0, 400.0, Some(80.0));
+        let probed = font.probe_memoized(
+            TextStyle::new(FontFamily::SansSerif, 14.0, 400.0),
+            "Hello",
+            Some(80.0),
+        );
+        font.probe_memoized(
+            TextStyle::new(FontFamily::SansSerif, 14.0, 400.0),
+            "Hello",
+            Some(80.0),
+        );
         // The same entry answers a real measurement, which is counted.
         let measured = font.measure_memoized(
             &mut None,
-            FontFamily::SansSerif,
+            TextStyle::new(FontFamily::SansSerif, 14.0, 400.0),
             "Hello",
-            14.0,
-            400.0,
             Some(80.0),
         );
         florui_profile::finish_frame(Vec::new());
@@ -1720,21 +1705,15 @@ mod tests {
         [
             InlineContent::Text {
                 text: "Mixed paragraph with ",
-                font_size: 14.0,
-                font_weight: 400.0,
-                family: FontFamily::SansSerif,
+                style: TextStyle::new(FontFamily::SansSerif, 14.0, 400.0),
             },
             InlineContent::Text {
                 text: "a styled span",
-                font_size: size,
-                font_weight: weight,
-                family: FontFamily::SansSerif,
+                style: TextStyle::new(FontFamily::SansSerif, size, weight),
             },
             InlineContent::Text {
                 text: tail,
-                font_size: 14.0,
-                font_weight: 400.0,
-                family: FontFamily::SansSerif,
+                style: TextStyle::new(FontFamily::SansSerif, 14.0, 400.0),
             },
         ]
     }

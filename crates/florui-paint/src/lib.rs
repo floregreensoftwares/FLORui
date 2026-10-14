@@ -965,12 +965,14 @@ fn ink_is_outside_clip(
             .max(0.0);
     let font_size = style.map_or(16.0, |s| s.font_size);
     let metrics = font.probe_memoized(
-        style.map_or(florui_text::FontFamily::SansSerif, |s| {
-            to_text_font_family(s.font_family)
-        }),
+        florui_text::TextStyle::new(
+            style.map_or(florui_text::FontFamily::SansSerif, |s| {
+                to_text_font_family(s.font_family)
+            }),
+            font_size,
+            style.map_or(400.0, |s| s.font_weight),
+        ),
         text,
-        font_size,
-        style.map_or(400.0, |s| s.font_weight),
         Some(wrap_width(content_width, scale_factor)),
     );
     // A glyph can overhang its advance box, and right-to-left lines start at
@@ -1579,7 +1581,11 @@ fn own_extent(
             let font_family = style.map_or(florui_text::FontFamily::SansSerif, |s| {
                 to_text_font_family(s.font_family)
             });
-            let shaped = font.shape_wrapped(font_family, text, font_size, font_weight, wrap_width);
+            let shaped = font.shape_wrapped(
+                florui_text::TextStyle::new(font_family, font_size, font_weight),
+                text,
+                wrap_width,
+            );
             shaped_extent = Some((shaped.width, shaped.height));
         }
     }
@@ -3350,13 +3356,14 @@ fn paint_node(
                 Some(style) if !text.is_empty() && places_its_text(is_button, Some(style)) => {
                     let family = to_text_font_family(style.font_family);
                     let metrics = font.measure_wrapped(
-                        family,
+                        florui_text::TextStyle::new(family, style.font_size, style.font_weight),
                         text,
-                        style.font_size,
-                        style.font_weight,
                         wrap_width,
                     );
-                    let unwrapped = font.measure(family, text, style.font_size, style.font_weight);
+                    let unwrapped = font.measure(
+                        florui_text::TextStyle::new(family, style.font_size, style.font_weight),
+                        text,
+                    );
                     text_offset(
                         is_button,
                         Some(style),
@@ -4764,7 +4771,11 @@ fn paint_text(buffer: &mut Surface, font: &mut Font, params: TextPaint<'_>) {
         clip,
         shadows,
     } = params;
-    let shaped = font.shape_wrapped(font_family, text, font_size, font_weight, wrap_width);
+    let shaped = font.shape_wrapped(
+        florui_text::TextStyle::new(font_family, font_size, font_weight),
+        text,
+        wrap_width,
+    );
     text_shadow::paint(buffer, &shaped.runs, (x, y), shadows, scale_factor, clip);
     paint_shaped_runs(buffer, &shaped.runs, x, y, color, scale_factor, clip);
 }
@@ -7412,10 +7423,8 @@ mod tests {
         let mut font = Font::load_embedded();
         let long = font
             .shape(
-                florui_text::FontFamily::SansSerif,
+                florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 16.0, 400.0),
                 "A placeholder much longer than sixty pixels",
-                16.0,
-                400.0,
             )
             .runs;
         let buffer = paint_text_field(Vec::new(), Some(long));
@@ -7443,7 +7452,10 @@ mod tests {
     fn the_placeholder_color_property_recolors_the_placeholder() {
         let mut font = Font::load_embedded();
         let runs = font
-            .shape(florui_text::FontFamily::SansSerif, "Hint", 16.0, 400.0)
+            .shape(
+                florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 16.0, 400.0),
+                "Hint",
+            )
             .runs;
         let buffer = paint_text_field_styled(
             Vec::new(),
@@ -7464,10 +7476,8 @@ mod tests {
         let mut font = Font::load_embedded();
         let runs = font
             .shape(
-                florui_text::FontFamily::SansSerif,
+                florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 16.0, 400.0),
                 "typed text that is far too long for the box",
-                16.0,
-                400.0,
             )
             .runs;
         let buffer = paint_text_field(runs, None);
@@ -7718,14 +7728,24 @@ mod tests {
         // every real glyph, so any red pixel there can only be the caret,
         // not anti-aliased glyph ink.
         let text_width = font
-            .measure(florui_text::FontFamily::SansSerif, "Hi", 16.0, 400.0)
+            .measure(
+                florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 16.0, 400.0),
+                "Hi",
+            )
             .width;
         let mut text_inputs = HashMap::new();
         text_inputs.insert(
             node,
             TextInputPaint {
                 runs: font
-                    .shape(florui_text::FontFamily::SansSerif, "Hi", 16.0, 400.0)
+                    .shape(
+                        florui_text::TextStyle::new(
+                            florui_text::FontFamily::SansSerif,
+                            16.0,
+                            400.0,
+                        ),
+                        "Hi",
+                    )
                     .runs,
                 caret_rect: Some((text_width + 4.0, 0.0, text_width + 4.0, height as f32)),
                 selection_rects: Vec::new(),
@@ -8020,10 +8040,8 @@ mod tests {
         // bug this test guards against at all.
         let unwrapped_at_double_width = font
             .measure_wrapped(
-                florui_text::FontFamily::SansSerif,
+                florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 16.0, 400.0),
                 text,
-                16.0,
-                400.0,
                 logical_width * 2.0,
             )
             .height;
@@ -8438,15 +8456,13 @@ mod tests {
         let text = "A WORKSHOP DESK FOR THINGS TO DO";
         let mut font = Font::load_embedded();
         let family = florui_text::FontFamily::SansSerif;
-        let line = font.measure(family, text, 11.0, 700.0);
+        let line = font.measure(florui_text::TextStyle::new(family, 11.0, 700.0), text);
         // Scaling the width of the line to painted pixels and back by another
         // factor can come out a hair short of it, which wrapped its last word.
         for scale in (0..400).map(|step| 0.3 + step as f32 * 0.0071) {
             let wrapped = font.measure_wrapped(
-                family,
+                florui_text::TextStyle::new(family, 11.0, 700.0),
                 text,
-                11.0,
-                700.0,
                 wrap_width(line.width * scale, scale),
             );
             assert_eq!(wrapped.height, line.height, "wrapped at a scale of {scale}");
@@ -11211,10 +11227,8 @@ mod tests {
                 .unwrap();
                 let plain = font.measure_memoized(
                     &mut None,
-                    florui_text::FontFamily::SansSerif,
+                    florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, size, weight),
                     words,
-                    size,
-                    weight,
                     Some(width),
                 );
                 assert_eq!(

@@ -566,10 +566,12 @@ impl UiRuntime {
             let natural = self
                 .font
                 .measure(
-                    florui_text::FontFamily::SansSerif,
+                    florui_text::TextStyle::new(
+                        florui_text::FontFamily::SansSerif,
+                        crate::validation_bubble::TEXT_FONT_SIZE,
+                        400.0,
+                    ),
                     &bubble.message,
-                    crate::validation_bubble::TEXT_FONT_SIZE,
-                    400.0,
                 )
                 .width;
             let wrap_width = self.validation_bubble_field().and_then(|field| {
@@ -683,7 +685,10 @@ impl UiRuntime {
                 .iter()
                 .map(|option| {
                     self.font
-                        .measure(family, &option.label, font_size, font_weight)
+                        .measure(
+                            florui_text::TextStyle::new(family, font_size, font_weight),
+                            &option.label,
+                        )
                         .width
                 })
                 .fold(0.0_f32, f32::max);
@@ -1845,7 +1850,10 @@ mod tests {
         runtime.update(viewport());
 
         let (.., font) = runtime.geometry_and_font_mut();
-        let metrics = font.measure(florui_text::FontFamily::SansSerif, "x", 16.0, 400.0);
+        let metrics = font.measure(
+            florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 16.0, 400.0),
+            "x",
+        );
         assert!(
             metrics.width > 0.0,
             "the same font instance register_font touched must still measure real text \
