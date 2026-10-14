@@ -110,6 +110,17 @@ pub enum FontFamily {
     Monospace,
 }
 
+/// `line-height`. A number stays a multiple of the element's own font size, so
+/// a descendant with a larger font gets taller lines; a length is in pixels,
+/// already resolved where it was declared.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum LineHeight {
+    #[default]
+    Normal,
+    Number(f32),
+    Length(f32),
+}
+
 /// How this node participates in its parent's formatting context
 /// (`Block`/`Inline`/`InlineBlock`, real CSS's `display-outside` plus
 /// `inline-block`'s special case), *and*, for `Block`/`Flex`/`Grid`, which
@@ -446,6 +457,14 @@ pub struct ComputedStyle {
     pub font_family: FontFamily,
     /// Inherits; initial `400.0` (`normal`), CSS's numeric 1–1000 scale.
     pub font_weight: f32,
+    /// Inherits; initial [`LineHeight::Normal`].
+    pub line_height: LineHeight,
+    /// `letter-spacing` in pixels, added after every character. Inherits;
+    /// `normal` and a percentage read as `0.0`.
+    pub letter_spacing: f32,
+    /// `word-spacing` in pixels, added after every space. Inherits; `normal`
+    /// and a percentage read as `0.0`.
+    pub word_spacing: f32,
     /// This node's own layout algorithm, applied to *its children* — a
     /// leaf's `display` never affects how its own box is placed by its
     /// parent (that's [`Self::flex_grow`]/[`Self::flex_shrink`]/
@@ -694,6 +713,9 @@ impl ComputedStyle {
             font_size: _,
             font_family: _,
             font_weight: _,
+            line_height: _,
+            letter_spacing: _,
+            word_spacing: _,
             display: _,
             flex_direction: _,
             flex_wrap: _,
@@ -2361,6 +2383,64 @@ mod tests {
         assert_eq!(computed[button].text_align, TextAlign::Center);
         assert_eq!(computed[left].text_align, TextAlign::Start);
         assert_eq!(computed[plain].text_align, TextAlign::Start);
+    }
+
+    #[test]
+    fn line_height_and_text_spacing_inherit_with_each_kind_of_value_kept_apart() {
+        let tree: Element = view! {
+            <div>
+                <p>{"plain"}</p>
+                <p class="length"><span>{"a"}</span></p>
+                <p class="number"><span class="big">{"b"}</span></p>
+                <p class="percent"><span class="big">{"c"}</span></p>
+                <p class="spaced"><span>{"d"}</span></p>
+                <p class="words">{"e f"}</p>
+            </div>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".length { line-height: 30px; } \
+             .number { line-height: 1.5; } \
+             .percent { font-size: 20px; line-height: 150%; } \
+             .big { font-size: 40px; } \
+             .spaced { letter-spacing: 3px; } \
+             .words { word-spacing: 14px; } ",
+            &InteractionState::new(),
+        );
+        let [plain, length, number, percent, spaced, words] = arena.children(arena.roots()[0])
+        else {
+            panic!("six children");
+        };
+        let child = |parent: &crate::NodeId| arena.children(*parent)[0];
+
+        assert_eq!(computed[plain].line_height, LineHeight::Normal);
+        assert_eq!(computed[plain].letter_spacing, 0.0);
+        assert_eq!(computed[plain].word_spacing, 0.0);
+
+        assert_eq!(computed[length].line_height, LineHeight::Length(30.0));
+        assert_eq!(
+            computed[&child(length)].line_height,
+            LineHeight::Length(30.0)
+        );
+
+        // A number is passed on as a number, so the larger font gets larger lines.
+        assert_eq!(computed[number].line_height, LineHeight::Number(1.5));
+        assert_eq!(
+            computed[&child(number)].line_height,
+            LineHeight::Number(1.5)
+        );
+
+        // A percentage is a length by the time a child inherits it.
+        assert_eq!(computed[percent].line_height, LineHeight::Length(30.0));
+        assert_eq!(
+            computed[&child(percent)].line_height,
+            LineHeight::Length(30.0)
+        );
+
+        assert_eq!(computed[spaced].letter_spacing, 3.0);
+        assert_eq!(computed[&child(spaced)].letter_spacing, 3.0, "inherited");
+        assert_eq!(computed[words].word_spacing, 14.0);
+        assert_eq!(computed[words].letter_spacing, 0.0);
     }
 
     #[test]
