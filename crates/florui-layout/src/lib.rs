@@ -218,16 +218,28 @@ pub fn to_text_font_family(value: florui_style::FontFamily) -> florui_text::Font
 /// What a node's own text is shaped with: the one place a computed style
 /// becomes a text style.
 pub fn text_style_of(style: &ComputedStyle) -> florui_text::TextStyle {
+    let line_height = match style.line_height {
+        florui_style::LineHeight::Normal => florui_text::LineHeight::Normal,
+        florui_style::LineHeight::Number(n) => florui_text::LineHeight::Number(n),
+        florui_style::LineHeight::Length(px) => florui_text::LineHeight::Length(px),
+    };
     florui_text::TextStyle::new(
         to_text_font_family(style.font_family),
         style.font_size,
         style.font_weight,
     )
+    .with_line_height(line_height)
+    .with_spacing(style.letter_spacing, style.word_spacing)
 }
 
 /// What text is shaped with when its node has no computed style.
 pub(crate) fn default_text_style() -> florui_text::TextStyle {
     florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 16.0, 400.0)
+}
+
+/// [`text_style_of`], or the default for a node with no computed style.
+pub fn node_text_style(style: Option<&ComputedStyle>) -> florui_text::TextStyle {
+    style.map_or_else(default_text_style, text_style_of)
 }
 
 /// One piece of a container's real inline formatting context, already
@@ -3342,6 +3354,85 @@ mod tests {
         );
         assert_close(layouts[&node].width, expected.width);
         assert_close(layouts[&node].height, expected.height);
+    }
+
+    const PANGRAM: &str = "The quick brown fox jumps over the lazy dog";
+
+    #[test]
+    fn line_height_sets_the_height_of_a_text_box() {
+        let tree: Element = view! { <div class="a">{PANGRAM}</div> };
+        let mut font = florui_text::Font::load_embedded();
+        let sans = florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 16.0, 400.0);
+
+        for (css, line_height) in [
+            (".a { width: 200px; }", florui_text::LineHeight::Normal),
+            (
+                ".a { width: 200px; line-height: 30px; }",
+                florui_text::LineHeight::Length(30.0),
+            ),
+            (
+                ".a { width: 200px; line-height: 2; }",
+                florui_text::LineHeight::Number(2.0),
+            ),
+        ] {
+            let (arena, layouts) = layout_for(&tree, css);
+            let expected = font.measure_wrapped(sans.with_line_height(line_height), PANGRAM, 200.0);
+            assert_close(layouts[&arena.roots()[0]].height, expected.height);
+        }
+        let (arena, layouts) = layout_for(&tree, ".a { width: 200px; line-height: 30px; }");
+        assert_close(layouts[&arena.roots()[0]].height, 60.0);
+    }
+
+    #[test]
+    fn a_number_line_height_follows_the_font_size_of_each_run() {
+        let tree = Element::node(
+            "p",
+            vec![],
+            vec![
+                Element::text("Hg "),
+                Element::node(
+                    "span",
+                    vec![("class".to_string(), "big".to_string())],
+                    vec![Element::text("Hg")],
+                ),
+            ],
+        );
+        let (arena, layouts) =
+            layout_for(&tree, "p { line-height: 1.5; } .big { font-size: 40px; }");
+        let p = arena.roots()[0];
+        // The 40px run's own line is 1.5 x 40, so the line cannot be shorter.
+        assert!(
+            layouts[&p].height >= 60.0 - 0.01,
+            "line height {} is shorter than the large run's 60px",
+            layouts[&p].height
+        );
+        let (_, plain) = layout_for(&tree, ".big { font-size: 40px; }");
+        assert!(layouts[&p].height > plain[&p].height - 0.01);
+    }
+
+    #[test]
+    fn letter_and_word_spacing_widen_a_text_box_by_what_the_text_api_measures() {
+        let tree: Element = view! {
+            <div class="row"><div class="s">{"Spaced out text"}</div></div>
+        };
+        let mut font = florui_text::Font::load_embedded();
+        let sans = florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 16.0, 400.0);
+        for (css, style) in [
+            (".row { display: flex; }", sans),
+            (
+                ".row { display: flex; } .s { letter-spacing: 3px; }",
+                sans.with_spacing(3.0, 0.0),
+            ),
+            (
+                ".row { display: flex; } .s { word-spacing: 14px; }",
+                sans.with_spacing(0.0, 14.0),
+            ),
+        ] {
+            let (arena, layouts) = layout_for(&tree, css);
+            let item = arena.children(arena.roots()[0])[0];
+            let expected = font.measure(style, "Spaced out text");
+            assert_close(layouts[&item].width, expected.width);
+        }
     }
 
     fn hit_styled(

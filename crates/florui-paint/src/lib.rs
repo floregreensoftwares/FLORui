@@ -965,13 +965,7 @@ fn ink_is_outside_clip(
             .max(0.0);
     let font_size = style.map_or(16.0, |s| s.font_size);
     let metrics = font.probe_memoized(
-        florui_text::TextStyle::new(
-            style.map_or(florui_text::FontFamily::SansSerif, |s| {
-                to_text_font_family(s.font_family)
-            }),
-            font_size,
-            style.map_or(400.0, |s| s.font_weight),
-        ),
+        florui_layout::node_text_style(style),
         text,
         Some(wrap_width(content_width, scale_factor)),
     );
@@ -1577,15 +1571,8 @@ fn own_extent(
     } else {
         let text = arena.text_content(node);
         if !text.is_empty() {
-            let font_weight = style.map_or(400.0, |s| s.font_weight);
-            let font_family = style.map_or(florui_text::FontFamily::SansSerif, |s| {
-                to_text_font_family(s.font_family)
-            });
-            let shaped = font.shape_wrapped(
-                florui_text::TextStyle::new(font_family, font_size, font_weight),
-                text,
-                wrap_width,
-            );
+            let shaped =
+                font.shape_wrapped(florui_layout::node_text_style(style), text, wrap_width);
             shaped_extent = Some((shaped.width, shaped.height));
         }
     }
@@ -3354,16 +3341,9 @@ fn paint_node(
             let is_button = arena.tag(node) == "button";
             let (dx, dy) = match style {
                 Some(style) if !text.is_empty() && places_its_text(is_button, Some(style)) => {
-                    let family = to_text_font_family(style.font_family);
-                    let metrics = font.measure_wrapped(
-                        florui_text::TextStyle::new(family, style.font_size, style.font_weight),
-                        text,
-                        wrap_width,
-                    );
-                    let unwrapped = font.measure(
-                        florui_text::TextStyle::new(family, style.font_size, style.font_weight),
-                        text,
-                    );
+                    let text_style = florui_layout::text_style_of(style);
+                    let metrics = font.measure_wrapped(text_style, text, wrap_width);
+                    let unwrapped = font.measure(text_style, text);
                     text_offset(
                         is_button,
                         Some(style),
@@ -3471,19 +3451,12 @@ fn paint_node_text(
     if text.is_empty() {
         return;
     }
-    let font_size = style.map_or(16.0, |s| s.font_size);
-    let font_weight = style.map_or(400.0, |s| s.font_weight);
-    let font_family = style.map_or(florui_text::FontFamily::SansSerif, |s| {
-        to_text_font_family(s.font_family)
-    });
     paint_text(
         buffer,
         font,
         TextPaint {
             text,
-            font_size,
-            font_weight,
-            font_family,
+            style: florui_layout::node_text_style(style),
             color,
             x,
             y,
@@ -4738,9 +4711,7 @@ fn blend_source_over(
 /// whole paint over one bad glyph.
 struct TextPaint<'a> {
     text: &'a str,
-    font_size: f32,
-    font_weight: f32,
-    font_family: florui_text::FontFamily,
+    style: florui_text::TextStyle,
     color: Rgba,
     x: f32,
     y: f32,
@@ -4750,19 +4721,10 @@ struct TextPaint<'a> {
     shadows: &'a [florui_style::TextShadow],
 }
 
-fn to_text_font_family(value: florui_style::FontFamily) -> florui_text::FontFamily {
-    match value {
-        florui_style::FontFamily::SansSerif => florui_text::FontFamily::SansSerif,
-        florui_style::FontFamily::Monospace => florui_text::FontFamily::Monospace,
-    }
-}
-
 fn paint_text(buffer: &mut Surface, font: &mut Font, params: TextPaint<'_>) {
     let TextPaint {
         text,
-        font_size,
-        font_weight,
-        font_family,
+        style,
         color,
         x,
         y,
@@ -4771,11 +4733,7 @@ fn paint_text(buffer: &mut Surface, font: &mut Font, params: TextPaint<'_>) {
         clip,
         shadows,
     } = params;
-    let shaped = font.shape_wrapped(
-        florui_text::TextStyle::new(font_family, font_size, font_weight),
-        text,
-        wrap_width,
-    );
+    let shaped = font.shape_wrapped(style, text, wrap_width);
     text_shadow::paint(buffer, &shaped.runs, (x, y), shadows, scale_factor, clip);
     paint_shaped_runs(buffer, &shaped.runs, x, y, color, scale_factor, clip);
 }
@@ -7848,6 +7806,55 @@ mod tests {
             bold > regular,
             "bold ({bold} ink pixels) must cover more area than regular ({regular})"
         );
+    }
+
+    #[test]
+    fn line_height_moves_the_ink_by_half_the_extra_leading() {
+        // The first and last row with red ink, and the box height, for one
+        // line of text under `css`.
+        fn ink_rows(css: &str) -> (u32, u32, f32) {
+            let tree: Element = view! { <div class="t">{"H"}</div> };
+            let arena = Arena::build(&tree);
+            let rules = florui_style::parse_stylesheet(css).unwrap();
+            let styles = florui_style::compute(
+                &arena,
+                &rules,
+                &InteractionState::new(),
+                florui_style::Viewport::default(),
+                &mut florui_style::AnimationTimeline::default(),
+            );
+            let mut font = Font::load_embedded();
+            let layouts =
+                florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT)
+                    .unwrap();
+            let node = arena.roots()[0];
+            let (width, height) = (layouts[&node].width.ceil() as u32, 80);
+            let buffer = paint_to_buffer(
+                &mut font,
+                width,
+                height,
+                Rgba::opaque(0, 0, 0),
+                &arena,
+                &styles,
+                &layouts,
+                1.0,
+            );
+            let inked = |py: u32| (0..width).any(|px| pixel_rgb(&buffer, px, py)[0] > 0x20);
+            let first = (0..height).find(|&py| inked(py)).expect("some ink");
+            let last = (0..height).rev().find(|&py| inked(py)).expect("some ink");
+            (first, last, layouts[&node].height)
+        }
+
+        let plain = ink_rows(".t { color: #ff0000; font-size: 20px; }");
+        let tall = ink_rows(".t { color: #ff0000; font-size: 20px; line-height: 60px; }");
+        assert!((tall.2 - 60.0).abs() < 0.01, "the box is one 60px line");
+        let shift = (60.0 - plain.2) / 2.0;
+        for (name, moved) in [("first", tall.0 - plain.0), ("last", tall.1 - plain.1)] {
+            assert!(
+                (moved as f32 - shift).abs() <= 1.0,
+                "the {name} ink row moved by {moved}, expected about {shift}"
+            );
+        }
     }
 
     #[test]
