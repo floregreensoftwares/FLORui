@@ -189,7 +189,7 @@ impl LayoutCache {
             self.slots.reserve(styles.len());
         }
 
-        let mut inline_leaves: Vec<(NodeId, Vec<InlineContentItem>)> = Vec::new();
+        let mut inline_leaves: Vec<(NodeId, InlineContext)> = Vec::new();
         self.sync_group(
             0,
             font,
@@ -243,7 +243,7 @@ impl LayoutCache {
         arena: &Arena,
         styles: &StyleMap,
         roots: &[NodeId],
-        inline_leaves: &mut Vec<(NodeId, Vec<InlineContentItem>)>,
+        inline_leaves: &mut Vec<(NodeId, InlineContext)>,
     ) -> Result<(), taffy::TaffyError> {
         if roots.is_empty() {
             if let Some(unused) = self.groups[group].take() {
@@ -289,7 +289,7 @@ impl LayoutCache {
         arena: &Arena,
         styles: &StyleMap,
         root: NodeId,
-        inline_leaves: &mut Vec<(NodeId, Vec<InlineContentItem>)>,
+        inline_leaves: &mut Vec<(NodeId, InlineContext)>,
     ) -> Result<(), taffy::TaffyError> {
         let mut stack = vec![Step::Visit(root)];
         while let Some(step) = stack.pop() {
@@ -300,15 +300,15 @@ impl LayoutCache {
                         let context = leaf_context(font, arena, styles, node);
                         self.place(node, to_taffy_style(styles.get(&node)), context, &[], false)?;
                     } else if needs_inline_layout(arena, styles, node) {
-                        let items = build_inline_content_items(font, arena, styles, node);
+                        let context = build_inline_content_items(font, arena, styles, node);
                         self.place(
                             node,
                             to_taffy_style(styles.get(&node)),
-                            Some(LeafContext::Inline(items.clone())),
+                            Some(LeafContext::Inline(context.clone())),
                             &[],
                             false,
                         )?;
-                        inline_leaves.push((node, items));
+                        inline_leaves.push((node, context));
                     } else {
                         stack.push(Step::Build(node));
                         for &child in arena_children.iter().rev() {

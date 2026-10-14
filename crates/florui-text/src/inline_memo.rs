@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use rustc_hash::{FxHashMap, FxHasher};
 
-use crate::{InlineContent, InlineLayout, StyleBits};
+use crate::{InlineContent, InlineLayout, StyleBits, TextStyle};
 
 /// Bytes kept in total, across both generations.
 pub(crate) const INLINE_MEMO_BYTES: usize = 16 * 1024 * 1024;
@@ -70,13 +70,15 @@ impl Item {
 
 struct Entry {
     items: Box<[Item]>,
+    strut: StyleBits,
     width: Option<u32>,
     layout: Arc<InlineLayout>,
 }
 
 impl Entry {
-    fn matches(&self, items: &[InlineContent<'_>], width: Option<u32>) -> bool {
+    fn matches(&self, items: &[InlineContent<'_>], strut: &TextStyle, width: Option<u32>) -> bool {
         self.width == width
+            && self.strut == strut.bits()
             && self.items.len() == items.len()
             && self
                 .items
@@ -101,13 +103,14 @@ thread_local! {
     pub(crate) static COLLIDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-fn hash_of(items: &[InlineContent<'_>], width: Option<u32>) -> u64 {
+fn hash_of(items: &[InlineContent<'_>], strut: &TextStyle, width: Option<u32>) -> u64 {
     #[cfg(test)]
     if COLLIDE.with(std::cell::Cell::get) {
         return 0;
     }
     let mut hasher = FxHasher::default();
     width.hash(&mut hasher);
+    strut.bits().hash(&mut hasher);
     for item in items {
         match *item {
             InlineContent::Text { text, style } => {
@@ -168,15 +171,16 @@ impl InlineMemo {
     pub(crate) fn get(
         &mut self,
         items: &[InlineContent<'_>],
+        strut: &TextStyle,
         width: Option<f32>,
     ) -> Option<Arc<InlineLayout>> {
         let width = width.map(f32::to_bits);
-        let hash = hash_of(items, width);
+        let hash = hash_of(items, strut, width);
         if let Some(entry) = self
             .current
             .by_hash
             .get(&hash)
-            .and_then(|bucket| bucket.iter().find(|e| e.matches(items, width)))
+            .and_then(|bucket| bucket.iter().find(|e| e.matches(items, strut, width)))
         {
             return Some(Arc::clone(&entry.layout));
         }
@@ -184,26 +188,28 @@ impl InlineMemo {
             .previous
             .by_hash
             .get(&hash)
-            .and_then(|bucket| bucket.iter().find(|e| e.matches(items, width)))
+            .and_then(|bucket| bucket.iter().find(|e| e.matches(items, strut, width)))
             .map(|entry| Arc::clone(&entry.layout))?;
-        self.store(hash, items, width, Arc::clone(&layout));
+        self.store(hash, items, strut, width, Arc::clone(&layout));
         Some(layout)
     }
 
     pub(crate) fn insert(
         &mut self,
         items: &[InlineContent<'_>],
+        strut: &TextStyle,
         width: Option<f32>,
         layout: Arc<InlineLayout>,
     ) {
         let width = width.map(f32::to_bits);
-        self.store(hash_of(items, width), items, width, layout);
+        self.store(hash_of(items, strut, width), items, strut, width, layout);
     }
 
     fn store(
         &mut self,
         hash: u64,
         items: &[InlineContent<'_>],
+        strut: &TextStyle,
         width: Option<u32>,
         layout: Arc<InlineLayout>,
     ) {
@@ -219,6 +225,7 @@ impl InlineMemo {
         self.current.bytes += weight;
         self.current.by_hash.entry(hash).or_default().push(Entry {
             items: items.iter().map(Item::of).collect(),
+            strut: strut.bits(),
             width,
             layout,
         });

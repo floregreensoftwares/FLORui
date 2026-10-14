@@ -261,6 +261,14 @@ enum InlineContentItem {
     },
 }
 
+/// A container's inline items with the container's own text style, which gives
+/// every line at least the height of an empty one (the CSS strut).
+#[derive(Clone, PartialEq)]
+struct InlineContext {
+    items: Vec<InlineContentItem>,
+    strut: florui_text::TextStyle,
+}
+
 fn to_inline_content(item: &InlineContentItem) -> florui_text::InlineContent<'_> {
     match item {
         InlineContentItem::Text { text, style } => florui_text::InlineContent::Text {
@@ -288,7 +296,7 @@ fn to_inline_content(item: &InlineContentItem) -> florui_text::InlineContent<'_>
 #[derive(PartialEq)]
 enum LeafContext {
     Text(TextContext),
-    Inline(Vec<InlineContentItem>),
+    Inline(InlineContext),
     Image(ImageContext),
     /// A control whose content box has a fixed intrinsic size independent of
     /// what it holds (a `<textarea>`: `cols` by `rows`). Explicit CSS
@@ -491,11 +499,11 @@ fn build_inline_content_items(
     arena: &Tree,
     styles: &StyleMap,
     node: NodeId,
-) -> Vec<InlineContentItem> {
+) -> InlineContext {
     let container_style = styles.get(&node);
     let container_text_style = container_style.map_or_else(default_text_style, text_style_of);
 
-    arena
+    let items = arena
         .inline_items(node)
         .iter()
         .filter_map(|item| match item {
@@ -526,7 +534,11 @@ fn build_inline_content_items(
                 }
             }
         })
-        .collect()
+        .collect();
+    InlineContext {
+        items,
+        strut: container_text_style,
+    }
 }
 
 /// Whether `node` is a real inline formatting context per this crate's own
@@ -554,10 +566,10 @@ pub fn shape_inline_formatting_context(
     if !needs_inline_layout(arena, styles, node) {
         return None;
     }
-    let items = build_inline_content_items(font, arena, styles, node);
+    let context = build_inline_content_items(font, arena, styles, node);
     let content: Vec<florui_text::InlineContent<'_>> =
-        items.iter().map(to_inline_content).collect();
-    Some(font.shape_inline_memoized(&content, Some(wrap_width)))
+        context.items.iter().map(to_inline_content).collect();
+    Some(font.shape_inline_memoized(&content, context.strut, Some(wrap_width)))
 }
 
 /// Computes block-layout geometry for every node in `arena`, using
@@ -611,7 +623,7 @@ pub fn compute_layout_with_content_extents(
     // Every inline-formatting-context leaf built below, so the second pass
     // after layout can derive its `Box` items' own `BoxLayout` entries —
     // see that pass's own comment for why they aren't ordinary Taffy nodes.
-    let mut inline_leaves: Vec<(NodeId, Vec<InlineContentItem>)> = Vec::new();
+    let mut inline_leaves: Vec<(NodeId, InlineContext)> = Vec::new();
 
     layout_root_group(
         font,
@@ -663,7 +675,7 @@ fn collect_layouts(
     tree: &TaffyTree<LeafContext>,
     nodes: impl Iterator<Item = (NodeId, taffy::NodeId)>,
     node_count: usize,
-    inline_leaves: &[(NodeId, Vec<InlineContentItem>)],
+    inline_leaves: &[(NodeId, InlineContext)],
     id_of: impl Fn(NodeId) -> taffy::NodeId,
 ) -> Result<LayoutsAndContentExtents, LayoutError> {
     let mut result = HashMap::with_capacity(node_count);
@@ -699,10 +711,11 @@ fn collect_layouts(
     // wrap points and box positions, and this is exactly the width
     // `measure_leaf` would also have used for Taffy's own final "perform
     // layout" call on this same leaf.
-    for (container, items) in inline_leaves {
+    for (container, context) in inline_leaves {
         // Only `Box` items need this pass; a paragraph of text and plain
         // inline elements has nothing to place, so reshaping it is wasted.
-        if !items
+        if !context
+            .items
             .iter()
             .any(|item| matches!(item, InlineContentItem::Box { .. }))
         {
@@ -711,8 +724,8 @@ fn collect_layouts(
         let tid = id_of(*container);
         let layout = tree.layout(tid).map_err(LayoutError)?;
         let content: Vec<florui_text::InlineContent<'_>> =
-            items.iter().map(to_inline_content).collect();
-        let shaped = font.shape_inline_memoized(&content, Some(layout.size.width));
+            context.items.iter().map(to_inline_content).collect();
+        let shaped = font.shape_inline_memoized(&content, context.strut, Some(layout.size.width));
 
         let container_style = styles.get(container);
         // A `Box` item's own position comes back from `shape_inline`
@@ -723,7 +736,8 @@ fn collect_layouts(
         let padding_left = container_style.map_or(0.0, |s| s.padding.left);
         let padding_top = container_style.map_or(0.0, |s| s.padding.top);
 
-        let box_sizes: HashMap<NodeId, (f32, f32)> = items
+        let box_sizes: HashMap<NodeId, (f32, f32)> = context
+            .items
             .iter()
             .filter_map(|item| match item {
                 InlineContentItem::Box {
@@ -779,7 +793,7 @@ fn layout_root_group(
     available: Size<AvailableSpace>,
     tree: &mut TaffyTree<LeafContext>,
     taffy_ids: &mut HashMap<NodeId, taffy::NodeId>,
-    inline_leaves: &mut Vec<(NodeId, Vec<InlineContentItem>)>,
+    inline_leaves: &mut Vec<(NodeId, InlineContext)>,
 ) -> Result<(), LayoutError> {
     for &root in roots {
         build_node(font, arena, styles, root, tree, taffy_ids, inline_leaves)
@@ -887,10 +901,13 @@ fn run_layout(
                             })
                             .baseline,
                     ),
-                    Some(LeafContext::Inline(items)) => {
+                    Some(LeafContext::Inline(context)) => {
                         let content: Vec<florui_text::InlineContent<'_>> =
-                            items.iter().map(to_inline_content).collect();
-                        Some(font.shape_inline_memoized(&content, None).baseline)
+                            context.items.iter().map(to_inline_content).collect();
+                        Some(
+                            font.shape_inline_memoized(&content, context.strut, None)
+                                .baseline,
+                        )
                     }
                     // A replaced element has no text baseline to recover,
                     // and neither does a fixed-size control.
@@ -1147,13 +1164,13 @@ fn measure_leaf(
                 height: metrics.height,
             }
         }
-        LeafContext::Inline(items) => {
+        LeafContext::Inline(context) => {
             // A real inline formatting context is its own build path
             // (`shape_inline`'s multi-item `RangedBuilder`), remembered whole
             // by its items and wrap width rather than by one text and style.
             let content: Vec<florui_text::InlineContent<'_>> =
-                items.iter().map(to_inline_content).collect();
-            let result = font.shape_inline_memoized(&content, wrap_width);
+                context.items.iter().map(to_inline_content).collect();
+            let result = font.shape_inline_memoized(&content, context.strut, wrap_width);
             *baseline_out = Some(result.baseline);
             Size {
                 width: result.width,
@@ -1376,7 +1393,7 @@ fn build_node(
     root: NodeId,
     tree: &mut TaffyTree<LeafContext>,
     taffy_ids: &mut HashMap<NodeId, taffy::NodeId>,
-    inline_leaves: &mut Vec<(NodeId, Vec<InlineContentItem>)>,
+    inline_leaves: &mut Vec<(NodeId, InlineContext)>,
 ) -> Result<taffy::NodeId, taffy::TaffyError> {
     let mut stack = vec![BuildStep::Visit(root)];
 
@@ -1423,10 +1440,10 @@ fn build_node(
                     }
                 } else if needs_inline_layout(arena, styles, node) {
                     let style = to_taffy_style(styles.get(&node));
-                    let items = build_inline_content_items(font, arena, styles, node);
+                    let context = build_inline_content_items(font, arena, styles, node);
                     let id =
-                        tree.new_leaf_with_context(style, LeafContext::Inline(items.clone()))?;
-                    inline_leaves.push((node, items));
+                        tree.new_leaf_with_context(style, LeafContext::Inline(context.clone()))?;
+                    inline_leaves.push((node, context));
                     id
                 } else {
                     stack.push(BuildStep::Build(node));
@@ -3408,6 +3425,55 @@ mod tests {
         );
         let (_, plain) = layout_for(&tree, ".big { font-size: 40px; }");
         assert!(layouts[&p].height > plain[&p].height - 0.01);
+    }
+
+    #[test]
+    fn inline_lines_are_as_tall_as_css_makes_them_for_spans_and_the_strut() {
+        // Every number is what Chrome gives for the same markup.
+        let span = |class: &str, text: &str| {
+            Element::node(
+                "span",
+                vec![("class".to_string(), class.to_string())],
+                vec![Element::text(text)],
+            )
+        };
+        let height_of = |tag: &'static str, children: Vec<Element>, css: &str| {
+            let tree = Element::node(tag, vec![("class".to_string(), "p".to_string())], children);
+            let (arena, layouts) = layout_for(&tree, css);
+            layouts[&arena.roots()[0]].height
+        };
+
+        // A span that differs from its paragraph only in line-height: 50 + 20 + 20.
+        let wrapped = height_of(
+            "div",
+            vec![
+                Element::text("small text "),
+                span("tall", "tall span"),
+                Element::text(" and more words to wrap onto lines"),
+            ],
+            ".p { width: 200px; line-height: 20px; } .tall { line-height: 50px; }",
+        );
+        assert_close(wrapped, 90.0);
+
+        // A larger span alone in a container: the container's strut still counts.
+        let alone = height_of(
+            "div",
+            vec![span("big", "Fixed")],
+            ".p { width: 200px; line-height: 30px; } .big { font-size: 32px; }",
+        );
+        assert_close(alone, 36.0);
+
+        // The container's text and a larger span under one length.
+        let mixed = height_of(
+            "div",
+            vec![
+                Element::text("Hg "),
+                span("big", "Hg"),
+                Element::text(" tail"),
+            ],
+            ".p { width: 280px; line-height: 30px; } .big { font-size: 40px; }",
+        );
+        assert_close(mixed, 39.0);
     }
 
     #[test]

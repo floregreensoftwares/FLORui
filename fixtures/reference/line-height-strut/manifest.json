@@ -1,0 +1,32 @@
+{
+  "id": "line-height-strut",
+  "description": "The container keeps an empty line of its own in every line: a 32px span alone under a 30px line-height makes a 36px line, not 30.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 240,
+    "height_css_px": 80,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "p",
+    "children": [
+      {
+        "tag": "span",
+        "class": "big",
+        "text": "Fixed",
+        "css": ""
+      }
+    ],
+    "css": ".p { width: 200px; line-height: 30px; background-color: #e8ecff; color: #112233; } .big { font-size: 32px; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 6,
+    "geometry_tolerance_px": 1.5,
+    "reason": "Measured against Chrome 155 on Windows: 3.19% of the pixels differ and the box matches exactly; what is left is the two engines' glyph antialiasing, as in the other text fixtures. Before each run's line box was measured on its own, the same fixture measured 9.4% and the box is 6px short, so it fails."
+  }
+}
