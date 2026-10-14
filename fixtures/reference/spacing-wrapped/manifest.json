@@ -1,0 +1,25 @@
+{
+  "id": "spacing-wrapped",
+  "description": "Spacing widens the text, so it also changes where the lines break.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 180,
+    "height_css_px": 140,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "p",
+    "text": "The quick brown fox jumps over the lazy dog",
+    "css": ".p { width: 140px; letter-spacing: 2px; word-spacing: 6px; background-color: #e8ecff; color: #112233; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 12.5,
+    "geometry_tolerance_px": 1.5,
+    "reason": "Measured against Chrome 155 on Windows: 9.79% of the pixels differ and the box is within 1px; what is left is the two engines' glyph antialiasing, as in the other text fixtures. With the property ignored the same fixture measures 22.6% and the box is 22.6px short, so it fails."
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "id": "letter-spacing",
+  "description": "letter-spacing adds space after every character.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 320,
+    "height_css_px": 50,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "p",
+    "text": "Spaced out text",
+    "css": ".p { position: absolute; left: 0; top: 0; letter-spacing: 8px; background-color: #e8ecff; color: #112233; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 9,
+    "geometry_tolerance_px": 1.5,
+    "reason": "Measured against Chrome 155 on Windows: 6.51% of the pixels differ and the box is within 1px; what is left is the two engines' glyph antialiasing, as in the other text fixtures. With the property ignored the same fixture measures 22.2% and the box is 120px too narrow, so it fails."
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "id": "line-height-px",
+  "description": "A length line-height sets the height of every line: two lines of text at 30px are 60px tall.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 240,
+    "height_css_px": 80,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "p",
+    "text": "The quick brown fox jumps over the lazy dog",
+    "css": ".p { width: 200px; line-height: 30px; background-color: #e8ecff; color: #112233; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 12.5,
+    "geometry_tolerance_px": 1.5,
+    "reason": "Measured against Chrome 155 on Windows: 10.18% of the pixels differ and the box is within 1px; what is left is the two engines' glyph antialiasing, as in the other text fixtures. With the property ignored the same fixture measures 30.3% and the box is 16.4px short, so it fails."
+  }
+}
