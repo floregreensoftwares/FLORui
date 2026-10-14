@@ -333,6 +333,7 @@ pub fn ico_file(entries: &[(u32, Vec<u8>)]) -> Vec<u8> {
 
 /// The `RT_GROUP_ICON` resource: the directory with resource ids instead of
 /// file offsets (the image of entry `i` is `RT_ICON` id `i + 1`).
+#[cfg(any(windows, test))]
 pub fn group_icon_resource(entries: &[(u32, Vec<u8>)]) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend([0, 0, 1, 0]);
@@ -621,6 +622,7 @@ pub fn version_resource(fields: &VersionFields) -> Result<Vec<u8>, String> {
 }
 
 /// Everything to write into one executable.
+#[cfg_attr(not(windows), allow(dead_code))] // Only the Windows writer reads the fields.
 pub struct Payload<'a> {
     pub icon: Option<&'a [(u32, Vec<u8>)]>,
     pub version: Vec<u8>,
@@ -705,6 +707,7 @@ pub struct ExecutableResources {
 
 /// The version-information strings this tool writes, which are the ones read
 /// back.
+#[cfg(windows)]
 pub const VERSION_KEYS: [&str; 8] = [
     "ProductName",
     "CompanyName",

@@ -29,6 +29,7 @@ mod doctor;
 mod fmt;
 mod new;
 mod register_cmd;
+#[cfg(any(windows, test))]
 mod registration;
 mod resources;
 mod schema_cmd;

@@ -31,6 +31,7 @@ use serde_json::{Value, json};
 mod artifacts;
 mod distribution;
 mod editor_schema;
+#[cfg(windows)]
 mod registration;
 
 const SCHEMA_VERSION: u32 = 1;
@@ -117,6 +118,7 @@ pub struct Options {
 }
 
 /// The build report at `path`, for the commands that start from a staged build.
+#[cfg(windows)]
 pub(crate) fn read_build_report(path: &Path) -> Result<Value, String> {
     artifacts::read_report(path)
 }
