@@ -678,6 +678,21 @@ fn resolve_chromium(explicit: Option<PathBuf>) -> Option<PathBuf> {
     }
 }
 
+/// How to name a Chromium when none is configured.
+fn print_chromium_hint() {
+    if cfg!(windows) {
+        eprintln!(
+            "run scripts/fetch-chromium.ps1 to fetch the pinned build, or pass --chromium <path> / set FLORUI_CHROMIUM, e.g.:"
+        );
+        eprintln!(r#"  --chromium "C:\Program Files\Google\Chrome\Application\chrome.exe""#);
+        eprintln!(r#"  --chromium "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe""#);
+    } else {
+        eprintln!("pass --chromium <path> / set FLORUI_CHROMIUM, e.g.:");
+        eprintln!("  --chromium /usr/bin/chromium");
+        eprintln!("  --chromium /usr/bin/google-chrome");
+    }
+}
+
 fn discover_reference_fixtures(fixtures_root: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(fixtures_root) else {
         return Vec::new();
@@ -883,11 +898,7 @@ fn run_compare(request: CompareRequest) -> ExitCode {
 
     let Some(chromium) = resolve_chromium(request.chromium) else {
         eprintln!("{}", failure("no Chromium binary configured"));
-        eprintln!(
-            "run scripts/fetch-chromium.ps1 to fetch the pinned build, or pass --chromium <path> / set FLORUI_CHROMIUM, e.g.:"
-        );
-        eprintln!(r#"  --chromium "C:\Program Files\Google\Chrome\Application\chrome.exe""#);
-        eprintln!(r#"  --chromium "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe""#);
+        print_chromium_hint();
         return ExitCode::FAILURE;
     };
 
@@ -1018,11 +1029,7 @@ fn run_compare_all(
 
     let Some(chromium) = resolve_chromium(chromium) else {
         eprintln!("{}", failure("no Chromium binary configured"));
-        eprintln!(
-            "run scripts/fetch-chromium.ps1 to fetch the pinned build, or pass --chromium <path> / set FLORUI_CHROMIUM, e.g.:"
-        );
-        eprintln!(r#"  --chromium "C:\Program Files\Google\Chrome\Application\chrome.exe""#);
-        eprintln!(r#"  --chromium "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe""#);
+        print_chromium_hint();
         return ExitCode::FAILURE;
     };
 
@@ -1229,9 +1236,12 @@ fn run_visual_suite(
         ));
     }
     let Some(chromium) = resolve_chromium(chromium) else {
-        return unavailable(
-            "no Chromium found: run scripts/fetch-chromium.ps1 or set FLORUI_CHROMIUM".to_string(),
-        );
+        let how = if cfg!(windows) {
+            "run scripts/fetch-chromium.ps1 or set FLORUI_CHROMIUM"
+        } else {
+            "set FLORUI_CHROMIUM"
+        };
+        return unavailable(format!("no Chromium found: {how}"));
     };
 
     println!();
