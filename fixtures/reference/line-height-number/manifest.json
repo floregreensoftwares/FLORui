@@ -1,0 +1,25 @@
+{
+  "id": "line-height-number",
+  "description": "A unitless line-height is a multiple of the font size: two lines at 2 are 64px tall.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 240,
+    "height_css_px": 90,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "p",
+    "text": "The quick brown fox jumps over the lazy dog",
+    "css": ".p { width: 200px; line-height: 2; background-color: #e8ecff; color: #112233; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 11.5,
+    "geometry_tolerance_px": 1.5,
+    "reason": "Measured against Chrome 155 on Windows: 9.05% of the pixels differ and the box is within 1px; what is left is the two engines' glyph antialiasing, as in the other text fixtures. With the property ignored the same fixture measures 30.2% and the box is 20.4px short, so it fails."
+  }
+}

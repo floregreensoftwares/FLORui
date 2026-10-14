@@ -1,0 +1,50 @@
+{
+  "id": "line-height-inherited",
+  "description": "A number is inherited as a number, so a larger font gets taller lines (1.5 x 32px), while a length is inherited as the same pixels whatever the font size.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 260,
+    "height_css_px": 190,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "p",
+    "children": [
+      {
+        "tag": "div",
+        "text": "Normal",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "big",
+        "text": "Big",
+        "css": ""
+      },
+      {
+        "tag": "div",
+        "class": "fixed",
+        "children": [
+          {
+            "tag": "div",
+            "class": "huge",
+            "text": "Fixed",
+            "css": ""
+          }
+        ],
+        "css": ""
+      }
+    ],
+    "css": ".p { width: 240px; line-height: 1.5; background-color: #e8ecff; color: #112233; } .big { font-size: 32px; background-color: #c9d6ff; } .fixed { line-height: 30px; background-color: #ffe9c9; } .huge { font-size: 32px; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 5,
+    "geometry_tolerance_px": 1.5,
+    "reason": "Measured against Chrome 155 on Windows: 2.93% of the pixels differ and the box is within 1px; what is left is the two engines' glyph antialiasing, as in the other text fixtures. With the property ignored the same fixture measures 12.1% and the box is 6.9px too tall, so it fails."
+  }
+}
