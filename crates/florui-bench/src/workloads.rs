@@ -34,6 +34,12 @@ const CSS: &str = "
     .para { margin: 0 0 8px 0; color: #222; font-size: 14px; line-height: 1.4; }
     .em { font-size: 16px; color: #36c; }
     .small { font-size: 11px; color: #666; }
+    .tag { padding: 0 6px; border: 1px solid #36c; margin: 0 4px; background-color: #dfe6ff; border-radius: 4px; }
+    .outer { font-size: 17px; background-color: #fff3d0; text-decoration: underline; }
+    .inner-span { font-size: 12px; color: #a30; vertical-align: super; }
+    .chip { display: inline-block; padding: 2px 6px; background-color: #eef; }
+    .bar { height: 6px; background-color: #36c; }
+    .justified { text-align: justify; text-indent: 24px; }
     .cards { display: flex; flex-direction: column; width: 800px; }
     .card { overflow: hidden; border-radius: 8px; margin: 6px; padding: 8px;
             background-color: #fff; box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.3); }
@@ -93,6 +99,65 @@ fn paragraph(i: usize) -> Element {
                 "span",
                 class("small"),
                 vec![Element::text(sentence(4, i + 3))],
+            ),
+        ],
+    )
+}
+
+/// A paragraph of nested spans with boxes of their own: padding, border,
+/// margin, background, underline and a raised inner span.
+fn nested_paragraph(i: usize) -> Element {
+    Element::node(
+        "p",
+        class("para justified"),
+        vec![
+            Element::text(format!(
+                "Paragraph {i} opens with some plain words and then "
+            )),
+            Element::node(
+                "span",
+                class("outer"),
+                vec![
+                    Element::text("an outer span that holds "),
+                    Element::node(
+                        "span",
+                        class("inner-span"),
+                        vec![Element::text("a raised one")],
+                    ),
+                    Element::text(" and more text"),
+                ],
+            ),
+            Element::text(" before a "),
+            Element::node(
+                "span",
+                class("tag"),
+                vec![Element::text("tagged phrase that wraps")],
+            ),
+            Element::text(" and a closing run of words to fill the line out."),
+        ],
+    )
+}
+
+/// A paragraph with an inline-block holding spans, and a block child between
+/// two runs of text, so the context has atomic boxes with content and anonymous blocks.
+fn mixed_paragraph(i: usize) -> Element {
+    Element::node(
+        "div",
+        class("para"),
+        vec![
+            Element::text(format!("Item {i} starts with text and ")),
+            Element::node(
+                "span",
+                class("chip"),
+                vec![
+                    Element::node("span", class("em"), vec![Element::text("big")]),
+                    Element::text(" small chip"),
+                ],
+            ),
+            Element::text(" then more words follow"),
+            Element::node("div", class("bar"), vec![]),
+            Element::text(
+                "and the text after the bar wraps over a couple of lines of the paragraph",
             ),
         ],
     )
@@ -360,6 +425,38 @@ fn frame_pipeline() -> Vec<Workload> {
             build: || {
                 let mut win = window(CSS, || {
                     Element::node("div", class("doc"), (0..200).map(paragraph).collect())
+                });
+                Box::new(move || {
+                    win.update();
+                    black_box(win.frame());
+                })
+            },
+        },
+        Workload {
+            name: "text_nested_spans_200_paragraphs",
+            description: "Update and paint of 200 justified paragraphs with nested spans that have padding, borders and backgrounds",
+            exercises: "nested inline elements, per-element boxes, vertical-align, justify, text-indent",
+            build: || {
+                let mut win = window(CSS, || {
+                    Element::node(
+                        "div",
+                        class("doc"),
+                        (0..200).map(nested_paragraph).collect(),
+                    )
+                });
+                Box::new(move || {
+                    win.update();
+                    black_box(win.frame());
+                })
+            },
+        },
+        Workload {
+            name: "text_mixed_blocks_200_paragraphs",
+            description: "Update and paint of 200 paragraphs with an inline-block holding spans and a block between two runs of text",
+            exercises: "inline-block with content, anonymous blocks, nested layout",
+            build: || {
+                let mut win = window(CSS, || {
+                    Element::node("div", class("doc"), (0..200).map(mixed_paragraph).collect())
                 });
                 Box::new(move || {
                     win.update();

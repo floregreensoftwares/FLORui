@@ -30,6 +30,10 @@ pub struct LayoutCache {
     styles: Option<StyleMemo>,
     /// The tree the cascade walks, kept for as long as the elements are the same.
     session: florui_style::StyleSession,
+    /// The Taffy leaves of the anonymous blocks of the last layout, by their
+    /// id. They have no arena node to keep a slot for, so each layout makes
+    /// them anew and removes the last ones.
+    anonymous: HashMap<NodeId, taffy::NodeId>,
 }
 
 /// One set of inputs to the cascade and, once they have come twice in a row,
@@ -63,6 +67,7 @@ struct Group {
 enum Step {
     Visit(NodeId),
     Build(NodeId),
+    BuildMixed(NodeId, Vec<Part>),
 }
 
 impl Default for LayoutCache {
@@ -85,6 +90,7 @@ impl LayoutCache {
             epoch: 0,
             styles: None,
             session: florui_style::StyleSession::new(),
+            anonymous: HashMap::new(),
         }
     }
 
@@ -176,11 +182,28 @@ impl LayoutCache {
         styles: &StyleMap,
         available: Size<AvailableSpace>,
     ) -> Result<LayoutsAndContentExtents, LayoutError> {
+        // On one grown stack for the whole layout: see
+        // [`compute_layout_with_content_extents`].
+        stacker::maybe_grow(RECURSION_RED_ZONE, RECURSION_STACK_SIZE, || {
+            self.compute_in_place(font, arena, styles, available)
+        })
+    }
+
+    fn compute_in_place(
+        &mut self,
+        font: &mut florui_text::Font,
+        arena: &Arena,
+        styles: &StyleMap,
+        available: Size<AvailableSpace>,
+    ) -> Result<LayoutsAndContentExtents, LayoutError> {
         if font.generation() != self.font_generation {
             *self = LayoutCache::new();
             self.font_generation = font.generation();
         }
         self.epoch += 1;
+        for (_, gone) in self.anonymous.drain() {
+            self.tree.remove(gone).map_err(LayoutError)?;
+        }
         if self.slots.is_empty() {
             // A first layout: room for every node at once, as a tree built anew has.
             let mut tree = TaffyTree::with_capacity(styles.len() + 2);
@@ -216,6 +239,7 @@ impl LayoutCache {
         }
 
         let slots = &self.slots;
+        let anonymous = &self.anonymous;
         collect_layouts(
             font,
             arena,
@@ -224,12 +248,17 @@ impl LayoutCache {
             slots
                 .iter()
                 .enumerate()
-                .filter_map(|(node, slot)| slot.as_ref().map(|slot| (node, slot.id))),
+                .filter_map(|(node, slot)| slot.as_ref().map(|slot| (node, slot.id)))
+                .chain(anonymous.iter().map(|(&key, &id)| (key, id))),
             &inline_leaves,
             |node| {
-                slots[node]
-                    .as_ref()
-                    .map_or_else(|| unreachable!(), |s| s.id)
+                if is_anonymous(node) {
+                    anonymous[&node]
+                } else {
+                    slots[node]
+                        .as_ref()
+                        .map_or_else(|| unreachable!(), |s| s.id)
+                }
             },
         )
     }
@@ -300,7 +329,7 @@ impl LayoutCache {
                         let context = leaf_context(font, arena, styles, node);
                         self.place(node, to_taffy_style(styles.get(&node)), context, &[], false)?;
                     } else if needs_inline_layout(arena, styles, node) {
-                        let context = build_inline_content_items(font, arena, styles, node);
+                        let context = build_inline_content_items(font, arena, styles, node, None);
                         self.place(
                             node,
                             to_taffy_style(styles.get(&node)),
@@ -309,12 +338,62 @@ impl LayoutCache {
                             false,
                         )?;
                         inline_leaves.push((node, context));
+                    } else if let Some(parts) = mixed_parts(arena, styles, node) {
+                        let blocks: Vec<NodeId> = parts
+                            .iter()
+                            .filter_map(|part| match part {
+                                Part::Block(child) => Some(*child),
+                                Part::Run(_) => None,
+                            })
+                            .collect();
+                        stack.push(Step::BuildMixed(node, parts));
+                        for &child in blocks.iter().rev() {
+                            stack.push(Step::Visit(child));
+                        }
                     } else {
                         stack.push(Step::Build(node));
                         for &child in arena_children.iter().rev() {
                             stack.push(Step::Visit(child));
                         }
                     }
+                }
+                Step::BuildMixed(node, parts) => {
+                    let mut children = Vec::with_capacity(parts.len());
+                    let mut run_number = 0;
+                    for part in &parts {
+                        match part {
+                            Part::Block(child) => children.push(self.id_of(*child)),
+                            Part::Run(range) => {
+                                let context = build_run_content_items(
+                                    font,
+                                    arena,
+                                    styles,
+                                    node,
+                                    range.clone(),
+                                    None,
+                                );
+                                let leaf = self.tree.new_leaf_with_context(
+                                    taffy::Style {
+                                        display: Display::Block,
+                                        ..Default::default()
+                                    },
+                                    LeafContext::Inline(context.clone()),
+                                )?;
+                                let key = anonymous_id(node, run_number);
+                                run_number += 1;
+                                self.anonymous.insert(key, leaf);
+                                inline_leaves.push((key, context));
+                                children.push(leaf);
+                            }
+                        }
+                    }
+                    self.place(
+                        node,
+                        to_taffy_style(styles.get(&node)),
+                        None,
+                        &children,
+                        false,
+                    )?;
                 }
                 Step::Build(node) => {
                     let children: Vec<taffy::NodeId> = arena
@@ -458,6 +537,7 @@ mod tests {
          .c2 { width: 50%; margin-left: 7.5px; } \
          .c3 { position: absolute; left: 30px; top: 20px; width: 50px; height: 50px; } \
          .c4 { display: inline-block; width: 24px; height: 12px; } \
+         .ib { display: inline-block; } \
          .big { font-size: 22px; font-weight: 700; } \
          .over { position: absolute; width: 120px; padding: 5px; }";
 
@@ -500,6 +580,26 @@ mod tests {
                         Element::node("span", vec![], vec![Element::text("world")]),
                         Element::node("span", vec![("class".into(), "c4".into())], vec![]),
                         Element::text("!"),
+                    ],
+                );
+            }
+            if next(state).is_multiple_of(5) {
+                // Inline-level runs around a block, and an inline-block with content.
+                return Element::node(
+                    "div",
+                    vec![("class".into(), class)],
+                    vec![
+                        Element::text("before "),
+                        Element::node(
+                            "span",
+                            vec![("class".into(), "ib".into())],
+                            vec![
+                                Element::node("span", vec![], vec![Element::text("one")]),
+                                Element::text(" two"),
+                            ],
+                        ),
+                        Element::node("div", vec![("class".into(), "c0".into())], vec![]),
+                        Element::text("after"),
                     ],
                 );
             }
