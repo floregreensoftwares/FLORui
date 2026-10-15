@@ -3,4 +3,5 @@
 
 pub mod accessibility;
 pub mod open_url;
+pub mod overlay;
 pub mod single_instance;
