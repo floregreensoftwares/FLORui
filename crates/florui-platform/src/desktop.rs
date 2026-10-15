@@ -1153,6 +1153,9 @@ struct WindowState {
     /// The restored position, until the window has settled and been checked
     /// against it once; see [`window_state::settle_correction`].
     position_to_settle: Option<(i32, i32)>,
+    /// The same for the restored logical size, which some compositors shrink
+    /// by a client-side title bar on every launch.
+    size_to_settle: Option<(i32, i32)>,
     /// `Some` once this window's bounds changed since the last successful
     /// save; cleared on save. Reset (not just refreshed) on every further
     /// change, so a continuous resize drag keeps pushing the save deadline
@@ -1761,6 +1764,24 @@ impl WindowState {
         if now < changed_at + WINDOW_STATE_SAVE_DEBOUNCE {
             return;
         }
+        if let Some(target) = self.size_to_settle.take()
+            && !self.window.is_maximized()
+        {
+            let actual = self
+                .window
+                .inner_size()
+                .to_logical::<f64>(self.window.scale_factor());
+            let actual = (actual.width.round() as i32, actual.height.round() as i32);
+            if let Some(request) = window_state::settle_size_correction(target, actual) {
+                let _ = self.window.request_inner_size(winit::dpi::LogicalSize::new(
+                    f64::from(request.0),
+                    f64::from(request.1),
+                ));
+                // The corrected resize reports `Resized`, which saves where it landed.
+                self.pending_geometry_save = Some(now);
+                return;
+            }
+        }
         if let Some(target) = self.position_to_settle.take()
             && let Ok(actual) = self.window.outer_position()
             && let Some(request) = window_state::settle_correction(target, (actual.x, actual.y))
@@ -1974,6 +1995,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             // alone is a smaller compromise than losing everything.
             let mut should_restore_maximized = false;
             let mut position_to_settle = None;
+            let mut size_to_settle = None;
             if let Some(persistence) = &spec.options.persistence {
                 let saved =
                     window_state::window_state_path(&persistence.app_identifier, &persistence.key)
@@ -2002,6 +2024,10 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                             window_state::clamp_to_min(saved.logical_size, spec.options.min_size);
                         attrs = attrs
                             .with_inner_size(winit::dpi::LogicalSize::new(clamped.0, clamped.1));
+                        if !saved.maximized {
+                            size_to_settle =
+                                Some((clamped.0.round() as i32, clamped.1.round() as i32));
+                        }
                         if let Some(position) = restorable_position {
                             attrs = attrs.with_position(winit::dpi::PhysicalPosition::new(
                                 position.0, position.1,
@@ -2169,6 +2195,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 decorations: spec.options.decorations,
                 persistence: spec.options.persistence.clone(),
                 position_to_settle,
+                size_to_settle,
                 pending_geometry_save: None,
                 accessibility_adapter,
                 accessibility_tree: accessibility::tree::AccessibilityTree::new(),
