@@ -345,6 +345,7 @@ fn run_windows_with(
         proxy: event_loop.create_proxy(),
         fatal_error: None,
         activation_queue: None,
+        app_id: None,
         primary_window_id: None,
         clipboard: crate::clipboard::Clipboard::new(),
         visited_links: crate::visited_links::VisitedLinks::new(),
@@ -441,6 +442,7 @@ pub fn run_single_instance(
                 proxy: event_loop.create_proxy(),
                 fatal_error: None,
                 activation_queue: Some(activation_queue),
+                app_id: Some(config.app_identifier.clone()),
                 primary_window_id: None,
                 clipboard: crate::clipboard::Clipboard::new(),
                 visited_links: crate::visited_links::VisitedLinks::new(),
@@ -1932,6 +1934,11 @@ struct DesktopHost {
     /// pipe-listener thread's `UserEvent::Activation` sends and with the
     /// primary window's own [`ActivationEvents`] context (see `resumed`).
     activation_queue: Option<Rc<RefCell<ActivationQueue>>>,
+    /// The application identifier, when the run was given one: the Wayland
+    /// app id and X11 class of every window, which is how a desktop matches
+    /// a window to the desktop entry `florui register` wrote.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    app_id: Option<String>,
     /// The first window `resumed` ever creates — the sole window
     /// [`ActivationEvents`] context is provided to and the sole target
     /// `UserEvent::Activation` redraws. Multi-window fan-out is
@@ -2012,6 +2019,16 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 .with_decorations(matches!(spec.options.decorations, DecorationMode::System))
                 .with_theme(crate::theme::requested_winit_theme(spec.options.theme));
             attrs = drag_drop::disable_builtin_drag_and_drop(attrs);
+            #[cfg(target_os = "linux")]
+            if let Some(identifier) = spec
+                .options
+                .persistence
+                .as_ref()
+                .map(|persistence| persistence.app_identifier.as_str())
+                .or(self.app_id.as_deref())
+            {
+                attrs = crate::os::linux::app_id::with_app_id(attrs, identifier);
+            }
             if let Some((width, height)) = spec.options.size {
                 attrs = attrs.with_inner_size(winit::dpi::LogicalSize::new(width, height));
             }
@@ -2829,6 +2846,7 @@ mod tests {
                 proxy: event_loop.create_proxy(),
                 fatal_error: None,
                 activation_queue: None,
+                app_id: None,
                 primary_window_id: None,
                 clipboard: crate::clipboard::Clipboard::new(),
                 visited_links: crate::visited_links::VisitedLinks::new(),

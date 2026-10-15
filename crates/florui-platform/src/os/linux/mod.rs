@@ -2,6 +2,7 @@
 //! name and entry points as its `windows` counterpart.
 
 pub mod accessibility;
+pub mod app_id;
 pub mod file_dialog;
 pub mod menu;
 pub mod open_url;
