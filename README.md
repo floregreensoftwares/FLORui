@@ -50,7 +50,15 @@ The planned build integration collects component stylesheets automatically, so a
 
 ## Run the development preview
 
-Install Rust through rustup and the native build tools for your platform. The repository pins Rust 1.94.0 in `rust-toolchain.toml`. Initial development and CI focus on Windows; other platforms are not yet validated.
+Install Rust through rustup and the native build tools for your platform. The repository pins Rust 1.94.0 in `rust-toolchain.toml`. Initial development and CI focus on Windows.
+
+### Linux
+
+The crates build, lint and pass their tests on Ubuntu 24.04 with the pinned toolchain, one crate at a time, and an example window opens and keeps its bounds. That was checked under WSL 2 with WSLg, on X11 and on native Wayland; it has not been tried on a full Linux desktop.
+
+- **Packages:** building needs the development files of `libxkbcommon`, `libwayland` and `libx11`. Running a window under X11 also needs `libxkbcommon-x11-0` at run time, which `winit` loads when it starts.
+- **Window bounds** are kept under `$XDG_STATE_HOME`, else `~/.local/state`, in `<app identifier>/window-state/`. Wayland does not tell a program where its window is, so there only the size and the maximized flag are saved; the position comes back only on X11.
+- **Not there yet:** the native services of the platform crate (file dialogs, context menus, the tray icon, single-instance activation, opening a URL and the system menu) have no Linux implementation and report themselves as unavailable or do nothing. `florui register`, the native icon and version information of `florui build`, and the conformance comparison against the pinned Chromium are Windows only for now.
 
 From the repository root:
 
