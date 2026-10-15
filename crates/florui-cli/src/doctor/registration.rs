@@ -6,13 +6,17 @@
 //! type.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
 
 use florui_config::{EnvironmentSelection, Target};
 
 use super::{Check, Status};
+use crate::declaration::Declaration;
 use crate::register_cmd::{declaration_from, load_project};
-use crate::registration::{self, Declaration, OWNER_VALUE, Registry};
+#[cfg(windows)]
+use crate::registration::{self, OWNER_VALUE, Registry};
 
 const CATEGORY: &str = "registration";
 
@@ -36,10 +40,35 @@ fn check(
     }
 }
 
+/// What a host's registration says; every other check is the same everywhere.
+pub(super) trait Host {
+    fn state(&self, declaration: &Declaration, staged: &Path) -> Check;
+    fn conflicts(&self, declaration: &Declaration, staged: &Path) -> Check;
+    fn registered(&self, identifier: &str) -> bool;
+}
+
+#[cfg(windows)]
+pub(super) struct Windows<'a>(pub(super) &'a dyn Registry);
+
+#[cfg(windows)]
+impl Host for Windows<'_> {
+    fn state(&self, declaration: &Declaration, staged: &Path) -> Check {
+        state_check(declaration, staged, self.0)
+    }
+
+    fn conflicts(&self, declaration: &Declaration, staged: &Path) -> Check {
+        conflicts_check(declaration, staged, self.0)
+    }
+
+    fn registered(&self, identifier: &str) -> bool {
+        registration::read_record(self.0, identifier).is_some()
+    }
+}
+
 pub(super) fn checks(
     package: Option<&str>,
     environment: Option<&str>,
-    registry: &dyn Registry,
+    host: &dyn Host,
 ) -> Vec<Check> {
     let (facts, config) = match load_project(package, environment) {
         Ok(project) => project,
@@ -86,13 +115,14 @@ pub(super) fn checks(
             std::env::consts::EXE_SUFFIX
         ));
     vec![
-        state_check(&declaration, &staged, registry),
-        conflicts_check(&declaration, &staged, registry),
+        host.state(&declaration, &staged),
+        host.conflicts(&declaration, &staged),
         isolation_check(package, environment, &facts),
-        default_requests_check(&config, &declaration, registry),
+        default_requests_check(&config, &declaration, host),
     ]
 }
 
+#[cfg(windows)]
 fn state_check(declaration: &Declaration, staged: &Path, registry: &dyn Registry) -> Check {
     let identifier = &declaration.identifier;
     let Some(record) = registration::read_record(registry, identifier) else {
@@ -188,6 +218,7 @@ fn describe(declaration: &Declaration) -> String {
     parts.join(", ")
 }
 
+#[cfg(windows)]
 fn conflicts_check(declaration: &Declaration, staged: &Path, registry: &dyn Registry) -> Check {
     // The executable only matters to the command that gets written, so a
     // project that has not been built yet is still checked.
@@ -320,7 +351,7 @@ fn isolation_check(
 fn default_requests_check(
     config: &florui_config::ResolvedConfig,
     declaration: &Declaration,
-    registry: &dyn Registry,
+    host: &dyn Host,
 ) -> Check {
     let requests = &config.app.activation.request_default;
     if requests.is_empty() {
@@ -332,7 +363,7 @@ fn default_requests_check(
             None,
         );
     }
-    let registered = registration::read_record(registry, &declaration.identifier).is_some();
+    let registered = host.registered(&declaration.identifier);
     let list: Vec<String> = requests
         .iter()
         .map(|request| match request {
@@ -362,5 +393,121 @@ fn default_requests_check(
             ),
             Some("run `florui register`"),
         )
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub(super) struct Linux(pub(super) crate::desktop_registration::Dirs);
+
+#[cfg(target_os = "linux")]
+impl Host for Linux {
+    fn state(&self, declaration: &Declaration, staged: &Path) -> Check {
+        use crate::desktop_registration::{FileState, file_state, read_record};
+
+        let identifier = &declaration.identifier;
+        let Some(record) = read_record(&self.0, identifier) else {
+            return check(
+                "registration.state",
+                false,
+                Status::Skipped,
+                format!("{identifier} is not registered with the system"),
+                Some("run `florui build` and then `florui register`"),
+            );
+        };
+        let mut problems = Vec::new();
+        if !Path::new(&record.exe).is_file() {
+            problems.push(format!("the registered executable {} is gone", record.exe));
+        }
+        for file in &record.files {
+            match file_state(file) {
+                FileState::Intact => {}
+                FileState::Missing => problems.push(format!("{} is missing", file.path)),
+                FileState::Changed => {
+                    problems.push(format!("{} changed after it was registered", file.path))
+                }
+            }
+        }
+        for scheme in &declaration.schemes {
+            if !record
+                .schemes
+                .iter()
+                .any(|s| s.eq_ignore_ascii_case(scheme))
+            {
+                problems.push(format!("{scheme}:// is declared but was not registered"));
+            }
+        }
+        for association in &declaration.associations {
+            if !record.extensions.contains(&association.extension) {
+                problems.push(format!(
+                    ".{} is declared but was not registered",
+                    association.extension
+                ));
+            }
+        }
+        if staged.is_file() && Path::new(&record.exe) != staged {
+            problems.push(format!(
+                "it is registered for {} but the project's staged build is {}",
+                record.exe,
+                staged.display()
+            ));
+        }
+        if problems.is_empty() {
+            check(
+                "registration.state",
+                false,
+                Status::Pass,
+                format!(
+                    "{identifier} is registered for {} and still as it was registered",
+                    describe(declaration)
+                ),
+                None,
+            )
+        } else {
+            check(
+                "registration.state",
+                false,
+                Status::Fail,
+                problems.join("; "),
+                Some("run `florui unregister` and `florui register` again"),
+            )
+        }
+    }
+
+    fn conflicts(&self, declaration: &Declaration, staged: &Path) -> Check {
+        // The executable only matters to the command that gets written, so a
+        // project that has not been built yet is still checked.
+        let exe = if staged.is_file() {
+            staged.to_path_buf()
+        } else {
+            std::path::PathBuf::from("/opt/app/app")
+        };
+        let plan = crate::desktop_registration::plan(declaration, &exe, &[], &self.0);
+        if plan.conflicts.is_empty() {
+            check(
+                "registration.conflicts",
+                false,
+                Status::Pass,
+                "registering would take nothing over: no reserved scheme, and nothing of another application's is in the way"
+                    .to_string(),
+                None,
+            )
+        } else {
+            let text: Vec<String> = plan
+                .conflicts
+                .iter()
+                .map(|c| format!("{}: {}", c.what, c.reason))
+                .collect();
+            check(
+                "registration.conflicts",
+                false,
+                Status::Fail,
+                text.join("; "),
+                Some("choose another scheme or association identity in [app.activation]"),
+            )
+        }
+    }
+
+    fn registered(&self, identifier: &str) -> bool {
+        crate::desktop_registration::read_record(&self.0, identifier).is_some()
     }
 }

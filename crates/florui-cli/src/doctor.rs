@@ -31,7 +31,7 @@ use serde_json::{Value, json};
 mod artifacts;
 mod distribution;
 mod editor_schema;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod registration;
 
 const SCHEMA_VERSION: u32 = 1;
@@ -118,17 +118,21 @@ pub struct Options {
 }
 
 /// The build report at `path`, for the commands that start from a staged build.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub(crate) fn read_build_report(path: &Path) -> Result<Value, String> {
     artifacts::read_report(path)
 }
 
 #[cfg(windows)]
 fn registration_checks(package: Option<&str>, environment: Option<&str>) -> Vec<Check> {
-    registration::checks(package, environment, &crate::registration::CurrentUser)
+    registration::checks(
+        package,
+        environment,
+        &registration::Windows(&crate::registration::CurrentUser),
+    )
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn registration_checks(_package: Option<&str>, _environment: Option<&str>) -> Vec<Check> {
     vec![Check {
         id: "registration.unsupported_host",
@@ -137,11 +141,30 @@ fn registration_checks(_package: Option<&str>, _environment: Option<&str>) -> Ve
         required: false,
         observed: None,
         expected: None,
-        evidence: "registering URL schemes and file types is only supported on Windows so far"
-            .to_string(),
+        evidence:
+            "registering URL schemes and file types is only supported on Windows and Linux so far"
+                .to_string(),
         reason: None,
         remediation: None,
     }]
+}
+
+#[cfg(target_os = "linux")]
+fn registration_checks(package: Option<&str>, environment: Option<&str>) -> Vec<Check> {
+    match crate::desktop_registration::Dirs::from_env() {
+        Ok(dirs) => registration::checks(package, environment, &registration::Linux(dirs)),
+        Err(reason) => vec![Check {
+            id: "registration.state",
+            category: "registration",
+            status: Status::Unknown,
+            required: false,
+            observed: None,
+            expected: None,
+            evidence: reason,
+            reason: None,
+            remediation: None,
+        }],
+    }
 }
 
 pub fn run(options: Options) -> ExitCode {
@@ -310,7 +333,7 @@ const CAPABILITY_PROBE_IDENTIFIER: &str = "florui-doctor-probe";
 /// merely being Windows. Machine-level, like [`reduced_motion_check`]:
 /// independent of whether the current project even opts into it.
 fn single_instance_capability_check() -> Check {
-    if !cfg!(target_os = "windows") {
+    if !cfg!(any(target_os = "windows", target_os = "linux")) {
         return Check {
             id: "environment.single_instance_capability",
             category: "environment",
@@ -332,9 +355,14 @@ fn single_instance_capability_check() -> Check {
             required: false,
             observed: Some("true".to_string()),
             expected: None,
-            evidence: "a real named mutex and a security-descriptor-restricted named pipe were \
-                       both created and released successfully"
-                .to_string(),
+            evidence: if cfg!(windows) {
+                "a real named mutex and a security-descriptor-restricted named pipe were \
+                 both created and released successfully"
+            } else {
+                "a real lock file and a user-private Unix socket were both created and \
+                 released successfully"
+            }
+            .to_string(),
             reason: None,
             remediation: None,
         }
@@ -346,13 +374,23 @@ fn single_instance_capability_check() -> Check {
             required: false,
             observed: Some("false".to_string()),
             expected: None,
-            evidence: "could not create the real named mutex and/or security-descriptor-\
-                       restricted named pipe single-instance activation depends on"
-                .to_string(),
+            evidence: if cfg!(windows) {
+                "could not create the real named mutex and/or security-descriptor-\
+                 restricted named pipe single-instance activation depends on"
+            } else {
+                "could not create the lock file and/or user-private Unix socket \
+                 single-instance activation depends on"
+            }
+            .to_string(),
             reason: None,
             remediation: Some(
-                "check local Windows security policy/permissions for named-object creation"
-                    .to_string(),
+                if cfg!(windows) {
+                    "check local Windows security policy/permissions for named-object creation"
+                } else {
+                    "check that XDG_RUNTIME_DIR (or the temporary directory) is set and writable \
+                     for the current user"
+                }
+                .to_string(),
             ),
         }
     }
@@ -420,7 +458,7 @@ fn window_persistence_capability_check() -> Check {
 /// creation probe in a bounded subprocess because a bad driver can crash
 /// the whole process) -- reported in-process, no subprocess needed.
 fn reduced_motion_check() -> Check {
-    if !cfg!(target_os = "windows") {
+    if !cfg!(any(target_os = "windows", target_os = "linux")) {
         return Check {
             id: "environment.reduced_motion",
             category: "environment",
@@ -441,10 +479,17 @@ fn reduced_motion_check() -> Check {
         required: false,
         observed: Some(prefers_reduced.to_string()),
         expected: None,
-        evidence: format!(
-            "Windows' \"Show animations in Windows\" setting reports reduced motion: \
-             {prefers_reduced}"
-        ),
+        evidence: if cfg!(windows) {
+            format!(
+                "Windows' \"Show animations in Windows\" setting reports reduced motion: \
+                 {prefers_reduced}"
+            )
+        } else {
+            format!(
+                "GNOME's enable-animations setting (gsettings) reports reduced motion: \
+                 {prefers_reduced}; other desktops report none"
+            )
+        },
         reason: None,
         remediation: None,
     }
@@ -1986,17 +2031,14 @@ mod tests {
         let checks = environment_checks();
         let single_instance = find(&checks, "environment.single_instance_capability");
         let persistence = find(&checks, "environment.window_persistence_capability");
-        if cfg!(target_os = "windows") {
-            assert_eq!(single_instance.status, Status::Pass);
-            assert_eq!(persistence.status, Status::Pass);
+        let expected = if cfg!(any(target_os = "windows", target_os = "linux")) {
+            Status::Pass
         } else {
-            assert_eq!(single_instance.status, Status::NotApplicable);
-            let expected = if cfg!(target_os = "linux") {
-                Status::Pass
-            } else {
-                Status::NotApplicable
-            };
-            assert_eq!(persistence.status, expected);
-        }
+            Status::NotApplicable
+        };
+        assert_eq!(single_instance.status, expected);
+        assert_eq!(persistence.status, expected);
+        let reduced_motion = find(&checks, "environment.reduced_motion");
+        assert_eq!(reduced_motion.status, expected);
     }
 }
