@@ -1,8 +1,8 @@
-//! Native open/save file dialogs — see
-//! [`crate::os::windows::file_dialog`] for the real implementation.
-//! `spawn_open_dialog`/`spawn_save_dialog` call back with
-//! [`OpenFileDialogOutcome::Unavailable`]/[`SaveFileDialogOutcome::Unavailable`]
-//! immediately on any other platform: no equivalent mechanism exists yet.
+//! Native open/save file dialogs — see [`crate::os::windows::file_dialog`]
+//! and `crate::os::linux::file_dialog` (the desktop portal's chooser) for the
+//! real implementations. `spawn_open_dialog`/`spawn_save_dialog` call back
+//! with [`OpenFileDialogOutcome::Unavailable`]/
+//! [`SaveFileDialogOutcome::Unavailable`] immediately elsewhere.
 //! Apps never call these two directly -- see
 //! [`crate::WindowControls::open_file_dialog`]/
 //! [`crate::WindowControls::save_file_dialog`] for the public entry
@@ -88,10 +88,13 @@ pub(crate) fn filter_patterns(filters: &[FileDialogFilter]) -> Vec<(String, Stri
 #[cfg(target_os = "windows")]
 pub(crate) use crate::os::windows::file_dialog::{spawn_open_dialog, spawn_save_dialog};
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+pub(crate) use crate::os::linux::file_dialog::{spawn_open_dialog, spawn_save_dialog};
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub(crate) use stub::{spawn_open_dialog, spawn_save_dialog};
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 mod stub {
     use winit::window::Window;
 
