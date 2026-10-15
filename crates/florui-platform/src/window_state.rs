@@ -274,11 +274,30 @@ pub(crate) fn capture_and_save(window: &Window, persistence: &WindowPersistence)
         },
         maximized: window.is_maximized(),
     };
+    let state = keep_normal_bounds(load_or_default(&path), state);
     if let Err(error) = save(&path, &state) {
         eprintln!(
             "florui-platform: could not save window state to {}: {error}",
             path.display()
         );
+    }
+}
+
+/// What to write when `current` is captured. A maximized window reports the
+/// screen's size and position, which must not replace the bounds it had
+/// before, or un-maximizing after the next launch would give a window as big
+/// as the screen. So the earlier bounds stay and only `maximized` changes;
+/// with no earlier file there is nothing better than the current ones.
+fn keep_normal_bounds(
+    previous: Option<PersistedWindowState>,
+    current: PersistedWindowState,
+) -> PersistedWindowState {
+    match previous {
+        Some(previous) if current.maximized => PersistedWindowState {
+            maximized: true,
+            ..previous
+        },
+        _ => current,
     }
 }
 
@@ -355,6 +374,45 @@ mod tests {
             },
             maximized: false,
         }
+    }
+
+    fn maximized_on_the_screen() -> PersistedWindowState {
+        PersistedWindowState {
+            logical_size: (1920.0, 1005.0),
+            position: Some((-8, -8)),
+            maximized: true,
+            ..sample_state()
+        }
+    }
+
+    #[test]
+    fn a_window_that_is_not_maximized_is_saved_as_it_is() {
+        let current = PersistedWindowState {
+            logical_size: (640.0, 480.0),
+            ..sample_state()
+        };
+        assert_eq!(
+            keep_normal_bounds(Some(sample_state()), current.clone()),
+            current
+        );
+    }
+
+    #[test]
+    fn maximizing_keeps_the_bounds_from_before_and_only_sets_the_flag() {
+        let kept = keep_normal_bounds(Some(sample_state()), maximized_on_the_screen());
+        assert_eq!(
+            kept,
+            PersistedWindowState {
+                maximized: true,
+                ..sample_state()
+            }
+        );
+    }
+
+    #[test]
+    fn a_maximized_window_with_no_earlier_state_saves_what_it_has() {
+        let current = maximized_on_the_screen();
+        assert_eq!(keep_normal_bounds(None, current.clone()), current);
     }
 
     #[test]
