@@ -1,0 +1,42 @@
+{
+  "id": "inline-block-children",
+  "description": "An inline-block holding a larger span is as tall as the span and sits on its last line.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 300,
+    "height_css_px": 60,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "p",
+    "children": [
+      "x ",
+      {
+        "tag": "span",
+        "class": "b",
+        "children": [
+          {
+            "tag": "span",
+            "class": "c",
+            "text": "big",
+            "css": ""
+          },
+          " small"
+        ],
+        "css": ""
+      },
+      " y"
+    ],
+    "css": ".p { width: 280px; background-color: #e8ecff; color: #112233; } .b { display: inline-block; background-color: #fff2b8; } .c { font-size: 24px; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 5.5,
+    "geometry_tolerance_px": 1.5,
+    "reason": "Measured against Chromium 153 on Windows: 3.98% of the pixels differ and the box is within 1px; what is left is the two engines' glyph antialiasing, as in the other text fixtures. Without the feature the same fixture measures 8.46% and the box is the same size, so it fails."
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": "span-underline",
+  "description": "Underline on a span reaches the spans inside it and stops with it: no-break spaces, so only the underline is drawn.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 300,
+    "height_css_px": 40,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "p",
+    "children": [
+      {
+        "tag": "span",
+        "text": "      ",
+        "css": ""
+      },
+      {
+        "tag": "span",
+        "class": "u",
+        "children": [
+          "            ",
+          {
+            "tag": "span",
+            "text": "            ",
+            "css": ""
+          }
+        ],
+        "css": ""
+      },
+      {
+        "tag": "span",
+        "text": "      ",
+        "css": ""
+      }
+    ],
+    "css": ".p { width: 280px; background-color: #e8ecff; color: #112233; } .u { text-decoration: underline; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 0.44,
+    "geometry_tolerance_px": 1.5,
+    "reason": "Measured against Chromium 153 on Windows: 0.04% of the pixels differ and the box is within 1px; what is left is the two engines' glyph antialiasing, as in the other text fixtures. Without the feature the same fixture measures 0.84% and the box is the same size, so it fails."
+  }
+}

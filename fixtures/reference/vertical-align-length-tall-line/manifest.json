@@ -1,0 +1,55 @@
+{
+  "id": "vertical-align-length-tall-line",
+  "description": "A raised or lowered span and top/bottom aligned boxes make the line taller as CSS does.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 300,
+    "height_css_px": 80,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "p",
+    "children": [
+      "ab ",
+      {
+        "tag": "span",
+        "class": "a",
+        "text": "up",
+        "css": ""
+      },
+      " ",
+      {
+        "tag": "span",
+        "class": "b",
+        "text": "down",
+        "css": ""
+      },
+      " ",
+      {
+        "tag": "span",
+        "class": "c",
+        "text": "top",
+        "css": ""
+      },
+      " ",
+      {
+        "tag": "span",
+        "class": "d",
+        "text": "half",
+        "css": ""
+      },
+      " cd"
+    ],
+    "css": ".p { width: 280px; line-height: 30px; background-color: #e8ecff; color: #112233; } .a { vertical-align: 8px; } .b { vertical-align: -8px; } .c { vertical-align: top; font-size: 28px; } .d { vertical-align: 50%; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 11,
+    "geometry_tolerance_px": 1.5,
+    "reason": "Measured against Chromium 153 on Windows: 4.99% of the pixels differ and the box is within 1px; what is left is the two engines' glyph antialiasing, as in the other text fixtures. Without the feature the same fixture measures 26.97% and the box is 18.0px off, so it fails."
+  }
+}

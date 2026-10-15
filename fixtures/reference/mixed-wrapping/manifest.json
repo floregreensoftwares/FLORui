@@ -1,0 +1,33 @@
+{
+  "id": "mixed-wrapping",
+  "description": "The text on each side of a block wraps in its own anonymous block.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 140,
+    "height_css_px": 190,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "p",
+    "children": [
+      "one two three four five six seven",
+      {
+        "tag": "div",
+        "class": "blk",
+        "css": ""
+      },
+      "eight nine ten eleven twelve thirteen"
+    ],
+    "css": ".p { width: 100px; background-color: #e8ecff; color: #112233; } .blk { height: 10px; background-color: #ffd54a; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 17.5,
+    "geometry_tolerance_px": 1.5,
+    "reason": "Measured against Chromium 153 on Windows: 11.16% of the pixels differ and the box is within 1px; what is left is the two engines' glyph antialiasing, as in the other text fixtures. Without the feature the same fixture measures 61.65% and the box is 154.0px off, so it fails."
+  }
+}
