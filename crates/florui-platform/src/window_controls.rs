@@ -55,14 +55,15 @@ pub enum InputMode {
     Normal,
     /// The whole window lets every click pass through to whatever is
     /// behind it, on any other application — see
-    /// [`crate::overlay`]'s own doc. No-op outside Windows.
+    /// [`crate::overlay`]'s own doc. No-op on macOS.
     Passthrough,
     /// Only elements carrying [`WINDOW_INPUT_REGION_CLASS`] receive
     /// clicks; everywhere else passes through, on any other
     /// application, the same as [`InputMode::Passthrough`] — see
     /// `crate::os::windows::input_regions`'s own doc for why this needs
     /// a live cursor-tracking hook rather than a plain per-window hit
-    /// test. No-op outside Windows.
+    /// test. On Linux only under X11: Wayland has no per-region input
+    /// shape, so `set_input_mode` returns `false`. No-op on macOS.
     Selective,
 }
 
@@ -478,7 +479,7 @@ impl WindowControls {
     /// Switches how the real window targets mouse input — see
     /// [`InputMode`]'s own doc for what each mode does. `false` (no-op,
     /// though this mode is still recorded and reported by
-    /// [`Self::input_mode`]) outside Windows.
+    /// [`Self::input_mode`]) where unsupported.
     pub fn set_input_mode(&self, mode: InputMode) -> bool {
         self.input_mode.set(mode);
         crate::overlay::set_input_mode(&self.window, mode)

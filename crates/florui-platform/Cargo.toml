@@ -17,7 +17,7 @@ profiling = ["florui/profiling", "florui-profile/profiling"]
 # driving UiRuntime on its own shouldn't have to pull them in.
 # `dep:windows-sys` is a no-op outside the Windows-only dependency table
 # below — every other target simply never has it in its resolved graph.
-desktop = ["dep:notify", "dep:softbuffer", "dep:winit", "dep:wgpu", "dep:pollster", "dep:windows-sys", "dep:windows", "dep:windows-core", "dep:florui-icon", "dep:serde", "dep:serde_json", "dep:arboard", "dep:accesskit", "dep:accesskit_winit"]
+desktop = ["dep:notify", "dep:softbuffer", "dep:winit", "dep:wgpu", "dep:pollster", "dep:windows-sys", "dep:windows", "dep:windows-core", "dep:florui-icon", "dep:serde", "dep:serde_json", "dep:arboard", "dep:accesskit", "dep:accesskit_winit", "dep:x11rb"]
 
 [dependencies]
 florui = { path = "../florui" }
@@ -136,3 +136,8 @@ windows-core = { version = "0.62.2", optional = true }
 [[bench]]
 name = "runtime"
 harness = false
+
+# `os::linux::overlay`'s per-region click-through: the X11 input shape.
+# Already resolved through `winit`, so no new compilation unit.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = { version = "0.13.2", optional = true, default-features = false, features = ["shape"] }

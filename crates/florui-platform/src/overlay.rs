@@ -1,8 +1,7 @@
 //! Whole-window and selective click-through — see
-//! [`crate::os::windows::overlay`] for the real `InputMode::Passthrough`
-//! implementation and `crate::os::windows::input_regions` for
-//! `InputMode::Selective`'s hook-driven version. Both are no-ops
-//! elsewhere.
+//! [`crate::os::windows::overlay`] and `crate::os::windows::input_regions`
+//! for Windows, and `crate::os::linux::overlay` for Linux (selective mode
+//! on X11 only). A no-op on other systems.
 
 use crate::window_controls::{InputMode, ScreenRect};
 
@@ -11,7 +10,12 @@ pub(crate) fn set_input_mode(window: &winit::window::Window, mode: InputMode) ->
     crate::os::windows::overlay::set_input_mode(window, mode)
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+pub(crate) fn set_input_mode(window: &winit::window::Window, mode: InputMode) -> bool {
+    crate::os::linux::overlay::set_input_mode(window, mode)
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub(crate) fn set_input_mode(_window: &winit::window::Window, _mode: InputMode) -> bool {
     false
 }
@@ -21,5 +25,10 @@ pub(crate) fn sync_input_regions(window: &winit::window::Window, regions: &[Scre
     crate::os::windows::overlay::sync_input_regions(window, regions);
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+pub(crate) fn sync_input_regions(window: &winit::window::Window, regions: &[ScreenRect]) {
+    crate::os::linux::overlay::sync_input_regions(window, regions);
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub(crate) fn sync_input_regions(_window: &winit::window::Window, _regions: &[ScreenRect]) {}
