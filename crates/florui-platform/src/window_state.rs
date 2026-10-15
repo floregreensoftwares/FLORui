@@ -1,9 +1,9 @@
 //! Opt-in window-bounds persistence: versioned JSON under
-//! `%LOCALAPPDATA%\<app identifier>\window-state\<key>.json`. `LOCALAPPDATA`
-//! (not `APPDATA`) because this is host-local, non-roaming state, and it's
-//! already per-Windows-user by construction -- no separate user component
-//! needed anywhere in the path. Windows-only for now; a macOS/Linux app-data
-//! root is a future adapter's problem, not this module's.
+//! `<state root>/<app identifier>/window-state/<key>.json`. The root is
+//! `%LOCALAPPDATA%` on Windows (not `APPDATA`: this is host-local,
+//! non-roaming state) and `$XDG_STATE_HOME`, else `~/.local/state`, on Linux.
+//! Both are per-user by construction, so no user component is needed in the
+//! path. Other hosts have no root yet, and persistence is unavailable there.
 //!
 //! A corrupted, unreadable, or version-mismatched file is never fatal --
 //! [`load_or_default`] always degrades to `None` (configured defaults),
@@ -62,18 +62,48 @@ impl std::fmt::Display for WindowStateError {
     }
 }
 
-/// `%LOCALAPPDATA%\<app_identifier>\window-state\<key>.json` -- `None` when
-/// `LOCALAPPDATA` itself isn't set (never expected for a normally-launched
-/// desktop session; treated the same as "persistence unavailable" by every
-/// caller, not a panic).
+/// `<state root>/<app_identifier>/window-state/<key>.json` -- `None` when the
+/// host has no state root or its variables aren't set (never expected for a
+/// normally-launched desktop session; treated the same as "persistence
+/// unavailable" by every caller, not a panic).
 pub(crate) fn window_state_path(app_identifier: &str, key: &str) -> Option<PathBuf> {
-    let local_app_data = std::env::var_os("LOCALAPPDATA")?;
     Some(
-        PathBuf::from(local_app_data)
+        state_root()?
             .join(app_identifier)
             .join("window-state")
             .join(format!("{key}.json")),
     )
+}
+
+fn state_root() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        xdg_state_root(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME"))
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        None
+    }
+}
+
+/// The XDG base directory rule: `$XDG_STATE_HOME` if it is an absolute path,
+/// else `$HOME/.local/state`. A relative value is ignored, as the
+/// specification requires.
+#[cfg(any(target_os = "linux", test))]
+fn xdg_state_root(
+    state_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let absolute =
+        |value: std::ffi::OsString| Some(PathBuf::from(value)).filter(|p| p.is_absolute());
+    state_home.and_then(absolute).or_else(|| {
+        home.and_then(absolute)
+            .map(|home| home.join(".local").join("state"))
+    })
 }
 
 fn read_and_parse(path: &Path) -> Result<PersistedWindowState, WindowStateError> {
@@ -349,8 +379,34 @@ mod tests {
         assert_eq!(load_or_default(&path).unwrap(), second);
     }
 
+    fn absolute(name: &str) -> std::ffi::OsString {
+        std::env::temp_dir().join(name).into_os_string()
+    }
+
     #[test]
-    #[cfg(windows)] // The path comes from `LOCALAPPDATA`, which only Windows sets.
+    fn an_absolute_state_home_wins_over_home() {
+        let root = xdg_state_root(Some(absolute("state")), Some(absolute("home")));
+        assert_eq!(root, Some(std::env::temp_dir().join("state")));
+    }
+
+    #[test]
+    fn without_a_usable_state_home_the_root_is_under_home() {
+        let expected = Some(std::env::temp_dir().join("home/.local/state"));
+        for state_home in [None, Some("".into()), Some("relative/state".into())] {
+            let root = xdg_state_root(state_home, Some(absolute("home")));
+            assert_eq!(root, expected);
+        }
+    }
+
+    #[test]
+    fn no_absolute_home_and_no_state_home_means_no_root() {
+        assert_eq!(xdg_state_root(None, None), None);
+        assert_eq!(xdg_state_root(None, Some("relative".into())), None);
+        assert_eq!(xdg_state_root(Some("relative".into()), None), None);
+    }
+
+    #[test]
+    #[cfg(any(windows, target_os = "linux"))] // Hosts that have a state root.
     fn distinct_keys_never_alias_the_same_path() {
         let a = window_state_path("com.floregreen.garden", "main").unwrap();
         let b = window_state_path("com.floregreen.garden", "editor").unwrap();
@@ -463,7 +519,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs a real Windows session: cargo test -p florui-platform -- --ignored"]
+    #[ignore = "writes to the real state directory: cargo test -p florui-platform -- --ignored"]
     fn probe_persistence_capability_writes_and_cleans_up_after_itself() {
         let identifier = "florui-platform-test-probe";
         assert!(probe_persistence_capability(identifier));
