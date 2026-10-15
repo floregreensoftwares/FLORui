@@ -661,6 +661,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "needs source locations: a debug build, or florui's source-locations feature"
+    )]
     fn inspector_nodes_report_where_their_element_was_written() {
         let marker = line!();
         let tree: Element = view! {

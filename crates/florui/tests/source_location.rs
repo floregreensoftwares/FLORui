@@ -26,6 +26,10 @@ fn located(element: &Element) -> Vec<(&'static str, SourceLocation)> {
 }
 
 #[test]
+#[cfg_attr(
+    not(any(debug_assertions, feature = "source-locations")),
+    ignore = "needs source locations: a debug build, or florui's source-locations feature"
+)]
 fn every_element_carries_its_own_line_and_column() {
     let marker = line!();
     let tree = view! {
@@ -54,6 +58,10 @@ fn every_element_carries_its_own_line_and_column() {
 }
 
 #[test]
+#[cfg_attr(
+    not(any(debug_assertions, feature = "source-locations")),
+    ignore = "needs source locations: a debug build, or florui's source-locations feature"
+)]
 fn an_element_on_the_line_of_the_invocation_is_located_from_its_own_column() {
     let marker = line!();
     let tree = view! { <p>{"x"}</p> };
@@ -74,6 +82,10 @@ fn Right() -> Element {
 }
 
 #[test]
+#[cfg_attr(
+    not(any(debug_assertions, feature = "source-locations")),
+    ignore = "needs source locations: a debug build, or florui's source-locations feature"
+)]
 fn the_component_that_built_an_element_is_recorded() {
     let (scope, _dirty) = ComponentScope::new();
     let tree = scope.render(|| {
@@ -98,6 +110,10 @@ fn Frame(children: Children) -> Element {
 }
 
 #[test]
+#[cfg_attr(
+    not(any(debug_assertions, feature = "source-locations")),
+    ignore = "needs source locations: a debug build, or florui's source-locations feature"
+)]
 fn markup_slotted_into_a_component_keeps_the_path_through_it() {
     let (scope, _dirty) = ComponentScope::new();
     let tree = scope.render(|| {
@@ -117,6 +133,10 @@ fn markup_slotted_into_a_component_keeps_the_path_through_it() {
 }
 
 #[test]
+#[cfg_attr(
+    not(any(debug_assertions, feature = "source-locations")),
+    ignore = "needs source locations: a debug build, or florui's source-locations feature"
+)]
 fn an_element_inside_an_expression_is_located_by_its_own_block() {
     let marker = line!();
     let tree = view! {
