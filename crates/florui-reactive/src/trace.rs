@@ -268,9 +268,6 @@ pub fn on_trace(listener: impl Fn(UpdateTrace) + 'static) {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
     use super::*;
 
     #[test]
@@ -319,6 +316,9 @@ mod tests {
 
     #[cfg(any(debug_assertions, feature = "profiling"))]
     mod recording {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
         use super::*;
 
         fn capture() -> (Rc<RefCell<Vec<UpdateTrace>>>, Subscription) {
