@@ -2,3 +2,4 @@
 //! name and entry points as its `windows` counterpart.
 
 pub mod open_url;
+pub mod single_instance;
