@@ -2,9 +2,10 @@
 //! selection, and the movement/deletion vocabulary a real `<input>` or
 //! `<textarea>` needs.
 //!
-//! Wraps Parley's own `editing::PlainEditor` rather than hand-rolling
-//! grapheme/word/bidi boundaries — it already implements exactly this
-//! vocabulary, tested and bidi/cluster-correct. Without
+//! Moves the caret and the selection with Parley's own `Selection` and
+//! `Cursor` rather than hand-rolling grapheme/word/bidi boundaries — they
+//! already implement exactly this vocabulary, tested and bidi/cluster-correct.
+//! The buffer and its layout are [`crate::editor_core::EditorCore`]'s. Without
 //! [`TextEditor::set_width`] text never wraps, which is what a single-line
 //! `<input>` wants; a `<textarea>` sets a width and gets wrapped lines,
 //! with `Up`/`Down` and the point operations working across them.
@@ -16,9 +17,9 @@
 //! know while it's active.
 
 use parley::FontFamily as ParleyFontFamily;
-use parley::editing::PlainEditor;
 use parley::{FontWeight, StyleProperty};
 
+use crate::editor_core::EditorCore;
 use crate::{Font, LineHeight, ShapedGlyph, ShapedRun, TextStyle};
 use parley::LineHeight as ParleyLineHeight;
 
@@ -26,7 +27,13 @@ use parley::LineHeight as ParleyLineHeight;
 /// multi-style; see this module's own doc for why. Opaque: only
 /// [`Font`]'s editing methods construct or inspect the [`PlainEditor`]
 /// inside, the same way [`crate::CachedLayout`] hides its own `Layout`.
-pub struct TextEditor(PlainEditor<[u8; 4]>);
+pub struct TextEditor(
+    EditorCore,
+    /// The width the text wraps at, if any.
+    Option<f32>,
+    /// The width a percentage `text-indent` is of when there is no wrapping.
+    f32,
+);
 
 /// A selection or caret position, in byte offsets into [`TextEditor`]'s
 /// current text — `anchor == focus` is a collapsed selection (a plain
@@ -106,7 +113,7 @@ pub enum TextEditOp {
 
 impl TextEditor {
     pub fn new(font_size: f32) -> Self {
-        Self(PlainEditor::new(font_size))
+        Self(EditorCore::new(font_size), None, 0.0)
     }
 
     /// Wraps text at `width` logical pixels, or never for `None`. A
@@ -114,6 +121,13 @@ impl TextEditor {
     /// its content width so long lines break like they do in a browser.
     pub fn set_width(&mut self, width: Option<f32>) {
         self.0.set_width(width);
+        self.1 = width;
+    }
+
+    /// The width of the field a percentage `text-indent` is of, for text that
+    /// does not wrap (a wrapped text uses the width it wraps at).
+    pub fn set_indent_basis(&mut self, width: f32) {
+        self.2 = width;
     }
 
     /// Overwrites the whole buffer — used both to seed a freshly-created
@@ -153,7 +167,7 @@ impl TextEditor {
     /// [`TextEditOp::SetCompose`]'s own doc), so this is what a caller
     /// checks before treating that text as final.
     pub fn is_composing(&self) -> bool {
-        self.0.raw_compose().is_some()
+        self.0.is_composing()
     }
 }
 
@@ -194,6 +208,8 @@ impl Font {
         styles.insert(StyleProperty::LetterSpacing(style.letter_spacing));
         styles.insert(StyleProperty::WordSpacing(style.word_spacing));
         editor.0.set_alignment(style.parley_alignment());
+        let (indent, options) = style.paragraph_indent(Some(editor.1.unwrap_or(editor.2)));
+        editor.0.set_text_indent(indent, options);
 
         let text_before = editor.0.raw_text().to_owned();
         let mut driver = editor.0.driver(&mut self.font_cx, &mut self.layout_cx);
