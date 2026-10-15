@@ -662,17 +662,15 @@ pub(crate) fn build_text_input_paint(
         let style = styles.get(&node);
         let (runs, caret_rect, selection_rects, compose_rect) =
             if arena.input_type(node) == Some("password") {
-                let font_size = style.map_or(16.0, |s| s.font_size);
-                let font_weight = style.map_or(400.0, |s| s.font_weight);
-                let family = style.map_or(florui_text::FontFamily::SansSerif, |s| {
-                    florui_layout::to_text_font_family(s.font_family)
-                });
                 let real_glyphs: Vec<florui_text::ShapedGlyph> = runs
                     .iter()
                     .flat_map(|run| run.glyphs.iter().copied())
                     .collect();
-                let (mask_runs, mask_positions) =
-                    masked_glyphs(font, real_glyphs.len(), family, font_size, font_weight);
+                let (mask_runs, mask_positions) = masked_glyphs(
+                    font,
+                    real_glyphs.len(),
+                    florui_layout::node_text_style(style),
+                );
                 let mask_x = |real_x: f32| -> f32 {
                     let index = char_index_at(&real_glyphs, real_x);
                     mask_positions
@@ -700,25 +698,12 @@ pub(crate) fn build_text_input_paint(
             .then(|| arena.attr(node, "placeholder"))
             .flatten()
             .map(|text| {
-                let font_size = style.map_or(16.0, |s| s.font_size);
-                let font_weight = style.map_or(400.0, |s| s.font_weight);
-                let family = style.map_or(florui_text::FontFamily::SansSerif, |s| {
-                    florui_layout::to_text_font_family(s.font_family)
-                });
+                let text_style = florui_layout::node_text_style(style);
                 if arena.tag(node) == "textarea" {
                     let width = registry.viewport(id).0.max(1.0);
-                    font.shape_wrapped(
-                        florui_text::TextStyle::new(family, font_size, font_weight),
-                        text,
-                        width,
-                    )
-                    .runs
+                    font.shape_wrapped(text_style, text, width).runs
                 } else {
-                    font.shape(
-                        florui_text::TextStyle::new(family, font_size, font_weight),
-                        text,
-                    )
-                    .runs
+                    font.shape(text_style, text).runs
                 }
             });
         let (scrollbar, resizer) = if arena.tag(node) == "textarea" {
@@ -985,15 +970,10 @@ fn content_box_raster_target(
 fn masked_glyphs(
     font: &mut florui_text::Font,
     char_count: usize,
-    family: florui_text::FontFamily,
-    font_size: f32,
-    font_weight: f32,
+    style: florui_text::TextStyle,
 ) -> (Vec<florui_text::ShapedRun>, Vec<f32>) {
     let probe_text = "\u{2022}".repeat(char_count + 1);
-    let mut shaped = font.shape(
-        florui_text::TextStyle::new(family, font_size, font_weight),
-        &probe_text,
-    );
+    let mut shaped = font.shape(style, &probe_text);
     let positions: Vec<f32> = shaped
         .runs
         .iter()
@@ -2569,16 +2549,12 @@ mod tests {
         let (narrow_runs, narrow_positions) = masked_glyphs(
             &mut font,
             13,
-            florui_text::FontFamily::SansSerif,
-            20.0,
-            400.0,
+            florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 20.0, 400.0),
         );
         let (wide_runs, wide_positions) = masked_glyphs(
             &mut font,
             13,
-            florui_text::FontFamily::SansSerif,
-            20.0,
-            400.0,
+            florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 20.0, 400.0),
         );
         // Same character *count* always produces the same positions --
         // real Chromium does this regardless of which real characters
@@ -2601,9 +2577,7 @@ mod tests {
         let (runs, positions) = masked_glyphs(
             &mut font,
             0,
-            florui_text::FontFamily::SansSerif,
-            20.0,
-            400.0,
+            florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 20.0, 400.0),
         );
         assert!(runs.iter().all(|run| run.glyphs.is_empty()));
         assert_eq!(positions.len(), 1, "just the caret-at-start position");

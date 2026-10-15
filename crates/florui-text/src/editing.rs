@@ -19,7 +19,8 @@ use parley::FontFamily as ParleyFontFamily;
 use parley::editing::PlainEditor;
 use parley::{FontWeight, StyleProperty};
 
-use crate::{Font, FontFamily, ShapedGlyph, ShapedRun};
+use crate::{Font, LineHeight, ShapedGlyph, ShapedRun, TextStyle};
+use parley::LineHeight as ParleyLineHeight;
 
 /// One buffer's worth of real, live-edited text — never wrapped, never
 /// multi-style; see this module's own doc for why. Opaque: only
@@ -169,17 +170,30 @@ impl Font {
         &mut self,
         editor: &mut TextEditor,
         op: TextEditOp,
-        family: FontFamily,
-        font_weight: f32,
+        style: TextStyle,
     ) -> bool {
-        let family_name = self.family_name(family).to_owned();
-        editor.0.edit_styles().insert(StyleProperty::FontFamily(
+        let family_name = self.family_name(style.family).to_owned();
+        // A normal line height is Chrome's, as it is for text that is not
+        // edited.
+        let line_height = match style.line_height {
+            LineHeight::Normal => {
+                ParleyLineHeight::Absolute(self.style_metrics(style).normal_line_height())
+            }
+            LineHeight::Number(n) => ParleyLineHeight::FontSizeRelative(n),
+            LineHeight::Length(px) => ParleyLineHeight::Absolute(px),
+        };
+        let styles = editor.0.edit_styles();
+        styles.insert(StyleProperty::FontFamily(
             ParleyFontFamily::named(&family_name).into_owned(),
         ));
-        editor
-            .0
-            .edit_styles()
-            .insert(StyleProperty::FontWeight(FontWeight::new(font_weight)));
+        styles.insert(StyleProperty::FontWeight(FontWeight::new(
+            style.font_weight,
+        )));
+        styles.insert(StyleProperty::FontSize(style.font_size));
+        styles.insert(StyleProperty::LineHeight(line_height));
+        styles.insert(StyleProperty::LetterSpacing(style.letter_spacing));
+        styles.insert(StyleProperty::WordSpacing(style.word_spacing));
+        editor.0.set_alignment(style.parley_alignment());
 
         let text_before = editor.0.raw_text().to_owned();
         let mut driver = editor.0.driver(&mut self.font_cx, &mut self.layout_cx);
@@ -342,14 +356,12 @@ mod tests {
         font.apply_text_edit(
             &mut editor,
             TextEditOp::InsertOrReplace("hello".to_string()),
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         font.apply_text_edit(
             &mut editor,
             TextEditOp::SelectByteRange(1, 3),
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         assert_eq!(
             editor.selection(),
@@ -368,8 +380,7 @@ mod tests {
         font.apply_text_edit(
             &mut editor,
             TextEditOp::InsertOrReplace("hello".to_string()),
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         assert_eq!(editor.text(), "hello");
         assert_eq!(
@@ -388,21 +399,18 @@ mod tests {
         font.apply_text_edit(
             &mut editor,
             TextEditOp::InsertOrReplace("hello".to_string()),
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         font.apply_text_edit(
             &mut editor,
             TextEditOp::SelectAll,
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         assert_eq!(editor.selected_text(), Some("hello"));
         let changed = font.apply_text_edit(
             &mut editor,
             TextEditOp::Delete,
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         assert!(changed);
         assert_eq!(editor.text(), "");
@@ -415,14 +423,12 @@ mod tests {
         font.apply_text_edit(
             &mut editor,
             TextEditOp::InsertOrReplace("hi".to_string()),
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         let changed = font.apply_text_edit(
             &mut editor,
             TextEditOp::MoveLeft,
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         assert!(!changed, "moving the caret must not itself change the text");
         assert_eq!(
@@ -441,8 +447,7 @@ mod tests {
         font.apply_text_edit(
             &mut editor,
             TextEditOp::InsertOrReplace("hi".to_string()),
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         let rect = font.caret_rect(&mut editor).expect("cursor is not hidden");
         assert!(rect.3 > rect.1, "caret must have a real, nonzero height");
@@ -456,8 +461,7 @@ mod tests {
         let changed = font.apply_text_edit(
             &mut editor,
             TextEditOp::SetCompose("n".to_string(), Some((1, 1))),
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         assert!(editor.is_composing());
         // The buffer really holds "n" (so it paints), but `text()` -- the
@@ -479,14 +483,12 @@ mod tests {
         font.apply_text_edit(
             &mut editor,
             TextEditOp::SetCompose("n".to_string(), Some((1, 1))),
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         font.apply_text_edit(
             &mut editor,
             TextEditOp::ClearCompose,
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         assert!(!editor.is_composing());
         // `text()` was already "" the whole time (it always excludes an
@@ -496,8 +498,7 @@ mod tests {
         font.apply_text_edit(
             &mut editor,
             TextEditOp::InsertOrReplace("hi".to_string()),
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         assert_eq!(editor.text(), "hi");
     }
@@ -509,8 +510,7 @@ mod tests {
         font.apply_text_edit(
             &mut editor,
             TextEditOp::SetCompose("n".to_string(), Some((1, 1))),
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         let rect = font.ime_cursor_area(&mut editor);
         assert!(rect.3 > rect.1, "must have a real, nonzero height");
@@ -523,8 +523,7 @@ mod tests {
         font.apply_text_edit(
             &mut editor,
             TextEditOp::InsertOrReplace("original".to_string()),
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         editor.set_text("rewritten");
         assert_eq!(editor.text(), "rewritten");
@@ -546,15 +545,13 @@ mod tests {
         font.apply_text_edit(
             &mut editor,
             TextEditOp::InsertOrReplace("original".to_string()),
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         editor.set_text("rewritten");
         font.apply_text_edit(
             &mut editor,
             TextEditOp::MoveTextEnd,
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         assert_eq!(
             editor.selection(),
@@ -572,8 +569,7 @@ mod tests {
         font.apply_text_edit(
             &mut editor,
             TextEditOp::InsertOrReplace("Hi".to_string()),
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         let edited_runs = font.shaped_runs_for_edit(&mut editor);
         let plain = font.shape(TextStyle::new(FontFamily::SansSerif, 16.0, 400.0), "Hi");
@@ -587,20 +583,22 @@ mod tests {
         font.apply_text_edit(
             &mut editor,
             TextEditOp::InsertOrReplace(text.to_string()),
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         font.apply_text_edit(
             &mut editor,
             TextEditOp::MoveTextStart,
-            FontFamily::SansSerif,
-            400.0,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         editor
     }
 
     fn op(font: &mut Font, editor: &mut TextEditor, op: TextEditOp) -> bool {
-        font.apply_text_edit(editor, op, FontFamily::SansSerif, 400.0)
+        font.apply_text_edit(
+            editor,
+            op,
+            TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
+        )
     }
 
     #[test]
@@ -693,5 +691,52 @@ mod tests {
         op(&mut font, &mut editor, TextEditOp::SelectDown);
         op(&mut font, &mut editor, TextEditOp::SelectDown);
         assert_eq!(editor.selected_text(), Some("ab\ncd\n"));
+    }
+    #[test]
+    fn the_editor_lays_its_lines_out_with_the_texts_line_height_and_spacing() {
+        use crate::LineHeight;
+        let mut font = Font::load_embedded();
+        let plain = TextStyle::new(FontFamily::SansSerif, 16.0, 400.0);
+        let mut size_of = |text: &str, style: TextStyle| {
+            let mut editor = TextEditor::new(16.0);
+            editor.set_text(text);
+            font.apply_text_edit(&mut editor, TextEditOp::MoveTextEnd, style);
+            font.content_size(&mut editor)
+        };
+        // Three lines: 3 x 22 (Chrome's normal line for 16px), 3 x 30 and 3 x 2 x 16.
+        assert_eq!(
+            size_of(
+                "a
+b
+c", plain
+            )
+            .1,
+            66.0
+        );
+        assert_eq!(
+            size_of(
+                "a
+b
+c",
+                plain.with_line_height(LineHeight::Length(30.0))
+            )
+            .1,
+            90.0
+        );
+        assert_eq!(
+            size_of(
+                "a
+b
+c",
+                plain.with_line_height(LineHeight::Number(2.0))
+            )
+            .1,
+            96.0
+        );
+        // 3px after each of three letters, 14px after each of four spaces.
+        let base = size_of("abc", plain).0;
+        assert!((size_of("abc", plain.with_spacing(3.0, 0.0)).0 - base - 9.0).abs() < 0.01);
+        let base = size_of("a b c d e", plain).0;
+        assert!((size_of("a b c d e", plain.with_spacing(0.0, 14.0)).0 - base - 56.0).abs() < 0.01);
     }
 }

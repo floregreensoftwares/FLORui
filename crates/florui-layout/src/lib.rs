@@ -223,6 +223,31 @@ pub fn text_style_of(style: &ComputedStyle) -> florui_text::TextStyle {
         florui_style::LineHeight::Number(n) => florui_text::LineHeight::Number(n),
         florui_style::LineHeight::Length(px) => florui_text::LineHeight::Length(px),
     };
+    // The text of a flex or grid container is an anonymous item as wide as the
+    // text, so there is nothing for `text-align` to align in it.
+    let align = match style.text_align {
+        _ if matches!(style.display, StyleDisplay::Flex | StyleDisplay::Grid) => {
+            florui_text::TextAlign::Start
+        }
+        florui_style::TextAlign::Start => florui_text::TextAlign::Start,
+        florui_style::TextAlign::End => florui_text::TextAlign::End,
+        florui_style::TextAlign::Center => florui_text::TextAlign::Center,
+        florui_style::TextAlign::Justify => florui_text::TextAlign::Justify,
+    };
+    let vertical_align = match style.vertical_align {
+        florui_style::VerticalAlign::Baseline => florui_text::VerticalAlign::Baseline,
+        florui_style::VerticalAlign::Sub => florui_text::VerticalAlign::Sub,
+        florui_style::VerticalAlign::Super => florui_text::VerticalAlign::Super,
+        florui_style::VerticalAlign::TextTop => florui_text::VerticalAlign::TextTop,
+        florui_style::VerticalAlign::TextBottom => florui_text::VerticalAlign::TextBottom,
+        florui_style::VerticalAlign::Middle => florui_text::VerticalAlign::Middle,
+        florui_style::VerticalAlign::Top => florui_text::VerticalAlign::Top,
+        florui_style::VerticalAlign::Bottom => florui_text::VerticalAlign::Bottom,
+        florui_style::VerticalAlign::Raise(amount) => florui_text::VerticalAlign::Raise {
+            length: amount.length,
+            percent: amount.percentage,
+        },
+    };
     florui_text::TextStyle::new(
         to_text_font_family(style.font_family),
         style.font_size,
@@ -230,6 +255,14 @@ pub fn text_style_of(style: &ComputedStyle) -> florui_text::TextStyle {
     )
     .with_line_height(line_height)
     .with_spacing(style.letter_spacing, style.word_spacing)
+    .with_align(align)
+    .with_indent(florui_text::TextIndent {
+        length: style.text_indent.length.length,
+        percent: style.text_indent.length.percentage,
+        hanging: style.text_indent.hanging,
+        each_line: style.text_indent.each_line,
+    })
+    .with_vertical_align(vertical_align)
 }
 
 /// What text is shaped with when its node has no computed style.
@@ -317,11 +350,10 @@ fn textarea_intrinsic_size(
     node: NodeId,
     style: Option<&ComputedStyle>,
 ) -> Size<f32> {
-    let family = style.map_or(florui_text::FontFamily::Monospace, |s| {
-        to_text_font_family(s.font_family)
-    });
-    let font_size = style.map_or(13.3333, |s| s.font_size);
-    let font_weight = style.map_or(400.0, |s| s.font_weight);
+    let text_style = style.map_or_else(
+        || florui_text::TextStyle::new(florui_text::FontFamily::Monospace, 13.3333, 400.0),
+        text_style_of,
+    );
     let attr_count = |name: &str, default: f32| {
         arena
             .attr(node, name)
@@ -329,18 +361,8 @@ fn textarea_intrinsic_size(
             .filter(|&count| count > 0)
             .map_or(default, |count| count as f32)
     };
-    let advance = font
-        .measure(
-            florui_text::TextStyle::new(family, font_size, font_weight),
-            "0",
-        )
-        .width;
-    let line_height = font
-        .measure(
-            florui_text::TextStyle::new(family, font_size, font_weight),
-            " ",
-        )
-        .height;
+    let advance = font.measure(text_style, "0").width;
+    let line_height = font.measure(text_style, " ").height;
     Size {
         width: attr_count("cols", 20.0) * advance + TEXTAREA_SCROLLBAR_WIDTH,
         height: attr_count("rows", 2.0) * line_height,

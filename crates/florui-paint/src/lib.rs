@@ -95,7 +95,7 @@ use florui_style::Arena;
 use florui_style::{
     ComputedStyle, ContentAlignment, Display, FilterFunction, FlexDirection, GlassMaterial,
     GlassSpec, ItemAlignment, LengthPercentage, NodeId, ObjectFit, Position, Rgba, RoundedRect,
-    TextAlign, Tree,
+    Tree,
 };
 use florui_text::Font;
 use rounded::RoundedRectPath;
@@ -3287,22 +3287,11 @@ fn paint_node(
                 font, arena, styles, node, wrap_width,
             ) {
                 let is_button = arena.tag(node) == "button";
-                let first_line = shaped
-                    .runs
-                    .first()
-                    .and_then(|r| r.glyphs.first())
-                    .map(|g| g.y);
-                let single_line = shaped
-                    .runs
-                    .iter()
-                    .flat_map(|run| &run.glyphs)
-                    .all(|glyph| Some(glyph.y) == first_line);
                 let (dx, dy) = text_offset(
                     is_button,
                     style,
                     (content_width, content_height),
                     (shaped.width * scale_factor, shaped.height * scale_factor),
-                    single_line,
                 );
                 text_shadow::paint(
                     buffer,
@@ -3343,13 +3332,11 @@ fn paint_node(
                 Some(style) if !text.is_empty() && places_its_text(is_button, Some(style)) => {
                     let text_style = florui_layout::text_style_of(style);
                     let metrics = font.measure_wrapped(text_style, text, wrap_width);
-                    let unwrapped = font.measure(text_style, text);
                     text_offset(
                         is_button,
                         Some(style),
                         (content_width, content_height),
                         (metrics.width * scale_factor, metrics.height * scale_factor),
-                        (unwrapped.width - metrics.width).abs() < 0.5,
                     )
                 }
                 _ => (0.0, 0.0),
@@ -3373,23 +3360,18 @@ fn paint_node(
 /// Whether [`text_offset`] can move this node's text at all, so a node that
 /// never needs it is not measured.
 fn places_its_text(is_button: bool, style: Option<&ComputedStyle>) -> bool {
-    style.is_some_and(|s| {
-        is_button || s.display == Display::Flex || s.text_align != TextAlign::Start
-    })
+    style.is_some_and(|s| is_button || s.display == Display::Flex)
 }
 
 /// How far a node's own text sits from the content box's corner. In a flex
 /// container the text is the only flex item, so `justify-content` and
-/// `align-items` place it. Otherwise `text-align` places a line of text
-/// horizontally (`single_line`: wrapped text keeps its lines at the start,
-/// since lines are not aligned one by one), and a `<button>` centers it
-/// vertically.
+/// `align-items` place it. Otherwise a `<button>` centers it vertically;
+/// `text-align` is the text engine's.
 fn text_offset(
     is_button: bool,
     style: Option<&ComputedStyle>,
     (content_width, content_height): (f32, f32),
     (text_width, text_height): (f32, f32),
-    single_line: bool,
 ) -> (f32, f32) {
     let Some(style) = style else {
         return (0.0, 0.0);
@@ -3397,12 +3379,7 @@ fn text_offset(
     let free_x = (content_width - text_width).max(0.0);
     let free_y = (content_height - text_height).max(0.0);
     if style.display != Display::Flex {
-        let dx = match style.text_align {
-            TextAlign::Center if single_line => free_x / 2.0,
-            TextAlign::End if single_line => free_x,
-            _ => 0.0,
-        };
-        return (dx, if is_button { free_y / 2.0 } else { 0.0 });
+        return (0.0, if is_button { free_y / 2.0 } else { 0.0 });
     }
     let (main_free, cross_free, row) = match style.flex_direction {
         FlexDirection::Row | FlexDirection::RowReverse => (free_x, free_y, true),
@@ -7855,6 +7832,100 @@ mod tests {
                 "the {name} ink row moved by {moved}, expected about {shift}"
             );
         }
+    }
+
+    /// The first and last column with red ink in each 30px band of a 200px
+    /// wide div under `css` (`line-height: 30px` puts one line in each).
+    fn ink_columns_per_line(css: &str, text: &str, width: u32) -> Vec<(u32, u32)> {
+        let tree = Element::node(
+            "div",
+            vec![("class".to_string(), "t".to_string())],
+            vec![Element::text(text)],
+        );
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let height = 120;
+        let buffer = paint_to_buffer(
+            &mut font,
+            width,
+            height,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        );
+        (0..height / 30)
+            .filter_map(|band| {
+                let inked: Vec<u32> = (0..width)
+                    .filter(|&px| {
+                        (band * 30..band * 30 + 30).any(|py| pixel_rgb(&buffer, px, py)[0] > 0x40)
+                    })
+                    .collect();
+                Some((*inked.first()?, *inked.last()?))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn text_align_places_every_line_not_only_a_single_one() {
+        let css = |align: &str, width: u32| {
+            format!(
+                ".t {{ color: #ff0000; width: {width}px; line-height: 30px; text-align: {align}; }}"
+            )
+        };
+        let text = "aaaa bbbb cccc dddd eeee ffff gggg";
+        let left = ink_columns_per_line(&css("left", 120), text, 120);
+        let center = ink_columns_per_line(&css("center", 120), text, 120);
+        let right = ink_columns_per_line(&css("right", 120), text, 120);
+        assert!(left.len() >= 3 && center.len() == left.len() && right.len() == left.len());
+        for line in 0..left.len() {
+            // The same ink, moved: the start of a centered line sits between
+            // the start and the end ones, and a right line ends at the edge.
+            assert!(center[line].0 >= left[line].0 && right[line].0 >= center[line].0);
+            assert!(
+                right[line].1 + 3 >= 119,
+                "line {line} ends at {}",
+                right[line].1
+            );
+        }
+        // Lines of different widths start at different columns when centered.
+        assert!(center.iter().any(|c| c.0 != center[0].0));
+    }
+
+    #[test]
+    fn justify_stretches_every_line_but_the_last_to_the_edge() {
+        let css = |align: &str| {
+            format!(
+                ".t {{ color: #ff0000; width: 120px; line-height: 30px; text-align: {align}; }}"
+            )
+        };
+        let text = "aaaa bbbb cccc dddd eeee ffff gggg";
+        let plain = ink_columns_per_line(&css("left"), text, 120);
+        let justified = ink_columns_per_line(&css("justify"), text, 120);
+        assert_eq!(plain.len(), justified.len());
+        let last = justified.len() - 1;
+        for (line, columns) in justified.iter().take(last).enumerate() {
+            assert!(
+                columns.1 + 3 >= 119,
+                "line {line} reaches {} of 120",
+                columns.1
+            );
+        }
+        assert_eq!(
+            justified[last], plain[last],
+            "the last line stays at the start"
+        );
     }
 
     #[test]

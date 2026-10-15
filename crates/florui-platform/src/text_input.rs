@@ -74,8 +74,7 @@ struct TextInputState {
     /// `undo`/`redo` all reshape with whatever this input's real font
     /// currently is, without their own callers needing to know style
     /// exists.
-    font_family: florui_text::FontFamily,
-    font_weight: f32,
+    text_style: florui_text::TextStyle,
     undo_stack: Vec<UndoEntry>,
     redo_stack: Vec<UndoEntry>,
     /// Whether `undo_stack`'s top entry is a valid restore point for
@@ -107,6 +106,7 @@ impl TextInputState {
     /// keeps the scroll offset inside the new bounds.
     fn relayout(&mut self, font: &mut Font) {
         if !self.multiline {
+            self.clamp_scroll(font);
             return;
         }
         let (vw, vh) = self.viewport;
@@ -148,10 +148,25 @@ impl TextInputState {
         } else {
             0.0
         };
-        self.scroll = (
-            self.scroll.0.clamp(0.0, max_x),
-            self.scroll.1.clamp(0.0, max_y),
-        );
+        // A single-line field whose text is narrower than it starts the text
+        // where `text-align` puts it, which is a scroll before the start.
+        let x = if self.multiline || content_w > self.viewport.0 {
+            self.scroll.0.clamp(0.0, max_x)
+        } else {
+            -self.aligned_offset(content_w)
+        };
+        self.scroll = (x, self.scroll.1.clamp(0.0, max_y));
+    }
+
+    /// How far a single-line field's text starts from its left edge when it is
+    /// narrower than the field and aligned to the center or the end.
+    fn aligned_offset(&self, content_width: f32) -> f32 {
+        let free = (self.viewport.0 - content_width).max(0.0);
+        match self.text_style.align {
+            florui_text::TextAlign::Center => free / 2.0,
+            florui_text::TextAlign::End => free,
+            _ => 0.0,
+        }
     }
 
     /// Scrolls the least distance that brings the caret into view.
@@ -198,16 +213,9 @@ fn mask_advance(
     if arena.input_type(node) != Some("password") {
         return None;
     }
-    let family = style.map_or(florui_text::FontFamily::SansSerif, |s| {
-        florui_layout::to_text_font_family(s.font_family)
-    });
-    let (size, weight) = style.map_or((16.0, 400.0), |s| (s.font_size, s.font_weight));
     Some(
-        font.measure(
-            florui_text::TextStyle::new(family, size, weight),
-            "\u{2022}",
-        )
-        .width,
+        font.measure(florui_layout::node_text_style(style), "\u{2022}")
+            .width,
     )
 }
 
@@ -341,16 +349,12 @@ impl TextInputRegistry {
             seen.insert(id.to_string());
             let value = arena.value_attr(node).unwrap_or_default();
             let style = styles.get(&node);
-            let font_family = style.map_or(florui_text::FontFamily::SansSerif, |s| {
-                florui_layout::to_text_font_family(s.font_family)
-            });
-            let font_weight = style.map_or(400.0, |s| s.font_weight);
+            let text_style = florui_layout::node_text_style(style);
             let multiline = arena.tag(node) == "textarea";
             let viewport = content_box(style, layouts.get(&node));
 
             if let Some(state) = states.get_mut(id) {
-                state.font_family = font_family;
-                state.font_weight = font_weight;
+                state.text_style = text_style;
                 state.kind = value_kind(arena, node);
                 state.read_only = arena.attr_flag(node, "readonly");
                 state.max_length = max_length(arena, node);
@@ -361,12 +365,7 @@ impl TextInputRegistry {
                 if state.last_committed_text != value {
                     state.editor.set_text(value);
                     state.bad_input = false;
-                    font.apply_text_edit(
-                        &mut state.editor,
-                        TextEditOp::MoveTextEnd,
-                        font_family,
-                        font_weight,
-                    );
+                    font.apply_text_edit(&mut state.editor, TextEditOp::MoveTextEnd, text_style);
                     state.last_committed_text = value.to_string();
                     state.undo_stack.clear();
                     state.redo_stack.clear();
@@ -390,16 +389,14 @@ impl TextInputRegistry {
                     } else {
                         TextEditOp::MoveTextEnd
                     },
-                    font_family,
-                    font_weight,
+                    text_style,
                 );
                 let mut state = TextInputState {
                     editor,
                     last_committed_text: value.to_string(),
                     kind: value_kind(arena, node),
                     bad_input: false,
-                    font_family,
-                    font_weight,
+                    text_style,
                     undo_stack: Vec::new(),
                     redo_stack: Vec::new(),
                     coalescing_insert: false,
@@ -444,8 +441,7 @@ impl TextInputRegistry {
             && state.editor.selection().is_collapsed();
         let before = (state.editor.text(), state.editor.selection());
 
-        let changed =
-            font.apply_text_edit(&mut state.editor, op, state.font_family, state.font_weight);
+        let changed = font.apply_text_edit(&mut state.editor, op, state.text_style);
         if changed {
             state.relayout(font);
         }
@@ -511,8 +507,7 @@ impl TextInputRegistry {
         font.apply_text_edit(
             &mut state.editor,
             TextEditOp::SelectByteRange(entry.selection.anchor, entry.selection.focus),
-            state.font_family,
-            state.font_weight,
+            state.text_style,
         );
         state.coalescing_insert = false;
         state.relayout(font);
@@ -707,8 +702,7 @@ impl TextInputRegistry {
         font.apply_text_edit(
             &mut state.editor,
             TextEditOp::SetCompose(text.to_owned(), cursor),
-            state.font_family,
-            state.font_weight,
+            state.text_style,
         );
         state.reveal_caret(font);
     }
@@ -726,8 +720,7 @@ impl TextInputRegistry {
         font.apply_text_edit(
             &mut state.editor,
             TextEditOp::ClearCompose,
-            state.font_family,
-            state.font_weight,
+            state.text_style,
         );
     }
 }
@@ -959,5 +952,94 @@ mod tests {
             (x - (50.0 * advance - 100.0)).abs() < 0.01,
             "scrolled to the end of the bullets: {x}, advance {advance}"
         );
+    }
+    /// A field laid out under `css` (its class is `f`), with `value` typed in.
+    fn styled_field(tag: &str, css: &str, value: &str) -> (TextInputRegistry, Font, f32) {
+        use taffy::prelude::*;
+        let tree: Element = match tag {
+            "textarea" => view! { <textarea id="x" class="f" /> },
+            _ => view! { <input type="text" id="x" class="f" /> },
+        };
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &florui_style::InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let registry = TextInputRegistry::new();
+        registry.sync(&arena, &styles, &layouts, &mut font);
+        registry.apply(
+            "x",
+            TextEditOp::InsertOrReplace(value.to_string()),
+            &mut font,
+        );
+        let node = arena.roots()[0];
+        let style = styles.get(&node).map(florui_layout::text_style_of);
+        let text_width = style.map_or(0.0, |style| font.measure(style, value).width);
+        (registry, font, text_width)
+    }
+
+    #[test]
+    fn text_align_starts_a_short_single_line_value_in_the_middle_or_at_the_end() {
+        let css = |align: &str| {
+            format!(
+                ".f {{ width: 200px; height: 24px; padding: 0px; border: none; text-align: {align}; }}"
+            )
+        };
+        let (start, _, _) = styled_field("input", &css("left"), "ab");
+        assert_eq!(start.scroll_offset("x").0, 0.0);
+        let (center, _, width) = styled_field("input", &css("center"), "ab");
+        assert!((-center.scroll_offset("x").0 - (200.0 - width) / 2.0).abs() < 0.01);
+        let (end, _, width) = styled_field("input", &css("right"), "ab");
+        assert!((-end.scroll_offset("x").0 - (200.0 - width)).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_long_value_is_not_pushed_by_text_align() {
+        let (registry, _, _) = styled_field(
+            "input",
+            ".f { width: 60px; height: 24px; padding: 0px; border: none; text-align: center; }",
+            &"x".repeat(80),
+        );
+        assert!(registry.scroll_offset("x").0 >= 0.0);
+    }
+
+    #[test]
+    fn a_textarea_scrolls_by_the_line_height_of_its_text() {
+        // Two rows tall at 30px a line, five lines of text: 150 - 60 to scroll.
+        let (registry, mut font, _) = styled_field(
+            "textarea",
+            ".f { width: 200px; padding: 0px; border: none; line-height: 30px; }",
+            "a
+b
+c
+d
+e",
+        );
+        let (_, max) = registry
+            .scroll_metrics("x", &mut font)
+            .expect("it overflows");
+        assert!((max - 90.0).abs() < 0.01, "{max}");
+        // A textarea's own font is 13.33px monospace, a 16px normal line: five
+        // lines in a two-row box scroll 80 - 32.
+        let (registry, mut font, _) = styled_field(
+            "textarea",
+            ".f { width: 200px; padding: 0px; border: none; }",
+            "a
+b
+c
+d
+e",
+        );
+        let (_, max) = registry
+            .scroll_metrics("x", &mut font)
+            .expect("it overflows");
+        assert!((max - 48.0).abs() < 0.01, "{max}");
     }
 }
