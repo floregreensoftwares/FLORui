@@ -1,5 +1,6 @@
-//! Named-mutex ownership plus activation handoff — see
-//! `crate::os::windows::single_instance` for the real implementation. On
+//! Lock ownership plus activation handoff — see
+//! `crate::os::windows::single_instance` and
+//! `crate::os::linux::single_instance` for the real implementations. On
 //! any other platform, single-instance enforcement is silently
 //! unenforced: every launch reports [`InstanceRole::Primary`] and a
 //! handoff always [`HandoffOutcome::Failed`]s, since there is no
@@ -10,12 +11,17 @@ pub(crate) use crate::os::windows::single_instance::{
     HandoffOutcome, InstanceRole, acquire, handoff, probe_capability, spawn_activation_listener,
 };
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+pub(crate) use crate::os::linux::single_instance::{
+    HandoffOutcome, InstanceRole, acquire, handoff, probe_capability, spawn_activation_listener,
+};
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub(crate) use stub::{
     HandoffOutcome, InstanceRole, acquire, handoff, probe_capability, spawn_activation_listener,
 };
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 mod stub {
     use std::time::Duration;
 
@@ -25,13 +31,13 @@ mod stub {
     /// can bind and hold it uniformly across platforms.
     pub(crate) struct NoOwnership;
 
-    #[allow(dead_code)] // Only the Windows implementation builds `Secondary`.
+    #[allow(dead_code)] // Only a real implementation builds `Secondary`.
     pub(crate) enum InstanceRole {
         Primary(NoOwnership),
         Secondary,
     }
 
-    #[allow(dead_code)] // Only the Windows implementation builds `Delivered`.
+    #[allow(dead_code)] // Only a real implementation builds `Delivered`.
     pub(crate) enum HandoffOutcome {
         Delivered,
         Failed,
