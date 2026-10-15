@@ -207,6 +207,21 @@ impl Font {
         styles.insert(StyleProperty::LineHeight(line_height));
         styles.insert(StyleProperty::LetterSpacing(style.letter_spacing));
         styles.insert(StyleProperty::WordSpacing(style.word_spacing));
+        styles.insert(StyleProperty::TextWrapMode(if style.wrap {
+            parley::TextWrapMode::Wrap
+        } else {
+            parley::TextWrapMode::NoWrap
+        }));
+        styles.insert(StyleProperty::WordBreak(match style.word_break {
+            crate::WordBreak::Normal => parley::WordBreak::Normal,
+            crate::WordBreak::BreakAll => parley::WordBreak::BreakAll,
+            crate::WordBreak::KeepAll => parley::WordBreak::KeepAll,
+        }));
+        styles.insert(StyleProperty::OverflowWrap(match style.overflow_wrap {
+            crate::OverflowWrap::Normal => parley::OverflowWrap::Normal,
+            crate::OverflowWrap::BreakWord => parley::OverflowWrap::BreakWord,
+            crate::OverflowWrap::Anywhere => parley::OverflowWrap::Anywhere,
+        }));
         editor.0.set_alignment(style.parley_alignment());
         let (indent, options) = style.paragraph_indent(Some(editor.1.unwrap_or(editor.2)));
         editor.0.set_text_indent(indent, options);

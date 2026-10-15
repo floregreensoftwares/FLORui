@@ -109,6 +109,39 @@ pub enum TextAlign {
     Justify,
 }
 
+/// `white-space-collapse`: what happens to the runs of white space and the
+/// line breaks of the text before it is laid out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WhiteSpaceCollapse {
+    /// A run of spaces, tabs and line breaks is one space.
+    #[default]
+    Collapse,
+    /// Everything stays as written.
+    Preserve,
+    /// Line breaks stay; the rest collapses.
+    PreserveBreaks,
+    /// As `Preserve`.
+    BreakSpaces,
+}
+
+/// `word-break`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WordBreak {
+    #[default]
+    Normal,
+    BreakAll,
+    KeepAll,
+}
+
+/// `overflow-wrap`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OverflowWrap {
+    #[default]
+    Normal,
+    BreakWord,
+    Anywhere,
+}
+
 /// `text-indent` of a paragraph. A percentage is of the width the text is
 /// wrapped at, so it is resolved when the lines are broken.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -174,6 +207,11 @@ pub struct TextStyle {
     pub align: TextAlign,
     pub indent: TextIndent,
     pub vertical_align: VerticalAlign,
+    pub collapse: WhiteSpaceCollapse,
+    /// Whether the text wraps at soft wrap opportunities.
+    pub wrap: bool,
+    pub word_break: WordBreak,
+    pub overflow_wrap: OverflowWrap,
 }
 
 /// A [`TextStyle`] as the bits the memos compare and hash.
@@ -191,7 +229,26 @@ impl TextStyle {
             align: TextAlign::Start,
             indent: TextIndent::default(),
             vertical_align: VerticalAlign::Baseline,
+            collapse: WhiteSpaceCollapse::Collapse,
+            wrap: true,
+            word_break: WordBreak::Normal,
+            overflow_wrap: OverflowWrap::Normal,
         }
+    }
+
+    /// How the text collapses, wraps and breaks inside words.
+    pub fn with_wrapping(
+        mut self,
+        collapse: WhiteSpaceCollapse,
+        wrap: bool,
+        word_break: WordBreak,
+        overflow_wrap: OverflowWrap,
+    ) -> Self {
+        self.collapse = collapse;
+        self.wrap = wrap;
+        self.word_break = word_break;
+        self.overflow_wrap = overflow_wrap;
+        self
     }
 
     pub fn with_align(mut self, align: TextAlign) -> Self {
@@ -238,8 +295,84 @@ impl TextStyle {
             vertical_kind,
             vertical_length,
             vertical_percent,
-            0,
+            self.collapse as u32
+                | (u32::from(self.wrap) << 2)
+                | ((self.word_break as u32) << 3)
+                | ((self.overflow_wrap as u32) << 5),
         ]
+    }
+
+    /// `text` as it is laid out under `white-space-collapse`. `previous_space`
+    /// says whether what comes before ended in a collapsible space (or is the
+    /// start of the block), and is updated for what comes after.
+    pub(crate) fn collapsed<'a>(
+        &self,
+        text: &'a str,
+        previous_space: &mut bool,
+    ) -> std::borrow::Cow<'a, str> {
+        use std::borrow::Cow;
+        let is_space = |c: char| matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{c}');
+        match self.collapse {
+            WhiteSpaceCollapse::Preserve | WhiteSpaceCollapse::BreakSpaces => {
+                if !text.is_empty() {
+                    *previous_space = false;
+                }
+                Cow::Borrowed(text)
+            }
+            WhiteSpaceCollapse::Collapse | WhiteSpaceCollapse::PreserveBreaks => {
+                let keep_breaks = self.collapse == WhiteSpaceCollapse::PreserveBreaks;
+                // Most text collapses to itself: found out without building it.
+                if !keep_breaks {
+                    let mut previous = *previous_space;
+                    let mut clean = true;
+                    for c in text.chars() {
+                        if is_space(c) {
+                            if previous || c != ' ' {
+                                clean = false;
+                                break;
+                            }
+                            previous = true;
+                        } else {
+                            previous = false;
+                        }
+                    }
+                    if clean {
+                        if !text.is_empty() {
+                            *previous_space = previous;
+                        }
+                        return Cow::Borrowed(text);
+                    }
+                }
+                let mut out = String::with_capacity(text.len());
+                let mut previous = *previous_space;
+                for c in text.chars() {
+                    if keep_breaks && c == '\n' {
+                        // Spaces before a kept break go, and so do those after it.
+                        if out.ends_with(' ') {
+                            out.pop();
+                        }
+                        out.push('\n');
+                        previous = true;
+                    } else if is_space(c) {
+                        if !previous {
+                            out.push(' ');
+                            previous = true;
+                        }
+                    } else {
+                        out.push(c);
+                        previous = false;
+                    }
+                }
+                if !text.is_empty() {
+                    *previous_space = previous;
+                }
+                if out == text {
+                    Cow::Borrowed(text)
+                } else {
+                    Cow::Owned(out)
+                }
+            }
+        }
     }
 
     /// The indent in pixels for a paragraph wrapped at `max_width`, with
@@ -270,7 +403,7 @@ impl TextStyle {
     fn parley_extras(
         &self,
         with_line_height: bool,
-    ) -> [Option<StyleProperty<'static, [u8; 4]>>; 3] {
+    ) -> [Option<StyleProperty<'static, [u8; 4]>>; 6] {
         [
             with_line_height
                 .then(|| self.line_height.parley().map(StyleProperty::LineHeight))
@@ -278,6 +411,21 @@ impl TextStyle {
             (self.letter_spacing != 0.0)
                 .then_some(StyleProperty::LetterSpacing(self.letter_spacing)),
             (self.word_spacing != 0.0).then_some(StyleProperty::WordSpacing(self.word_spacing)),
+            (!self.wrap).then_some(StyleProperty::TextWrapMode(parley::TextWrapMode::NoWrap)),
+            (self.word_break != WordBreak::Normal).then_some(StyleProperty::WordBreak(match self
+                .word_break
+            {
+                WordBreak::Normal => parley::WordBreak::Normal,
+                WordBreak::BreakAll => parley::WordBreak::BreakAll,
+                WordBreak::KeepAll => parley::WordBreak::KeepAll,
+            })),
+            (self.overflow_wrap != OverflowWrap::Normal).then_some(StyleProperty::OverflowWrap(
+                match self.overflow_wrap {
+                    OverflowWrap::Normal => parley::OverflowWrap::Normal,
+                    OverflowWrap::BreakWord => parley::OverflowWrap::BreakWord,
+                    OverflowWrap::Anywhere => parley::OverflowWrap::Anywhere,
+                },
+            )),
         ]
     }
 }
@@ -937,6 +1085,8 @@ impl Font {
         normal_line_height: Option<f32>,
     ) -> parley::Layout<[u8; 4]> {
         let family_name = self.family_name(style.family).to_owned();
+        let text = style.collapsed(text, &mut true);
+        let text = text.as_ref();
         let mut builder = self
             .layout_cx
             .ranged_builder(&mut self.font_cx, text, 1.0, true);

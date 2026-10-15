@@ -202,11 +202,28 @@ impl Font {
         items: &[InlineItem<'_>],
         max_width: Option<f32>,
     ) -> InlineLayout {
+        // The runs as laid out: each under its own element's white space, and
+        // a space collapses with the one before even across elements.
+        let mut previous_space = true;
+        let runs: Vec<std::borrow::Cow<'_, str>> = items
+            .iter()
+            .map(|item| match *item {
+                InlineItem::Text { text, element } => {
+                    elements[element].style.collapsed(text, &mut previous_space)
+                }
+                InlineItem::Box { .. } => {
+                    previous_space = false;
+                    std::borrow::Cow::Borrowed("")
+                }
+                InlineItem::Spacer { .. } => std::borrow::Cow::Borrowed(""),
+            })
+            .collect();
         let mut text = String::new();
         let mut spans: Vec<Span> = Vec::new();
-        for item in items {
+        for (item, run) in items.iter().zip(&runs) {
+            let run = run.as_ref();
             match *item {
-                InlineItem::Text { text: run, element } if !run.is_empty() => {
+                InlineItem::Text { element, .. } if !run.is_empty() => {
                     spans.push(Span {
                         range: text.len()..text.len() + run.len(),
                         element,
@@ -261,9 +278,10 @@ impl Font {
         builder.push_default(StyleProperty::FontSize(16.0));
 
         let mut offset = 0usize;
-        for item in items {
+        for (item, run) in items.iter().zip(&runs) {
+            let run = run.as_ref();
             match *item {
-                InlineItem::Text { text: run, element } => {
+                InlineItem::Text { element, .. } => {
                     if run.is_empty() {
                         continue;
                     }
