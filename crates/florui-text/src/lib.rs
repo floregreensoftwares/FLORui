@@ -326,6 +326,9 @@ pub struct ShapedRun {
     /// For a run of an inline context, the element the text belongs to
     /// (see [`InlineElement`]); `0` everywhere else.
     pub element: usize,
+    /// Where the run starts on its line and how far it advances.
+    pub x: f32,
+    pub width: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -852,6 +855,8 @@ impl Font {
                     normalized_coords: run.normalized_coords().to_vec(),
                     glyphs,
                     element: 0,
+                    x: glyph_run.offset(),
+                    width: glyph_run.advance(),
                 });
             }
         }

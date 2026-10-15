@@ -275,15 +275,23 @@ pub fn node_text_style(style: Option<&ComputedStyle>) -> florui_text::TextStyle 
     style.map_or_else(default_text_style, text_style_of)
 }
 
-/// One piece of a container's real inline formatting context, already
-/// resolved down to what [`florui_text::Font::shape_inline`] needs — built
-/// once in [`build_node`], reused by both the measure closure and the
-/// post-layout pass that positions each `Box` item's own [`BoxLayout`].
+/// One piece of a container's inline formatting context, already resolved
+/// down to what [`florui_text::Font::shape_inline_tree`] needs — built once
+/// in [`build_node`], reused by both the measure closure and the post-layout
+/// pass that places each inline element's and box's own [`BoxLayout`].
 #[derive(Clone, PartialEq)]
 enum InlineContentItem {
     Text {
         text: String,
-        style: florui_text::TextStyle,
+        element: usize,
+    },
+    /// The horizontal padding and border inside an element's box, and its
+    /// margin outside it, on its start side or, with `end`, its end side.
+    Spacer {
+        element: usize,
+        inside: f32,
+        margin: f32,
+        end: bool,
     },
     /// A real `display: inline-block` child, flowing as one atomic box —
     /// `child` is the arena node this box's own [`BoxLayout`] belongs to.
@@ -291,33 +299,63 @@ enum InlineContentItem {
         child: NodeId,
         width: f32,
         height: f32,
+        baseline: f32,
+        element: usize,
+        vertical_align: florui_text::VerticalAlign,
     },
 }
 
-/// A container's inline items with the container's own text style, which gives
-/// every line at least the height of an empty one (the CSS strut).
+/// A container's inline formatting context: the tree of its inline elements
+/// (element `0` is the container, whose own text style gives every line at
+/// least the height of an empty one, the CSS strut), the items of text,
+/// spacers and boxes that belong to them, and the arena node of each element.
 #[derive(Clone, PartialEq)]
 struct InlineContext {
+    elements: Vec<florui_text::InlineElement>,
     items: Vec<InlineContentItem>,
-    strut: florui_text::TextStyle,
+    nodes: Vec<NodeId>,
+    /// Children with `display: none`, which take no part in the lines but
+    /// still have an empty box.
+    hidden: Vec<NodeId>,
 }
 
-fn to_inline_content(item: &InlineContentItem) -> florui_text::InlineContent<'_> {
-    match item {
-        InlineContentItem::Text { text, style } => florui_text::InlineContent::Text {
-            text,
-            style: *style,
-        },
-        InlineContentItem::Box {
-            child,
-            width,
-            height,
-        } => florui_text::InlineContent::Box {
-            id: *child as u64,
-            width: *width,
-            height: *height,
-        },
-    }
+fn to_inline_items(context: &InlineContext) -> Vec<florui_text::InlineItem<'_>> {
+    context
+        .items
+        .iter()
+        .map(|item| match item {
+            InlineContentItem::Text { text, element } => florui_text::InlineItem::Text {
+                text,
+                element: *element,
+            },
+            InlineContentItem::Spacer {
+                element,
+                inside,
+                margin,
+                end,
+            } => florui_text::InlineItem::Spacer {
+                element: *element,
+                inside: *inside,
+                margin: *margin,
+                end: *end,
+            },
+            InlineContentItem::Box {
+                child,
+                width,
+                height,
+                baseline,
+                element,
+                vertical_align,
+            } => florui_text::InlineItem::Box {
+                id: *child as u64,
+                width: *width,
+                height: *height,
+                baseline: *baseline,
+                element: *element,
+                vertical_align: *vertical_align,
+            },
+        })
+        .collect()
 }
 
 /// A Taffy leaf's own context: either plain single-style text (unchanged
@@ -421,17 +459,38 @@ fn needs_inline_layout(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
                 }
             }
             StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
-                Some(StyleDisplay::Inline) | Some(StyleDisplay::InlineBlock) => {
+                Some(StyleDisplay::Inline) => {
+                    has_real_inline_content = true;
+                    if !inline_subtree_is_inline(arena, styles, *child) {
+                        return false;
+                    }
+                }
+                Some(StyleDisplay::InlineBlock) => {
                     has_real_inline_content = true;
                     if !arena.children(*child).is_empty() {
                         return false;
                     }
                 }
+                Some(StyleDisplay::None) => {}
                 _ => return false,
             },
         }
     }
     has_real_inline_content
+}
+
+/// Whether everything inside the inline element `node` is inline-level, so
+/// it can flow in its container's lines.
+fn inline_subtree_is_inline(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
+    arena.inline_items(node).iter().all(|item| match item {
+        StyleInlineItem::Text(_) => true,
+        StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
+            Some(StyleDisplay::Inline) => inline_subtree_is_inline(arena, styles, *child),
+            Some(StyleDisplay::InlineBlock) => arena.children(*child).is_empty(),
+            Some(StyleDisplay::None) => true,
+            _ => false,
+        },
+    })
 }
 
 /// An inline-block child's own intrinsic *border-box* size: its own
@@ -511,55 +570,108 @@ fn measure_inline_block_intrinsic_size(
     )
 }
 
-/// Builds `node`'s own [`InlineContentItem`] sequence from
-/// [`Arena::inline_items`] — a bare text item inherits the container's own
-/// font (real CSS: a text node has no style of its own), while an
-/// `Inline`/`InlineBlock` element child uses *its own* resolved font, the
-/// same as a real styled `<span>`.
+/// Builds `node`'s inline formatting context from [`Arena::inline_items`]:
+/// a bare text item inherits its element's font (real CSS: a text node has no
+/// style of its own), an `Inline` element child is an element of its own with
+/// its own resolved style, nested to any depth, and an `InlineBlock` child is
+/// one atomic box.
 fn build_inline_content_items(
     font: &mut florui_text::Font,
     arena: &Tree,
     styles: &StyleMap,
     node: NodeId,
 ) -> InlineContext {
-    let container_style = styles.get(&node);
-    let container_text_style = container_style.map_or_else(default_text_style, text_style_of);
+    let mut context = InlineContext {
+        elements: vec![florui_text::InlineElement {
+            parent: 0,
+            style: node_text_style(styles.get(&node)),
+        }],
+        items: Vec::new(),
+        nodes: vec![node],
+        hidden: Vec::new(),
+    };
+    flatten_inline(font, arena, styles, node, 0, &mut context);
+    context
+}
 
-    let items = arena
-        .inline_items(node)
-        .iter()
-        .filter_map(|item| match item {
-            StyleInlineItem::Text(text) => Some(InlineContentItem::Text {
+/// Adds the inline items of `node`, which is element `element` of `context`.
+fn flatten_inline(
+    font: &mut florui_text::Font,
+    arena: &Tree,
+    styles: &StyleMap,
+    node: NodeId,
+    element: usize,
+    context: &mut InlineContext,
+) {
+    for item in arena.inline_items(node) {
+        match item {
+            StyleInlineItem::Text(text) => context.items.push(InlineContentItem::Text {
                 text: text.clone(),
-                style: container_text_style,
+                element,
             }),
             StyleInlineItem::Element(child) => {
                 let child_style = styles.get(child);
-                if child_style.map(|s| s.display) == Some(StyleDisplay::InlineBlock) {
-                    let (width, height) =
-                        measure_inline_block_intrinsic_size(font, arena, styles, *child);
-                    Some(InlineContentItem::Box {
-                        child: *child,
-                        width,
-                        height,
-                    })
-                } else {
-                    let text = arena.text_content(*child);
-                    if text.is_empty() {
-                        None
-                    } else {
-                        Some(InlineContentItem::Text {
-                            text: text.to_string(),
-                            style: child_style.map_or(container_text_style, text_style_of),
-                        })
+                match child_style.map(|s| s.display) {
+                    Some(StyleDisplay::None) => context.hidden.push(*child),
+                    Some(StyleDisplay::InlineBlock) => {
+                        let (width, height) =
+                            measure_inline_block_intrinsic_size(font, arena, styles, *child);
+                        context.items.push(InlineContentItem::Box {
+                            child: *child,
+                            width,
+                            height,
+                            baseline: height,
+                            element,
+                            vertical_align: node_text_style(child_style).vertical_align,
+                        });
+                    }
+                    _ => {
+                        context.elements.push(florui_text::InlineElement {
+                            parent: element,
+                            style: node_text_style(child_style),
+                        });
+                        let own = context.elements.len() - 1;
+                        context.nodes.push(*child);
+                        let sides = |style: &ComputedStyle, end: bool| {
+                            if end {
+                                (
+                                    style.padding.right + style.border.right.width,
+                                    style.margin.right.unwrap_or(0.0),
+                                )
+                            } else {
+                                (
+                                    style.padding.left + style.border.left.width,
+                                    style.margin.left.unwrap_or(0.0),
+                                )
+                            }
+                        };
+                        if let Some(style) = child_style {
+                            let (inside, margin) = sides(style, false);
+                            if inside + margin > 0.0 {
+                                context.items.push(InlineContentItem::Spacer {
+                                    element: own,
+                                    inside,
+                                    margin,
+                                    end: false,
+                                });
+                            }
+                        }
+                        flatten_inline(font, arena, styles, *child, own, context);
+                        if let Some(style) = child_style {
+                            let (inside, margin) = sides(style, true);
+                            if inside + margin > 0.0 {
+                                context.items.push(InlineContentItem::Spacer {
+                                    element: own,
+                                    inside,
+                                    margin,
+                                    end: true,
+                                });
+                            }
+                        }
                     }
                 }
             }
-        })
-        .collect();
-    InlineContext {
-        items,
-        strut: container_text_style,
+        }
     }
 }
 
@@ -572,26 +684,55 @@ pub fn is_inline_formatting_context(arena: &Tree, styles: &StyleMap, node: NodeI
     needs_inline_layout(arena, styles, node)
 }
 
+/// An inline formatting context shaped for painting: the lines, and the arena
+/// node each element of them (the container is element `0`) belongs to.
+pub struct InlineShaped {
+    pub layout: std::sync::Arc<florui_text::InlineLayout>,
+    pub nodes: Vec<NodeId>,
+    /// The parent element of each element; the container's own is `0`.
+    pub parents: Vec<usize>,
+}
+
+/// Whether `node` is an inline element that flows in the lines of an inline
+/// formatting context, which paints its box and text itself.
+pub fn is_flowed_inline(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
+    if styles.get(&node).map(|s| s.display) != Some(StyleDisplay::Inline) {
+        return false;
+    }
+    let mut parent = arena.parent(node);
+    while let Some(candidate) = parent {
+        if styles.get(&candidate).map(|s| s.display) == Some(StyleDisplay::Inline) {
+            parent = arena.parent(candidate);
+        } else {
+            return needs_inline_layout(arena, styles, candidate);
+        }
+    }
+    false
+}
+
 /// Shapes `node`'s own real inline formatting context at `wrap_width` —
 /// the same content [`compute_layout`] itself measured this node with,
 /// rebuilt fresh here since `florui-paint` doesn't share layout's own
-/// internal `TaffyTree` — so `florui-paint` can paint its mixed-style
-/// glyph runs. Only meaningful when [`is_inline_formatting_context`] is
-/// true for `node`; returns `None` otherwise (nothing to shape).
+/// internal `TaffyTree` — so `florui-paint` can paint its glyph runs and the
+/// boxes of its elements. Only meaningful when [`is_inline_formatting_context`]
+/// is true for `node`; returns `None` otherwise (nothing to shape).
 pub fn shape_inline_formatting_context(
     font: &mut florui_text::Font,
     arena: &Tree,
     styles: &StyleMap,
     node: NodeId,
     wrap_width: f32,
-) -> Option<std::sync::Arc<florui_text::InlineLayout>> {
+) -> Option<InlineShaped> {
     if !needs_inline_layout(arena, styles, node) {
         return None;
     }
     let context = build_inline_content_items(font, arena, styles, node);
-    let content: Vec<florui_text::InlineContent<'_>> =
-        context.items.iter().map(to_inline_content).collect();
-    Some(font.shape_inline_memoized(&content, context.strut, Some(wrap_width)))
+    let items = to_inline_items(&context);
+    Some(InlineShaped {
+        layout: font.shape_inline_tree_memoized(&context.elements, &items, Some(wrap_width)),
+        nodes: context.nodes.clone(),
+        parents: context.elements.iter().map(|e| e.parent).collect(),
+    })
 }
 
 /// Computes block-layout geometry for every node in `arena`, using
@@ -679,10 +820,10 @@ pub fn compute_layout_with_content_extents(
 
     collect_layouts(
         font,
+        arena,
         styles,
         &tree,
         taffy_ids.iter().map(|(&node, &id)| (node, id)),
-        taffy_ids.len(),
         &inline_leaves,
         |node| taffy_ids[&node],
     )
@@ -693,13 +834,14 @@ pub fn compute_layout_with_content_extents(
 /// the second pass below). `id_of` finds the Taffy node of an arena node.
 fn collect_layouts(
     font: &mut florui_text::Font,
+    arena: &Tree,
     styles: &StyleMap,
     tree: &TaffyTree<LeafContext>,
     nodes: impl Iterator<Item = (NodeId, taffy::NodeId)>,
-    node_count: usize,
     inline_leaves: &[(NodeId, InlineContext)],
     id_of: impl Fn(NodeId) -> taffy::NodeId,
 ) -> Result<LayoutsAndContentExtents, LayoutError> {
+    let node_count = nodes.size_hint().0;
     let mut result = HashMap::with_capacity(node_count);
     let mut content_extents = HashMap::with_capacity(node_count);
     for (node_id, tid) in nodes {
@@ -723,42 +865,130 @@ fn collect_layouts(
         );
     }
 
-    // Second pass: an inline-formatting-context leaf's own `Box` items
-    // (real `display: inline-block` children) are not Taffy nodes of their
-    // own — they were absorbed into their container's single leaf above,
-    // since Taffy has no inline display mode to give them one — so their
-    // own `BoxLayout` is derived here instead, by rerunning the exact same
-    // real inline layout at the container's now-final resolved width.
-    // Deterministic, not a guess: the same width always produces the same
-    // wrap points and box positions, and this is exactly the width
-    // `measure_leaf` would also have used for Taffy's own final "perform
-    // layout" call on this same leaf.
+    // Second pass: the boxes of an inline formatting context's elements and
+    // atomic boxes are not Taffy nodes of their own — they were absorbed into
+    // their container's single leaf above, since Taffy has no inline display
+    // mode to give them one — so their own `BoxLayout` is derived here
+    // instead, by rerunning the exact same inline layout at the container's
+    // now-final content width. Deterministic, not a guess: the same width
+    // always produces the same wrap points and positions, and this is the
+    // width the measure closure used for Taffy's own final "perform layout"
+    // call on this same leaf.
     for (container, context) in inline_leaves {
-        // Only `Box` items need this pass; a paragraph of text and plain
-        // inline elements has nothing to place, so reshaping it is wasted.
-        if !context
-            .items
-            .iter()
-            .any(|item| matches!(item, InlineContentItem::Box { .. }))
-        {
+        for &hidden in &context.hidden {
+            let mut stack = vec![hidden];
+            while let Some(node) = stack.pop() {
+                result.entry(node).or_insert(BoxLayout {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                });
+                content_extents.entry(node).or_insert(ContentExtent {
+                    width: 0.0,
+                    height: 0.0,
+                });
+                stack.extend(arena.children(node));
+            }
+        }
+        let nothing_to_place = context.nodes.len() == 1
+            && !context
+                .items
+                .iter()
+                .any(|item| matches!(item, InlineContentItem::Box { .. }));
+        if nothing_to_place {
             continue;
         }
         let tid = id_of(*container);
         let layout = tree.layout(tid).map_err(LayoutError)?;
-        let content: Vec<florui_text::InlineContent<'_>> =
-            context.items.iter().map(to_inline_content).collect();
-        let shaped = font.shape_inline_memoized(&content, context.strut, Some(layout.size.width));
-
         let container_style = styles.get(container);
-        // A `Box` item's own position comes back from `shape_inline`
-        // relative to the container's content-box origin — matching the
-        // same "includes the parent's own padding" convention every other
-        // `BoxLayout` entry already uses (see `absolute_position`'s own
-        // accumulation), the container's own padding is added here.
-        let padding_left = container_style.map_or(0.0, |s| s.padding.left);
-        let padding_top = container_style.map_or(0.0, |s| s.padding.top);
+        let edge =
+            |pick: fn(&ComputedStyle) -> (f32, f32)| container_style.map_or((0.0, 0.0), pick);
+        let (padding_left, padding_right) = edge(|s| (s.padding.left, s.padding.right));
+        let (border_left, border_right) = edge(|s| (s.border.left.width, s.border.right.width));
+        let (padding_top, border_top) = edge(|s| (s.padding.top, s.border.top.width));
+        let content_width =
+            (layout.size.width - padding_left - padding_right - border_left - border_right)
+                .max(0.0);
+        let items = to_inline_items(context);
+        let shaped =
+            font.shape_inline_tree_memoized(&context.elements, &items, Some(content_width));
+        // Where the container's content box starts, in its own box.
+        let origin = (border_left + padding_left, border_top + padding_top);
 
-        let box_sizes: HashMap<NodeId, (f32, f32)> = context
+        // Each element's border box in content coordinates: its fragments'
+        // content areas grown by the vertical padding and border, merged.
+        let count = context.elements.len();
+        let mut rects: Vec<Option<(f32, f32, f32, f32)>> = vec![None; count];
+        let merge = |slot: &mut Option<(f32, f32, f32, f32)>, rect: (f32, f32, f32, f32)| {
+            *slot = Some(match *slot {
+                None => rect,
+                Some((x0, y0, x1, y1)) => (
+                    x0.min(rect.0),
+                    y0.min(rect.1),
+                    x1.max(rect.2),
+                    y1.max(rect.3),
+                ),
+            });
+        };
+        for fragment in &shaped.fragments {
+            let (above, below) =
+                styles
+                    .get(&context.nodes[fragment.element])
+                    .map_or((0.0, 0.0), |s| {
+                        (
+                            s.padding.top + s.border.top.width,
+                            s.padding.bottom + s.border.bottom.width,
+                        )
+                    });
+            merge(
+                &mut rects[fragment.element],
+                (
+                    fragment.x,
+                    fragment.y - above,
+                    fragment.x + fragment.width,
+                    fragment.y + fragment.ascent + fragment.descent + below,
+                ),
+            );
+        }
+        let origin_of = |element: usize, rects: &[Option<(f32, f32, f32, f32)>]| {
+            if element == 0 {
+                (origin.0, origin.1)
+            } else {
+                rects[element].map_or(origin, |r| (r.0, r.1))
+            }
+        };
+        for element in 1..count {
+            let Some((x0, y0, x1, y1)) = rects[element] else {
+                continue;
+            };
+            let parent = origin_of(context.elements[element].parent, &rects);
+            let node = context.nodes[element];
+            let parent_is_container = context.elements[element].parent == 0;
+            let (rx, ry) = if parent_is_container {
+                (x0 + parent.0, y0 + parent.1)
+            } else {
+                (x0 - parent.0, y0 - parent.1)
+            };
+            result.insert(
+                node,
+                BoxLayout {
+                    x: rx,
+                    y: ry,
+                    width: x1 - x0,
+                    height: y1 - y0,
+                },
+            );
+            content_extents.insert(
+                node,
+                ContentExtent {
+                    width: x1 - x0,
+                    height: y1 - y0,
+                },
+            );
+        }
+
+        let box_sizes: HashMap<NodeId, (f32, f32, usize)> = context
             .items
             .iter()
             .filter_map(|item| match item {
@@ -766,27 +996,34 @@ fn collect_layouts(
                     child,
                     width,
                     height,
-                } => Some((*child, (*width, *height))),
-                InlineContentItem::Text { .. } => None,
+                    element,
+                    ..
+                } => Some((*child, (*width, *height, *element))),
+                _ => None,
             })
             .collect();
-
         for positioned in &shaped.boxes {
             let child = positioned.id as NodeId;
-            if let Some(&(width, height)) = box_sizes.get(&child) {
+            if let Some(&(width, height, element)) = box_sizes.get(&child) {
+                let parent = origin_of(element, &rects);
+                let (x, y) = if element == 0 {
+                    (positioned.x + parent.0, positioned.y + parent.1)
+                } else {
+                    (positioned.x - parent.0, positioned.y - parent.1)
+                };
                 result.insert(
                     child,
                     BoxLayout {
-                        x: positioned.x + padding_left,
-                        y: positioned.y + padding_top,
+                        x,
+                        y,
                         width,
                         height,
                     },
                 );
-                // Not an independent Taffy node — see this pass's own
-                // comment above — so it has no `scrollable_overflow_rect`
-                // of its own; its content extent is just its own box size,
-                // the correct value for a leaf that never overflows itself.
+                // Not an independent Taffy node, so it has no
+                // `scrollable_overflow_rect` of its own; its content extent is
+                // just its own box size, the correct value for a leaf that
+                // never overflows itself.
                 content_extents.insert(child, ContentExtent { width, height });
             }
         }
@@ -924,10 +1161,9 @@ fn run_layout(
                             .baseline,
                     ),
                     Some(LeafContext::Inline(context)) => {
-                        let content: Vec<florui_text::InlineContent<'_>> =
-                            context.items.iter().map(to_inline_content).collect();
+                        let items = to_inline_items(context);
                         Some(
-                            font.shape_inline_memoized(&content, context.strut, None)
+                            font.shape_inline_tree_memoized(&context.elements, &items, None)
                                 .baseline,
                         )
                     }
@@ -1190,9 +1426,8 @@ fn measure_leaf(
             // A real inline formatting context is its own build path
             // (`shape_inline`'s multi-item `RangedBuilder`), remembered whole
             // by its items and wrap width rather than by one text and style.
-            let content: Vec<florui_text::InlineContent<'_>> =
-                context.items.iter().map(to_inline_content).collect();
-            let result = font.shape_inline_memoized(&content, context.strut, wrap_width);
+            let items = to_inline_items(context);
+            let result = font.shape_inline_tree_memoized(&context.elements, &items, wrap_width);
             *baseline_out = Some(result.baseline);
             Size {
                 width: result.width,
@@ -3521,6 +3756,122 @@ mod tests {
             let expected = font.measure(style, "Spaced out text");
             assert_close(layouts[&item].width, expected.width);
         }
+    }
+
+    fn span(class: &str, children: Vec<Element>) -> Element {
+        Element::node(
+            "span",
+            vec![("class".to_string(), class.to_string())],
+            children,
+        )
+    }
+
+    fn paragraph(children: Vec<Element>) -> Element {
+        Element::node(
+            "div",
+            vec![("class".to_string(), "p".to_string())],
+            children,
+        )
+    }
+
+    #[test]
+    fn a_span_with_padding_border_and_margin_has_the_box_chrome_gives_it() {
+        // Chrome: "hello" then a span with `padding: 0 10px; border: 2px solid;
+        // margin: 0 8px` around "world" in a 400px div: 22 tall, and the span's
+        // border box at x 44.5, y -2, 66.391 by 26.
+        let tree = paragraph(vec![
+            Element::text("hello"),
+            span("s", vec![Element::text("world")]),
+        ]);
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".p { width: 400px; } .s { padding: 0 10px; border: 2px solid #c00; margin: 0 8px; }",
+        );
+        let container = arena.roots()[0];
+        let element = arena.children(container)[0];
+        assert_close(layouts[&container].height, 22.0);
+        let rect = layouts[&element];
+        assert_close(rect.x, 44.5);
+        assert_close(rect.y, -2.0);
+        assert_close(rect.width, 66.391);
+        assert_close(rect.height, 26.0);
+    }
+
+    #[test]
+    fn vertical_padding_and_border_do_not_make_the_line_taller() {
+        // Chrome: padding 10px and a 3px border on the span leave the line 22 and
+        // the span's box at y -13, 48 tall, 55.375 wide.
+        let tree = paragraph(vec![
+            Element::text("aaa "),
+            span("s", vec![Element::text("bbb")]),
+            Element::text(" ccc"),
+        ]);
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".p { width: 300px; } .s { padding: 10px; border: 3px solid #c00; }",
+        );
+        let container = arena.roots()[0];
+        let element = arena.children(container)[0];
+        assert_close(layouts[&container].height, 22.0);
+        let rect = layouts[&element];
+        assert_close(rect.y, -13.0);
+        assert_close(rect.height, 48.0);
+        assert_close(rect.width, 55.375);
+    }
+
+    #[test]
+    fn nested_spans_have_boxes_inside_each_other() {
+        // Chrome: an outer 24px span holding an inner 12px one: the line is 33,
+        // the outer box 33 tall at the top and the inner one 17 tall, 13 down.
+        let tree = paragraph(vec![
+            Element::text("a "),
+            span(
+                "o",
+                vec![
+                    Element::text("b "),
+                    span("i", vec![Element::text("c")]),
+                    Element::text(" d"),
+                ],
+            ),
+            Element::text(" e"),
+        ]);
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".p { width: 300px; } .o { font-size: 24px; } .i { font-size: 12px; }",
+        );
+        let container = arena.roots()[0];
+        let outer = arena.children(container)[0];
+        let inner = arena.children(outer)[0];
+        assert_close(layouts[&container].height, 33.0);
+        assert_close(layouts[&outer].height, 33.0);
+        assert_close(layouts[&inner].height, 17.0);
+        let (ox, oy) = absolute_position(&arena, &layouts, outer);
+        let (ix, iy) = absolute_position(&arena, &layouts, inner);
+        assert_close(oy, 0.0);
+        assert_close(iy, 13.0);
+        assert!(ix > ox && ix + layouts[&inner].width < ox + layouts[&outer].width);
+    }
+
+    #[test]
+    fn a_box_inside_a_span_lands_where_it_would_in_the_container() {
+        let button = || {
+            Element::node(
+                "button",
+                vec![("class".to_string(), "b".to_string())],
+                vec![Element::text("ok")],
+            )
+        };
+        let css = ".p { width: 300px; } .b { padding: 2px 6px; }";
+        let loose = paragraph(vec![Element::text("x "), button()]);
+        let (arena, layouts) = layout_for(&loose, css);
+        let loose_at = absolute_position(&arena, &layouts, arena.children(arena.roots()[0])[0]);
+        let wrapped = paragraph(vec![Element::text("x "), span("w", vec![button()])]);
+        let (arena, layouts) = layout_for(&wrapped, css);
+        let element = arena.children(arena.roots()[0])[0];
+        let inside = arena.children(element)[0];
+        let wrapped_at = absolute_position(&arena, &layouts, inside);
+        assert_close(wrapped_at.0, loose_at.0);
+        assert_close(wrapped_at.1, loose_at.1);
     }
 
     fn hit_styled(

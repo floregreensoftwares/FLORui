@@ -218,13 +218,13 @@ impl LayoutCache {
         let slots = &self.slots;
         collect_layouts(
             font,
+            arena,
             styles,
             &self.tree,
             slots
                 .iter()
                 .enumerate()
                 .filter_map(|(node, slot)| slot.as_ref().map(|slot| (node, slot.id))),
-            node_count,
             &inline_leaves,
             |node| {
                 slots[node]

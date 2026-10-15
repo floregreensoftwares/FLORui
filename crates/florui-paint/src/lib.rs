@@ -753,6 +753,18 @@ fn paint_nodes(
         {
             continue;
         }
+        if florui_layout::is_flowed_inline(arena, styles, node) {
+            // An inline element flowing in a context's lines is drawn by that
+            // context (its box behind the text, then the text); only the
+            // atomic boxes inside it are walked.
+            stack.extend(
+                paint_order(styles, Some(Display::Inline), arena.children(node))
+                    .into_iter()
+                    .rev()
+                    .map(|id| (id, node_clip.clone())),
+            );
+            continue;
+        }
         let opacity = styles.get(&node).map_or(1.0, |s| s.opacity);
         if opacity <= 0.0 {
             // Real CSS: a fully transparent subtree still occupies its
@@ -1566,7 +1578,7 @@ fn own_extent(
         if let Some(shaped) =
             florui_layout::shape_inline_formatting_context(font, arena, styles, node, wrap_width)
         {
-            shaped_extent = Some((shaped.width, shaped.height));
+            shaped_extent = Some((shaped.layout.width, shaped.layout.height));
         }
     } else {
         let text = arena.text_content(node);
@@ -3279,10 +3291,9 @@ fn paint_node(
             // reshaped fresh here, since this crate doesn't share layout's
             // own internal Taffy tree — deterministic at the same final
             // width, the same reasoning `paint_text`'s own doc gives for
-            // the plain single-style case below. Every run paints in this
-            // node's own inherited `color` uniformly — a per-span `color`
-            // override isn't painted differently yet, a documented bound
-            // matching `florui_layout`'s own module doc.
+            // the plain single-style case below. Each inline element paints
+            // its own box behind the text and its own color, shadow and
+            // underline on it.
             if let Some(shaped) = florui_layout::shape_inline_formatting_context(
                 font, arena, styles, node, wrap_width,
             ) {
@@ -3291,39 +3302,14 @@ fn paint_node(
                     is_button,
                     style,
                     (content_width, content_height),
-                    (shaped.width * scale_factor, shaped.height * scale_factor),
+                    (
+                        shaped.layout.width * scale_factor,
+                        shaped.layout.height * scale_factor,
+                    ),
                 );
-                text_shadow::paint(
-                    buffer,
-                    &shaped.runs,
-                    (content_x + dx, content_y + dy),
-                    style.map_or(&[][..], |s| &s.text_shadow[..]),
-                    scale_factor,
-                    clip,
-                );
-                paint_shaped_runs(
-                    buffer,
-                    &shaped.runs,
-                    content_x + dx,
-                    content_y + dy,
-                    color,
-                    scale_factor,
-                    clip,
-                );
-                if style.is_some_and(|s| s.text_decoration_underline) {
-                    let font_size = style.map_or(16.0, |s| s.font_size);
-                    paint_underline(
-                        buffer,
-                        content_x,
-                        content_y,
-                        shaped.width,
-                        font_size,
-                        shaped.baseline,
-                        color,
-                        scale_factor,
-                        clip,
-                    );
-                }
+                let origin = (content_x + dx, content_y + dy);
+                paint_inline_boxes(buffer, styles, &shaped, origin, scale_factor, clip);
+                paint_inline_runs(buffer, styles, &shaped, origin, color, scale_factor, clip);
             }
         } else {
             let text = arena.text_content(node);
@@ -4715,12 +4701,146 @@ fn paint_text(buffer: &mut Surface, font: &mut Font, params: TextPaint<'_>) {
     paint_shaped_runs(buffer, &shaped.runs, x, y, color, scale_factor, clip);
 }
 
+/// What each inline element of `inline` draws behind its text: its background
+/// and border, one box for each line it appears on. A box that continues on
+/// the next line has no border, padding or rounded corners at that end, as CSS
+/// slices a box across lines.
+fn paint_inline_boxes(
+    buffer: &mut Surface,
+    styles: &StyleMap,
+    inline: &florui_layout::InlineShaped,
+    (origin_x, origin_y): (f32, f32),
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
+    let square = (
+        florui_style::LengthPercentage::default(),
+        florui_style::LengthPercentage::default(),
+    );
+    for fragment in &inline.layout.fragments {
+        let Some(style) = styles.get(&inline.nodes[fragment.element]) else {
+            continue;
+        };
+        let mut border = style.border;
+        let has_border = [border.top, border.right, border.bottom, border.left]
+            .iter()
+            .any(|side| side.width > 0.0);
+        if style.background_color.a == 0 && style.background_layers.is_empty() && !has_border {
+            continue;
+        }
+        let mut padding = style.padding;
+        let mut radius = style.border_radius;
+        if !fragment.starts {
+            border.left.width = 0.0;
+            padding.left = 0.0;
+            radius.top_left = square;
+            radius.bottom_left = square;
+        }
+        if !fragment.ends {
+            border.right.width = 0.0;
+            padding.right = 0.0;
+            radius.top_right = square;
+            radius.bottom_right = square;
+        }
+        let above = padding.top + border.top.width;
+        let below = padding.bottom + border.bottom.width;
+        let x = origin_x + fragment.x * scale_factor;
+        let y = origin_y + (fragment.y - above) * scale_factor;
+        let width = fragment.width * scale_factor;
+        let height = (fragment.ascent + fragment.descent + above + below) * scale_factor;
+        let outline = RoundedRect::new(x, y, width, height, &radius, scale_factor);
+        let border = scaled_border(border, scale_factor);
+        if style.background_color.a != 0 {
+            if outline.is_square() {
+                fill_rect(buffer, x, y, width, height, style.background_color, clip);
+            } else {
+                fill_rounded_rect(buffer, &outline, style.background_color, clip);
+            }
+        }
+        if !style.background_layers.is_empty() {
+            background::paint_layers(
+                buffer,
+                &outline,
+                border,
+                scaled_padding(padding, scale_factor),
+                &style.background_layers,
+                scale_factor,
+                clip,
+            );
+        }
+        if has_border {
+            if outline.is_square() {
+                paint_border(buffer, x, y, width, height, border, clip);
+            } else {
+                paint_rounded_border(buffer, &outline, border, clip);
+            }
+        }
+    }
+}
+
+/// The glyph runs of `inline`, each in the color and shadow of its own
+/// element, underlined when its element or one around it is.
+fn paint_inline_runs(
+    buffer: &mut Surface,
+    styles: &StyleMap,
+    inline: &florui_layout::InlineShaped,
+    (origin_x, origin_y): (f32, f32),
+    container_color: Rgba,
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
+    let runs = &inline.layout.runs;
+    let mut underlined = vec![false; inline.nodes.len()];
+    for element in 0..inline.nodes.len() {
+        let own = styles
+            .get(&inline.nodes[element])
+            .is_some_and(|s| s.text_decoration_underline);
+        underlined[element] = own || (element > 0 && underlined[inline.parents[element]]);
+    }
+    let mut start = 0;
+    while start < runs.len() {
+        let element = runs[start].element;
+        let mut end = start + 1;
+        while end < runs.len() && runs[end].element == element {
+            end += 1;
+        }
+        let group = &runs[start..end];
+        let style = styles.get(&inline.nodes[element]);
+        let color = style.map_or(container_color, |s| s.color);
+        text_shadow::paint(
+            buffer,
+            group,
+            (origin_x, origin_y),
+            style.map_or(&[][..], |s| &s.text_shadow[..]),
+            scale_factor,
+            clip,
+        );
+        paint_shaped_runs(buffer, group, origin_x, origin_y, color, scale_factor, clip);
+        if underlined[element] {
+            for run in group {
+                if let Some(glyph) = run.glyphs.first().filter(|_| run.width > 0.0) {
+                    paint_underline(
+                        buffer,
+                        origin_x + run.x * scale_factor,
+                        origin_y,
+                        run.width,
+                        run.font_size,
+                        glyph.y,
+                        color,
+                        scale_factor,
+                        clip,
+                    );
+                }
+            }
+        }
+        start = end;
+    }
+}
+
 /// `text-decoration: underline`'s own mark, spanning `width` (logical
 /// units, same as `font_size`/`baseline`) at `baseline`'s own offset from
-/// the block's top. Single-line only: the caller has no per-line width/
-/// baseline to draw a second mark from (see `florui-style`'s own
-/// `ComputedStyle::text_decoration_underline` doc for why that's a
-/// deliberate bound, not an oversight).
+/// the block's top. One mark for one run of one line: a caller with several
+/// calls it once for each.
 #[allow(clippy::too_many_arguments)]
 fn paint_underline(
     buffer: &mut Surface,
@@ -7926,6 +8046,163 @@ mod tests {
             justified[last], plain[last],
             "the last line stays at the start"
         );
+    }
+
+    /// A paragraph of inline content under `css`, painted 200 x 120 on black.
+    fn painted_paragraph(
+        css: &str,
+        children: Vec<Element>,
+    ) -> (Canvas, Arena, StyleMap, HashMap<usize, BoxLayout>) {
+        let tree = Element::node(
+            "div",
+            vec![("class".to_string(), "p".to_string())],
+            children,
+        );
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let canvas = paint_to_buffer(
+            &mut font,
+            200,
+            120,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        );
+        (canvas, arena, styles, layouts)
+    }
+
+    fn span_of(class: &str, text: &str) -> Element {
+        Element::node(
+            "span",
+            vec![("class".to_string(), class.to_string())],
+            vec![Element::text(text)],
+        )
+    }
+
+    #[test]
+    fn a_span_paints_its_own_color() {
+        let (canvas, ..) = painted_paragraph(
+            ".p { width: 200px; color: #ffffff; } .r { color: #ff0000; }",
+            vec![Element::text("white "), span_of("r", "red")],
+        );
+        let mut red = 0;
+        let mut white = 0;
+        for y in 0..30 {
+            for x in 0..200 {
+                let [r, g, b] = pixel_rgb(&canvas, x, y);
+                if r > 0xc0 && g < 0x40 && b < 0x40 {
+                    red += 1;
+                }
+                if r > 0xc0 && g > 0xc0 && b > 0xc0 {
+                    white += 1;
+                }
+            }
+        }
+        assert!(red > 20, "{red} red pixels");
+        assert!(white > 20, "{white} white pixels");
+    }
+
+    #[test]
+    fn a_span_paints_its_background_over_its_own_box_only() {
+        let (canvas, arena, _styles, layouts) = painted_paragraph(
+            ".p { width: 200px; color: #ffffff; } .g { background-color: #00ff00; color: #000000; }",
+            vec![
+                Element::text("ab "),
+                span_of("g", "green"),
+                Element::text(" cd"),
+            ],
+        );
+        let span = arena.children(arena.roots()[0])[0];
+        let rect = layouts[&span];
+        let green = |x: u32, y: u32| {
+            let [r, g, b] = pixel_rgb(&canvas, x, y);
+            g > 0xc0 && r < 0x40 && b < 0x40
+        };
+        // The corner pixels inside the box are green...
+        assert!(green(rect.x as u32 + 1, rect.y as u32 + 1));
+        assert!(green(
+            (rect.x + rect.width) as u32 - 2,
+            (rect.y + rect.height) as u32 - 2
+        ));
+        // ...and just outside it on every side they are not.
+        assert!(!green(rect.x as u32 - 2, rect.y as u32 + 5));
+        assert!(!green((rect.x + rect.width) as u32 + 2, rect.y as u32 + 5));
+        assert!(!green(rect.x as u32 + 5, (rect.y + rect.height) as u32 + 2));
+    }
+
+    #[test]
+    fn a_box_that_wraps_is_sliced_with_no_border_at_the_cut() {
+        // A span with a blue 4px border, wrapped across two lines: the first
+        // line has its left border and no right one, the second the opposite.
+        let (canvas, arena, _styles, layouts) = painted_paragraph(
+            ".p { width: 120px; color: #ffffff; line-height: 40px; } \
+             .b { border: 4px solid #0000ff; }",
+            vec![Element::text("aaa "), span_of("b", "bbb ccc ddd")],
+        );
+        let span = arena.children(arena.roots()[0])[0];
+        let rect = layouts[&span];
+        let blue = |x: u32, y: u32| {
+            let [r, g, b] = pixel_rgb(&canvas, x, y);
+            b > 0xc0 && r < 0x40 && g < 0x40
+        };
+        let first_row = rect.y as u32 + 4 + 6;
+        // The first line starts the box after "aaa ": blue to the right of the
+        // line's start, none at it.
+        assert!(
+            (10..120).any(|x| blue(x, first_row)),
+            "left border of the first line"
+        );
+        assert!(!blue(1, first_row));
+        // The second line continues it: nothing blue at the line's left edge.
+        let second_row = 40 + 14;
+        assert!(
+            !blue(1, second_row),
+            "no left border where the box continues"
+        );
+        // And that line ends the box: blue at its right end.
+        let right = (0..120).rev().find(|&x| blue(x, second_row));
+        assert!(right.is_some(), "right border of the last line");
+    }
+
+    #[test]
+    fn a_span_is_underlined_only_where_it_or_a_parent_says() {
+        let (canvas, arena, styles, layouts) = painted_paragraph(
+            ".p { width: 200px; color: #ffffff; } .u { text-decoration: underline; }",
+            vec![Element::text("plain "), span_of("u", "under")],
+        );
+        let container = arena.roots()[0];
+        let span = arena.children(container)[0];
+        let mut font = Font::load_embedded();
+        let shaped = florui_layout::shape_inline_formatting_context(
+            &mut font, &arena, &styles, container, 200.0,
+        )
+        .unwrap();
+        let baseline = shaped.layout.baseline;
+        let rect = layouts[&span];
+        let lit = |x: u32, y: u32| pixel_rgb(&canvas, x, y)[0] > 0x80;
+        let underlined = |from: u32, to: u32| {
+            (baseline as u32 + 1..baseline as u32 + 4).any(|y| {
+                let covered = (from..to).filter(|&x| lit(x, y)).count() as u32;
+                covered * 10 >= (to - from) * 8
+            })
+        };
+        assert!(underlined(
+            rect.x as u32 + 1,
+            (rect.x + rect.width) as u32 - 1
+        ));
+        assert!(!underlined(2, rect.x as u32 - 6));
     }
 
     #[test]
@@ -11310,7 +11587,7 @@ mod tests {
                     Some(width),
                 );
                 assert_eq!(
-                    (inline.width, inline.height),
+                    (inline.layout.width, inline.layout.height),
                     (plain.width, plain.height),
                     "{size}px weight {weight} wrapped at {width}"
                 );

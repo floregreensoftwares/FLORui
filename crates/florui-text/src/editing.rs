@@ -337,6 +337,8 @@ impl Font {
                     normalized_coords: run.normalized_coords().to_vec(),
                     glyphs,
                     element: 0,
+                    x: glyph_run.offset(),
+                    width: glyph_run.advance(),
                 });
             }
         }
