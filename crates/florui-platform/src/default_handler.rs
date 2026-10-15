@@ -12,7 +12,8 @@
 //!
 //! The registry layout of a registration is a contract between `florui
 //! register`, which writes it, and this module, which looks it up; the names
-//! of those keys live here, once.
+//! of those keys live here, once. On Linux the contract is the name of the
+//! desktop entry, [`desktop_entry_file`].
 
 /// Where Windows lists the applications that offer themselves as handlers
 /// (value name: the application's identifier, data: its capabilities key).
@@ -201,7 +202,116 @@ mod os {
     }
 }
 
-#[cfg(not(all(windows, feature = "desktop")))]
+/// The desktop entry `florui register` writes for an application on Linux,
+/// in the user's applications directory. Its presence is what "registered"
+/// means there.
+pub fn desktop_entry_file(identifier: &str) -> String {
+    format!("{identifier}.desktop")
+}
+
+#[cfg(target_os = "linux")]
+mod os {
+    use std::io::ErrorKind;
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+
+    use super::{DefaultHandlerOutcome, desktop_entry_file};
+
+    /// The directories desktop entries are looked up in, user first.
+    fn application_dirs() -> Vec<PathBuf> {
+        let data_home = std::env::var_os("XDG_DATA_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
+            });
+        let data_dirs = std::env::var("XDG_DATA_DIRS")
+            .ok()
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "/usr/local/share:/usr/share".to_owned());
+        data_home
+            .into_iter()
+            .chain(data_dirs.split(':').map(PathBuf::from))
+            .map(|dir| dir.join("applications"))
+            .collect()
+    }
+
+    fn registered_in(dirs: &[PathBuf], identifier: &str) -> bool {
+        let file = desktop_entry_file(identifier);
+        dirs.iter().any(|dir| Path::new(dir).join(&file).is_file())
+    }
+
+    /// The program and arguments that open the defaults page of the desktop
+    /// named in `XDG_CURRENT_DESKTOP` (a colon-separated list). GNOME has no
+    /// `default-apps` panel (it falls back to Network); Apps holds Default Apps.
+    fn settings_command(current_desktop: &str) -> Option<(&'static str, &'static [&'static str])> {
+        current_desktop
+            .split(':')
+            .find_map(|desktop| match desktop.to_ascii_lowercase().as_str() {
+                "gnome" | "unity" | "ubuntu" => {
+                    Some(("gnome-control-center", &["applications"][..]))
+                }
+                "kde" => Some(("systemsettings", &["kcm_componentchooser"][..])),
+                _ => None,
+            })
+    }
+
+    pub(super) fn open_default_apps(identifier: &str) -> DefaultHandlerOutcome {
+        if !registered_in(&application_dirs(), identifier) {
+            return DefaultHandlerOutcome::NotRegistered;
+        }
+        let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+        let Some((program, args)) = settings_command(&desktop) else {
+            return DefaultHandlerOutcome::Unsupported;
+        };
+        match Command::new(program)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(_) => DefaultHandlerOutcome::Opened,
+            Err(error) if error.kind() == ErrorKind::NotFound => DefaultHandlerOutcome::Unsupported,
+            Err(error) => DefaultHandlerOutcome::Failed(error.to_string()),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn the_defaults_page_depends_on_the_desktop() {
+            assert_eq!(
+                settings_command("ubuntu:GNOME"),
+                Some(("gnome-control-center", &["applications"][..]))
+            );
+            assert_eq!(
+                settings_command("KDE"),
+                Some(("systemsettings", &["kcm_componentchooser"][..]))
+            );
+            assert_eq!(settings_command("XFCE"), None);
+            assert_eq!(settings_command(""), None);
+        }
+
+        #[test]
+        fn an_application_is_registered_when_its_entry_is_in_a_directory() {
+            let dir = tempfile::tempdir().expect("temp dir");
+            let dirs = vec![dir.path().join("missing"), dir.path().to_path_buf()];
+            assert!(!registered_in(&dirs, "com.example.garden"));
+            std::fs::write(
+                dir.path().join("com.example.garden.desktop"),
+                "[Desktop Entry]",
+            )
+            .expect("write entry");
+            assert!(registered_in(&dirs, "com.example.garden"));
+            assert!(!registered_in(&dirs, "com.example.other"));
+        }
+    }
+}
+
+#[cfg(not(any(all(windows, feature = "desktop"), target_os = "linux")))]
 mod os {
     use super::DefaultHandlerOutcome;
 
