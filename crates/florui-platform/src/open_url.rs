@@ -1,5 +1,6 @@
 //! Opening a URL in the OS's own default browser — see
-//! [`crate::os::windows::open_url`] for the real implementation. Unlike a
+//! [`crate::os::windows::open_url`] and [`crate::os::linux::open_url`] for
+//! the real implementations. Unlike a
 //! file dialog, the underlying OS call doesn't block on anything the
 //! browser does (it just asks the shell to launch a handler and returns),
 //! so this is synchronous — no spawn/callback round trip needed. Apps
@@ -20,10 +21,13 @@ pub enum OpenUrlOutcome {
 #[cfg(target_os = "windows")]
 pub(crate) use crate::os::windows::open_url::open_url;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+pub(crate) use crate::os::linux::open_url::open_url;
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub(crate) use stub::open_url;
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 mod stub {
     use winit::window::Window;
 
