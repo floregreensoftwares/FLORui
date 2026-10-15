@@ -1156,6 +1156,10 @@ struct WindowState {
     /// The same for the restored logical size, which some compositors shrink
     /// by a client-side title bar on every launch.
     size_to_settle: Option<(i32, i32)>,
+    /// Set while a restored maximize still has to be confirmed once the
+    /// window has settled: on X11 a request sent before the window manager
+    /// has the window is ignored, and the next save would record `false`.
+    maximize_to_confirm: bool,
     /// `Some` once this window's bounds changed since the last successful
     /// save; cleared on save. Reset (not just refreshed) on every further
     /// change, so a continuous resize drag keeps pushing the save deadline
@@ -1764,6 +1768,12 @@ impl WindowState {
         if now < changed_at + WINDOW_STATE_SAVE_DEBOUNCE {
             return;
         }
+        if std::mem::take(&mut self.maximize_to_confirm) && !self.window.is_maximized() {
+            self.window.set_maximized(true);
+            // Its `Resized` saves the maximized state once it has taken effect.
+            self.pending_geometry_save = Some(now);
+            return;
+        }
         if let Some(target) = self.size_to_settle.take()
             && !self.window.is_maximized()
         {
@@ -1993,7 +2003,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             // A saved size with no saved position (never recorded, e.g. no
             // `Moved` event ever fired) still applies -- losing position
             // alone is a smaller compromise than losing everything.
-            let mut should_restore_maximized = false;
+            let mut restore_maximized = false;
             let mut position_to_settle = None;
             let mut size_to_settle = None;
             if let Some(persistence) = &spec.options.persistence {
@@ -2034,7 +2044,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                             ));
                             position_to_settle = Some(position);
                         }
-                        should_restore_maximized = saved.maximized;
+                        restore_maximized = saved.maximized;
                     }
                 }
             }
@@ -2060,7 +2070,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             if is_primary_window {
                 self.primary_window_id = Some(window_id);
             }
-            if should_restore_maximized {
+            if restore_maximized {
                 window.set_maximized(true);
             }
 
@@ -2196,6 +2206,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 persistence: spec.options.persistence.clone(),
                 position_to_settle,
                 size_to_settle,
+                maximize_to_confirm: restore_maximized,
                 pending_geometry_save: None,
                 accessibility_adapter,
                 accessibility_tree: accessibility::tree::AccessibilityTree::new(),
