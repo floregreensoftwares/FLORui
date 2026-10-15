@@ -127,7 +127,7 @@ mod default_handler;
 #[cfg(feature = "desktop")]
 pub use default_handler::{
     DefaultHandlerOutcome, DefaultHandlerPermission, DefaultTarget, REGISTERED_APPLICATIONS_KEY,
-    application_key, capabilities_key, request_default_handler,
+    application_key, capabilities_key, desktop_entry_file, request_default_handler,
 };
 
 #[cfg(feature = "desktop")]
