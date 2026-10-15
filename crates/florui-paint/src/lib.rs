@@ -945,6 +945,9 @@ fn ink_is_outside_clip(
     // An element holding only text counts as an inline formatting context,
     // but shapes that one text in the container's own font, exactly as the
     // plain path does. Anything mixed with other elements is left alone.
+    if !florui_layout::anonymous_blocks(arena, styles, node).is_empty() {
+        return false;
+    }
     let text = if florui_layout::is_inline_formatting_context(arena, styles, node) {
         match arena.inline_items(node) {
             [florui_style::InlineItem::Text(text)] => text.as_str(),
@@ -1099,6 +1102,11 @@ fn wrap_width(content_width: f32, scale_factor: f32) -> f32 {
     } else {
         content_width / scale_factor + WRAP_SLACK
     }
+}
+
+/// [`wrap_width`] where a local of the same name shadows it.
+fn self_wrap(content_width: f32, scale_factor: f32) -> f32 {
+    wrap_width(content_width, scale_factor)
 }
 
 /// `border` with its widths in painted pixels: they are authored in logical
@@ -1574,10 +1582,35 @@ fn own_extent(
     // extra room isn't actually visible.
     let ink_pad = font_size * scale_factor;
     let mut shaped_extent = None;
-    if florui_layout::is_inline_formatting_context(arena, styles, node) {
-        if let Some(shaped) =
-            florui_layout::shape_inline_formatting_context(font, arena, styles, node, wrap_width)
-        {
+    let blocks = florui_layout::anonymous_blocks(arena, styles, node);
+    if !blocks.is_empty() {
+        for block in blocks {
+            let Some(&at) = layouts.get(&block) else {
+                continue;
+            };
+            if let Some(shaped) = florui_layout::shape_anonymous_block(
+                font,
+                arena,
+                styles,
+                (layouts, scale_factor),
+                block,
+                self_wrap(at.width, scale_factor),
+            ) {
+                min_x = min_x.min(abs_x + at.x - ink_pad);
+                min_y = min_y.min(abs_y + at.y - ink_pad);
+                max_x = max_x.max(abs_x + at.x + shaped.layout.width * scale_factor + ink_pad);
+                max_y = max_y.max(abs_y + at.y + shaped.layout.height * scale_factor + ink_pad);
+            }
+        }
+    } else if florui_layout::is_inline_formatting_context(arena, styles, node) {
+        if let Some(shaped) = florui_layout::shape_inline_formatting_context(
+            font,
+            arena,
+            styles,
+            (layouts, scale_factor),
+            node,
+            wrap_width,
+        ) {
             shaped_extent = Some((shaped.layout.width, shaped.layout.height));
         }
     } else {
@@ -3011,6 +3044,11 @@ fn paint_node(
         let _content_span = florui_profile::span(florui_profile::Phase::RasterContent);
 
         let color = style.map_or(Rgba::opaque(0, 0, 0), |s| s.color);
+        let anonymous = if arena.children(node).is_empty() {
+            Vec::new()
+        } else {
+            florui_layout::anonymous_blocks(arena, styles, node)
+        };
         let no_padding = florui_style::Edges {
             top: 0.0,
             right: 0.0,
@@ -3286,6 +3324,27 @@ fn paint_node(
                     clip,
                 );
             }
+        } else if !anonymous.is_empty() {
+            // Runs of text and inline elements between block children: each is
+            // an anonymous block, painted where layout put it, as a context
+            // of its own.
+            for &block in &anonymous {
+                let Some(&at) = layouts.get(&block) else {
+                    continue;
+                };
+                if let Some(shaped) = florui_layout::shape_anonymous_block(
+                    font,
+                    arena,
+                    styles,
+                    (layouts, scale_factor),
+                    block,
+                    self_wrap(at.width, scale_factor),
+                ) {
+                    let origin = (x + at.x, y + at.y);
+                    paint_inline_boxes(buffer, styles, &shaped, origin, scale_factor, clip);
+                    paint_inline_runs(buffer, styles, &shaped, origin, color, scale_factor, clip);
+                }
+            }
         } else if florui_layout::is_inline_formatting_context(arena, styles, node) {
             // A real mixed text/inline-element node: rebuilt and
             // reshaped fresh here, since this crate doesn't share layout's
@@ -3295,7 +3354,12 @@ fn paint_node(
             // its own box behind the text and its own color, shadow and
             // underline on it.
             if let Some(shaped) = florui_layout::shape_inline_formatting_context(
-                font, arena, styles, node, wrap_width,
+                font,
+                arena,
+                styles,
+                (layouts, scale_factor),
+                node,
+                wrap_width,
             ) {
                 let is_button = arena.tag(node) == "button";
                 let (dx, dy) = text_offset(
@@ -8092,6 +8156,57 @@ mod tests {
     }
 
     #[test]
+    fn text_around_a_block_is_painted_in_its_own_lines_and_not_over_the_block() {
+        // Two 22px lines of text with a 30px blue block between them.
+        let (canvas, ..) = painted_paragraph(
+            ".p { width: 200px; color: #ffffff; } .blk { height: 30px; background-color: #0000ff; }",
+            vec![
+                Element::text("text before"),
+                Element::node(
+                    "div",
+                    vec![("class".to_string(), "blk".to_string())],
+                    vec![],
+                ),
+                Element::text("text after"),
+            ],
+        );
+        let white_rows = |from: u32, to: u32| {
+            (from..to)
+                .filter(|&y| {
+                    (0..200).any(|x| {
+                        let [r, g, b] = pixel_rgb(&canvas, x, y);
+                        r > 0xc0 && g > 0xc0 && b > 0xc0
+                    })
+                })
+                .count()
+        };
+        assert!(white_rows(0, 22) > 5, "the text before the block");
+        assert_eq!(white_rows(22, 52), 0, "nothing over the block");
+        assert!(white_rows(52, 74) > 5, "the text after the block");
+        assert_eq!(pixel_rgb(&canvas, 100, 36), [0, 0, 0xff]);
+    }
+
+    #[test]
+    fn a_span_beside_a_block_paints_its_own_background_where_layout_put_it() {
+        let (canvas, arena, _styles, layouts) = painted_paragraph(
+            ".p { width: 200px; color: #ffffff; } .blk { height: 30px; } .g { background-color: #00ff00; color: #000000; }",
+            vec![
+                Element::node(
+                    "div",
+                    vec![("class".to_string(), "blk".to_string())],
+                    vec![],
+                ),
+                span_of("g", "below"),
+            ],
+        );
+        let span = arena.children(arena.roots()[0])[1];
+        let rect = layouts[&span];
+        assert!(rect.y >= 30.0, "the span is under the block");
+        let [r, g, b] = pixel_rgb(&canvas, rect.x as u32 + 1, rect.y as u32 + 1);
+        assert!(g > 0xc0 && r < 0x40 && b < 0x40);
+    }
+
+    #[test]
     fn a_span_paints_its_own_color() {
         let (canvas, ..) = painted_paragraph(
             ".p { width: 200px; color: #ffffff; } .r { color: #ff0000; }",
@@ -8186,7 +8301,12 @@ mod tests {
         let span = arena.children(container)[0];
         let mut font = Font::load_embedded();
         let shaped = florui_layout::shape_inline_formatting_context(
-            &mut font, &arena, &styles, container, 200.0,
+            &mut font,
+            &arena,
+            &styles,
+            (&layouts, 1.0),
+            container,
+            200.0,
         )
         .unwrap();
         let baseline = shaped.layout.baseline;
@@ -11577,7 +11697,12 @@ mod tests {
             ));
             for width in [40.0, 90.0, 200.0, 4000.0] {
                 let inline = florui_layout::shape_inline_formatting_context(
-                    &mut font, &arena, &styles, node, width,
+                    &mut font,
+                    &arena,
+                    &styles,
+                    (&HashMap::new(), 1.0),
+                    node,
+                    width,
                 )
                 .unwrap();
                 let plain = font.measure_memoized(

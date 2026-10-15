@@ -34,9 +34,10 @@
 //! [`BoxLayout`] (the bounding box of its pieces on each line; padding,
 //! border and margin sit in the line), and an `InlineBlock` child, whether a
 //! leaf (a `<button>`) or holding content of its own, is laid out as one atomic
-//! box, sized to its content and sitting on its last line. A block or flex
-//! sibling mixed in with the inline content falls back to the older,
-//! block-only behavior rather than partially-correct output.
+//! box, sized to its content and sitting on its last line. Inline content
+//! mixed with block-level children (`text<div>block</div>more text`) is
+//! wrapped in anonymous blocks, one per run, which are reported next to the
+//! arena nodes under ids from [`anonymous_id`].
 //!
 //! Taffy positions are relative to the parent's content box, matching
 //! Taffy's own convention; see [`absolute_position`] to accumulate them
@@ -445,9 +446,9 @@ struct ImageContext {
 /// otherwise block/flex siblings.
 ///
 /// Every element child must itself be `Inline`/`InlineBlock` (an inline
-/// element's own children included, to any depth); a block/flex sibling mixed
-/// into the same content falls back to the old block-only behavior, in which a
-/// node's own direct text is dropped when it also has element children.
+/// element's own children included, to any depth). A node that also has
+/// block-level children is not one context but a container of blocks and
+/// anonymous blocks: see [`mixed_parts`].
 fn needs_inline_layout(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
     let items = arena.inline_items(node);
     if items.is_empty() {
@@ -477,6 +478,126 @@ fn needs_inline_layout(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
     }
     has_real_inline_content
 }
+
+/// One piece of a container whose content is inline-level runs between
+/// block-level children: a child laid out as a block, or a run of text and
+/// inline-level elements (by their indices in [`Arena::inline_items`]) that
+/// CSS wraps in an anonymous block of its own.
+#[derive(Clone, PartialEq)]
+enum Part {
+    Block(NodeId),
+    Run(std::ops::Range<usize>),
+}
+
+/// The pieces of `node` when its content mixes inline-level runs with
+/// block-level children (text, a block, more text), or `None`
+/// when it does not and the container is laid out as it always was. A run of
+/// whitespace between blocks is not a piece; a `display: none` element is
+/// a block of no size unless it sits in a run that has content.
+fn mixed_parts(arena: &Tree, styles: &StyleMap, node: NodeId) -> Option<Vec<Part>> {
+    let items = arena.inline_items(node);
+    // Most containers have no inline content, or no block child: found out
+    // without building anything.
+    let (mut block, mut inline) = (false, false);
+    for item in items {
+        match item {
+            StyleInlineItem::Text(text) => inline |= !text.trim().is_empty(),
+            StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
+                Some(StyleDisplay::Inline | StyleDisplay::InlineBlock) => inline = true,
+                Some(StyleDisplay::None) => {}
+                _ => block = true,
+            },
+        }
+        if block && inline {
+            break;
+        }
+    }
+    if !(block && inline) {
+        return None;
+    }
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut content = false;
+    let mut has_block = false;
+    let mut has_run = false;
+    let close = |parts: &mut Vec<Part>, start: usize, end: usize, content: bool| {
+        if content {
+            parts.push(Part::Run(start..end));
+            return true;
+        }
+        for item in &items[start..end] {
+            if let StyleInlineItem::Element(child) = item {
+                parts.push(Part::Block(*child));
+            }
+        }
+        false
+    };
+    for (index, item) in items.iter().enumerate() {
+        match item {
+            StyleInlineItem::Text(text) => content |= !text.trim().is_empty(),
+            StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
+                Some(StyleDisplay::Inline) if inline_subtree_is_inline(arena, styles, *child) => {
+                    content = true;
+                }
+                Some(StyleDisplay::InlineBlock) => content = true,
+                Some(StyleDisplay::None) => {}
+                _ => {
+                    has_run |= close(&mut parts, start, index, content);
+                    parts.push(Part::Block(*child));
+                    start = index + 1;
+                    content = false;
+                    has_block = true;
+                }
+            },
+        }
+    }
+    has_run |= close(&mut parts, start, items.len(), content);
+    (has_block && has_run).then_some(parts)
+}
+
+/// Marks a node id that is not an arena node but the anonymous block around a
+/// run of inline content: its container and its place among the container's
+/// runs are in the rest of the bits (see [`anonymous_id`]).
+const ANONYMOUS: NodeId = 1 << 62;
+
+/// Whether `node` is the id of an anonymous block (see [`anonymous_id`])
+/// rather than an arena node.
+pub fn is_anonymous(node: NodeId) -> bool {
+    node & ANONYMOUS != 0
+}
+
+/// The id under which the layout of the `run`th anonymous block of
+/// `container` is reported, next to the arena nodes'.
+pub fn anonymous_id(container: NodeId, run: usize) -> NodeId {
+    ANONYMOUS | (container << 16) | run.min(0xffff)
+}
+
+/// The arena node whose content has the anonymous block `node`.
+pub fn anonymous_container(node: NodeId) -> NodeId {
+    (node & !ANONYMOUS) >> 16
+}
+
+/// Marks the id of one piece of an inline element that wraps over lines.
+const PIECE: NodeId = 1 << 61;
+
+/// The id under which the `piece`th line's box of the inline element `node`
+/// is reported, relative to the element's own box, when it wraps over
+/// several. [`hit_test`] hits the element only inside them.
+pub fn piece_id(node: NodeId, piece: usize) -> NodeId {
+    PIECE | (node << 16) | piece.min(0xffff)
+}
+
+/// Marks the id under which the baseline of an inline-block with content is
+/// reported (as the `y` of its entry), so painting does not lay it out again.
+const BASELINE: NodeId = 1 << 60;
+
+fn baseline_id(node: NodeId) -> NodeId {
+    BASELINE | node
+}
+
+/// What painting knows of the boxes layout placed: their layouts, in physical
+/// pixels at the scale given, so it does not lay an inline-block out again.
+type Laid<'a> = Option<(&'a HashMap<NodeId, BoxLayout>, f32)>;
 
 /// Whether everything inside the inline element `node` is inline-level, so
 /// it can flow in its container's lines.
@@ -711,6 +832,9 @@ fn last_line_baseline(
         );
         return Some(top + shaped.last_baseline);
     }
+    if is_anonymous(node) {
+        return None;
+    }
     let children = arena.children(node);
     if children.is_empty() {
         let text = leaf_text(arena, node);
@@ -720,7 +844,23 @@ fn last_line_baseline(
         let line = font.measure(style.map_or_else(default_text_style, text_style_of), " ");
         return Some(layout.height - bottom - (line.height - line.baseline));
     }
-    children.iter().rev().find_map(|&child| {
+    let blocks: Vec<NodeId> = match mixed_parts(arena, styles, node) {
+        Some(parts) => {
+            let mut run_number = 0;
+            parts
+                .iter()
+                .map(|part| match part {
+                    Part::Block(child) => *child,
+                    Part::Run(_) => {
+                        run_number += 1;
+                        anonymous_id(node, run_number - 1)
+                    }
+                })
+                .collect()
+        }
+        None => children.to_vec(),
+    };
+    blocks.iter().rev().find_map(|&child| {
         let child_style = styles.get(&child);
         if child_style.is_some_and(|s| {
             s.display == StyleDisplay::None || s.position == StylePosition::Absolute
@@ -742,6 +882,7 @@ fn build_inline_content_items(
     arena: &Tree,
     styles: &StyleMap,
     node: NodeId,
+    laid: Laid<'_>,
 ) -> InlineContext {
     let mut context = InlineContext {
         elements: vec![florui_text::InlineElement {
@@ -752,7 +893,38 @@ fn build_inline_content_items(
         nodes: vec![node],
         hidden: Vec::new(),
     };
-    flatten_inline(font, arena, styles, node, 0, &mut context);
+    flatten_inline(font, arena, styles, node, 0, &mut context, laid);
+    context
+}
+
+/// [`build_inline_content_items`] for one run of `node`'s content, which is
+/// an anonymous block of its own whose text style is `node`'s.
+fn build_run_content_items(
+    font: &mut florui_text::Font,
+    arena: &Tree,
+    styles: &StyleMap,
+    node: NodeId,
+    run: std::ops::Range<usize>,
+    laid: Laid<'_>,
+) -> InlineContext {
+    let mut context = InlineContext {
+        elements: vec![florui_text::InlineElement {
+            parent: 0,
+            style: node_text_style(styles.get(&node)),
+        }],
+        items: Vec::new(),
+        nodes: vec![node],
+        hidden: Vec::new(),
+    };
+    flatten_items(
+        font,
+        arena,
+        styles,
+        &arena.inline_items(node)[run],
+        0,
+        &mut context,
+        laid,
+    );
     context
 }
 
@@ -764,8 +936,30 @@ fn flatten_inline(
     node: NodeId,
     element: usize,
     context: &mut InlineContext,
+    laid: Laid<'_>,
 ) {
-    for item in arena.inline_items(node) {
+    flatten_items(
+        font,
+        arena,
+        styles,
+        arena.inline_items(node),
+        element,
+        context,
+        laid,
+    );
+}
+
+/// Adds `items`, which belong to element `element` of `context`.
+fn flatten_items(
+    font: &mut florui_text::Font,
+    arena: &Tree,
+    styles: &StyleMap,
+    items: &[StyleInlineItem],
+    element: usize,
+    context: &mut InlineContext,
+    laid: Laid<'_>,
+) {
+    for item in items {
         match item {
             StyleInlineItem::Text(text) => context.items.push(InlineContentItem::Text {
                 text: text.clone(),
@@ -782,12 +976,23 @@ fn flatten_inline(
                                 measure_inline_block_intrinsic_size(font, arena, styles, *child);
                             (width, height, baseline, None)
                         } else {
-                            let line_width = definite_content_width(styles.get(&context.nodes[0]));
-                            match nested_block(font, arena, styles, *child, line_width) {
-                                Ok((width, height, baseline, nested)) => {
-                                    (width, height, baseline, Some(std::sync::Arc::new(nested)))
+                            // Painting finds the box where layout put it.
+                            let known = laid.and_then(|(boxes, scale)| {
+                                let own = boxes.get(child)?;
+                                let marker = boxes.get(&baseline_id(*child))?;
+                                Some((own.width / scale, own.height / scale, marker.y / scale))
+                            });
+                            if let Some((width, height, baseline)) = known {
+                                (width, height, baseline, None)
+                            } else {
+                                let line_width =
+                                    definite_content_width(styles.get(&context.nodes[0]));
+                                match nested_block(font, arena, styles, *child, line_width) {
+                                    Ok((width, height, baseline, nested)) => {
+                                        (width, height, baseline, Some(std::sync::Arc::new(nested)))
+                                    }
+                                    Err(_) => (0.0, 0.0, 0.0, None),
                                 }
-                                Err(_) => (0.0, 0.0, 0.0, None),
                             }
                         };
                         context.items.push(InlineContentItem::Box {
@@ -831,7 +1036,7 @@ fn flatten_inline(
                                 });
                             }
                         }
-                        flatten_inline(font, arena, styles, *child, own, context);
+                        flatten_inline(font, arena, styles, *child, own, context, laid);
                         if let Some(style) = child_style {
                             let (inside, margin) = sides(style, true);
                             if inside + margin > 0.0 {
@@ -874,15 +1079,66 @@ pub fn is_flowed_inline(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
     if styles.get(&node).map(|s| s.display) != Some(StyleDisplay::Inline) {
         return false;
     }
+    // The outermost inline element on the way up is the one that is a child
+    // of the container; it flows only if everything in it is inline-level.
+    let mut top = node;
     let mut parent = arena.parent(node);
     while let Some(candidate) = parent {
         if styles.get(&candidate).map(|s| s.display) == Some(StyleDisplay::Inline) {
+            top = candidate;
             parent = arena.parent(candidate);
         } else {
-            return needs_inline_layout(arena, styles, candidate);
+            return needs_inline_layout(arena, styles, candidate)
+                || (inline_subtree_is_inline(arena, styles, top)
+                    && mixed_parts(arena, styles, candidate).is_some());
         }
     }
     false
+}
+
+/// The ids of the anonymous blocks around the runs of inline content of
+/// `node`, in order; empty unless its content mixes such runs with
+/// block-level children.
+pub fn anonymous_blocks(arena: &Tree, styles: &StyleMap, node: NodeId) -> Vec<NodeId> {
+    let Some(parts) = mixed_parts(arena, styles, node) else {
+        return Vec::new();
+    };
+    parts
+        .iter()
+        .filter(|part| matches!(part, Part::Run(_)))
+        .enumerate()
+        .map(|(run, _)| anonymous_id(node, run))
+        .collect()
+}
+
+/// [`shape_inline_formatting_context`] for the anonymous block `block` of a
+/// container, from [`anonymous_blocks`].
+pub fn shape_anonymous_block(
+    font: &mut florui_text::Font,
+    arena: &Tree,
+    styles: &StyleMap,
+    laid: (&HashMap<NodeId, BoxLayout>, f32),
+    block: NodeId,
+    wrap_width: f32,
+) -> Option<InlineShaped> {
+    let container = anonymous_container(block);
+    let run = block & 0xffff;
+    let parts = mixed_parts(arena, styles, container)?;
+    let Part::Run(range) = parts
+        .iter()
+        .filter(|part| matches!(part, Part::Run(_)))
+        .nth(run)?
+    else {
+        return None;
+    };
+    let context =
+        build_run_content_items(font, arena, styles, container, range.clone(), Some(laid));
+    let items = to_inline_items(&context);
+    Some(InlineShaped {
+        layout: font.shape_inline_tree_memoized(&context.elements, &items, Some(wrap_width)),
+        nodes: context.nodes.clone(),
+        parents: context.elements.iter().map(|e| e.parent).collect(),
+    })
 }
 
 /// Shapes `node`'s own real inline formatting context at `wrap_width` —
@@ -895,13 +1151,14 @@ pub fn shape_inline_formatting_context(
     font: &mut florui_text::Font,
     arena: &Tree,
     styles: &StyleMap,
+    laid: (&HashMap<NodeId, BoxLayout>, f32),
     node: NodeId,
     wrap_width: f32,
 ) -> Option<InlineShaped> {
     if !needs_inline_layout(arena, styles, node) {
         return None;
     }
-    let context = build_inline_content_items(font, arena, styles, node);
+    let context = build_inline_content_items(font, arena, styles, node, Some(laid));
     let items = to_inline_items(&context);
     Some(InlineShaped {
         layout: font.shape_inline_tree_memoized(&context.elements, &items, Some(wrap_width)),
@@ -929,70 +1186,6 @@ fn fragment_rect(
         fragment.x + fragment.width,
         fragment.y + fragment.ascent + fragment.descent + below,
     )
-}
-
-/// The pieces of every inline element that wraps over more than one line,
-/// one box per line, relative to the element's own [`BoxLayout`] (whose box
-/// is their bounding rectangle). [`hit_test_with_fragments`] takes them so a
-/// click in the empty corner of a wrapped span misses it. Elements on one
-/// line are not listed: their box is their only fragment.
-pub fn inline_fragment_boxes(
-    font: &mut florui_text::Font,
-    arena: &Tree,
-    styles: &StyleMap,
-    layouts: &HashMap<NodeId, BoxLayout>,
-) -> HashMap<NodeId, Vec<BoxLayout>> {
-    let mut boxes = HashMap::new();
-    for &container in styles.keys() {
-        let Some(layout) = layouts.get(&container) else {
-            continue;
-        };
-        if !needs_inline_layout(arena, styles, container) {
-            continue;
-        }
-        let context = build_inline_content_items(font, arena, styles, container);
-        if context.elements.len() < 2 {
-            continue;
-        }
-        let style = styles.get(&container);
-        let across = style.map_or(0.0, |s| {
-            s.padding.left + s.padding.right + s.border.left.width + s.border.right.width
-        });
-        let items = to_inline_items(&context);
-        let shaped = font.shape_inline_tree_memoized(
-            &context.elements,
-            &items,
-            Some((layout.width - across).max(0.0)),
-        );
-        let mut pieces: Vec<Vec<(f32, f32, f32, f32)>> = vec![Vec::new(); context.elements.len()];
-        for fragment in &shaped.fragments {
-            pieces[fragment.element].push(fragment_rect(
-                styles,
-                context.nodes[fragment.element],
-                fragment,
-            ));
-        }
-        for (element, rects) in pieces.into_iter().enumerate().skip(1) {
-            if rects.len() < 2 {
-                continue;
-            }
-            let x0 = rects.iter().map(|r| r.0).fold(f32::MAX, f32::min);
-            let y0 = rects.iter().map(|r| r.1).fold(f32::MAX, f32::min);
-            boxes.insert(
-                context.nodes[element],
-                rects
-                    .iter()
-                    .map(|r| BoxLayout {
-                        x: r.0 - x0,
-                        y: r.1 - y0,
-                        width: r.2 - r.0,
-                        height: r.3 - r.1,
-                    })
-                    .collect(),
-            );
-        }
-    }
-    boxes
 }
 
 /// Computes block-layout geometry for every node in `arena`, using
@@ -1031,6 +1224,20 @@ type LayoutsAndContentExtents = (HashMap<NodeId, BoxLayout>, HashMap<NodeId, Con
 /// resolved `width` after measuring text) can get corrected geometry
 /// without re-running the cascade or touching an [`AnimationTimeline`].
 pub fn compute_layout_with_content_extents(
+    font: &mut florui_text::Font,
+    arena: &Arena,
+    styles: &StyleMap,
+    available: Size<AvailableSpace>,
+) -> Result<LayoutsAndContentExtents, LayoutError> {
+    // The tree is built and laid out inside one grown stack: an inline-block's
+    // own content is laid out while the tree is built, and would otherwise find
+    // the small stack of the thread too short, and grow its own each time.
+    stacker::maybe_grow(RECURSION_RED_ZONE, RECURSION_STACK_SIZE, || {
+        compute_layout_in_place(font, arena, styles, available)
+    })
+}
+
+fn compute_layout_in_place(
     font: &mut florui_text::Font,
     arena: &Arena,
     styles: &StyleMap,
@@ -1101,7 +1308,7 @@ fn collect_layouts(
     inline_leaves: &[(NodeId, InlineContext)],
     id_of: impl Fn(NodeId) -> taffy::NodeId,
 ) -> Result<LayoutsAndContentExtents, LayoutError> {
-    let node_count = nodes.size_hint().0;
+    let node_count = nodes.size_hint().1.unwrap_or_default();
     let mut result = HashMap::with_capacity(node_count);
     let mut content_extents = HashMap::with_capacity(node_count);
     for (node_id, tid) in nodes {
@@ -1173,8 +1380,13 @@ fn collect_layouts(
         let items = to_inline_items(context);
         let shaped =
             font.shape_inline_tree_memoized(&context.elements, &items, Some(content_width));
-        // Where the container's content box starts, in its own box.
-        let origin = (border_left + padding_left, border_top + padding_top);
+        // Where the content starts, in the box of the container: its content
+        // box, or where an anonymous block is among its children.
+        let origin = if is_anonymous(*container) {
+            (layout.location.x, layout.location.y)
+        } else {
+            (border_left + padding_left, border_top + padding_top)
+        };
 
         // Each element's border box in content coordinates: its fragments'
         // content areas grown by the vertical padding and border, merged.
@@ -1191,11 +1403,11 @@ fn collect_layouts(
                 ),
             });
         };
+        let mut pieces: Vec<Vec<(f32, f32, f32, f32)>> = vec![Vec::new(); count];
         for fragment in &shaped.fragments {
-            merge(
-                &mut rects[fragment.element],
-                fragment_rect(styles, context.nodes[fragment.element], fragment),
-            );
+            let rect = fragment_rect(styles, context.nodes[fragment.element], fragment);
+            merge(&mut rects[fragment.element], rect);
+            pieces[fragment.element].push(rect);
         }
         let origin_of = |element: usize, rects: &[Option<(f32, f32, f32, f32)>]| {
             if element == 0 {
@@ -1225,6 +1437,20 @@ fn collect_layouts(
                     height: y1 - y0,
                 },
             );
+            // An element on several lines is hit only inside its piece of each.
+            if pieces[element].len() > 1 {
+                for (number, piece) in pieces[element].iter().enumerate() {
+                    result.insert(
+                        piece_id(node, number),
+                        BoxLayout {
+                            x: piece.0 - x0,
+                            y: piece.1 - y0,
+                            width: piece.2 - piece.0,
+                            height: piece.3 - piece.1,
+                        },
+                    );
+                }
+            }
             content_extents.insert(
                 node,
                 ContentExtent {
@@ -1234,7 +1460,8 @@ fn collect_layouts(
             );
         }
 
-        let box_sizes: HashMap<NodeId, (f32, f32, usize, Option<&NestedBlock>)> = context
+        type Placed<'a> = (f32, f32, usize, Option<(&'a NestedBlock, f32)>);
+        let box_sizes: HashMap<NodeId, Placed<'_>> = context
             .items
             .iter()
             .filter_map(|item| match item {
@@ -1244,15 +1471,33 @@ fn collect_layouts(
                     height,
                     element,
                     nested,
+                    baseline,
                     ..
-                } => Some((*child, (*width, *height, *element, nested.as_deref()))),
+                } => Some((
+                    *child,
+                    (
+                        *width,
+                        *height,
+                        *element,
+                        nested.as_deref().map(|nested| (nested, *baseline)),
+                    ),
+                )),
                 _ => None,
             })
             .collect();
         for positioned in &shaped.boxes {
             let child = positioned.id as NodeId;
             if let Some(&(width, height, element, nested)) = box_sizes.get(&child) {
-                if let Some(nested) = nested {
+                if let Some((nested, baseline)) = nested {
+                    result.insert(
+                        baseline_id(child),
+                        BoxLayout {
+                            x: 0.0,
+                            y: baseline,
+                            width: 0.0,
+                            height: 0.0,
+                        },
+                    );
                     result.extend(nested.layouts.iter().map(|(&node, &layout)| (node, layout)));
                     content_extents
                         .extend(nested.extents.iter().map(|(&node, &extent)| (node, extent)));
@@ -1889,6 +2134,9 @@ pub fn resolve_object_fit_content_rect(
 enum BuildStep {
     Visit(NodeId),
     Build(NodeId),
+    /// A container with anonymous blocks among its children, which `Build`
+    /// cannot find in the arena.
+    BuildMixed(NodeId, Vec<Part>),
 }
 
 /// Builds `root`'s whole subtree into `tree`, returning its own
@@ -1949,11 +2197,24 @@ fn build_node(
                     }
                 } else if needs_inline_layout(arena, styles, node) {
                     let style = to_taffy_style(styles.get(&node));
-                    let context = build_inline_content_items(font, arena, styles, node);
+                    let context = build_inline_content_items(font, arena, styles, node, None);
                     let id =
                         tree.new_leaf_with_context(style, LeafContext::Inline(context.clone()))?;
                     inline_leaves.push((node, context));
                     id
+                } else if let Some(parts) = mixed_parts(arena, styles, node) {
+                    let blocks: Vec<NodeId> = parts
+                        .iter()
+                        .filter_map(|part| match part {
+                            Part::Block(child) => Some(*child),
+                            Part::Run(_) => None,
+                        })
+                        .collect();
+                    stack.push(BuildStep::BuildMixed(node, parts));
+                    for &child in blocks.iter().rev() {
+                        stack.push(BuildStep::Visit(child));
+                    }
+                    continue;
                 } else {
                     stack.push(BuildStep::Build(node));
                     for &child in arena_children.iter().rev() {
@@ -1961,6 +2222,39 @@ fn build_node(
                     }
                     continue;
                 };
+                taffy_ids.insert(node, id);
+            }
+            BuildStep::BuildMixed(node, parts) => {
+                let mut children = Vec::with_capacity(parts.len());
+                let mut run_number = 0;
+                for part in &parts {
+                    match part {
+                        Part::Block(child) => children.push(taffy_ids[child]),
+                        Part::Run(range) => {
+                            let context = build_run_content_items(
+                                font,
+                                arena,
+                                styles,
+                                node,
+                                range.clone(),
+                                None,
+                            );
+                            let leaf = tree.new_leaf_with_context(
+                                taffy::Style {
+                                    display: Display::Block,
+                                    ..Default::default()
+                                },
+                                LeafContext::Inline(context.clone()),
+                            )?;
+                            let key = anonymous_id(node, run_number);
+                            run_number += 1;
+                            taffy_ids.insert(key, leaf);
+                            inline_leaves.push((key, context));
+                            children.push(leaf);
+                        }
+                    }
+                }
+                let id = tree.new_with_children(to_taffy_style(styles.get(&node)), &children)?;
                 taffy_ids.insert(node, id);
             }
             BuildStep::Build(node) => {
@@ -2257,9 +2551,21 @@ pub fn absolute_position(
             x += layout.x;
             y += layout.y;
         }
-        current = arena.parent(id);
+        current = layout_parent(arena, id);
     }
     (x, y)
+}
+
+/// The node `id` is laid out inside: its parent, or for an anonymous block
+/// the container whose content it holds.
+pub fn layout_parent(arena: &Tree, id: NodeId) -> Option<NodeId> {
+    if is_anonymous(id) {
+        Some(anonymous_container(id))
+    } else if id & (PIECE | BASELINE) != 0 {
+        None
+    } else {
+        arena.parent(id)
+    }
 }
 
 /// Shifts every node's own box by its *immediate* parent's scroll offset,
@@ -2277,9 +2583,8 @@ pub fn apply_scroll_offsets(
     layouts
         .iter()
         .map(|(&id, &layout)| {
-            let Some((offset_x, offset_y)) = arena
-                .parent(id)
-                .and_then(|parent| scroll_offsets.get(&parent).copied())
+            let Some((offset_x, offset_y)) =
+                layout_parent(arena, id).and_then(|parent| scroll_offsets.get(&parent).copied())
             else {
                 return (id, layout);
             };
@@ -2318,19 +2623,6 @@ pub fn hit_test(
     arena: &Arena,
     layouts: &HashMap<NodeId, BoxLayout>,
     styles: &StyleMap,
-    x: f32,
-    y: f32,
-) -> Option<NodeId> {
-    hit_test_with_fragments(arena, layouts, styles, &HashMap::new(), x, y)
-}
-
-/// [`hit_test`] where an inline element that wraps over lines (see
-/// [`inline_fragment_boxes`]) is hit only inside the piece of it on a line.
-pub fn hit_test_with_fragments(
-    arena: &Arena,
-    layouts: &HashMap<NodeId, BoxLayout>,
-    styles: &StyleMap,
-    fragments: &HashMap<NodeId, Vec<BoxLayout>>,
     x: f32,
     y: f32,
 ) -> Option<NodeId> {
@@ -2383,12 +2675,15 @@ pub fn hit_test_with_fragments(
             }
             let outline = border_box_outline(styles, node, ax, ay, layout);
             let pointer_events_none = style.is_some_and(|s| s.pointer_events_none);
-            let in_a_piece = fragments.get(&node).is_none_or(|pieces| {
-                pieces.iter().any(|piece| {
-                    let (px, py) = (point.0 - ax - piece.x, point.1 - ay - piece.y);
-                    px >= 0.0 && py >= 0.0 && px < piece.width && py < piece.height
-                })
-            });
+            // An inline element that wraps over lines is hit only inside its
+            // piece of each (see [`piece_id`]).
+            let in_a_piece = !layouts.contains_key(&piece_id(node, 0))
+                || (0..)
+                    .map_while(|number| layouts.get(&piece_id(node, number)))
+                    .any(|piece| {
+                        let (px, py) = (point.0 - ax - piece.x, point.1 - ay - piece.y);
+                        px >= 0.0 && py >= 0.0 && px < piece.width && py < piece.height
+                    });
             if admitted && !pointer_events_none && in_a_piece && outline.contains(point.0, point.1)
             {
                 hit = Some(node);
@@ -4136,10 +4431,9 @@ mod tests {
             layout_with_styles(&tree, ".p { width: 120px; line-height: 40px; }");
         let container = arena.roots()[0];
         let element = arena.children(container)[0];
-        let mut font = florui_text::Font::load_embedded();
-        let pieces = inline_fragment_boxes(&mut font, &arena, &styles, &layouts);
-        assert_eq!(pieces[&element].len(), 2);
-        let hit = |x, y| hit_test_with_fragments(&arena, &layouts, &styles, &pieces, x, y);
+        assert!(layouts.contains_key(&piece_id(element, 1)));
+        assert!(!layouts.contains_key(&piece_id(element, 2)));
+        let hit = |x, y| super::hit_test(&arena, &layouts, &styles, x, y);
         // Inside the span's bounding box but on the first line, before it.
         assert_eq!(hit(2.0, 10.0), Some(container));
         // Inside the piece on the first line, and on the second line.
@@ -4149,8 +4443,10 @@ mod tests {
         );
         assert_eq!(hit(5.0, 50.0), Some(element));
         // Without the pieces the bounding box answers for the corner.
+        let mut whole = layouts.clone();
+        whole.retain(|&node, _| node & PIECE == 0);
         assert_eq!(
-            super::hit_test(&arena, &layouts, &styles, 2.0, 10.0),
+            super::hit_test(&arena, &whole, &styles, 2.0, 10.0),
             Some(element)
         );
     }
@@ -4243,6 +4539,85 @@ mod tests {
         assert_close(layouts[&top].height, 22.0);
         assert_close(layouts[&bottom].y, 22.0);
         assert_close(layouts[&bottom].width, 55.266);
+    }
+
+    #[test]
+    fn text_before_and_after_a_block_is_laid_out_around_it() {
+        // Chrome, in 300px: "text before", a 20px block and "text after" make
+        // lines 22, 20 and 22 tall, so the container is 64 and the block 22 down.
+        let tree = paragraph(vec![
+            Element::text("text before"),
+            block("blk", vec![]),
+            Element::text("text after"),
+        ]);
+        let (arena, layouts) = layout_for(&tree, ".p { width: 300px; } .blk { height: 20px; }");
+        let container = arena.roots()[0];
+        let middle = arena.children(container)[0];
+        assert_close(layouts[&container].height, 64.0);
+        assert_close(layouts[&middle].y, 22.0);
+        assert_close(layouts[&middle].height, 20.0);
+        assert_close(layouts[&middle].width, 300.0);
+        // The two runs are anonymous blocks of their own.
+        let first = anonymous_id(container, 0);
+        let second = anonymous_id(container, 1);
+        assert_close(layouts[&first].y, 0.0);
+        assert_close(layouts[&first].height, 22.0);
+        assert_close(layouts[&second].y, 42.0);
+        assert_close(layouts[&second].height, 22.0);
+    }
+
+    #[test]
+    fn spans_around_a_block_sit_in_the_anonymous_blocks_beside_it() {
+        // Chrome: a span, a 20px block and a span: the spans are 22 tall at the
+        // top and 42 down, 54.125 and 35.5 wide.
+        let tree = paragraph(vec![
+            span("s", vec![Element::text("in span ")]),
+            block("blk", vec![]),
+            span("t", vec![Element::text("after")]),
+        ]);
+        let (arena, layouts) = layout_for(&tree, ".p { width: 300px; } .blk { height: 20px; }");
+        let container = arena.roots()[0];
+        let (first, middle, last) = (
+            arena.children(container)[0],
+            arena.children(container)[1],
+            arena.children(container)[2],
+        );
+        assert_close(layouts[&container].height, 64.0);
+        assert_close(layouts[&first].y, 0.0);
+        assert_close(layouts[&first].width, 54.125);
+        assert_close(layouts[&middle].y, 22.0);
+        assert_close(layouts[&last].y, 42.0);
+        assert_close(layouts[&last].width, 35.5);
+        assert_close(absolute_position(&arena, &layouts, last).1, 42.0);
+    }
+
+    #[test]
+    fn text_before_a_block_wraps_in_its_anonymous_block() {
+        // Chrome, in 100px: seven words wrap to three lines, then a 10px block,
+        // then six words on four more lines: 164 in all, the block 66 down.
+        let tree = paragraph(vec![
+            Element::text("one two three four five six seven"),
+            block("blk", vec![]),
+            Element::text("eight nine ten eleven twelve thirteen"),
+        ]);
+        let (arena, layouts) = layout_for(&tree, ".p { width: 100px; } .blk { height: 10px; }");
+        let container = arena.roots()[0];
+        let middle = arena.children(container)[0];
+        assert_close(layouts[&container].height, 164.0);
+        assert_close(layouts[&middle].y, 66.0);
+    }
+
+    #[test]
+    fn whitespace_between_blocks_makes_no_line() {
+        let tree = paragraph(vec![
+            block("blk", vec![]),
+            Element::text("  "),
+            block("blk", vec![]),
+        ]);
+        let (arena, layouts) = layout_for(&tree, ".p { width: 100px; } .blk { height: 10px; }");
+        let container = arena.roots()[0];
+        assert_close(layouts[&container].height, 20.0);
+        assert!(!layouts.contains_key(&anonymous_id(container, 0)));
     }
 
     #[test]
