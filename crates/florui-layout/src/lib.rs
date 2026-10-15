@@ -262,6 +262,31 @@ pub fn text_style_of(style: &ComputedStyle) -> florui_text::TextStyle {
         each_line: style.text_indent.each_line,
     })
     .with_vertical_align(vertical_align)
+    .with_wrapping(
+        match style.white_space_collapse {
+            florui_style::WhiteSpaceCollapse::Collapse => florui_text::WhiteSpaceCollapse::Collapse,
+            florui_style::WhiteSpaceCollapse::Preserve => florui_text::WhiteSpaceCollapse::Preserve,
+            florui_style::WhiteSpaceCollapse::PreserveBreaks => {
+                florui_text::WhiteSpaceCollapse::PreserveBreaks
+            }
+            florui_style::WhiteSpaceCollapse::BreakSpaces => {
+                florui_text::WhiteSpaceCollapse::BreakSpaces
+            }
+        },
+        style.text_wrap,
+        match style.word_break {
+            florui_style::WordBreak::Normal | florui_style::WordBreak::BreakWord => {
+                florui_text::WordBreak::Normal
+            }
+            florui_style::WordBreak::BreakAll => florui_text::WordBreak::BreakAll,
+            florui_style::WordBreak::KeepAll => florui_text::WordBreak::KeepAll,
+        },
+        match style.overflow_wrap {
+            florui_style::OverflowWrap::Normal => florui_text::OverflowWrap::Normal,
+            florui_style::OverflowWrap::BreakWord => florui_text::OverflowWrap::BreakWord,
+            florui_style::OverflowWrap::Anywhere => florui_text::OverflowWrap::Anywhere,
+        },
+    )
 }
 
 /// What text is shaped with when its node has no computed style.
@@ -4618,6 +4643,101 @@ mod tests {
         let container = arena.roots()[0];
         assert_close(layouts[&container].height, 20.0);
         assert!(!layouts.contains_key(&anonymous_id(container, 0)));
+    }
+
+    /// The height of a 90px paragraph of `text` under `css`.
+    fn wrapped_height(text: &str, css: &str) -> f32 {
+        let tree = paragraph(vec![Element::text(text)]);
+        let (arena, layouts) = layout_for(&tree, &format!(".p {{ width: 90px; {css} }}"));
+        layouts[&arena.roots()[0]].height
+    }
+
+    #[test]
+    fn white_space_wraps_and_collapses_as_chromium_does() {
+        // Chromium, 90px wide, lines of 22px.
+        let words = "one two three four five six";
+        for (value, lines) in [
+            ("normal", 3.0),
+            ("nowrap", 1.0),
+            ("pre", 1.0),
+            ("pre-wrap", 3.0),
+            ("pre-line", 3.0),
+            ("break-spaces", 3.0),
+        ] {
+            let css = format!("white-space: {value};");
+            assert_close(wrapped_height(words, &css), 22.0 * lines);
+        }
+        // Spaces and a line break: collapsed into one line, or kept.
+        let spaced = "a   b\n  c  d  ";
+        for (value, lines) in [
+            ("normal", 1.0),
+            ("nowrap", 1.0),
+            ("pre", 2.0),
+            ("pre-wrap", 2.0),
+            ("pre-line", 2.0),
+            ("break-spaces", 2.0),
+        ] {
+            let css = format!("white-space: {value};");
+            assert_close(wrapped_height(spaced, &css), 22.0 * lines);
+        }
+    }
+
+    #[test]
+    fn a_space_collapses_with_the_one_before_even_across_an_element() {
+        // Chromium: in "a <span> b </span> c" the span is 13.953 wide, in
+        // "a <span>  b</span>  c" it is 9.797 wide, and the line is one.
+        let measure = |inside: &str, after: &str| {
+            let tree = paragraph(vec![
+                Element::text("a "),
+                span("s", vec![Element::text(inside)]),
+                Element::text(after),
+            ]);
+            let (arena, layouts) = layout_for(&tree, ".p { width: 300px; }");
+            let container = arena.roots()[0];
+            let element = arena.children(container)[0];
+            assert_close(layouts[&container].height, 22.0);
+            layouts[&element].width
+        };
+        assert_close(measure(" b ", " c"), 13.953);
+        assert_close(measure("  b", "  c"), 9.797);
+    }
+
+    #[test]
+    fn word_break_and_overflow_wrap_break_inside_a_long_word_as_chromium_does() {
+        // Chromium, 60px wide: a 135px word and a 105px one.
+        let text = "Supercalifragilistic expialidocious";
+        let at_60 = |css: &str| {
+            let tree = paragraph(vec![Element::text(text)]);
+            let (arena, layouts) = layout_for(&tree, &format!(".p {{ width: 60px; {css} }}"));
+            layouts[&arena.roots()[0]].height
+        };
+        assert_close(at_60(""), 44.0);
+        assert_close(at_60("word-break: break-all;"), 110.0);
+        assert_close(at_60("word-break: keep-all;"), 44.0);
+        assert_close(at_60("overflow-wrap: break-word;"), 110.0);
+        assert_close(at_60("overflow-wrap: anywhere;"), 110.0);
+        assert_close(at_60("overflow-wrap: normal;"), 44.0);
+    }
+
+    #[test]
+    fn pre_wrap_with_break_word_breaks_a_long_word_as_a_textarea_does() {
+        // What a textarea's user-agent style says: the 135px word breaks into
+        // three 22px lines in 60px, as in Chromium's five lines for two words.
+        let tree: Element = Element::node(
+            "div",
+            vec![("class".into(), "p".into())],
+            vec![Element::node(
+                "span",
+                vec![("class".into(), "t".into())],
+                vec![Element::text("Supercalifragilistic")],
+            )],
+        );
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".p { width: 60px; } .t { display: block; white-space: pre-wrap; overflow-wrap: break-word; line-height: 22px; }",
+        );
+        let element = arena.children(arena.roots()[0])[0];
+        assert_close(layouts[&element].height, 66.0);
     }
 
     #[test]
