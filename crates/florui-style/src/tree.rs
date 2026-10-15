@@ -1905,6 +1905,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "needs source locations: a debug build, or florui's source-locations feature"
+    )]
     fn a_node_reports_where_its_element_was_written() {
         let marker = line!();
         let tree = view! {
@@ -1933,6 +1937,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "needs source locations: a debug build, or florui's source-locations feature"
+    )]
     fn overlay_content_keeps_its_location() {
         let marker = line!();
         let content = view! {

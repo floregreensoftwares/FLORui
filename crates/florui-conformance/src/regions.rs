@@ -192,6 +192,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(debug_assertions),
+        ignore = "needs source locations: a debug build, or florui's source-locations feature"
+    )]
     fn a_mismatch_in_a_real_tree_names_the_element_and_where_it_was_written() {
         let marker = line!();
         let tree = view! {
