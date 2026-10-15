@@ -9,4 +9,7 @@ pub mod open_url;
 pub mod overlay;
 pub mod single_instance;
 pub mod tray;
+pub mod wayland;
 mod x11;
+
+pub(crate) use x11::pointer_in_window;

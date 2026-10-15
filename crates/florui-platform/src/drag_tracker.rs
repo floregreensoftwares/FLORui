@@ -1,8 +1,9 @@
-//! Turns the per-file events `winit` reports on X11 into the whole-payload
-//! sequence the rest of this crate delivers: one `Enter` for everything
-//! hovering, then a `Leave`, or a `Drop` of everything dropped. `winit` has no
-//! hover or drop events on Wayland and reports no pointer position during a
-//! drag, so the position is the last one the pointer had over the window.
+//! Turns the per-file events a Linux window gets (from `winit` on X11, from
+//! the compositor's data device on Wayland) into the whole-payload sequence
+//! the rest of this crate delivers: one `Enter` for everything hovering, an
+//! `Over` each time the pointer moves, then a `Leave`, or a `Drop` of
+//! everything dropped. `winit` reports no pointer position during a drag, so
+//! the host supplies it with [`DragTracker::moved`].
 //!
 //! Events are collected as they arrive and turned into drag events once per
 //! loop iteration by [`DragTracker::flush`], which is what lets several files
@@ -22,14 +23,43 @@ pub(crate) struct DragTracker {
 
 #[derive(Debug)]
 enum Step {
-    Hovered(PathBuf),
+    Hovered(PathBuf, DragPosition),
+    Moved(DragPosition),
     Cancelled,
-    Dropped(PathBuf),
+    Dropped(PathBuf, DragPosition),
 }
 
 impl DragTracker {
+    /// Whether a drag has entered and not yet left or dropped.
+    pub(crate) fn is_hovering(&self) -> bool {
+        self.entered.is_some()
+            || self
+                .steps
+                .iter()
+                .any(|step| matches!(step, Step::Hovered(..)))
+    }
+
+    /// Where the pointer last was; the origin until it is known.
+    fn here(&self) -> DragPosition {
+        self.position.unwrap_or(DragPosition { x: 0.0, y: 0.0 })
+    }
+
+    /// The pointer moved during a drag.
+    pub(crate) fn moved(&mut self, position: DragPosition) {
+        if self.position == Some(position) {
+            return;
+        }
+        self.position = Some(position);
+        if let Some(Step::Moved(last)) = self.steps.last_mut() {
+            *last = position;
+        } else {
+            self.steps.push(Step::Moved(position));
+        }
+    }
+
     pub(crate) fn hovered(&mut self, path: PathBuf) {
-        self.steps.push(Step::Hovered(path));
+        let at = self.here();
+        self.steps.push(Step::Hovered(path, at));
     }
 
     pub(crate) fn cancelled(&mut self) {
@@ -37,7 +67,8 @@ impl DragTracker {
     }
 
     pub(crate) fn dropped(&mut self, path: PathBuf) {
-        self.steps.push(Step::Dropped(path));
+        let at = self.here();
+        self.steps.push(Step::Dropped(path, at));
     }
 
     pub(crate) fn pointer_at(&mut self, position: DragPosition) {
@@ -49,15 +80,19 @@ impl DragTracker {
     /// a payload dropped without a hover is asked about when it lands. A
     /// rejected payload is never dropped, only left.
     pub(crate) fn flush(&mut self, accept: impl Fn(&DragPayload) -> bool) -> Vec<DragEvent> {
-        let position = self.position.unwrap_or(DragPosition { x: 0.0, y: 0.0 });
         let mut events = Vec::new();
         let mut rest = std::mem::take(&mut self.steps).into_iter().peekable();
         while let Some(step) = rest.next() {
             match step {
-                Step::Hovered(first) => {
+                Step::Moved(position) => {
+                    if let Some(accepted) = self.entered {
+                        events.push(DragEvent::Over { position, accepted });
+                    }
+                }
+                Step::Hovered(first, position) => {
                     let mut files = vec![first];
-                    while let Some(Step::Hovered(path)) =
-                        rest.next_if(|next| matches!(next, Step::Hovered(_)))
+                    while let Some(Step::Hovered(path, _)) =
+                        rest.next_if(|next| matches!(next, Step::Hovered(..)))
                     {
                         files.push(path);
                     }
@@ -78,10 +113,10 @@ impl DragTracker {
                         events.push(DragEvent::Leave);
                     }
                 }
-                Step::Dropped(first) => {
+                Step::Dropped(first, position) => {
                     let mut files = vec![first];
-                    while let Some(Step::Dropped(path)) =
-                        rest.next_if(|next| matches!(next, Step::Dropped(_)))
+                    while let Some(Step::Dropped(path, _)) =
+                        rest.next_if(|next| matches!(next, Step::Dropped(..)))
                     {
                         files.push(path);
                     }
@@ -210,6 +245,90 @@ mod tests {
         assert!(
             matches!(&events[1], DragEvent::Enter { payload, .. } if *payload == files(&["/b.txt"]))
         );
+    }
+
+    #[test]
+    fn moves_during_a_hover_become_over_events_with_the_answer_given_at_the_enter() {
+        let mut tracker = DragTracker::default();
+        tracker.hovered("/a.txt".into());
+        tracker.flush(|_| false);
+        tracker.moved(at(10.0, 20.0));
+        assert_eq!(
+            tracker.flush(|_| true),
+            vec![DragEvent::Over {
+                position: at(10.0, 20.0),
+                accepted: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn moves_outside_a_hover_are_not_events() {
+        let mut tracker = DragTracker::default();
+        tracker.moved(at(10.0, 20.0));
+        assert_eq!(tracker.flush(|_| true), vec![]);
+        assert!(!tracker.is_hovering());
+    }
+
+    #[test]
+    fn moves_that_arrive_together_are_one_over_at_the_last_position() {
+        let mut tracker = DragTracker::default();
+        tracker.hovered("/a.txt".into());
+        tracker.flush(|_| true);
+        tracker.moved(at(1.0, 1.0));
+        tracker.moved(at(2.0, 3.0));
+        assert_eq!(
+            tracker.flush(|_| true),
+            vec![DragEvent::Over {
+                position: at(2.0, 3.0),
+                accepted: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_pointer_that_has_not_moved_is_not_a_move() {
+        let mut tracker = DragTracker::default();
+        tracker.moved(at(4.0, 5.0));
+        tracker.hovered("/a.txt".into());
+        tracker.flush(|_| true);
+        tracker.moved(at(4.0, 5.0));
+        assert_eq!(tracker.flush(|_| true), vec![]);
+    }
+
+    #[test]
+    fn an_enter_keeps_the_position_the_pointer_had_when_the_hover_arrived() {
+        let mut tracker = DragTracker::default();
+        tracker.moved(at(4.0, 5.0));
+        tracker.hovered("/a.txt".into());
+        tracker.moved(at(40.0, 50.0));
+        let events = tracker.flush(|_| true);
+        assert!(matches!(
+            events[0],
+            DragEvent::Enter {
+                position: DragPosition { x: 4.0, y: 5.0 },
+                ..
+            }
+        ));
+        assert_eq!(
+            events[1],
+            DragEvent::Over {
+                position: at(40.0, 50.0),
+                accepted: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_drag_is_hovering_from_its_hover_until_it_leaves() {
+        let mut tracker = DragTracker::default();
+        tracker.hovered("/a.txt".into());
+        assert!(tracker.is_hovering(), "before the flush");
+        tracker.flush(|_| true);
+        assert!(tracker.is_hovering(), "after the enter");
+        tracker.cancelled();
+        tracker.flush(|_| true);
+        assert!(!tracker.is_hovering());
     }
 
     #[test]

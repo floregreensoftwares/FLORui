@@ -126,6 +126,10 @@ pub(crate) enum UserEvent {
     /// `crate::os::linux::tray`.
     #[cfg(target_os = "linux")]
     Tray,
+    /// The compositor sent this process something on the Wayland connection that
+    /// a thread was waiting for; the loop only has to run once more.
+    #[cfg(target_os = "linux")]
+    Wayland,
     /// A [`crate::WindowControls::open_file_dialog`]/`save_file_dialog`
     /// call's background thread finished — routed back through the event
     /// loop so the app's own `on_result` callback runs on the UI thread,
@@ -1032,6 +1036,10 @@ fn sync_input_regions(
     arena: &florui_style::Arena,
     physical_layouts: &HashMap<NodeId, BoxLayout>,
 ) {
+    // A Wayland window has no position: its regions are in window pixels.
+    #[cfg(target_os = "linux")]
+    let origin = window.inner_position().unwrap_or_default();
+    #[cfg(not(target_os = "linux"))]
     let Ok(origin) = window.inner_position() else {
         return;
     };
@@ -1210,6 +1218,10 @@ struct WindowState {
 /// that a crash/kill within a second or two of the last move doesn't lose
 /// much. Not spec-mandated to an exact number, only "bounded/debounced."
 const WINDOW_STATE_SAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// How often the pointer is looked up while a drag hovers on X11.
+#[cfg(target_os = "linux")]
+const DRAG_POLL: std::time::Duration = std::time::Duration::from_millis(16);
 
 /// What the input code needs from this window: the real window and its
 /// controls, borrowed for the length of one event.
@@ -1764,16 +1776,58 @@ impl WindowState {
         sync_input_regions(&self.controls, &self.window, arena, &physical_layouts);
     }
 
+    /// Takes one step of a Wayland drag into the tracker the X11 events go to.
+    #[cfg(target_os = "linux")]
+    fn feed_wayland_drag(&mut self, step: crate::os::linux::wayland::DragStep) {
+        use crate::drag_drop::DragPosition;
+        use crate::os::linux::wayland::DragStep;
+        let at = |(x, y): (f32, f32)| DragPosition { x, y };
+        match step {
+            DragStep::Enter(files, position) => {
+                self.drag.pointer_at(at(position));
+                for file in files {
+                    self.drag.hovered(file);
+                }
+            }
+            DragStep::Over(position) => self.drag.moved(at(position)),
+            DragStep::Leave => self.drag.cancelled(),
+            DragStep::Drop(files, position) => {
+                self.drag.pointer_at(at(position));
+                for file in files {
+                    self.drag.dropped(file);
+                }
+            }
+        }
+    }
+
     /// Hands the app the drag events gathered since the last loop iteration.
     #[cfg(target_os = "linux")]
-    fn flush_drag_events(&mut self) {
+    fn flush_drag_events(&mut self) -> Option<std::time::Instant> {
+        // X11 sends no motion while a drag hovers, so ask where the pointer is
+        // and look again soon; Wayland reports it with the drag itself.
+        let mut poll_again = false;
+        if self.drag.is_hovering()
+            && let Some((x, y)) = crate::os::linux::pointer_in_window(&self.window)
+        {
+            let logical = winit::dpi::PhysicalPosition::new(x, y)
+                .to_logical::<f32>(self.window.scale_factor());
+            self.drag.moved(crate::drag_drop::DragPosition {
+                x: logical.x,
+                y: logical.y,
+            });
+            poll_again = true;
+        }
         let controls = Rc::clone(&self.controls);
         for event in self
             .drag
             .flush(|payload| controls.evaluate_drag_accept(payload))
         {
+            if let crate::drag_drop::DragEvent::Enter { accepted, .. } = &event {
+                crate::os::linux::wayland::answer_drag(*accepted);
+            }
             controls.dispatch_drag_event(event);
         }
+        poll_again.then(|| std::time::Instant::now() + DRAG_POLL)
     }
 
     /// Marks this window's bounds as changed since the last save, resetting
@@ -2108,6 +2162,16 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 Err(error) => return self.fail(event_loop, RunError::WindowCreation(error)),
             };
             let window_id = window.id();
+            #[cfg(target_os = "linux")]
+            {
+                let proxy = self.proxy.clone();
+                crate::os::linux::wayland::init(
+                    &window,
+                    Arc::new(move || {
+                        let _ = proxy.send_event(UserEvent::Wayland);
+                    }),
+                );
+            }
             let accessibility_adapter = accesskit_winit::Adapter::with_event_loop_proxy(
                 event_loop,
                 &window,
@@ -2302,11 +2366,19 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             state.runtime.window_focus_lost();
             state.update_and_request_redraw();
         }
+        #[cfg(target_os = "linux")]
+        for (id, step) in crate::os::linux::wayland::pump() {
+            if let Some(state) = self.windows.get_mut(&id) {
+                state.feed_wayland_drag(step);
+            }
+        }
         let now = std::time::Instant::now();
         let mut next_wake: Option<std::time::Instant> = None;
         for state in self.windows.values_mut() {
             #[cfg(target_os = "linux")]
-            state.flush_drag_events();
+            if let Some(deadline) = state.flush_drag_events() {
+                next_wake = Some(next_wake.map_or(deadline, |current| current.min(deadline)));
+            }
             match state.resizing_until {
                 Some(deadline) if now >= deadline => {
                     // The drag has stopped: the frame at full size.
@@ -2473,6 +2545,8 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             UserEvent::RequestClose(id) => self.close_if_confirmed(event_loop, id),
             #[cfg(target_os = "linux")]
             UserEvent::Tray => crate::os::linux::tray::deliver_pending(),
+            #[cfg(target_os = "linux")]
+            UserEvent::Wayland => {}
             UserEvent::Activation(activation_event) => {
                 let Some(queue) = &self.activation_queue else {
                     return;

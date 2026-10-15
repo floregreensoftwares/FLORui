@@ -101,7 +101,7 @@ pub fn classify_launch(
 
 /// The local path a `file://` URI names (empty or `localhost` host), with its
 /// percent escapes decoded.
-fn file_uri_to_path(value: &str) -> Option<String> {
+pub(crate) fn file_uri_to_path(value: &str) -> Option<String> {
     let rest = value.strip_prefix("file://")?;
     let path = rest.strip_prefix("localhost").unwrap_or(rest);
     if !path.starts_with('/') {

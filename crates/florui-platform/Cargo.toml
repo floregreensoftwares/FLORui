@@ -17,7 +17,7 @@ profiling = ["florui/profiling", "florui-profile/profiling"]
 # driving UiRuntime on its own shouldn't have to pull them in.
 # `dep:windows-sys` is a no-op outside the Windows-only dependency table
 # below — every other target simply never has it in its resolved graph.
-desktop = ["dep:notify", "dep:softbuffer", "dep:winit", "dep:wgpu", "dep:pollster", "dep:windows-sys", "dep:windows", "dep:windows-core", "dep:florui-icon", "dep:serde", "dep:serde_json", "dep:arboard", "dep:accesskit", "dep:accesskit_winit", "dep:x11rb", "dep:rfd", "dep:zbus"]
+desktop = ["dep:notify", "dep:softbuffer", "dep:winit", "dep:wgpu", "dep:pollster", "dep:windows-sys", "dep:windows", "dep:windows-core", "dep:florui-icon", "dep:serde", "dep:serde_json", "dep:arboard", "dep:accesskit", "dep:accesskit_winit", "dep:x11rb", "dep:rfd", "dep:zbus", "dep:wayland-client", "dep:wayland-backend", "dep:libc"]
 
 [dependencies]
 florui = { path = "../florui" }
@@ -148,3 +148,10 @@ rfd = { version = "0.17.2", optional = true, default-features = false, features 
 # `os::linux::tray`: the StatusNotifierItem D-Bus interface, the tray protocol
 # that GNOME with the AppIndicator extension, KDE and most panels host.
 zbus = { version = "5", optional = true }
+# `os::linux::wayland`: the compositor's data device (drag-and-drop and the
+# clipboard) and input regions, on the connection `winit` already opened. Both
+# crates are already resolved through `winit`.
+wayland-client = { version = "0.31.5", optional = true }
+wayland-backend = { version = "0.3.17", optional = true, default-features = false, features = ["client_system"] }
+# `os::linux::wayland`'s reader thread waits for the compositor with `poll`.
+libc = { version = "0.2", optional = true }
