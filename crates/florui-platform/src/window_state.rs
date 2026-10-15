@@ -75,6 +75,26 @@ pub(crate) fn window_state_path(app_identifier: &str, key: &str) -> Option<PathB
     )
 }
 
+/// Largest placement error, per axis, worth correcting. A bigger one is the
+/// compositor keeping the window on a screen or away from a panel, and
+/// pushing against that would only fight it.
+const MAX_PLACEMENT_ERROR: i32 = 200;
+
+/// Some window managers place a window a fixed distance away from the
+/// position it was created with (a frame, a shadow), so the saved position
+/// drifts a little on every launch. Given where the window was meant to be
+/// and where it settled, this is the position to ask for once so that it
+/// lands on `target`, assuming the same offset applies. `None` when it
+/// already is there, or is too far to be that kind of offset.
+pub(crate) fn settle_correction(target: (i32, i32), actual: (i32, i32)) -> Option<(i32, i32)> {
+    let error = (target.0 - actual.0, target.1 - actual.1);
+    if error == (0, 0) || error.0.abs() > MAX_PLACEMENT_ERROR || error.1.abs() > MAX_PLACEMENT_ERROR
+    {
+        return None;
+    }
+    Some((target.0 + error.0, target.1 + error.1))
+}
+
 fn state_root() -> Option<PathBuf> {
     #[cfg(windows)]
     {
@@ -382,6 +402,25 @@ mod tests {
         second.logical_size = (640.0, 480.0);
         save(&path, &second).unwrap();
         assert_eq!(load_or_default(&path).unwrap(), second);
+    }
+
+    #[test]
+    fn a_window_already_at_its_target_needs_no_correction() {
+        assert_eq!(settle_correction((1566, 56), (1566, 56)), None);
+    }
+
+    #[test]
+    fn a_constant_placement_offset_is_cancelled_by_asking_for_the_opposite() {
+        // The compositor put the window 32 px up and left of the request.
+        assert_eq!(settle_correction((1566, 56), (1534, 24)), Some((1598, 88)));
+        assert_eq!(settle_correction((0, 0), (-10, 5)), Some((10, -5)));
+    }
+
+    #[test]
+    fn an_error_too_large_to_be_a_frame_offset_is_left_alone() {
+        assert_eq!(settle_correction((1000, 500), (1000, 500 - 201)), None);
+        assert_eq!(settle_correction((1000, 500), (1000 + 201, 500)), None);
+        assert!(settle_correction((1000, 500), (1000 - 200, 500)).is_some());
     }
 
     fn absolute(name: &str) -> std::ffi::OsString {

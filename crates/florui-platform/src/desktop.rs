@@ -1159,6 +1159,9 @@ struct WindowState {
     /// close time (see [`DesktopHost::close_if_confirmed`]) to flush a
     /// final save.
     persistence: Option<WindowPersistence>,
+    /// The restored position, until the window has settled and been checked
+    /// against it once; see [`window_state::settle_correction`].
+    position_to_settle: Option<(i32, i32)>,
     /// `Some` once this window's bounds changed since the last successful
     /// save; cleared on save. Reset (not just refreshed) on every further
     /// change, so a continuous resize drag keeps pushing the save deadline
@@ -1767,6 +1770,16 @@ impl WindowState {
         if now < changed_at + WINDOW_STATE_SAVE_DEBOUNCE {
             return;
         }
+        if let Some(target) = self.position_to_settle.take()
+            && let Ok(actual) = self.window.outer_position()
+            && let Some(request) = window_state::settle_correction(target, (actual.x, actual.y))
+        {
+            self.window
+                .set_outer_position(winit::dpi::PhysicalPosition::new(request.0, request.1));
+            // The corrected move reports `Moved`, which saves where it landed.
+            self.pending_geometry_save = Some(now);
+            return;
+        }
         window_state::capture_and_save(&self.window, persistence);
         self.pending_geometry_save = None;
     }
@@ -1969,6 +1982,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             // `Moved` event ever fired) still applies -- losing position
             // alone is a smaller compromise than losing everything.
             let mut should_restore_maximized = false;
+            let mut position_to_settle = None;
             if let Some(persistence) = &spec.options.persistence {
                 let saved =
                     window_state::window_state_path(&persistence.app_identifier, &persistence.key)
@@ -2001,6 +2015,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                             attrs = attrs.with_position(winit::dpi::PhysicalPosition::new(
                                 position.0, position.1,
                             ));
+                            position_to_settle = Some(position);
                         }
                         should_restore_maximized = saved.maximized;
                     }
@@ -2162,6 +2177,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 theme_preference,
                 decorations: spec.options.decorations,
                 persistence: spec.options.persistence.clone(),
+                position_to_settle,
                 pending_geometry_save: None,
                 accessibility_adapter,
                 accessibility_tree: accessibility::tree::AccessibilityTree::new(),
