@@ -159,7 +159,8 @@ impl GpuPresenter {
     }
 
     /// The real alpha-compositing mode negotiated for this presenter —
-    /// `CompositeAlphaMode::Opaque` for [`PresentationCapability::GpuOpaque`],
+    /// `CompositeAlphaMode::Opaque` for [`PresentationCapability::GpuOpaque`]
+    /// (the nearest mode the surface lists when it has no `Opaque`),
     /// `PreMultiplied` for [`PresentationCapability::GpuTransparent`] (see
     /// this module's own doc for why `PreMultiplied` specifically).
     pub fn alpha_mode(&self) -> CompositeAlphaMode {
@@ -216,13 +217,15 @@ impl GpuPresenter {
             .find(|f| matches!(f, TextureFormat::Rgba8Unorm))
             .or_else(|| capabilities.formats.first().copied())?;
 
+        let alpha_mode = opaque_alpha_mode(&capabilities.alpha_modes)?;
+
         Self::configure(
             window,
             device,
             queue,
             surface,
             format,
-            CompositeAlphaMode::Opaque,
+            alpha_mode,
             PresentationCapability::GpuOpaque,
         )
     }
@@ -506,6 +509,21 @@ pub fn probe_graphics() -> Result<GraphicsProbe, String> {
     })
 }
 
+/// The alpha mode for a window that draws every pixel opaque: `Opaque` when
+/// the surface offers it, else the nearest the surface does. Some
+/// compositors (Vulkan on Wayland) list only `PreMultiplied` and `Inherit`,
+/// and asking for an unlisted mode is a validation error.
+fn opaque_alpha_mode(supported: &[CompositeAlphaMode]) -> Option<CompositeAlphaMode> {
+    [
+        CompositeAlphaMode::Opaque,
+        CompositeAlphaMode::Inherit,
+        CompositeAlphaMode::PreMultiplied,
+        CompositeAlphaMode::PostMultiplied,
+    ]
+    .into_iter()
+    .find(|mode| supported.contains(mode))
+}
+
 fn create_upload_texture(
     device: &wgpu::Device,
     format: TextureFormat,
@@ -526,6 +544,45 @@ fn create_upload_texture(
         usage: TextureUsages::COPY_SRC | TextureUsages::COPY_DST,
         view_formats: &[],
     })
+}
+
+#[cfg(test)]
+mod alpha_mode_tests {
+    use super::*;
+
+    #[test]
+    fn opaque_is_chosen_whenever_the_surface_offers_it() {
+        let offered = [
+            CompositeAlphaMode::PreMultiplied,
+            CompositeAlphaMode::Opaque,
+        ];
+        assert_eq!(
+            opaque_alpha_mode(&offered),
+            Some(CompositeAlphaMode::Opaque)
+        );
+    }
+
+    #[test]
+    fn a_surface_without_opaque_gets_the_nearest_mode_it_lists() {
+        let wayland = [
+            CompositeAlphaMode::PreMultiplied,
+            CompositeAlphaMode::Inherit,
+        ];
+        assert_eq!(
+            opaque_alpha_mode(&wayland),
+            Some(CompositeAlphaMode::Inherit)
+        );
+        let only_pre = [CompositeAlphaMode::PreMultiplied];
+        assert_eq!(
+            opaque_alpha_mode(&only_pre),
+            Some(CompositeAlphaMode::PreMultiplied)
+        );
+    }
+
+    #[test]
+    fn a_surface_listing_nothing_has_no_mode() {
+        assert_eq!(opaque_alpha_mode(&[]), None);
+    }
 }
 
 #[cfg(all(test, feature = "desktop", target_os = "windows"))]
