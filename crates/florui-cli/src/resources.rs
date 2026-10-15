@@ -130,18 +130,22 @@ pub fn unsupported_host() -> ResourcesReport {
     }
 }
 
-/// Picks the declared icon: the Windows one, else the common one.
+/// Picks the declared icon: the one for this host, else the common one.
 pub fn declared_icon(icons: &IconsConfig) -> Option<(&'static str, &Path)> {
-    icons
-        .windows
-        .as_deref()
-        .map(|path| ("app.icons.windows", path))
-        .or_else(|| {
-            icons
-                .source
-                .as_deref()
-                .map(|path| ("app.icons.source", path))
-        })
+    let own = if cfg!(windows) {
+        icons
+            .windows
+            .as_deref()
+            .map(|path| ("app.icons.windows", path))
+    } else {
+        icons.linux.as_deref().map(|path| ("app.icons.linux", path))
+    };
+    own.or_else(|| {
+        icons
+            .source
+            .as_deref()
+            .map(|path| ("app.icons.source", path))
+    })
 }
 
 /// Reads and converts the declared icon. `project_dir` only shortens the
@@ -861,6 +865,12 @@ pub fn ico_path(staging: &Path) -> PathBuf {
     staging.join("icon.ico")
 }
 
+/// The name a staged PNG of the icon has at `size` pixels, on a host that
+/// does not embed it into the executable.
+pub fn png_file_name(size: u32) -> String {
+    format!("icon-{size}.png")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1008,13 +1018,19 @@ mod tests {
     }
 
     #[test]
-    fn the_windows_icon_is_preferred_over_the_common_one() {
+    fn this_hosts_icon_is_preferred_over_the_common_one() {
         let icons = IconsConfig {
             source: Some(PathBuf::from("common.svg")),
             windows: Some(PathBuf::from("win.svg")),
+            linux: Some(PathBuf::from("linux.svg")),
             ..IconsConfig::default()
         };
-        assert_eq!(declared_icon(&icons).unwrap().0, "app.icons.windows");
+        let own = if cfg!(windows) {
+            "app.icons.windows"
+        } else {
+            "app.icons.linux"
+        };
+        assert_eq!(declared_icon(&icons).unwrap().0, own);
         let only_common = IconsConfig {
             source: Some(PathBuf::from("common.svg")),
             ..IconsConfig::default()
