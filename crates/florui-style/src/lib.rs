@@ -49,6 +49,7 @@ mod style_map;
 mod style_session;
 mod stylesheet_parse;
 mod stylo;
+mod text_indent_adapter;
 mod tree;
 
 pub use animation::AnimationTimeline;
@@ -62,7 +63,8 @@ pub use cascade::{
     ContainerType, ContentAlignment, Corners, Display, Edges, FilterFunction, FlexDirection,
     FlexWrap, FontFamily, GlassMaterial, GlassQuality, GlassSpec, GridPlacement, GridTrackSize,
     ItemAlignment, LengthPercentage, LineHeight, ObjectFit, Position, Resize, TextAlign,
-    TextShadow, TransformFunction, Viewport, compute, compute_with_container_query_signature,
+    TextIndent, TextShadow, TransformFunction, VerticalAlign, Viewport, compute,
+    compute_with_container_query_signature,
 };
 pub use color::{ColorParseError, Rgba, parse_hex_color};
 pub use container_query_adapter::{ContentBoxSize, resolve_container_query_signatures};

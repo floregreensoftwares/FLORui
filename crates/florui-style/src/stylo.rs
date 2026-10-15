@@ -1109,6 +1109,10 @@ pub(crate) fn shared_lock() -> &'static SharedRwLock {
 /// unsupported declaration this crate's cascade already tolerates.
 fn parse_inline_style(css: &str) -> Arc<Locked<PropertyDeclarationBlock>> {
     let css = crate::scroll_behavior_adapter::rewrite_declarations(css);
+    let css = match crate::text_indent_adapter::rewrite_declarations(&css) {
+        std::borrow::Cow::Owned(rewritten) => std::borrow::Cow::Owned(rewritten),
+        std::borrow::Cow::Borrowed(_) => css,
+    };
     let url_data: style::stylesheets::UrlExtraData = url::Url::parse("about:florui")
         .expect("a fixed, valid URL literal")
         .into();
@@ -1778,6 +1782,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
     // `currentcolor` reference resolve against it, rather than an
     // arbitrary fallback.
     let color = to_absolute_rgba(&text.color);
+    let font_size = style::values::computed::Length::new(font.font_size.computed_size.0.px());
 
     ComputedStyle {
         background_color: background
@@ -1811,8 +1816,10 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         font_size: font.font_size.computed_size.0.px(),
         font_weight: font.font_weight.value(),
         line_height: to_line_height(&font.line_height),
-        letter_spacing: text.letter_spacing.0.to_length().map_or(0.0, |l| l.px()),
-        word_spacing: text.word_spacing.to_length().map_or(0.0, |l| l.px()),
+        letter_spacing: text.letter_spacing.0.resolve(font_size).px(),
+        word_spacing: text.word_spacing.resolve(font_size).px(),
+        text_indent: to_text_indent(&text.text_indent, values),
+        vertical_align: to_vertical_align(&box_style.vertical_align),
         display: to_display(values.get_box().display),
         flex_direction: to_flex_direction(position.flex_direction),
         flex_wrap: to_flex_wrap(position.flex_wrap),
@@ -1932,6 +1939,7 @@ struct FlorNames {
     glass_light_strength: Atom,
     glass_quality: Atom,
     backdrop_blur: Atom,
+    text_indent_keywords: Atom,
 }
 
 thread_local! {
@@ -1947,6 +1955,7 @@ thread_local! {
         glass_light_strength: Atom::from("florui-glass-light-strength"),
         glass_quality: Atom::from("florui-glass-quality"),
         backdrop_blur: Atom::from("florui-backdrop-blur"),
+        text_indent_keywords: Atom::from("florui-text-indent-keywords"),
     };
 }
 
@@ -3028,11 +3037,47 @@ fn to_line_height(value: &style::values::computed::font::LineHeight) -> crate::L
     }
 }
 
+/// The length is Stylo's; the `hanging` and `each-line` keywords its servo
+/// build does not parse come through `--florui-text-indent-keywords` (see
+/// `text_indent_adapter`).
+fn to_text_indent(
+    value: &style::values::computed::text::TextIndent,
+    values: &ComputedValues,
+) -> crate::TextIndent {
+    let keywords = florui_property(values, |names| &names.text_indent_keywords);
+    let has = |word: &str| {
+        keywords
+            .as_deref()
+            .is_some_and(|css| css.split_whitespace().any(|k| k.eq_ignore_ascii_case(word)))
+    };
+    crate::TextIndent {
+        length: to_length_percentage(&value.length),
+        hanging: has("hanging"),
+        each_line: has("each-line"),
+    }
+}
+
+fn to_vertical_align(value: &style::values::computed::VerticalAlign) -> crate::VerticalAlign {
+    use style::values::generics::box_::{VerticalAlign as Value, VerticalAlignKeyword as Keyword};
+    match value {
+        Value::Keyword(Keyword::Sub) => crate::VerticalAlign::Sub,
+        Value::Keyword(Keyword::Super) => crate::VerticalAlign::Super,
+        Value::Keyword(Keyword::TextTop) => crate::VerticalAlign::TextTop,
+        Value::Keyword(Keyword::TextBottom) => crate::VerticalAlign::TextBottom,
+        Value::Keyword(Keyword::Middle) => crate::VerticalAlign::Middle,
+        Value::Keyword(Keyword::Top) => crate::VerticalAlign::Top,
+        Value::Keyword(Keyword::Bottom) => crate::VerticalAlign::Bottom,
+        Value::Keyword(_) => crate::VerticalAlign::Baseline,
+        Value::Length(length) => crate::VerticalAlign::Raise(to_length_percentage(length)),
+    }
+}
+
 fn to_text_align(value: style::values::computed::text::TextAlign) -> crate::TextAlign {
     use style::values::specified::text::TextAlignKeyword as Keyword;
     match value {
         Keyword::Center | Keyword::MozCenter => crate::TextAlign::Center,
         Keyword::Right | Keyword::MozRight | Keyword::End => crate::TextAlign::End,
+        Keyword::Justify => crate::TextAlign::Justify,
         _ => crate::TextAlign::Start,
     }
 }

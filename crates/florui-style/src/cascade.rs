@@ -93,14 +93,41 @@ pub enum GlassSpec {
     Invalid(&'static str),
 }
 
-/// `text-align` for left-to-right text: `justify` is `Start`, `left` and
-/// `right` are `Start` and `End`.
+/// `text-align` for left-to-right text: `left` and `right` are `Start` and
+/// `End`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextAlign {
     #[default]
     Start,
     Center,
     End,
+    Justify,
+}
+
+/// `text-indent`. A percentage is of the containing block's width, so it
+/// stays unresolved until the text is wrapped; `hanging` indents every line
+/// but the first and `each_line` also indents the line after a forced break.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct TextIndent {
+    pub length: LengthPercentage,
+    pub hanging: bool,
+    pub each_line: bool,
+}
+
+/// `vertical-align`. A length or percentage raises the box above the parent's
+/// baseline (a percentage is of the element's own line height).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum VerticalAlign {
+    #[default]
+    Baseline,
+    Sub,
+    Super,
+    TextTop,
+    TextBottom,
+    Middle,
+    Top,
+    Bottom,
+    Raise(LengthPercentage),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -459,12 +486,15 @@ pub struct ComputedStyle {
     pub font_weight: f32,
     /// Inherits; initial [`LineHeight::Normal`].
     pub line_height: LineHeight,
-    /// `letter-spacing` in pixels, added after every character. Inherits;
-    /// `normal` and a percentage read as `0.0`.
+    /// `letter-spacing` in pixels, added after every character. Inherits; a
+    /// percentage is of the element's own font size.
     pub letter_spacing: f32,
-    /// `word-spacing` in pixels, added after every space. Inherits; `normal`
-    /// and a percentage read as `0.0`.
+    /// `word-spacing` in pixels, added after every space. Inherits.
     pub word_spacing: f32,
+    /// Inherits. See [`TextIndent`].
+    pub text_indent: TextIndent,
+    /// Does not inherit. See [`VerticalAlign`].
+    pub vertical_align: VerticalAlign,
     /// This node's own layout algorithm, applied to *its children* — a
     /// leaf's `display` never affects how its own box is placed by its
     /// parent (that's [`Self::flex_grow`]/[`Self::flex_shrink`]/
@@ -716,6 +746,8 @@ impl ComputedStyle {
             line_height: _,
             letter_spacing: _,
             word_spacing: _,
+            text_indent: _,
+            vertical_align: _,
             display: _,
             flex_direction: _,
             flex_wrap: _,
@@ -2441,6 +2473,103 @@ mod tests {
         assert_eq!(computed[&child(spaced)].letter_spacing, 3.0, "inherited");
         assert_eq!(computed[words].word_spacing, 14.0);
         assert_eq!(computed[words].letter_spacing, 0.0);
+    }
+
+    #[test]
+    fn text_indent_justify_and_percentage_spacing_read_and_inherit() {
+        let tree: Element = view! {
+            <div>
+                <p class="indent"><span>{"a"}</span></p>
+                <p class="percent">{"b"}</p>
+                <p class="hanging">{"c"}</p>
+                <p class="justify"><span>{"d"}</span></p>
+                <p class="spaced"><span>{"e"}</span></p>
+            </div>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".indent { text-indent: 24px; }              .percent { text-indent: 10%; }              .hanging { text-indent: 12px hanging each-line; }              .justify { text-align: justify; }              .spaced { font-size: 20px; letter-spacing: 10%; word-spacing: 50%; }",
+            &InteractionState::new(),
+        );
+        let [indent, percent, hanging, justify, spaced] = arena.children(arena.roots()[0]) else {
+            panic!("five children");
+        };
+        let child = |parent: &crate::NodeId| arena.children(*parent)[0];
+
+        assert_eq!(computed[indent].text_indent.length.length, 24.0);
+        assert_eq!(
+            computed[&child(indent)].text_indent.length.length,
+            24.0,
+            "inherited"
+        );
+        assert_eq!(computed[percent].text_indent.length.percentage, 0.1);
+        assert_eq!(computed[percent].text_indent.length.length, 0.0);
+        let hung = computed[hanging].text_indent;
+        assert!(hung.hanging && hung.each_line, "got {hung:?}");
+        assert_eq!(hung.length.length, 12.0);
+        assert!(!computed[indent].text_indent.hanging);
+
+        assert_eq!(computed[justify].text_align, TextAlign::Justify);
+        assert_eq!(computed[&child(justify)].text_align, TextAlign::Justify);
+
+        // Both spacings are a fraction of the element's own font size.
+        assert_eq!(computed[spaced].letter_spacing, 2.0);
+        assert_eq!(computed[spaced].word_spacing, 10.0);
+        assert_eq!(computed[&child(spaced)].letter_spacing, 2.0, "inherited");
+    }
+
+    #[test]
+    fn vertical_align_reads_each_keyword_and_a_raise_and_does_not_inherit() {
+        let tree: Element = view! {
+            <div>
+                <span class="base">{"a"}</span>
+                <span class="sub">{"b"}</span>
+                <span class="sup">{"c"}</span>
+                <span class="mid">{"d"}</span>
+                <span class="ttop">{"e"}</span>
+                <span class="tbot">{"f"}</span>
+                <span class="top">{"g"}</span>
+                <span class="bottom">{"h"}</span>
+                <span class="px">{"i"}</span>
+                <span class="pct">{"j"}</span>
+                <span class="outer"><em>{"k"}</em></span>
+            </div>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".sub { vertical-align: sub; } .sup { vertical-align: super; }              .mid { vertical-align: middle; } .ttop { vertical-align: text-top; }              .tbot { vertical-align: text-bottom; } .top { vertical-align: top; }              .bottom { vertical-align: bottom; } .px { vertical-align: -5px; }              .pct { vertical-align: 50%; } .outer { vertical-align: super; }",
+            &InteractionState::new(),
+        );
+        let kids = arena.children(arena.roots()[0]);
+        let at = |i: usize| computed[&kids[i]].vertical_align;
+        assert_eq!(at(0), VerticalAlign::Baseline);
+        assert_eq!(at(1), VerticalAlign::Sub);
+        assert_eq!(at(2), VerticalAlign::Super);
+        assert_eq!(at(3), VerticalAlign::Middle);
+        assert_eq!(at(4), VerticalAlign::TextTop);
+        assert_eq!(at(5), VerticalAlign::TextBottom);
+        assert_eq!(at(6), VerticalAlign::Top);
+        assert_eq!(at(7), VerticalAlign::Bottom);
+        assert_eq!(
+            at(8),
+            VerticalAlign::Raise(LengthPercentage {
+                length: -5.0,
+                percentage: 0.0
+            })
+        );
+        assert_eq!(
+            at(9),
+            VerticalAlign::Raise(LengthPercentage {
+                length: 0.0,
+                percentage: 0.5
+            })
+        );
+        let inner = arena.children(kids[10])[0];
+        assert_eq!(
+            computed[&inner].vertical_align,
+            VerticalAlign::Baseline,
+            "not inherited"
+        );
     }
 
     #[test]
