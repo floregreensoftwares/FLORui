@@ -2262,7 +2262,12 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 drag: Default::default(),
                 pending_geometry_save: None,
                 accessibility_adapter,
-                accessibility_tree: accessibility::tree::AccessibilityTree::new(),
+                accessibility_tree: if cfg!(target_os = "linux") {
+                    accessibility::tree::AccessibilityTree::new()
+                        .with_window_label(spec.title.clone())
+                } else {
+                    accessibility::tree::AccessibilityTree::new()
+                },
                 accessibility_reverse: HashMap::new(),
                 observer: self.observer.clone(),
             };

@@ -72,6 +72,9 @@ pub(crate) struct AccessibilityTree {
     interner: HashMap<FocusPath, u64>,
     next_id: u64,
     identity: Option<Identity>,
+    /// The name of the window node. Windows names a window from its HWND, so
+    /// only hosts without that give it one here.
+    window_label: Option<String>,
     /// How many trees this has built, for tests that check one was not.
     #[cfg(test)]
     builds: u64,
@@ -83,9 +86,15 @@ impl AccessibilityTree {
             interner: HashMap::new(),
             next_id: 1,
             identity: None,
+            window_label: None,
             #[cfg(test)]
             builds: 0,
         }
+    }
+
+    pub(crate) fn with_window_label(mut self, label: impl Into<String>) -> Self {
+        self.window_label = Some(label.into()).filter(|label| !label.is_empty());
+        self
     }
 
     #[cfg(test)]
@@ -168,6 +177,9 @@ impl AccessibilityTree {
             .collect();
 
         let mut root = Node::new(Role::Window);
+        if let Some(label) = &self.window_label {
+            root.set_label(label.clone());
+        }
         root.set_children(root_children);
         nodes.push((ROOT_ID, root));
 
@@ -1244,6 +1256,32 @@ mod tests {
             .1;
         assert_eq!(root.role(), Role::Window);
         assert_eq!(root.children().len(), 2);
+    }
+
+    #[test]
+    fn the_window_is_named_only_when_given_a_label() {
+        let tree: Element = view! { <div /> };
+        let arena = Arena::build(&tree);
+        let label = |ak_tree: &mut AccessibilityTree| {
+            let (update, _) =
+                ak_tree.build(&arena, None, &NodeBounds::new(), &InteractionState::new());
+            let root = &update
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == ROOT_ID)
+                .unwrap()
+                .1;
+            root.label().map(str::to_owned)
+        };
+        assert_eq!(label(&mut AccessibilityTree::new()), None);
+        assert_eq!(
+            label(&mut AccessibilityTree::new().with_window_label("Garden")),
+            Some("Garden".to_owned())
+        );
+        assert_eq!(
+            label(&mut AccessibilityTree::new().with_window_label("")),
+            None
+        );
     }
 
     #[test]
