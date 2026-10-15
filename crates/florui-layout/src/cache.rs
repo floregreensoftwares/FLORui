@@ -325,10 +325,15 @@ impl LayoutCache {
             match step {
                 Step::Visit(node) => {
                     let arena_children = arena.children(node);
+                    let kind = if arena_children.is_empty() {
+                        LayoutKind::Blocks
+                    } else {
+                        layout_kind(arena, styles, node)
+                    };
                     if arena_children.is_empty() {
                         let context = leaf_context(font, arena, styles, node);
                         self.place(node, to_taffy_style(styles.get(&node)), context, &[], false)?;
-                    } else if needs_inline_layout(arena, styles, node) {
+                    } else if kind == LayoutKind::Inline {
                         let context = build_inline_content_items(font, arena, styles, node, None);
                         self.place(
                             node,
@@ -338,7 +343,8 @@ impl LayoutCache {
                             false,
                         )?;
                         inline_leaves.push((node, context));
-                    } else if let Some(parts) = mixed_parts(arena, styles, node) {
+                    } else if kind == LayoutKind::Mixed {
+                        let parts = mixed_parts_of(arena, styles, node);
                         let blocks: Vec<NodeId> = parts
                             .iter()
                             .filter_map(|part| match part {

@@ -450,33 +450,44 @@ struct ImageContext {
 /// block-level children is not one context but a container of blocks and
 /// anonymous blocks: see [`mixed_parts`].
 fn needs_inline_layout(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
-    let items = arena.inline_items(node);
-    if items.is_empty() {
-        return false;
-    }
+    layout_kind(arena, styles, node) == LayoutKind::Inline
+}
 
-    let mut has_real_inline_content = false;
-    for item in items {
+/// How a node with children lays them out.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LayoutKind {
+    /// Its children are blocks, flex items or grid cells: Taffy's own.
+    Blocks,
+    /// Text and inline-level elements only: one inline formatting context.
+    Inline,
+    /// Inline-level runs between block-level children: see [`mixed_parts`].
+    Mixed,
+}
+
+/// Which of the three `node` is, in one pass over its children (most nodes
+/// are asked at every layout, so the pass stops as soon as it knows).
+fn layout_kind(arena: &Tree, styles: &StyleMap, node: NodeId) -> LayoutKind {
+    let (mut block, mut inline) = (false, false);
+    for item in arena.inline_items(node) {
         match item {
-            StyleInlineItem::Text(text) => {
-                if !text.trim().is_empty() {
-                    has_real_inline_content = true;
-                }
-            }
+            StyleInlineItem::Text(text) => inline |= !text.trim().is_empty(),
             StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
-                Some(StyleDisplay::Inline) => {
-                    has_real_inline_content = true;
-                    if !inline_subtree_is_inline(arena, styles, *child) {
-                        return false;
-                    }
+                Some(StyleDisplay::Inline) if inline_subtree_is_inline(arena, styles, *child) => {
+                    inline = true;
                 }
-                Some(StyleDisplay::InlineBlock) => has_real_inline_content = true,
+                Some(StyleDisplay::InlineBlock) => inline = true,
                 Some(StyleDisplay::None) => {}
-                _ => return false,
+                _ => block = true,
             },
         }
+        if block && inline {
+            return LayoutKind::Mixed;
+        }
     }
-    has_real_inline_content
+    match (block, inline) {
+        (false, true) => LayoutKind::Inline,
+        _ => LayoutKind::Blocks,
+    }
 }
 
 /// One piece of a container whose content is inline-level runs between
@@ -495,42 +506,26 @@ enum Part {
 /// whitespace between blocks is not a piece; a `display: none` element is
 /// a block of no size unless it sits in a run that has content.
 fn mixed_parts(arena: &Tree, styles: &StyleMap, node: NodeId) -> Option<Vec<Part>> {
+    (layout_kind(arena, styles, node) == LayoutKind::Mixed)
+        .then(|| mixed_parts_of(arena, styles, node))
+}
+
+/// [`mixed_parts`] of a node already known to be [`LayoutKind::Mixed`].
+fn mixed_parts_of(arena: &Tree, styles: &StyleMap, node: NodeId) -> Vec<Part> {
     let items = arena.inline_items(node);
-    // Most containers have no inline content, or no block child: found out
-    // without building anything.
-    let (mut block, mut inline) = (false, false);
-    for item in items {
-        match item {
-            StyleInlineItem::Text(text) => inline |= !text.trim().is_empty(),
-            StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
-                Some(StyleDisplay::Inline | StyleDisplay::InlineBlock) => inline = true,
-                Some(StyleDisplay::None) => {}
-                _ => block = true,
-            },
-        }
-        if block && inline {
-            break;
-        }
-    }
-    if !(block && inline) {
-        return None;
-    }
     let mut parts = Vec::new();
     let mut start = 0;
     let mut content = false;
-    let mut has_block = false;
-    let mut has_run = false;
     let close = |parts: &mut Vec<Part>, start: usize, end: usize, content: bool| {
         if content {
             parts.push(Part::Run(start..end));
-            return true;
+            return;
         }
         for item in &items[start..end] {
             if let StyleInlineItem::Element(child) = item {
                 parts.push(Part::Block(*child));
             }
         }
-        false
     };
     for (index, item) in items.iter().enumerate() {
         match item {
@@ -542,17 +537,16 @@ fn mixed_parts(arena: &Tree, styles: &StyleMap, node: NodeId) -> Option<Vec<Part
                 Some(StyleDisplay::InlineBlock) => content = true,
                 Some(StyleDisplay::None) => {}
                 _ => {
-                    has_run |= close(&mut parts, start, index, content);
+                    close(&mut parts, start, index, content);
                     parts.push(Part::Block(*child));
                     start = index + 1;
                     content = false;
-                    has_block = true;
                 }
             },
         }
     }
-    has_run |= close(&mut parts, start, items.len(), content);
-    (has_block && has_run).then_some(parts)
+    close(&mut parts, start, items.len(), content);
+    parts
 }
 
 /// Marks a node id that is not an arena node but the anonymous block around a
@@ -2158,6 +2152,11 @@ fn build_node(
         match step {
             BuildStep::Visit(node) => {
                 let arena_children = arena.children(node);
+                let kind = if arena_children.is_empty() {
+                    LayoutKind::Blocks
+                } else {
+                    layout_kind(arena, styles, node)
+                };
                 let id = if arena_children.is_empty() {
                     let style = to_taffy_style(styles.get(&node));
                     // `icon` (a themable SVG icon) is the same kind of
@@ -2195,14 +2194,15 @@ fn build_node(
                             }),
                         )?
                     }
-                } else if needs_inline_layout(arena, styles, node) {
+                } else if kind == LayoutKind::Inline {
                     let style = to_taffy_style(styles.get(&node));
                     let context = build_inline_content_items(font, arena, styles, node, None);
                     let id =
                         tree.new_leaf_with_context(style, LeafContext::Inline(context.clone()))?;
                     inline_leaves.push((node, context));
                     id
-                } else if let Some(parts) = mixed_parts(arena, styles, node) {
+                } else if kind == LayoutKind::Mixed {
+                    let parts = mixed_parts_of(arena, styles, node);
                     let blocks: Vec<NodeId> = parts
                         .iter()
                         .filter_map(|part| match part {
