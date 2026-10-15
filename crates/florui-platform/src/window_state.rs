@@ -95,6 +95,16 @@ pub(crate) fn settle_correction(target: (i32, i32), actual: (i32, i32)) -> Optio
     Some((target.0 + error.0, target.1 + error.1))
 }
 
+/// Some compositors count a client-side title bar inside the size a window is
+/// created with, so its content area comes out smaller than the saved one and
+/// the saved size shrinks on every launch. A size asked for once the window
+/// exists is the content area itself, so the correction is the target. `None`
+/// when the content already has that size, or is too far off to be a title
+/// bar.
+pub(crate) fn settle_size_correction(target: (i32, i32), actual: (i32, i32)) -> Option<(i32, i32)> {
+    settle_correction(target, actual).map(|_| target)
+}
+
 fn state_root() -> Option<PathBuf> {
     #[cfg(windows)]
     {
@@ -472,6 +482,17 @@ mod tests {
         // The compositor put the window 32 px up and left of the request.
         assert_eq!(settle_correction((1566, 56), (1534, 24)), Some((1598, 88)));
         assert_eq!(settle_correction((0, 0), (-10, 5)), Some((10, -5)));
+    }
+
+    #[test]
+    fn a_title_bar_counted_inside_the_size_is_fixed_by_asking_for_the_size_itself() {
+        // Asked for 565 high, the content area came out 530 (a 35 px title bar).
+        assert_eq!(
+            settle_size_correction((800, 565), (800, 530)),
+            Some((800, 565))
+        );
+        assert_eq!(settle_size_correction((800, 565), (800, 565)), None);
+        assert_eq!(settle_size_correction((800, 565), (800, 565 - 201)), None);
     }
 
     #[test]
