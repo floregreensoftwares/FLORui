@@ -1160,6 +1160,10 @@ struct WindowState {
     /// window has settled: on X11 a request sent before the window manager
     /// has the window is ignored, and the next save would record `false`.
     maximize_to_confirm: bool,
+    /// The per-file drag events `winit` reports (X11 only), gathered into
+    /// whole payloads; see [`crate::drag_tracker`].
+    #[cfg(target_os = "linux")]
+    drag: crate::drag_tracker::DragTracker,
     /// `Some` once this window's bounds changed since the last successful
     /// save; cleared on save. Reset (not just refreshed) on every further
     /// change, so a continuous resize drag keeps pushing the save deadline
@@ -1740,6 +1744,18 @@ impl WindowState {
         sync_input_regions(&self.controls, &self.window, arena, &physical_layouts);
     }
 
+    /// Hands the app the drag events gathered since the last loop iteration.
+    #[cfg(target_os = "linux")]
+    fn flush_drag_events(&mut self) {
+        let controls = Rc::clone(&self.controls);
+        for event in self
+            .drag
+            .flush(|payload| controls.evaluate_drag_accept(payload))
+        {
+            controls.dispatch_drag_event(event);
+        }
+    }
+
     /// Marks this window's bounds as changed since the last save, resetting
     /// (not just refreshing) the debounce deadline — see
     /// [`WINDOW_STATE_SAVE_DEBOUNCE`]'s own doc. A no-op window without
@@ -2207,6 +2223,8 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 position_to_settle,
                 size_to_settle,
                 maximize_to_confirm: restore_maximized,
+                #[cfg(target_os = "linux")]
+                drag: Default::default(),
                 pending_geometry_save: None,
                 accessibility_adapter,
                 accessibility_tree: accessibility::tree::AccessibilityTree::new(),
@@ -2247,6 +2265,8 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
         let now = std::time::Instant::now();
         let mut next_wake: Option<std::time::Instant> = None;
         for state in self.windows.values_mut() {
+            #[cfg(target_os = "linux")]
+            state.flush_drag_events();
             match state.resizing_until {
                 Some(deadline) if now >= deadline => {
                     // The drag has stopped: the frame at full size.
@@ -2350,8 +2370,22 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             }
             WindowEvent::RedrawRequested => state.redraw_for_frame(),
             WindowEvent::CursorMoved { position, .. } => {
+                #[cfg(target_os = "linux")]
+                {
+                    let logical = position.to_logical::<f32>(state.window.scale_factor());
+                    state.drag.pointer_at(crate::drag_drop::DragPosition {
+                        x: logical.x,
+                        y: logical.y,
+                    });
+                }
                 state.handle_cursor_moved(position.x, position.y);
             }
+            #[cfg(target_os = "linux")]
+            WindowEvent::HoveredFile(path) => state.drag.hovered(path),
+            #[cfg(target_os = "linux")]
+            WindowEvent::HoveredFileCancelled => state.drag.cancelled(),
+            #[cfg(target_os = "linux")]
+            WindowEvent::DroppedFile(path) => state.drag.dropped(path),
             WindowEvent::CursorLeft { .. } => state.handle_cursor_left(),
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
