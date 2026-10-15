@@ -1915,6 +1915,8 @@ fn measure_leaf(
         return Size::ZERO;
     };
 
+    let min_content = known_dimensions.width.is_none()
+        && matches!(available_space.width, AvailableSpace::MinContent);
     let wrap_width = known_dimensions.width.or(match available_space.width {
         AvailableSpace::Definite(width) => Some(width),
         // Min-content is the longest unbreakable word: break at every chance.
@@ -1929,9 +1931,20 @@ fn measure_leaf(
             // closure for this same leaf during one layout pass — see its
             // own doc, and the cache's own doc for why re-breaking a
             // shaped layout at a new width is safe to do repeatedly.
-            let metrics = shaping_cache.answer(wrap_width, |shaping| {
-                font.measure_memoized(shaping, text_context.style, &text_context.text, wrap_width)
-            });
+            // The least width of text that may break only if it has to
+            // (`overflow-wrap: break-word`) is still its longest word.
+            let mut style = text_context.style;
+            if min_content && style.overflow_wrap == florui_text::OverflowWrap::BreakWord {
+                style.overflow_wrap = florui_text::OverflowWrap::Normal;
+            }
+            let metrics = if style == text_context.style {
+                shaping_cache.answer(wrap_width, |shaping| {
+                    font.measure_memoized(shaping, style, &text_context.text, wrap_width)
+                })
+            } else {
+                // Not the style this leaf's kept layout was shaped with.
+                font.measure_memoized(&mut None, style, &text_context.text, wrap_width)
+            };
             *baseline_out = Some(metrics.baseline);
             Size {
                 width: metrics.width,
@@ -1943,7 +1956,19 @@ fn measure_leaf(
             // (`shape_inline`'s multi-item `RangedBuilder`), remembered whole
             // by its items and wrap width rather than by one text and style.
             let items = to_inline_items(context);
-            let result = font.shape_inline_tree_memoized(&context.elements, &items, wrap_width);
+            let mut elements = std::borrow::Cow::Borrowed(&context.elements[..]);
+            if min_content
+                && elements
+                    .iter()
+                    .any(|e| e.style.overflow_wrap == florui_text::OverflowWrap::BreakWord)
+            {
+                for element in elements.to_mut() {
+                    if element.style.overflow_wrap == florui_text::OverflowWrap::BreakWord {
+                        element.style.overflow_wrap = florui_text::OverflowWrap::Normal;
+                    }
+                }
+            }
+            let result = font.shape_inline_tree_memoized(&elements, &items, wrap_width);
             *baseline_out = Some(result.baseline);
             Size {
                 width: result.width,
@@ -4738,6 +4763,37 @@ mod tests {
         );
         let element = arena.children(arena.roots()[0])[0];
         assert_close(layouts[&element].height, 66.0);
+    }
+
+    #[test]
+    fn a_flex_item_or_grid_cell_shrinks_to_what_the_wrapping_allows() {
+        // Chromium: in a 60px flex container or grid, text of a 135px word and
+        // a 105px one is 135.188 x 44 (it cannot break the word), 60 x 110 when
+        // a word may break, and 245.672 x 22 when it does not wrap.
+        let cases = [
+            ("", 135.188, 44.0),
+            ("overflow-wrap: break-word;", 135.188, 44.0),
+            ("overflow-wrap: anywhere;", 60.0, 110.0),
+            ("word-break: break-all;", 60.0, 110.0),
+            ("word-break: keep-all;", 135.188, 44.0),
+            ("white-space: nowrap;", 245.672, 22.0),
+            ("white-space: pre;", 245.672, 22.0),
+        ];
+        for display in ["flex", "grid"] {
+            for (css, width, height) in cases {
+                let tree = paragraph(vec![block(
+                    "s",
+                    vec![Element::text("Supercalifragilistic expialidocious")],
+                )]);
+                let (arena, layouts) = layout_for(
+                    &tree,
+                    &format!(".p {{ display: {display}; width: 60px; {css} }}"),
+                );
+                let item = arena.children(arena.roots()[0])[0];
+                assert_close(layouts[&item].width, width);
+                assert_close(layouts[&item].height, height);
+            }
+        }
     }
 
     #[test]
