@@ -21,15 +21,23 @@ param(
     [double]$Alarm = 0.10
 )
 
-$ErrorActionPreference = 'Stop'
-$root = (git rev-parse --show-toplevel).Trim()
+# Windows PowerShell 5.1 turns anything a native command writes to stderr into
+# a terminating error under 'Stop', and git and cargo report progress there; so
+# errors are checked by exit status instead.
+$ErrorActionPreference = 'Continue'
+
+function Invoke-Git {
+    $output = & git @args
+    if ($LASTEXITCODE -ne 0) { throw "git $($args -join ' ') failed" }
+    $output
+}
+
+$root = (Invoke-Git rev-parse --show-toplevel).Trim()
 $null = New-Item -ItemType Directory -Force $OutDir
 $out = (Resolve-Path $OutDir).Path
 
 function Build-Bench([string]$dir, [string]$exe) {
     Push-Location $dir
-    # Cargo reports progress on stderr, which Windows PowerShell 5.1 treats as an error.
-    $ErrorActionPreference = 'Continue'
     try {
         cargo build --release -p florui-bench
         if ($LASTEXITCODE -ne 0) { throw "could not build florui-bench in $dir" }
@@ -37,12 +45,12 @@ function Build-Bench([string]$dir, [string]$exe) {
     } finally { Pop-Location }
 }
 
-$headSha = (git -C $root rev-parse --short $Head).Trim()
-$baseSha = (git -C $root rev-parse --short $Base).Trim()
+$headSha = (Invoke-Git -C $root rev-parse --short $Head).Trim()
+$baseSha = (Invoke-Git -C $root rev-parse --short $Base).Trim()
 Build-Bench $root (Join-Path $out 'head.exe')
 
 $baseDir = Join-Path (Split-Path $root -Parent) "florui-bench-base-$baseSha"
-git -C $root worktree add --detach $baseDir $Base | Out-Null
+Invoke-Git -C $root worktree add --detach $baseDir $Base | Out-Null
 try {
     if (-not (Test-Path (Join-Path $baseDir 'crates/florui-bench'))) {
         "The base commit $baseSha has no florui-bench, so there is nothing to compare against." |
@@ -51,7 +59,7 @@ try {
     }
     Build-Bench $baseDir (Join-Path $out 'base.exe')
 } finally {
-    git -C $root worktree remove --force $baseDir | Out-Null
+    Invoke-Git -C $root worktree remove --force $baseDir | Out-Null
 }
 
 & (Join-Path $out 'head.exe') ab --a (Join-Path $out 'base.exe') --b (Join-Path $out 'head.exe') `
@@ -59,7 +67,9 @@ try {
 if ($LASTEXITCODE -ne 0) { throw 'florui-bench ab failed' }
 
 $alarmsFile = Join-Path $out 'ab/alarms.md'
-$alarmCount = @(Get-Content (Join-Path $out 'ab/alarms.json') -Raw | ConvertFrom-Json).Count
+# Windows PowerShell 5.1 hands back an empty JSON array as one object, so it is
+# enumerated through the pipeline to count what is in it.
+$alarmCount = @(Get-Content (Join-Path $out 'ab/alarms.json') -Raw | ConvertFrom-Json | ForEach-Object { $_ }).Count
 $percent = [int]($Alarm * 100)
 
 $report = @()
