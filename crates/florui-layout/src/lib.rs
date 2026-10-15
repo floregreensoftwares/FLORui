@@ -735,6 +735,91 @@ pub fn shape_inline_formatting_context(
     })
 }
 
+/// A fragment's border box as `(x0, y0, x1, y1)` in content coordinates: its
+/// content area grown by the element's vertical padding and border.
+fn fragment_rect(
+    styles: &StyleMap,
+    node: NodeId,
+    fragment: &florui_text::InlineFragment,
+) -> (f32, f32, f32, f32) {
+    let (above, below) = styles.get(&node).map_or((0.0, 0.0), |s| {
+        (
+            s.padding.top + s.border.top.width,
+            s.padding.bottom + s.border.bottom.width,
+        )
+    });
+    (
+        fragment.x,
+        fragment.y - above,
+        fragment.x + fragment.width,
+        fragment.y + fragment.ascent + fragment.descent + below,
+    )
+}
+
+/// The pieces of every inline element that wraps over more than one line,
+/// one box per line, relative to the element's own [`BoxLayout`] (whose box
+/// is their bounding rectangle). [`hit_test_with_fragments`] takes them so a
+/// click in the empty corner of a wrapped span misses it. Elements on one
+/// line are not listed: their box is their only fragment.
+pub fn inline_fragment_boxes(
+    font: &mut florui_text::Font,
+    arena: &Tree,
+    styles: &StyleMap,
+    layouts: &HashMap<NodeId, BoxLayout>,
+) -> HashMap<NodeId, Vec<BoxLayout>> {
+    let mut boxes = HashMap::new();
+    for &container in styles.keys() {
+        let Some(layout) = layouts.get(&container) else {
+            continue;
+        };
+        if !needs_inline_layout(arena, styles, container) {
+            continue;
+        }
+        let context = build_inline_content_items(font, arena, styles, container);
+        if context.elements.len() < 2 {
+            continue;
+        }
+        let style = styles.get(&container);
+        let across = style.map_or(0.0, |s| {
+            s.padding.left + s.padding.right + s.border.left.width + s.border.right.width
+        });
+        let items = to_inline_items(&context);
+        let shaped = font.shape_inline_tree_memoized(
+            &context.elements,
+            &items,
+            Some((layout.width - across).max(0.0)),
+        );
+        let mut pieces: Vec<Vec<(f32, f32, f32, f32)>> = vec![Vec::new(); context.elements.len()];
+        for fragment in &shaped.fragments {
+            pieces[fragment.element].push(fragment_rect(
+                styles,
+                context.nodes[fragment.element],
+                fragment,
+            ));
+        }
+        for (element, rects) in pieces.into_iter().enumerate().skip(1) {
+            if rects.len() < 2 {
+                continue;
+            }
+            let x0 = rects.iter().map(|r| r.0).fold(f32::MAX, f32::min);
+            let y0 = rects.iter().map(|r| r.1).fold(f32::MAX, f32::min);
+            boxes.insert(
+                context.nodes[element],
+                rects
+                    .iter()
+                    .map(|r| BoxLayout {
+                        x: r.0 - x0,
+                        y: r.1 - y0,
+                        width: r.2 - r.0,
+                        height: r.3 - r.1,
+                    })
+                    .collect(),
+            );
+        }
+    }
+    boxes
+}
+
 /// Computes block-layout geometry for every node in `arena`, using
 /// `styles` for sizing/spacing. `available` is the space the layout root
 /// itself is given (e.g. the preview window's content area). `font` is the
@@ -932,23 +1017,9 @@ fn collect_layouts(
             });
         };
         for fragment in &shaped.fragments {
-            let (above, below) =
-                styles
-                    .get(&context.nodes[fragment.element])
-                    .map_or((0.0, 0.0), |s| {
-                        (
-                            s.padding.top + s.border.top.width,
-                            s.padding.bottom + s.border.bottom.width,
-                        )
-                    });
             merge(
                 &mut rects[fragment.element],
-                (
-                    fragment.x,
-                    fragment.y - above,
-                    fragment.x + fragment.width,
-                    fragment.y + fragment.ascent + fragment.descent + below,
-                ),
+                fragment_rect(styles, context.nodes[fragment.element], fragment),
             );
         }
         let origin_of = |element: usize, rects: &[Option<(f32, f32, f32, f32)>]| {
@@ -2069,6 +2140,19 @@ pub fn hit_test(
     x: f32,
     y: f32,
 ) -> Option<NodeId> {
+    hit_test_with_fragments(arena, layouts, styles, &HashMap::new(), x, y)
+}
+
+/// [`hit_test`] where an inline element that wraps over lines (see
+/// [`inline_fragment_boxes`]) is hit only inside the piece of it on a line.
+pub fn hit_test_with_fragments(
+    arena: &Arena,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    styles: &StyleMap,
+    fragments: &HashMap<NodeId, Vec<BoxLayout>>,
+    x: f32,
+    y: f32,
+) -> Option<NodeId> {
     /// A node still to visit, with what its parent worked out for it.
     struct Visit {
         node: NodeId,
@@ -2118,7 +2202,14 @@ pub fn hit_test(
             }
             let outline = border_box_outline(styles, node, ax, ay, layout);
             let pointer_events_none = style.is_some_and(|s| s.pointer_events_none);
-            if admitted && !pointer_events_none && outline.contains(point.0, point.1) {
+            let in_a_piece = fragments.get(&node).is_none_or(|pieces| {
+                pieces.iter().any(|piece| {
+                    let (px, py) = (point.0 - ax - piece.x, point.1 - ay - piece.y);
+                    px >= 0.0 && py >= 0.0 && px < piece.width && py < piece.height
+                })
+            });
+            if admitted && !pointer_events_none && in_a_piece && outline.contains(point.0, point.1)
+            {
                 hit = Some(node);
             }
             if let Some(style) = style
@@ -3850,6 +3941,37 @@ mod tests {
         assert_close(oy, 0.0);
         assert_close(iy, 13.0);
         assert!(ix > ox && ix + layouts[&inner].width < ox + layouts[&outer].width);
+    }
+
+    #[test]
+    fn a_click_in_the_empty_corner_of_a_wrapped_span_misses_it() {
+        // "aaa " then a span that wraps: its box spans both lines, but on the
+        // first it begins after "aaa ", so the line's start is not the span.
+        let tree = paragraph(vec![
+            Element::text("aaa "),
+            span("s", vec![Element::text("bbb ccc ddd")]),
+        ]);
+        let (arena, styles, layouts) =
+            layout_with_styles(&tree, ".p { width: 120px; line-height: 40px; }");
+        let container = arena.roots()[0];
+        let element = arena.children(container)[0];
+        let mut font = florui_text::Font::load_embedded();
+        let pieces = inline_fragment_boxes(&mut font, &arena, &styles, &layouts);
+        assert_eq!(pieces[&element].len(), 2);
+        let hit = |x, y| hit_test_with_fragments(&arena, &layouts, &styles, &pieces, x, y);
+        // Inside the span's bounding box but on the first line, before it.
+        assert_eq!(hit(2.0, 10.0), Some(container));
+        // Inside the piece on the first line, and on the second line.
+        assert_eq!(
+            hit(layouts[&element].x + layouts[&element].width - 2.0, 10.0),
+            Some(element)
+        );
+        assert_eq!(hit(5.0, 50.0), Some(element));
+        // Without the pieces the bounding box answers for the corner.
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 2.0, 10.0),
+            Some(element)
+        );
     }
 
     #[test]
