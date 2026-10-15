@@ -4621,6 +4621,21 @@ mod tests {
     }
 
     #[test]
+    fn a_glyph_from_a_fallback_font_does_not_change_the_line_height() {
+        // Chrome: "Hello 😀 world" in 400px is 22 tall under a normal
+        // line height, 30 under 30px and 24 under 1.5, the same as without it.
+        for (css, height) in [
+            ("", 22.0),
+            ("line-height: 30px;", 30.0),
+            ("line-height: 1.5;", 24.0),
+        ] {
+            let tree = paragraph(vec![Element::text("Hello \u{1F600} world")]);
+            let (arena, layouts) = layout_for(&tree, &format!(".p {{ width: 400px; {css} }}"));
+            assert_close(layouts[&arena.roots()[0]].height, height);
+        }
+    }
+
+    #[test]
     fn a_box_inside_a_span_lands_where_it_would_in_the_container() {
         let button = || {
             Element::node(
