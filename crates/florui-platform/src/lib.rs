@@ -141,6 +141,8 @@ mod single_instance;
 
 #[cfg(feature = "desktop")]
 mod drag_drop;
+#[cfg(all(feature = "desktop", any(target_os = "linux", test)))]
+mod drag_tracker;
 
 #[cfg(feature = "desktop")]
 pub use drag_drop::{DragEvent, DragPayload, DragPosition};

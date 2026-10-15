@@ -175,7 +175,7 @@ impl DragAcceptPolicy {
         *self.0.borrow_mut() = None;
     }
 
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     fn evaluate(&self, payload: &DragPayload) -> bool {
         match self.0.borrow().as_ref() {
             Some(policy) => policy(payload),
@@ -201,7 +201,7 @@ impl DragEventHandler {
         *self.0.borrow_mut() = None;
     }
 
-    #[cfg(any(windows, test))]
+    #[cfg(any(windows, target_os = "linux", test))]
     fn dispatch(&self, event: DragEvent) {
         if let Some(handler) = self.0.borrow().as_ref() {
             handler(event);
@@ -571,12 +571,12 @@ impl WindowControls {
         self.drag_event_handler.clear();
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) fn evaluate_drag_accept(&self, payload: &DragPayload) -> bool {
         self.drag_accept_policy.evaluate(payload)
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) fn dispatch_drag_event(&self, event: DragEvent) {
         self.drag_event_handler.dispatch(event);
     }
