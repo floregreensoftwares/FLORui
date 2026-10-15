@@ -370,6 +370,7 @@ impl Font {
                     element: 0,
                     x: glyph_run.offset(),
                     width: glyph_run.advance(),
+                    line: 0,
                 });
             }
         }

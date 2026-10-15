@@ -49,6 +49,7 @@ use peniko::Blob;
 
 pub mod editing;
 mod editor_core;
+mod ellipsis;
 pub use inline::{InlineElement, InlineItem};
 mod inline;
 mod inline_memo;
@@ -478,6 +479,9 @@ pub struct ShapedRun {
     /// Where the run starts on its line and how far it advances.
     pub x: f32,
     pub width: f32,
+    /// The line the run is on, counting from `0` (`0` for the lines of an
+    /// edited text, which are not told apart).
+    pub line: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -544,6 +548,8 @@ pub struct InlineLayout {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InlineFragment {
     pub element: usize,
+    /// The line this fragment is on.
+    pub line: u32,
     pub x: f32,
     pub y: f32,
     pub width: f32,
@@ -987,7 +993,7 @@ impl Font {
         };
 
         let mut runs = Vec::new();
-        for line in layout.lines() {
+        for (line_number, line) in layout.lines().enumerate() {
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
                     continue;
@@ -1009,6 +1015,7 @@ impl Font {
                     element: 0,
                     x: glyph_run.offset(),
                     width: glyph_run.advance(),
+                    line: line_number as u32,
                 });
             }
         }

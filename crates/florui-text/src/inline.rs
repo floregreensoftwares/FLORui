@@ -375,7 +375,7 @@ impl Font {
         let mut cursor = 0.0f32;
         let mut first_baseline = None;
         let mut last_baseline = 0.0;
-        for line in layout.lines() {
+        for (line_number, line) in layout.lines().enumerate() {
             let placed = place_line(
                 &line,
                 &text,
@@ -391,10 +391,14 @@ impl Font {
                     glyph.y += shift_y;
                 }
                 shaped.element = run_element;
+                shaped.line = line_number as u32;
                 runs.push(shaped);
             }
             boxes.extend(placed.boxes);
-            fragments.extend(placed.fragments);
+            fragments.extend(placed.fragments.into_iter().map(|mut fragment| {
+                fragment.line = line_number as u32;
+                fragment
+            }));
             first_baseline.get_or_insert(placed.baseline);
             last_baseline = placed.baseline;
             cursor += placed.height;
@@ -622,6 +626,7 @@ fn place_line(
                         element,
                         x: glyph_run.offset(),
                         width: glyph_run.advance(),
+                        line: 0,
                     },
                     element,
                     kind,
@@ -928,6 +933,7 @@ fn place_line(
         let base = element_boxes[element];
         fragments.push(InlineFragment {
             element,
+            line: 0,
             x: low[element],
             y: line_top + baseline_of[element] - base.content_ascent,
             width: high[element] - low[element],
