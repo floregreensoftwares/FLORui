@@ -310,6 +310,11 @@ pub fn probe_persistence_capability(app_identifier: &str) -> bool {
     };
     let wrote = save(&path, &probe_state).is_ok();
     let _ = remove_if_present(&path);
+    // `remove_dir` refuses a directory that still holds anything, so real
+    // state next to the probe is never touched.
+    for dir in path.ancestors().skip(1).take(2) {
+        let _ = std::fs::remove_dir(dir);
+    }
     wrote
 }
 
@@ -527,5 +532,7 @@ mod tests {
         // stale file from the first.
         let path = window_state_path(identifier, PROBE_KEY).unwrap();
         assert!(!path.exists());
+        let app_dir = path.parent().and_then(Path::parent).unwrap();
+        assert!(!app_dir.exists(), "the empty directories are removed too");
     }
 }
