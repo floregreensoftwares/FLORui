@@ -1831,6 +1831,7 @@ dependencies = [
  "florui-platform",
  "image",
  "notify",
+ "object",
  "serde",
  "serde_json",
  "sha2",

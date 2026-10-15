@@ -66,15 +66,21 @@ fn builds_the_package_stages_the_executable_and_reports_hashes_that_match_the_fi
     let staged_exe = staged(dir.path(), "app").join(format!("app{EXE}"));
     let built = std::fs::read(dir.path().join("target/release").join(format!("app{EXE}"))).unwrap();
     let copy = std::fs::read(&staged_exe).unwrap();
-    // On Windows the copy also carries the application's version information;
-    // what cargo produced is recorded separately and is never touched.
+    let report = report(dir.path(), "app");
+    // On Windows the copy also carries the application's version information,
+    // and on Linux the symbols were taken off it; what cargo produced is
+    // recorded separately and is never touched.
     if cfg!(windows) {
         assert_ne!(copy, built, "the copy carries no resources");
+    } else if report["diagnostics"]["status"] == "retained" {
+        assert!(
+            copy.len() < built.len(),
+            "the symbols are still in the copy"
+        );
     } else {
         assert_eq!(copy, built, "the staged file is not what cargo built");
     }
 
-    let report = report(dir.path(), "app");
     assert_eq!(report["schema_version"], 2);
     let built_sha: String = Sha256::digest(&built)
         .iter()
@@ -101,6 +107,63 @@ fn builds_the_package_stages_the_executable_and_reports_hashes_that_match_the_fi
             .starts_with("rustc ")
     );
     assert!(!report["toolchain"]["host"].as_str().unwrap().is_empty());
+}
+
+/// Whether this host can take symbols off an executable.
+#[cfg(target_os = "linux")]
+fn has_objcopy() -> bool {
+    Command::new("objcopy")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_symbols_of_a_linux_build_are_kept_beside_the_staged_directory_not_in_it() {
+    if !has_objcopy() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    single_app(dir.path());
+    assert_eq!(florui_build(dir.path(), &[]).status.code(), Some(0));
+
+    let report = report(dir.path(), "app");
+    let block = &report["diagnostics"];
+    if block["status"] != "retained" {
+        // A linker that writes no build id cannot bind the symbols; the
+        // build says so and keeps nothing.
+        assert_eq!(block["status"], "none");
+        assert!(
+            block["warnings"][0]
+                .as_str()
+                .unwrap()
+                .contains("no build id"),
+            "{block}"
+        );
+        return;
+    }
+    let kept = staged(dir.path(), "app")
+        .with_file_name("diagnostics")
+        .join("app.debug");
+    assert!(kept.is_file(), "{} was not kept", kept.display());
+    assert!(
+        !staged(dir.path(), "app").join("app.debug").exists(),
+        "the symbols are in the deployable directory"
+    );
+    let file = &block["files"][0];
+    assert_eq!(file["kind"], "debug");
+    assert_eq!(file["executable"], "app");
+    assert_eq!(file["bytes"], std::fs::metadata(&kept).unwrap().len());
+    // What is recorded for the executable is what ships, with no symbols.
+    let shipped = std::fs::read(staged(dir.path(), "app").join("app")).unwrap();
+    assert_eq!(file["executable_sha256"], report["files"][0]["sha256"]);
+    let sha: String = Sha256::digest(&shipped)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    assert_eq!(file["executable_sha256"], sha.as_str());
+    assert!(!file["guid"].as_str().unwrap().is_empty());
 }
 
 #[test]

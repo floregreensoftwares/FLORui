@@ -31,3 +31,8 @@ windows-sys = { version = "0.60", features = ["Win32_System_LibraryLoader", "Win
 
 [dev-dependencies]
 tempfile = "3"
+
+# `diagnostics`' Linux symbol binding: reads the GNU build id and the symbol
+# table of an ELF file. Already resolved through `backtrace`/`gimli`.
+[target.'cfg(target_os = "linux")'.dependencies]
+object = { version = "0.39", default-features = false, features = ["read_core", "elf", "std"] }

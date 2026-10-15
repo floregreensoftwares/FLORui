@@ -168,7 +168,7 @@ fn diagnostics_check(report: &Value, dir: &Path) -> Check {
                 ID,
                 false,
                 Status::Skipped,
-                "symbols are only retained for Windows builds so far".to_string(),
+                "symbols are only retained for Windows and Linux builds so far".to_string(),
                 None,
             );
         }
@@ -602,6 +602,15 @@ fn resources_check(report: &Value, dir: &Path) -> Check {
     let status = text(report, &["resources", "status"]);
     match status {
         Some("applied") => {}
+        Some("unsupported_host") => {
+            return check(
+                "artifacts.resources",
+                false,
+                Status::NotApplicable,
+                "this host writes no executable resources; an application icon is staged beside the executable instead".to_string(),
+                None,
+            );
+        }
         Some(other) => {
             return check(
                 "artifacts.resources",
@@ -1101,7 +1110,13 @@ mod tests {
             dir.path(),
         );
         assert_eq!(missing.status, Status::Unknown);
-        assert_eq!(none_written.status, Status::Unknown);
+        assert_eq!(
+            none_written.status,
+            Status::NotApplicable,
+            "a host that writes none has nothing to check"
+        );
+        let other = resources_check(&json!({"resources": {"status": "failed"}}), dir.path());
+        assert_eq!(other.status, Status::Unknown);
     }
 
     #[test]

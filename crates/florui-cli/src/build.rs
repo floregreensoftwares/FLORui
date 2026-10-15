@@ -244,9 +244,19 @@ fn stage(
     dir: &Path,
     native: Option<&NativeResources<'_>>,
     icon: Option<&resources::Icon>,
-) -> Result<(Vec<StagedFile>, Vec<resources::VersionFields>), String> {
+    symbols: &Path,
+) -> Result<
+    (
+        Vec<StagedFile>,
+        Vec<resources::VersionFields>,
+        diagnostics::Splits,
+    ),
+    String,
+> {
     let mut staged = Vec::new();
     let mut versions = Vec::new();
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    let mut splits = diagnostics::Splits::new();
     for source in executables {
         let name = source
             .file_name()
@@ -255,10 +265,19 @@ fn stage(
         let destination = dir.join(name);
         fs::copy(source, &destination).map_err(|error| error.to_string())?;
         let built = hash_file(&destination).map_err(|error| error.to_string())?;
+        // The symbols leave the staged copy before it is hashed, so the hash
+        // recorded is that of what ships.
+        #[cfg(target_os = "linux")]
+        splits.insert(
+            file.clone(),
+            diagnostics::split(source, &destination, symbols),
+        );
+        #[cfg(not(target_os = "linux"))]
+        let _ = symbols;
         let Some(native) = native else {
             staged.push(StagedFile {
                 file,
-                hashes: built.clone(),
+                hashes: hash_file(&destination).map_err(|error| error.to_string())?,
                 built: Some(built),
             });
             continue;
@@ -300,7 +319,7 @@ fn stage(
             });
         }
     }
-    Ok((staged, versions))
+    Ok((staged, versions, splits))
 }
 
 // --------------------------------------------------------------------- report
@@ -523,8 +542,13 @@ pub fn run(options: Options) -> ExitCode {
             notice.file_name
         ));
     }
-    let (mut files, versions) = match stage(&executables, &staging, native.as_ref(), icon.as_ref())
-    {
+    let (mut files, versions, splits) = match stage(
+        &executables,
+        &staging,
+        native.as_ref(),
+        icon.as_ref(),
+        &diagnostics_directory,
+    ) {
         Ok(staged) => staged,
         Err(error) => return fail(format!("could not stage the executables: {error}")),
     };
@@ -569,6 +593,7 @@ pub fn run(options: Options) -> ExitCode {
         &staging,
         &diagnostics_directory,
         &staged_hashes,
+        &splits,
     );
     let resources_report = match &icon {
         Some(icon) if native.is_none() => resources::ResourcesReport {
