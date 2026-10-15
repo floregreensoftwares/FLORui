@@ -97,6 +97,9 @@ pub struct UiRuntime {
     arena: Arena,
     styles: StyleMap,
     layouts: HashMap<NodeId, BoxLayout>,
+    /// The line-by-line pieces of the inline elements that wrap, for
+    /// hit-testing (see [`florui_layout::inline_fragment_boxes`]).
+    inline_fragments: HashMap<NodeId, Vec<BoxLayout>>,
     /// Every select's own options, by the select's `id` — see
     /// [`crate::select::normalize`]'s own doc for why this exists
     /// alongside `arena` rather than just reading options off it.
@@ -302,6 +305,7 @@ impl UiRuntime {
             arena: Arena::build(&Element::Fragment(Vec::new())),
             styles: StyleMap::new(),
             layouts: HashMap::new(),
+            inline_fragments: HashMap::new(),
             option_summaries: HashMap::new(),
             multiselect_anchor: None,
             edited: RefCell::new(HashSet::new()),
@@ -622,6 +626,12 @@ impl UiRuntime {
         let (layouts, content_extents) = self.fix_select_widths(layouts, content_extents, viewport);
         let (layouts, content_extents) =
             self.fix_image_intrinsic_sizes(layouts, content_extents, viewport);
+        self.inline_fragments = florui_layout::inline_fragment_boxes(
+            &mut self.font,
+            &self.arena,
+            &self.styles,
+            &layouts,
+        );
         self.layouts = layouts;
         self.position_open_selects(resolved_viewport.width, resolved_viewport.height);
         self.position_validation_bubble(resolved_viewport.width, resolved_viewport.height);
@@ -886,10 +896,24 @@ impl UiRuntime {
     pub fn hit_test(&self, x: f32, y: f32) -> Option<NodeId> {
         let offsets = self.scroll_registry.offsets_by_node(&self.arena);
         if offsets.values().all(|&offset| offset == (0.0, 0.0)) {
-            return florui_layout::hit_test(&self.arena, &self.layouts, &self.styles, x, y);
+            return florui_layout::hit_test_with_fragments(
+                &self.arena,
+                &self.layouts,
+                &self.styles,
+                &self.inline_fragments,
+                x,
+                y,
+            );
         }
         let scrolled = florui_layout::apply_scroll_offsets(&self.arena, &self.layouts, &offsets);
-        florui_layout::hit_test(&self.arena, &scrolled, &self.styles, x, y)
+        florui_layout::hit_test_with_fragments(
+            &self.arena,
+            &scrolled,
+            &self.styles,
+            &self.inline_fragments,
+            x,
+            y,
+        )
     }
 
     /// [`florui_layout::absolute_position`] where `node` is drawn: shifted
