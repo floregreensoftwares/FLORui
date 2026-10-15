@@ -2372,6 +2372,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             WindowEvent::CursorMoved { position, .. } => {
                 #[cfg(target_os = "linux")]
                 {
+                    crate::os::linux::menu::note_cursor(position.x, position.y);
                     let logical = position.to_logical::<f32>(state.window.scale_factor());
                     state.drag.pointer_at(crate::drag_drop::DragPosition {
                         x: logical.x,

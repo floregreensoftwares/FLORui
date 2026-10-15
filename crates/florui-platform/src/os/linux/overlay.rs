@@ -3,7 +3,7 @@
 //! per-region input shape, which only X11 has; Wayland reports it
 //! unsupported rather than pretending.
 
-use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+use super::x11;
 use winit::window::Window;
 
 use crate::window_controls::{InputMode, ScreenRect};
@@ -12,22 +12,22 @@ pub(crate) fn set_input_mode(window: &Window, mode: InputMode) -> bool {
     match mode {
         InputMode::Normal => {
             let _ = window.set_cursor_hittest(true);
-            if let Some(id) = x11_window(window) {
-                x11::reset(id);
+            if let Some(id) = x11::window_id(window) {
+                shape::reset(id);
             }
             true
         }
         InputMode::Passthrough => {
-            if let Some(id) = x11_window(window) {
-                x11::reset(id);
+            if let Some(id) = x11::window_id(window) {
+                shape::reset(id);
             }
             window.set_cursor_hittest(false).is_ok()
         }
-        InputMode::Selective => match x11_window(window) {
+        InputMode::Selective => match x11::window_id(window) {
             Some(id) => {
                 let _ = window.set_cursor_hittest(true);
                 // Nothing is interactive until the first sync.
-                x11::set_rects(id, &[])
+                shape::set_rects(id, &[])
             }
             None => false,
         },
@@ -35,18 +35,10 @@ pub(crate) fn set_input_mode(window: &Window, mode: InputMode) -> bool {
 }
 
 pub(crate) fn sync_input_regions(window: &Window, regions: &[ScreenRect]) {
-    let (Some(id), Ok(origin)) = (x11_window(window), window.inner_position()) else {
+    let (Some(id), Ok(origin)) = (x11::window_id(window), window.inner_position()) else {
         return;
     };
-    x11::set_rects(id, &relative_rects(regions, origin.x, origin.y));
-}
-
-fn x11_window(window: &Window) -> Option<u32> {
-    match window.window_handle().ok()?.as_raw() {
-        RawWindowHandle::Xlib(handle) => u32::try_from(handle.window).ok(),
-        RawWindowHandle::Xcb(handle) => Some(handle.window.get()),
-        _ => None,
-    }
+    shape::set_rects(id, &relative_rects(regions, origin.x, origin.y));
 }
 
 /// `(x, y, width, height)` relative to the window, empty rectangles dropped
@@ -70,31 +62,16 @@ fn relative_rects(
         .collect()
 }
 
-mod x11 {
-    use std::cell::RefCell;
-
+mod shape {
     use x11rb::connection::Connection;
     use x11rb::protocol::shape::{ConnectionExt, SK, SO};
     use x11rb::protocol::xproto::{ClipOrdering, Rectangle};
-    use x11rb::rust_connection::RustConnection;
 
-    thread_local! {
-        static CONNECTION: RefCell<Option<RustConnection>> = const { RefCell::new(None) };
-    }
-
-    fn with_connection<T>(f: impl FnOnce(&RustConnection) -> Option<T>) -> Option<T> {
-        CONNECTION.with(|slot| {
-            let mut slot = slot.borrow_mut();
-            if slot.is_none() {
-                *slot = RustConnection::connect(None).ok().map(|(conn, _)| conn);
-            }
-            f(slot.as_ref()?)
-        })
-    }
+    use super::x11::with_connection;
 
     /// Makes the whole window receive input again.
     pub(super) fn reset(window: u32) {
-        with_connection(|conn| {
+        with_connection(|conn, _root| {
             conn.shape_mask(SO::SET, SK::INPUT, window, 0, 0, x11rb::NONE)
                 .ok()?;
             conn.flush().ok()
@@ -112,7 +89,7 @@ mod x11 {
                 height,
             })
             .collect();
-        with_connection(|conn| {
+        with_connection(|conn, _root| {
             conn.shape_rectangles(
                 SO::SET,
                 SK::INPUT,
