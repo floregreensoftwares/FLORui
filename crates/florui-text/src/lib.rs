@@ -378,6 +378,9 @@ pub struct InlineLayout {
     /// Offset from the top of the block to the first line's baseline —
     /// same meaning as [`TextMetrics::baseline`].
     pub baseline: f32,
+    /// The same for the last line, which is where an `inline-block` is
+    /// aligned on the line it sits in.
+    pub last_baseline: f32,
     pub runs: Vec<ShapedRun>,
     pub boxes: Vec<PositionedBox>,
     /// Where each inline element has text, one per element and line it

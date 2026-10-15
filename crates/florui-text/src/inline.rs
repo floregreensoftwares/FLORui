@@ -236,6 +236,7 @@ impl Font {
                 width: 0.0,
                 height: 0.0,
                 baseline: 0.0,
+                last_baseline: 0.0,
                 runs: Vec::new(),
                 boxes: Vec::new(),
                 fragments: Vec::new(),
@@ -355,6 +356,7 @@ impl Font {
         let mut fragments = Vec::new();
         let mut cursor = 0.0f32;
         let mut first_baseline = None;
+        let mut last_baseline = 0.0;
         for line in layout.lines() {
             let placed = place_line(
                 &line,
@@ -376,6 +378,7 @@ impl Font {
             boxes.extend(placed.boxes);
             fragments.extend(placed.fragments);
             first_baseline.get_or_insert(placed.baseline);
+            last_baseline = placed.baseline;
             cursor += placed.height;
         }
 
@@ -383,6 +386,7 @@ impl Font {
             width: layout.width(),
             height: cursor,
             baseline: first_baseline.unwrap_or(0.0),
+            last_baseline,
             runs,
             boxes,
             fragments,

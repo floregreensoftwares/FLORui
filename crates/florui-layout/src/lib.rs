@@ -29,16 +29,14 @@
 //! display mode at all, so this is a genuinely separate algorithm built on
 //! [`florui_text::Font::shape_inline`]'s real multi-style text wrapping
 //! and in-flow boxes, not a translation onto an existing Taffy algorithm
-//! the way flex was. See [`needs_inline_layout`]'s own doc for the exact,
-//! honest bound: one level of mixed inline content (an `Inline`/
-//! `InlineBlock` child must itself be a leaf), every element child must be
-//! inline-level (a block/flex sibling mixed in falls back to the older,
-//! coarser block-only behavior rather than partially-correct output), and
-//! a plain `Inline` child does not get its own [`BoxLayout`] yet — only
-//! its text, mixed into its container's one inline-formatting-context box;
-//! only `InlineBlock` children (real `display: inline-block`, e.g. a
-//! `<button>`) get an exact one, sized to their own content and positioned
-//! within the flow.
+//! the way flex was. See [`needs_inline_layout`]'s own doc for what it
+//! covers: inline elements nest to any depth and each gets its own
+//! [`BoxLayout`] (the bounding box of its pieces on each line; padding,
+//! border and margin sit in the line), and an `InlineBlock` child, whether a
+//! leaf (a `<button>`) or holding content of its own, is laid out as one atomic
+//! box, sized to its content and sitting on its last line. A block or flex
+//! sibling mixed in with the inline content falls back to the older,
+//! block-only behavior rather than partially-correct output.
 //!
 //! Taffy positions are relative to the parent's content box, matching
 //! Taffy's own convention; see [`absolute_position`] to accumulate them
@@ -302,7 +300,18 @@ enum InlineContentItem {
         baseline: f32,
         element: usize,
         vertical_align: florui_text::VerticalAlign,
+        /// The laid out content of an inline-block that has children of its
+        /// own, which are not Taffy nodes of the container's tree.
+        nested: Option<std::sync::Arc<NestedBlock>>,
     },
+}
+
+/// What an `inline-block` with children holds, laid out on its own: its
+/// descendants' boxes, relative to their parents.
+#[derive(PartialEq)]
+struct NestedBlock {
+    layouts: HashMap<NodeId, BoxLayout>,
+    extents: HashMap<NodeId, ContentExtent>,
 }
 
 /// A container's inline formatting context: the tree of its inline elements
@@ -346,6 +355,7 @@ fn to_inline_items(context: &InlineContext) -> Vec<florui_text::InlineItem<'_>> 
                 baseline,
                 element,
                 vertical_align,
+                ..
             } => florui_text::InlineItem::Box {
                 id: *child as u64,
                 width: *width,
@@ -434,16 +444,10 @@ struct ImageContext {
 /// container that merely happens to have an inline-display child among
 /// otherwise block/flex siblings.
 ///
-/// Bounded, documented rather than silently wrong, matching this crate's
-/// established pattern of shipping a real but scoped slice: every element
-/// child must itself be `Inline`/`InlineBlock` (a block/flex sibling mixed
-/// into the same content falls back to the old block-only behavior — the
-/// same pre-existing gap where a node's own direct text is dropped when it
-/// also has element children, not a new one this slice introduces), and
-/// every such child must itself be a leaf with no element children of its
-/// own (one level of mixed inline content, not arbitrarily deep
-/// inline-in-inline-in-inline nesting — see this crate's own top-level
-/// scope doc for why).
+/// Every element child must itself be `Inline`/`InlineBlock` (an inline
+/// element's own children included, to any depth); a block/flex sibling mixed
+/// into the same content falls back to the old block-only behavior, in which a
+/// node's own direct text is dropped when it also has element children.
 fn needs_inline_layout(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
     let items = arena.inline_items(node);
     if items.is_empty() {
@@ -465,12 +469,7 @@ fn needs_inline_layout(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
                         return false;
                     }
                 }
-                Some(StyleDisplay::InlineBlock) => {
-                    has_real_inline_content = true;
-                    if !arena.children(*child).is_empty() {
-                        return false;
-                    }
-                }
+                Some(StyleDisplay::InlineBlock) => has_real_inline_content = true,
                 Some(StyleDisplay::None) => {}
                 _ => return false,
             },
@@ -486,8 +485,7 @@ fn inline_subtree_is_inline(arena: &Tree, styles: &StyleMap, node: NodeId) -> bo
         StyleInlineItem::Text(_) => true,
         StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
             Some(StyleDisplay::Inline) => inline_subtree_is_inline(arena, styles, *child),
-            Some(StyleDisplay::InlineBlock) => arena.children(*child).is_empty(),
-            Some(StyleDisplay::None) => true,
+            Some(StyleDisplay::InlineBlock | StyleDisplay::None) => true,
             _ => false,
         },
     })
@@ -515,7 +513,7 @@ fn measure_inline_block_intrinsic_size(
     arena: &Tree,
     styles: &StyleMap,
     child: NodeId,
-) -> (f32, f32) {
+) -> (f32, f32, f32) {
     let style = styles.get(&child);
     let text = leaf_text(arena, child);
     let text_style = style.map_or_else(default_text_style, text_style_of);
@@ -532,6 +530,9 @@ fn measure_inline_block_intrinsic_size(
             height: 0.0,
             baseline: 0.0,
         }
+    } else if let Some(width) = definite_content_width(style) {
+        // A declared width wraps the text at it.
+        font.measure_wrapped(text_style, text, width)
     } else {
         font.measure(text_style, text)
     };
@@ -556,18 +557,179 @@ fn measure_inline_block_intrinsic_size(
         Some(size) => size + chrome,
         None => measured + chrome,
     };
-    (
-        outer(
-            style.and_then(|s| s.width),
-            measured.width,
-            padding_x + border_x,
-        ),
-        outer(
-            style.and_then(|s| s.height),
-            measured.height,
-            padding_y + border_y,
-        ),
-    )
+    let width = outer(
+        style.and_then(|s| s.width),
+        measured.width,
+        padding_x + border_x,
+    );
+    let height = outer(
+        style.and_then(|s| s.height),
+        measured.height,
+        padding_y + border_y,
+    );
+    // The box sits on the baseline of its last line of text, and on its
+    // bottom edge when it has none or clips what overflows.
+    let baseline = if text.is_empty()
+        || arena.tag(child) == "textarea"
+        || style.is_some_and(|s| s.overflow_clips)
+    {
+        height
+    } else {
+        let line = font.measure(text_style, " ");
+        let top = style.map_or(0.0, |s| s.padding.top + s.border.top.width);
+        top + measured.height - (line.height - line.baseline)
+    };
+    (width, height, baseline)
+}
+
+/// The content-box width an element declares in pixels, if it does.
+fn definite_content_width(style: Option<&ComputedStyle>) -> Option<f32> {
+    let style = style?;
+    let width = style.width?;
+    Some(if style.box_sizing == StyleBoxSizing::BorderBox {
+        (width
+            - style.padding.left
+            - style.padding.right
+            - style.border.left.width
+            - style.border.right.width)
+            .max(0.0)
+    } else {
+        width
+    })
+}
+
+/// Lays out the `inline-block` `node` that has children, on its own: its
+/// width is the shrink-to-fit one (its content's width, or the line's if that
+/// is narrower and the content can wrap), and its baseline is the last line
+/// of the text it holds. Returns its border box size, that baseline and the
+/// boxes of everything inside it.
+fn nested_block(
+    font: &mut florui_text::Font,
+    arena: &Tree,
+    styles: &StyleMap,
+    node: NodeId,
+    line_width: Option<f32>,
+) -> Result<(f32, f32, f32, NestedBlock), LayoutError> {
+    type Laid = (
+        HashMap<NodeId, BoxLayout>,
+        HashMap<NodeId, ContentExtent>,
+        Vec<(NodeId, InlineContext)>,
+    );
+    let lay = |font: &mut florui_text::Font, width: AvailableSpace| -> Result<Laid, LayoutError> {
+        let mut tree: TaffyTree<LeafContext> = TaffyTree::new();
+        tree.disable_rounding();
+        let mut ids = HashMap::new();
+        let mut leaves = Vec::new();
+        let id = build_node(font, arena, styles, node, &mut tree, &mut ids, &mut leaves)
+            .map_err(LayoutError)?;
+        let root = tree
+            .new_with_children(
+                taffy::Style {
+                    display: Display::Block,
+                    ..Default::default()
+                },
+                &[id],
+            )
+            .map_err(LayoutError)?;
+        run_layout(
+            font,
+            &mut tree,
+            root,
+            Size {
+                width,
+                height: AvailableSpace::MaxContent,
+            },
+            ids.len(),
+        )?;
+        let (layouts, extents) = collect_layouts(
+            font,
+            arena,
+            styles,
+            &tree,
+            ids.iter().map(|(&node, &id)| (node, id)),
+            &leaves,
+            |node| ids[&node],
+        )?;
+        Ok((layouts, extents, leaves))
+    };
+    let mut laid = lay(font, AvailableSpace::MaxContent)?;
+    let natural = laid.0[&node].width;
+    if let Some(line_width) = line_width
+        && natural > line_width
+    {
+        let narrowest = lay(font, AvailableSpace::MinContent)?.0[&node].width;
+        let target = line_width.max(narrowest);
+        if target < natural {
+            laid = lay(font, AvailableSpace::Definite(target))?;
+        }
+    }
+    let (mut layouts, mut extents, leaves) = laid;
+    let own = layouts[&node];
+    let contexts: HashMap<NodeId, &InlineContext> = leaves
+        .iter()
+        .map(|(node, context)| (*node, context))
+        .collect();
+    let baseline =
+        last_line_baseline(font, arena, styles, &layouts, &contexts, node).unwrap_or(own.height);
+    layouts.remove(&node);
+    extents.remove(&node);
+    Ok((
+        own.width,
+        own.height,
+        baseline,
+        NestedBlock { layouts, extents },
+    ))
+}
+
+/// How far down `node`'s border box the baseline of its last line of text
+/// is, or `None` when it has no line (or clips its overflow, which makes its
+/// bottom edge the baseline instead).
+fn last_line_baseline(
+    font: &mut florui_text::Font,
+    arena: &Tree,
+    styles: &StyleMap,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    contexts: &HashMap<NodeId, &InlineContext>,
+    node: NodeId,
+) -> Option<f32> {
+    let style = styles.get(&node);
+    if style.is_some_and(|s| s.overflow_clips) {
+        return None;
+    }
+    let layout = layouts.get(&node)?;
+    let edge = |pick: fn(&ComputedStyle) -> f32| style.map_or(0.0, pick);
+    let top = edge(|s| s.padding.top + s.border.top.width);
+    let bottom = edge(|s| s.padding.bottom + s.border.bottom.width);
+    if let Some(context) = contexts.get(&node) {
+        let across =
+            edge(|s| s.padding.left + s.padding.right + s.border.left.width + s.border.right.width);
+        let items = to_inline_items(context);
+        let shaped = font.shape_inline_tree_memoized(
+            &context.elements,
+            &items,
+            Some((layout.width - across).max(0.0)),
+        );
+        return Some(top + shaped.last_baseline);
+    }
+    let children = arena.children(node);
+    if children.is_empty() {
+        let text = leaf_text(arena, node);
+        if text.is_empty() || arena.tag(node) == "textarea" {
+            return None;
+        }
+        let line = font.measure(style.map_or_else(default_text_style, text_style_of), " ");
+        return Some(layout.height - bottom - (line.height - line.baseline));
+    }
+    children.iter().rev().find_map(|&child| {
+        let child_style = styles.get(&child);
+        if child_style.is_some_and(|s| {
+            s.display == StyleDisplay::None || s.position == StylePosition::Absolute
+        }) {
+            return None;
+        }
+        let at = layouts.get(&child)?.y;
+        last_line_baseline(font, arena, styles, layouts, contexts, child).map(|b| at + b)
+    })
 }
 
 /// Builds `node`'s inline formatting context from [`Arena::inline_items`]:
@@ -614,15 +776,28 @@ fn flatten_inline(
                 match child_style.map(|s| s.display) {
                     Some(StyleDisplay::None) => context.hidden.push(*child),
                     Some(StyleDisplay::InlineBlock) => {
-                        let (width, height) =
-                            measure_inline_block_intrinsic_size(font, arena, styles, *child);
+                        let (width, height, baseline, nested) = if arena.children(*child).is_empty()
+                        {
+                            let (width, height, baseline) =
+                                measure_inline_block_intrinsic_size(font, arena, styles, *child);
+                            (width, height, baseline, None)
+                        } else {
+                            let line_width = definite_content_width(styles.get(&context.nodes[0]));
+                            match nested_block(font, arena, styles, *child, line_width) {
+                                Ok((width, height, baseline, nested)) => {
+                                    (width, height, baseline, Some(std::sync::Arc::new(nested)))
+                                }
+                                Err(_) => (0.0, 0.0, 0.0, None),
+                            }
+                        };
                         context.items.push(InlineContentItem::Box {
                             child: *child,
                             width,
                             height,
-                            baseline: height,
+                            baseline,
                             element,
                             vertical_align: node_text_style(child_style).vertical_align,
+                            nested,
                         });
                     }
                     _ => {
@@ -1059,7 +1234,7 @@ fn collect_layouts(
             );
         }
 
-        let box_sizes: HashMap<NodeId, (f32, f32, usize)> = context
+        let box_sizes: HashMap<NodeId, (f32, f32, usize, Option<&NestedBlock>)> = context
             .items
             .iter()
             .filter_map(|item| match item {
@@ -1068,14 +1243,20 @@ fn collect_layouts(
                     width,
                     height,
                     element,
+                    nested,
                     ..
-                } => Some((*child, (*width, *height, *element))),
+                } => Some((*child, (*width, *height, *element, nested.as_deref()))),
                 _ => None,
             })
             .collect();
         for positioned in &shaped.boxes {
             let child = positioned.id as NodeId;
-            if let Some(&(width, height, element)) = box_sizes.get(&child) {
+            if let Some(&(width, height, element, nested)) = box_sizes.get(&child) {
+                if let Some(nested) = nested {
+                    result.extend(nested.layouts.iter().map(|(&node, &layout)| (node, layout)));
+                    content_extents
+                        .extend(nested.extents.iter().map(|(&node, &extent)| (node, extent)));
+                }
                 let parent = origin_of(element, &rects);
                 let (x, y) = if element == 0 {
                     (positioned.x + parent.0, positioned.y + parent.1)
@@ -1716,7 +1897,7 @@ enum BuildStep {
 /// so the stack's LIFO order still builds every child before its parent.
 fn build_node(
     font: &mut florui_text::Font,
-    arena: &Arena,
+    arena: &Tree,
     styles: &StyleMap,
     root: NodeId,
     tree: &mut TaffyTree<LeafContext>,
@@ -3972,6 +4153,96 @@ mod tests {
             super::hit_test(&arena, &layouts, &styles, 2.0, 10.0),
             Some(element)
         );
+    }
+
+    fn block(class: &str, children: Vec<Element>) -> Element {
+        Element::node(
+            "div",
+            vec![("class".to_string(), class.to_string())],
+            children,
+        )
+    }
+
+    #[test]
+    fn an_inline_block_with_a_declared_width_wraps_its_text_at_it() {
+        // Chrome: width 40px around "one two three": 40 by 66 (three lines),
+        // and the line holding it is 66 tall.
+        let tree = paragraph(vec![
+            Element::text("x "),
+            span("b", vec![Element::text("one two three")]),
+            Element::text(" y"),
+        ]);
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".p { width: 300px; } .b { display: inline-block; width: 40px; }",
+        );
+        let container = arena.roots()[0];
+        let element = arena.children(container)[0];
+        assert_close(layouts[&container].height, 66.0);
+        assert_close(layouts[&element].width, 40.0);
+        assert_close(layouts[&element].height, 66.0);
+    }
+
+    #[test]
+    fn an_inline_block_holding_a_larger_span_is_as_tall_as_the_span() {
+        // Chrome: an inline-block with a 24px span and " small": 77.344 by 33,
+        // the span at its top left (33.781 by 33), the line 33 tall.
+        let tree = paragraph(vec![
+            Element::text("x "),
+            span(
+                "b",
+                vec![
+                    span("c", vec![Element::text("big")]),
+                    Element::text(" small"),
+                ],
+            ),
+            Element::text(" y"),
+        ]);
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".p { width: 300px; } .b { display: inline-block; } .c { font-size: 24px; }",
+        );
+        let container = arena.roots()[0];
+        let outer = arena.children(container)[0];
+        let inner = arena.children(outer)[0];
+        assert_close(layouts[&container].height, 33.0);
+        assert_close(layouts[&outer].width, 77.344);
+        assert_close(layouts[&outer].height, 33.0);
+        assert_close(layouts[&outer].y, 0.0);
+        assert_close(layouts[&inner].x, 0.0);
+        assert_close(layouts[&inner].y, 0.0);
+        assert_close(layouts[&inner].width, 33.781);
+        assert_close(layouts[&inner].height, 33.0);
+    }
+
+    #[test]
+    fn an_inline_block_of_blocks_sits_on_its_last_line() {
+        // Chrome: two stacked divs in an inline-block: 55.266 by 44, each
+        // 22 tall, and the text around it on the second line, so the line is
+        // 44 tall with the container's text 22 down.
+        let tree = paragraph(vec![
+            Element::text("x "),
+            span(
+                "b",
+                vec![
+                    block("", vec![Element::text("top")]),
+                    block("", vec![Element::text("bottom")]),
+                ],
+            ),
+            Element::text(" y"),
+        ]);
+        let (arena, layouts) =
+            layout_for(&tree, ".p { width: 300px; } .b { display: inline-block; }");
+        let container = arena.roots()[0];
+        let outer = arena.children(container)[0];
+        let (top, bottom) = (arena.children(outer)[0], arena.children(outer)[1]);
+        assert_close(layouts[&container].height, 44.0);
+        assert_close(layouts[&outer].width, 55.266);
+        assert_close(layouts[&outer].height, 44.0);
+        assert_close(layouts[&top].y, 0.0);
+        assert_close(layouts[&top].height, 22.0);
+        assert_close(layouts[&bottom].y, 22.0);
+        assert_close(layouts[&bottom].width, 55.266);
     }
 
     #[test]
