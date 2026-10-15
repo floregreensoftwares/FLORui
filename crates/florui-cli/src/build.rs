@@ -243,6 +243,7 @@ fn stage(
     executables: &[PathBuf],
     dir: &Path,
     native: Option<&NativeResources<'_>>,
+    icon: Option<&resources::Icon>,
 ) -> Result<(Vec<StagedFile>, Vec<resources::VersionFields>), String> {
     let mut staged = Vec::new();
     let mut versions = Vec::new();
@@ -284,6 +285,20 @@ fn stage(
             hashes: hash_file(&path).map_err(|error| error.to_string())?,
             built: None,
         });
+    } else if let Some(icon) = icon.filter(|_| native.is_none()) {
+        // No executable resources on this host: the icon stays beside the
+        // executable as one PNG per size, for `florui register` to install.
+        for (size, png) in &icon.entries {
+            let file = resources::png_file_name(*size);
+            let path = dir.join(&file);
+            fs::write(&path, png)
+                .map_err(|error| format!("could not write {}: {error}", path.display()))?;
+            staged.push(StagedFile {
+                file,
+                hashes: hash_file(&path).map_err(|error| error.to_string())?,
+                built: None,
+            });
+        }
     }
     Ok((staged, versions))
 }
@@ -427,7 +442,7 @@ pub fn run(options: Options) -> ExitCode {
     // Converted before the build, so a declared icon that cannot be used
     // fails fast and never ends in an artifact with the wrong branding.
     let icon = match resources::declared_icon(&resolution.config.app.icons) {
-        Some((declared_as, path)) if cfg!(windows) => {
+        Some((declared_as, path)) if cfg!(any(windows, target_os = "linux")) => {
             match resources::generate_icon(declared_as, path, &facts.package_root) {
                 Ok(icon) => Some(icon),
                 Err(error) => return fail(error),
@@ -508,7 +523,8 @@ pub fn run(options: Options) -> ExitCode {
             notice.file_name
         ));
     }
-    let (mut files, versions) = match stage(&executables, &staging, native.as_ref()) {
+    let (mut files, versions) = match stage(&executables, &staging, native.as_ref(), icon.as_ref())
+    {
         Ok(staged) => staged,
         Err(error) => return fail(format!("could not stage the executables: {error}")),
     };
@@ -555,6 +571,15 @@ pub fn run(options: Options) -> ExitCode {
         &staged_hashes,
     );
     let resources_report = match &icon {
+        Some(icon) if native.is_none() => resources::ResourcesReport {
+            status: "unsupported_host",
+            warnings: icon.warnings.clone(),
+            icon: Some(icon.asset.clone()),
+            version_info: Vec::new(),
+            notes: vec![
+                "native executable resources are only written on Windows hosts; the icon is staged as icon-<size>.png files for `florui register`",
+            ],
+        },
         Some(icon) => resources::ResourcesReport {
             status: "applied",
             warnings: icon

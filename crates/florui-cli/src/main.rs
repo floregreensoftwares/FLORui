@@ -23,6 +23,10 @@ use test_cmd::{Suite, SuiteOutcome};
 
 mod build;
 mod compare_select;
+#[cfg(any(windows, target_os = "linux", test))]
+mod declaration;
+#[cfg(any(target_os = "linux", test))]
+mod desktop_registration;
 mod diagnostics;
 mod distribution;
 mod doctor;

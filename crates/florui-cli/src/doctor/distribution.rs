@@ -379,9 +379,15 @@ fn icon_check(resolution: &Resolution, facts: &CargoProjectFacts) -> Check {
             "distribution.icon",
             false,
             Status::Warning,
-            "no icon is declared in app.icons.windows or app.icons.source: the executable will \
-             have the default icon"
-                .to_string(),
+            format!(
+                "no icon is declared in {} or app.icons.source: the executable will have the \
+                 default icon",
+                if cfg!(windows) {
+                    "app.icons.windows"
+                } else {
+                    "app.icons.linux"
+                }
+            ),
             Some("set app.icons.source to an SVG or a PNG of at least 256 pixels"),
         );
     };
