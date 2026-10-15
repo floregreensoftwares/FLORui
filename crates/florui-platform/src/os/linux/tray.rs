@@ -1,9 +1,9 @@
 //! A tray icon through the StatusNotifierItem protocol (the one GNOME's
 //! AppIndicator extension, KDE and most panels host). The item answers
-//! `Activate` as a left click and `ContextMenu` as a right click; it exposes
-//! no D-Bus menu. GNOME's extension only calls `Activate` (on a double-click)
-//! and never `ContextMenu` for an item without a D-Bus menu, so `RightClick`
-//! does not arrive there. Other hosts were not checked.
+//! `Activate` as a left click and `ContextMenu` as a right click. A host that
+//! only opens a D-Bus menu on a right-click (GNOME's extension never calls
+//! `ContextMenu`) is given an empty one, and the moment it asks to show it is
+//! delivered as the right click.
 //!
 //! D-Bus calls arrive on the connection's own thread. They are queued and the
 //! event loop is woken, and the handler runs on the thread that created the
@@ -63,6 +63,8 @@ fn push(id: u64, event: TrayEvent) {
         wake();
     }
 }
+
+const MENU_PATH: &str = "/StatusNotifierMenu";
 
 type Pixmap = Vec<(i32, i32, Vec<u8>)>;
 
@@ -137,7 +139,70 @@ impl Item {
 
     #[zbus(property)]
     fn menu(&self) -> ObjectPath<'static> {
-        ObjectPath::from_static_str_unchecked("/NO_DBUSMENU")
+        ObjectPath::from_static_str_unchecked(MENU_PATH)
+    }
+}
+
+/// The `com.canonical.dbusmenu` object that panels such as GNOME's AppIndicator
+/// extension open on a right-click. It has no entries of its own: the panel
+/// asks whether it should show the menu (`AboutToShow`) just before it does,
+/// which is how a right-click reaches the application on a host that never
+/// calls `ContextMenu`.
+struct Menu {
+    id: u64,
+}
+
+type Layout = (
+    i32,
+    HashMap<String, zbus::zvariant::OwnedValue>,
+    Vec<zbus::zvariant::OwnedValue>,
+);
+
+#[zbus::interface(name = "com.canonical.dbusmenu")]
+impl Menu {
+    fn get_layout(&self, _parent: i32, _depth: i32, _properties: Vec<String>) -> (u32, Layout) {
+        (1, (0, HashMap::new(), Vec::new()))
+    }
+
+    fn get_group_properties(
+        &self,
+        _ids: Vec<i32>,
+        _properties: Vec<String>,
+    ) -> Vec<(i32, HashMap<String, zbus::zvariant::OwnedValue>)> {
+        Vec::new()
+    }
+
+    fn get_property(&self, _id: i32, _name: &str) -> zbus::fdo::Result<zbus::zvariant::OwnedValue> {
+        Err(zbus::fdo::Error::InvalidArgs("no such property".to_owned()))
+    }
+
+    fn event(&self, _id: i32, _event: &str, _data: zbus::zvariant::Value<'_>, _timestamp: u32) {}
+
+    fn about_to_show(&self, id: i32) -> bool {
+        if id == 0 {
+            push(self.id, TrayEvent::RightClick);
+        }
+        false
+    }
+
+    #[zbus(property)]
+    fn version(&self) -> u32 {
+        3
+    }
+
+    #[zbus(property)]
+    fn text_direction(&self) -> &str {
+        "ltr"
+    }
+
+    #[zbus(property)]
+    fn status(&self) -> &str {
+        "normal"
+    }
+
+    #[zbus(property)]
+    fn icon_theme_path(&self) -> Vec<String> {
+        Vec::new()
     }
 }
 
@@ -163,6 +228,8 @@ impl TrayIcon {
                     tooltip: tooltip.to_owned(),
                 },
             )
+            .ok()?
+            .serve_at(MENU_PATH, Menu { id })
             .ok()?
             .build()
             .ok()?;
@@ -210,6 +277,24 @@ fn register(connection: &Connection, name: &str) -> Option<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_menu_about_to_show_is_a_right_click_and_has_nothing_to_show() {
+        let seen = std::rc::Rc::new(RefCell::new(Vec::new()));
+        let sink = std::rc::Rc::clone(&seen);
+        HANDLERS.with(|h| {
+            h.borrow_mut()
+                .insert(9003, Box::new(move |e| sink.borrow_mut().push(e)))
+        });
+        let menu = Menu { id: 9003 };
+        assert!(!menu.about_to_show(0), "the layout is never out of date");
+        assert!(!menu.about_to_show(5), "an entry is not the menu");
+        deliver_pending();
+        assert_eq!(*seen.borrow(), vec![TrayEvent::RightClick]);
+        let (_, (root, _, children)) = menu.get_layout(0, -1, Vec::new());
+        assert_eq!((root, children.len()), (0, 0));
+        HANDLERS.with(|h| h.borrow_mut().remove(&9003));
+    }
 
     #[test]
     fn queued_events_reach_the_handler_of_their_icon_only() {
