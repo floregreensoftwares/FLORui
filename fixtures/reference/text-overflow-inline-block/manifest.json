@@ -1,0 +1,34 @@
+{
+  "id": "text-overflow-inline-block",
+  "description": "An inline-block that clips its text ends it in an ellipsis.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 200,
+    "height_css_px": 60,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "p",
+    "children": [
+      "x ",
+      {
+        "tag": "span",
+        "class": "b",
+        "text": "Supercalifragilistic",
+        "css": ""
+      },
+      " y"
+    ],
+    "css": ".p { width: 180px; background-color: #e8ecff; color: #112233; } .b { display: inline-block; width: 60px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; background-color: #ffd54a; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 5,
+    "geometry_tolerance_px": 1.5,
+    "reason": "Measured against Chromium 153 on Windows: 3.74% of the pixels differ and the box is within 1px; what is left is the two engines' glyph antialiasing, as in the other text fixtures. Without the feature the same fixture measures 7.83% and the box is the same size, so it fails."
+  }
+}

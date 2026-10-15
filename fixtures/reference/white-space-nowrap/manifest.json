@@ -1,0 +1,25 @@
+{
+  "id": "white-space-nowrap",
+  "description": "nowrap keeps the text on one line, overflowing the box.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 140,
+    "height_css_px": 60,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "p",
+    "text": "The quick brown fox jumps over the lazy dog",
+    "css": ".p { width: 90px; overflow: hidden; white-space: nowrap; background-color: #e8ecff; color: #112233; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 15.5,
+    "geometry_tolerance_px": 1.5,
+    "reason": "Measured against Chromium 153 on Windows: 9.26% of the pixels differ and the box is within 1px; what is left is the two engines' glyph antialiasing, as in the other text fixtures. Without the feature the same fixture measures 47.14% and the box is 66.0px off, so it fails."
+  }
+}

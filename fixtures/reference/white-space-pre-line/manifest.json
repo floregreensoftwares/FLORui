@@ -1,0 +1,25 @@
+{
+  "id": "white-space-pre-line",
+  "description": "pre-line keeps the line breaks and collapses the spaces.",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 140,
+    "height_css_px": 100,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "p",
+    "text": "one   two\n   three four five\nsix",
+    "css": ".p { width: 120px; white-space: pre-line; background-color: #e8ecff; color: #112233; }"
+  },
+  "classification": {
+    "kind": "tolerant",
+    "threshold_percent": 14,
+    "geometry_tolerance_px": 1.5,
+    "reason": "Measured against Chromium 153 on Windows: 7.93% of the pixels differ and the box is within 1px; what is left is the two engines' glyph antialiasing, as in the other text fixtures. Without the feature the same fixture measures 28.56% and the box is 22.0px off, so it fails."
+  }
+}
