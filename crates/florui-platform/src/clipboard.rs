@@ -43,16 +43,24 @@ impl ClipboardAccess for MemoryClipboard {
 /// the process, the same "log and continue, don't crash" precedent
 /// `crate::drag_drop::register`'s own doc already establishes for a
 /// similar optional OS capability.
-pub(crate) struct Clipboard(RefCell<Option<arboard::Clipboard>>);
+pub(crate) struct Clipboard {
+    arboard: RefCell<Result<arboard::Clipboard, String>>,
+    /// The "unavailable" notice is logged once, when a clipboard is first
+    /// needed and none is there.
+    reported: std::cell::Cell<bool>,
+}
 
 impl Clipboard {
     pub(crate) fn new() -> Self {
-        match arboard::Clipboard::new() {
-            Ok(clipboard) => Self(RefCell::new(Some(clipboard))),
-            Err(error) => {
-                eprintln!("florui-platform: system clipboard unavailable: {error}");
-                Self(RefCell::new(None))
-            }
+        Self {
+            arboard: RefCell::new(arboard::Clipboard::new().map_err(|error| error.to_string())),
+            reported: std::cell::Cell::new(false),
+        }
+    }
+
+    fn unavailable(&self, why: &str) {
+        if !self.reported.replace(true) {
+            eprintln!("florui-platform: system clipboard unavailable: {why}");
         }
     }
 }
@@ -61,18 +69,35 @@ impl ClipboardAccess for Clipboard {
     /// `None` either way (nothing there, or reading failed) is treated as
     /// "nothing to paste," not an error a caller needs to react to.
     fn get_text(&self) -> Option<String> {
-        self.0.borrow_mut().as_mut()?.get_text().ok()
+        // A Wayland session has its own clipboard; the X11 one (through
+        // `arboard`) is for X11 sessions and for a compositor without it.
+        #[cfg(target_os = "linux")]
+        if crate::os::linux::wayland::has_clipboard() {
+            return crate::os::linux::wayland::clipboard_text();
+        }
+        match self.arboard.borrow_mut().as_mut() {
+            Ok(clipboard) => clipboard.get_text().ok(),
+            Err(why) => {
+                self.unavailable(why);
+                None
+            }
+        }
     }
 
     /// A failure (or an unavailable clipboard) is logged, not surfaced: a
     /// keyboard shortcut has no error-reporting UI to report it to.
     fn set_text(&self, text: String) {
-        let mut clipboard = self.0.borrow_mut();
-        let Some(clipboard) = clipboard.as_mut() else {
+        #[cfg(target_os = "linux")]
+        if crate::os::linux::wayland::set_clipboard_text(&text) {
             return;
-        };
-        if let Err(error) = clipboard.set_text(text) {
-            eprintln!("florui-platform: could not write to the system clipboard: {error}");
+        }
+        match self.arboard.borrow_mut().as_mut() {
+            Ok(clipboard) => {
+                if let Err(error) = clipboard.set_text(text) {
+                    eprintln!("florui-platform: could not write to the system clipboard: {error}");
+                }
+            }
+            Err(why) => self.unavailable(why),
         }
     }
 }

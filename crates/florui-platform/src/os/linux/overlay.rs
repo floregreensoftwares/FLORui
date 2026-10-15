@@ -1,9 +1,8 @@
 //! Click-through on Linux. `Passthrough` is `winit`'s cursor hit test
-//! switch (an empty input region on X11 and Wayland). `Selective` needs a
-//! per-region input shape, which only X11 has; Wayland reports it
-//! unsupported rather than pretending.
+//! switch (an empty input region on X11 and Wayland). `Selective` is an input
+//! shape on X11 and the surface's input region on Wayland.
 
-use super::x11;
+use super::{wayland, x11};
 use winit::window::Window;
 
 use crate::window_controls::{InputMode, ScreenRect};
@@ -29,16 +28,40 @@ pub(crate) fn set_input_mode(window: &Window, mode: InputMode) -> bool {
                 // Nothing is interactive until the first sync.
                 shape::set_rects(id, &[])
             }
-            None => false,
+            None => {
+                let _ = window.set_cursor_hittest(true);
+                wayland::set_input_region(window, Some(&[]))
+            }
         },
     }
 }
 
+/// `regions` are in screen pixels on X11 and in window pixels on Wayland,
+/// where a window has no position to be relative to.
 pub(crate) fn sync_input_regions(window: &Window, regions: &[ScreenRect]) {
-    let (Some(id), Ok(origin)) = (x11::window_id(window), window.inner_position()) else {
+    if let Some(id) = x11::window_id(window) {
+        if let Ok(origin) = window.inner_position() {
+            shape::set_rects(id, &relative_rects(regions, origin.x, origin.y));
+        }
         return;
-    };
-    shape::set_rects(id, &relative_rects(regions, origin.x, origin.y));
+    }
+    wayland::set_input_region(window, Some(&logical_rects(regions, window.scale_factor())));
+}
+
+/// `(x, y, width, height)` in logical pixels, which is what a surface's input
+/// region is in. A region is widened to whole logical pixels, never narrowed.
+fn logical_rects(regions: &[ScreenRect], scale: f64) -> Vec<(i32, i32, i32, i32)> {
+    regions
+        .iter()
+        .filter(|r| r.right > r.left && r.bottom > r.top)
+        .map(|r| {
+            let left = (f64::from(r.left) / scale).floor() as i32;
+            let top = (f64::from(r.top) / scale).floor() as i32;
+            let right = (f64::from(r.right) / scale).ceil() as i32;
+            let bottom = (f64::from(r.bottom) / scale).ceil() as i32;
+            (left, top, right - left, bottom - top)
+        })
+        .collect()
 }
 
 /// `(x, y, width, height)` relative to the window, empty rectangles dropped
@@ -125,6 +148,19 @@ mod tests {
             relative_rects(&[rect(110, 220, 150, 260)], 100, 200),
             vec![(10, 20, 40, 40)]
         );
+    }
+
+    #[test]
+    fn regions_become_logical_pixels_widened_to_whole_ones() {
+        assert_eq!(
+            logical_rects(&[rect(10, 20, 50, 60)], 2.0),
+            vec![(5, 10, 20, 20)]
+        );
+        assert_eq!(
+            logical_rects(&[rect(11, 21, 50, 61)], 2.0),
+            vec![(5, 10, 20, 21)]
+        );
+        assert!(logical_rects(&[rect(5, 5, 5, 9)], 1.0).is_empty());
     }
 
     #[test]
