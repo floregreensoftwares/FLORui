@@ -598,6 +598,8 @@ fn place_line(
                         normalized_coords: run.normalized_coords().to_vec(),
                         glyphs,
                         element,
+                        x: glyph_run.offset(),
+                        width: glyph_run.advance(),
                     },
                     element,
                     kind,
