@@ -105,6 +105,8 @@ impl TextInputState {
     /// scrollbar's width once the text is taller than the viewport, then
     /// keeps the scroll offset inside the new bounds.
     fn relayout(&mut self, font: &mut Font) {
+        // A percentage `text-indent` of an unwrapped text is of the field.
+        self.editor.set_indent_basis(self.viewport.0);
         if !self.multiline {
             self.clamp_scroll(font);
             return;
@@ -1008,6 +1010,51 @@ mod tests {
             &"x".repeat(80),
         );
         assert!(registry.scroll_offset("x").0 >= 0.0);
+    }
+
+    /// Where the caret is, and how many lines the text takes, in a field laid
+    /// out under `css`.
+    fn caret_and_lines(tag: &str, css: &str, value: &str) -> (f32, usize) {
+        let (registry, mut font, _) = styled_field(tag, css, value);
+        let (runs, caret, _, _) = registry.paint_data("x", &mut font).unwrap();
+        let mut rows: Vec<i32> = runs
+            .iter()
+            .flat_map(|run| run.glyphs.iter().map(|glyph| glyph.y.round() as i32))
+            .collect();
+        rows.sort_unstable();
+        rows.dedup();
+        (caret.map_or(0.0, |rect| rect.0), rows.len())
+    }
+
+    #[test]
+    fn text_indent_starts_the_text_of_an_input_further_in() {
+        let css = |indent: &str| {
+            format!(
+                ".f {{ width: 200px; height: 24px; padding: 0px; border: none; text-indent: {indent}; }}"
+            )
+        };
+        let (plain, _) = caret_and_lines("input", &css("0px"), "ab");
+        let (pixels, _) = caret_and_lines("input", &css("30px"), "ab");
+        let (percent, _) = caret_and_lines("input", &css("10%"), "ab");
+        assert!((pixels - plain - 30.0).abs() < 0.01, "{plain} {pixels}");
+        assert!((percent - plain - 20.0).abs() < 0.01, "{plain} {percent}");
+    }
+
+    #[test]
+    fn text_indent_wraps_a_textarea_as_chromium_does() {
+        // Chromium, for a 200px textarea of this value repeated three times:
+        // 4 lines, and 5 with a 150px indent. Hanging narrows every line but the
+        // first, which wraps it far more.
+        let value = "aaaa aaaa aaaa aaaa aaaa ".repeat(3);
+        let lines = |indent: &str| {
+            let css = format!(
+                ".f {{ width: 200px; padding: 0px; border: none; font-family: sans-serif; font-size: 16px;                  line-height: 22px; text-indent: {indent}; }}"
+            );
+            caret_and_lines("textarea", &css, &value).1
+        };
+        assert_eq!(lines("0px"), 4);
+        assert_eq!(lines("150px"), 5);
+        assert!(lines("150px hanging") > 8);
     }
 
     #[test]

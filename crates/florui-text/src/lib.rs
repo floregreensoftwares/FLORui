@@ -48,6 +48,7 @@ use parley::{
 use peniko::Blob;
 
 pub mod editing;
+mod editor_core;
 pub use inline::{InlineElement, InlineItem};
 mod inline;
 mod inline_memo;
