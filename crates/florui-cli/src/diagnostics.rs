@@ -60,7 +60,105 @@ pub struct DiagnosticsReport {
 
 pub const DIRECTORY: &str = "../diagnostics";
 
-#[cfg(not(windows))]
+/// What splitting each staged executable's symbols off found, by file name: the
+/// kept file, or why there is none. Only a Linux build makes any.
+pub type Splits = std::collections::BTreeMap<String, Result<std::path::PathBuf, String>>;
+
+/// Moves the symbols of `built` into `directory` and strips them from `staged`,
+/// which then points at the kept file by name. The GNU build id both files
+/// carry is what binds them.
+#[cfg(target_os = "linux")]
+pub fn split(built: &Path, staged: &Path, directory: &Path) -> Result<std::path::PathBuf, String> {
+    let name = built
+        .file_name()
+        .ok_or_else(|| "an executable has no file name".to_string())?;
+    let kept = directory.join(format!("{}.debug", name.to_string_lossy()));
+    std::fs::create_dir_all(directory)
+        .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
+    run_objcopy(&["--only-keep-debug"], &[built, &kept])?;
+    let link = format!("--add-gnu-debuglink={}", kept.display());
+    run_objcopy(&["--strip-all", &link], &[staged])?;
+    Ok(kept)
+}
+
+#[cfg(target_os = "linux")]
+fn run_objcopy(flags: &[&str], files: &[&Path]) -> Result<(), String> {
+    let output = std::process::Command::new("objcopy")
+        .args(flags)
+        .args(files)
+        .output()
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => {
+                "objcopy (binutils) was not found, so the symbols were not split from the executable"
+                    .to_string()
+            }
+            _ => format!("could not run objcopy: {error}"),
+        })?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "objcopy failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+/// The identity both ELF files carry (the GNU build id, in hex), and whether
+/// the symbols the executable points at, searched for in `search` alone, are
+/// the ones built with it and name `main`.
+#[cfg(target_os = "linux")]
+pub fn inspect(executable: &Path, search: &Path) -> Result<SymbolInfo, String> {
+    use object::{Object, ObjectSymbol};
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+    let read = |path: &Path| {
+        std::fs::read(path).map_err(|error| format!("could not read {}: {error}", path.display()))
+    };
+    let bytes = read(executable)?;
+    let exe = object::File::parse(&*bytes)
+        .map_err(|error| format!("{} is not an ELF file: {error}", executable.display()))?;
+    let build_id = exe
+        .build_id()
+        .map_err(|error| error.to_string())?
+        .map(hex)
+        .unwrap_or_default();
+    let unmatched = |loaded_file: String| SymbolInfo {
+        matched: false,
+        guid: build_id.clone(),
+        age: 0,
+        loaded_file,
+        resolves_main: false,
+    };
+    let Some((link, _crc)) = exe.gnu_debuglink().map_err(|error| error.to_string())? else {
+        return Ok(unmatched(String::new()));
+    };
+    let link = String::from_utf8_lossy(link).into_owned();
+    if build_id.is_empty() || link.is_empty() || link.contains(['/', '\\']) {
+        return Ok(unmatched(link));
+    }
+    let Ok(kept_bytes) = std::fs::read(search.join(&link)) else {
+        return Ok(unmatched(link));
+    };
+    let kept = object::File::parse(&*kept_bytes)
+        .map_err(|error| format!("{link} is not an ELF file: {error}"))?;
+    let kept_id = kept
+        .build_id()
+        .map_err(|error| error.to_string())?
+        .map(hex)
+        .unwrap_or_default();
+    Ok(SymbolInfo {
+        matched: kept_id == build_id,
+        guid: build_id.clone(),
+        age: 0,
+        loaded_file: link,
+        resolves_main: kept.symbols().any(|symbol| symbol.name() == Ok("main")),
+    })
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn unsupported_host() -> DiagnosticsReport {
     DiagnosticsReport {
         status: "unsupported_host",
@@ -171,7 +269,7 @@ pub fn inspect(executable: &Path, search: &Path) -> Result<SymbolInfo, String> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn inspect(_executable: &Path, _search: &Path) -> Result<SymbolInfo, String> {
     Err("symbols are only inspected on Windows hosts".to_string())
 }
@@ -187,6 +285,7 @@ pub fn retain(
     staging: &Path,
     directory: &Path,
     staged_hashes: &std::collections::BTreeMap<String, String>,
+    _splits: &Splits,
 ) -> DiagnosticsReport {
     let mut report = DiagnosticsReport {
         status: "none",
@@ -275,14 +374,89 @@ pub fn retain(
     report
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn retain(
     _executables: &[std::path::PathBuf],
     _staging: &Path,
     _directory: &Path,
     _staged_hashes: &std::collections::BTreeMap<String, String>,
+    _splits: &Splits,
 ) -> DiagnosticsReport {
     unsupported_host()
+}
+
+/// Keeps the symbols `split` took off each staged executable, once the build id
+/// both carry and the symbol table say they belong to it. A file that does not
+/// is not kept, and the build says so.
+#[cfg(target_os = "linux")]
+pub fn retain(
+    executables: &[std::path::PathBuf],
+    staging: &Path,
+    directory: &Path,
+    staged_hashes: &std::collections::BTreeMap<String, String>,
+    splits: &Splits,
+) -> DiagnosticsReport {
+    let mut report = DiagnosticsReport {
+        status: "none",
+        directory: DIRECTORY,
+        files: Vec::new(),
+        warnings: Vec::new(),
+        notes: vec![
+            "private: these files explain the executables and are not part of what is shipped; nothing uploads them",
+        ],
+    };
+    for built in executables {
+        let Some(name) = built.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        let kept = match splits.get(&name) {
+            Some(Ok(kept)) => kept,
+            Some(Err(reason)) => {
+                report
+                    .warnings
+                    .push(format!("no symbols were kept for {name}: {reason}"));
+                continue;
+            }
+            None => continue,
+        };
+        let Some(file) = kept.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        let staged = staging.join(&name);
+        match inspect(&staged, directory) {
+            Ok(info) if info.matched && info.resolves_main => {
+                let Ok(hashes) = crate::build::hash_file(kept) else {
+                    report.warnings.push(format!("could not hash {file}"));
+                    continue;
+                };
+                report.files.push(RetainedFile {
+                    file,
+                    kind: "debug",
+                    bytes: hashes.bytes,
+                    sha256: hashes.sha256,
+                    executable: name.clone(),
+                    executable_sha256: staged_hashes.get(&name).cloned().unwrap_or_default(),
+                    guid: info.guid,
+                    age: info.age,
+                });
+                continue;
+            }
+            Ok(info) if info.guid.is_empty() => report.warnings.push(format!(
+                "the linker wrote no build id into {name}, so its symbols cannot be bound to it and {file} was not kept"
+            )),
+            Ok(_) => report.warnings.push(format!(
+                "{file} does not resolve {name} by itself, so it was not kept"
+            )),
+            Err(error) => report
+                .warnings
+                .push(format!("could not read the symbols of {name}: {error}")),
+        }
+        let _ = std::fs::remove_file(kept);
+    }
+    if !report.files.is_empty() {
+        report.status = "retained";
+    }
+    report
 }
 
 /// Whether `name` is a file that explains an executable and so must never be
@@ -297,6 +471,93 @@ pub fn is_private_file(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// This test executable stands in for a built one: an ELF file with its
+    /// symbols. `None` when the linker wrote it no build id, which a split
+    /// cannot bind (the build reports that case instead of keeping anything).
+    #[cfg(target_os = "linux")]
+    fn built_executable(dir: &Path) -> Option<std::path::PathBuf> {
+        use object::Object;
+        let built = dir.join("built");
+        std::fs::copy(std::env::current_exe().ok()?, &built).ok()?;
+        let bytes = std::fs::read(&built).ok()?;
+        object::read::File::parse(&*bytes).ok()?.build_id().ok()??;
+        Some(built)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn split_symbols_are_bound_to_their_executable_by_build_id() {
+        use object::Object;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let Some(built) = built_executable(dir.path()) else {
+            return;
+        };
+        let staged = dir.path().join("staged");
+        std::fs::copy(&built, &staged).expect("stage");
+        let symbols = dir.path().join("diagnostics");
+        let kept = split(&built, &staged, &symbols).expect("split");
+        let info = inspect(&staged, &symbols).expect("inspect");
+        assert!(info.matched, "{info:?}");
+        assert!(info.resolves_main, "{info:?}");
+        assert_eq!(info.loaded_file, "built.debug");
+        let stripped = std::fs::read(&staged).expect("read staged");
+        assert!(
+            object::read::File::parse(&*stripped)
+                .expect("elf")
+                .symbols()
+                .next()
+                .is_none(),
+            "what ships carries no symbols"
+        );
+        assert!(kept.is_file());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_debuglink_that_names_a_path_is_not_followed() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let Some(built) = built_executable(dir.path()) else {
+            return;
+        };
+        let staged = dir.path().join("staged");
+        std::fs::copy(&built, &staged).expect("stage");
+        let symbols = dir.path().join("diagnostics");
+        let kept = split(&built, &staged, &symbols).expect("split");
+        // The right symbols, one level up, where the link below points.
+        std::fs::copy(&kept, dir.path().join("built.debug")).expect("copy");
+        // The name, its terminator, padding to a word, then the checksum.
+        let mut link = b"../built.debug\0\0".to_vec();
+        link.extend_from_slice(&[0; 4]);
+        let blob = dir.path().join("link.bin");
+        std::fs::write(&blob, link).expect("write link");
+        let update = format!(".gnu_debuglink={}", blob.display());
+        run_objcopy(&["--update-section", &update], &[&staged]).expect("objcopy");
+        let info = inspect(&staged, &symbols).expect("inspect");
+        assert!(!info.matched, "{info:?}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn symbols_of_another_build_are_not_a_match() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let Some(built) = built_executable(dir.path()) else {
+            return;
+        };
+        let staged = dir.path().join("staged");
+        std::fs::copy(&built, &staged).expect("stage");
+        let symbols = dir.path().join("diagnostics");
+        let kept = split(&built, &staged, &symbols).expect("split");
+        // Another executable's file under the name the staged one points at.
+        let Ok(other) = std::fs::read("/bin/sh") else {
+            return;
+        };
+        std::fs::write(&kept, other).expect("replace");
+        let info = inspect(&staged, &symbols).expect("inspect");
+        assert!(!info.matched, "{info:?}");
+        std::fs::remove_file(&kept).expect("remove");
+        assert!(!inspect(&staged, &symbols).expect("inspect").matched);
+    }
 
     #[test]
     fn symbol_and_map_files_are_private_and_executables_are_not() {
