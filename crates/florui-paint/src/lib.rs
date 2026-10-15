@@ -5595,6 +5595,40 @@ mod tests {
     }
 
     #[test]
+    fn a_selects_label_follows_the_letter_spacing_and_line_height_of_its_style() {
+        let ink = |extra: &str| {
+            let tree: Element = view! { <select class="sel">{"Medium"}</select> };
+            let buffer = paint_control_icon(
+                tree,
+                &format!(
+                    ".sel {{ width: 200px; height: 100px; border: none; padding: 0px; \
+                     background-color: transparent; color: #ffffff; {extra} }}"
+                ),
+                200,
+                100,
+            );
+            let lit: Vec<(u32, u32)> = (0..170)
+                .flat_map(|x| (0..100).map(move |y| (x, y)))
+                .filter(|&(x, y)| pixel_rgb(&buffer, x, y) != [0, 0, 0])
+                .collect();
+            let right = lit.iter().map(|&(x, _)| x).max().unwrap_or(0);
+            let top = lit.iter().map(|&(_, y)| y).min().unwrap_or(0);
+            (right, top)
+        };
+        let (plain_right, plain_top) = ink("");
+        let (spaced_right, _) = ink("letter-spacing: 6px;");
+        let (_, tall_top) = ink("line-height: 60px;");
+        assert!(
+            spaced_right >= plain_right + 20,
+            "six letters spaced 6px apart: {plain_right} -> {spaced_right}"
+        );
+        assert!(
+            tall_top >= plain_top + 15,
+            "a 60px line puts the text lower: {plain_top} -> {tall_top}"
+        );
+    }
+
+    #[test]
     fn a_checked_checkboxs_check_paints_centered() {
         let tree: Element = view! { <input type="checkbox" checked={true} class="cb" /> };
         let buffer = paint_control_icon(
