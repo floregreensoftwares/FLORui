@@ -50,15 +50,23 @@ The planned build integration collects component stylesheets automatically, so a
 
 ## Run the development preview
 
-Install Rust through rustup and the native build tools for your platform. The repository pins Rust 1.94.0 in `rust-toolchain.toml`. Initial development and CI focus on Windows.
+Install Rust through rustup and the native build tools for your platform. The repository pins Rust 1.94.0 in `rust-toolchain.toml`. Development and the full CI (including the Chromium comparison) focus on Windows; lint and tests also run on Linux.
 
 ### Linux
 
-The crates build, lint and pass their tests on Ubuntu 24.04 with the pinned toolchain, one crate at a time. Windows keep their bounds between runs and the clipboard works in a text field. That was checked with real windows and real input on the GNOME desktop of Ubuntu 24.04, in a native Wayland session, on X11 through Xwayland and in an Xorg session, and also under WSL 2 with WSLg. KDE and other compositors, several monitors, other scales and input methods have not been tried.
+The workspace builds, lints and passes its tests on Ubuntu 24.04 with the pinned toolchain, and CI runs the same formatting, clippy and test commands on Linux. The native services of the platform crate have a Linux implementation, and `florui register`, `florui unregister`, `florui doctor --registration` and the icons of `florui build` work there too. All of it was checked with real windows and real input on the GNOME desktop of Ubuntu 24.04 (a virtual machine with software rendering), in a native Wayland session, on X11 through Xwayland and in an Xorg session; the limits below say where a service differs between them. Window behavior was also checked under WSL 2 with WSLg.
 
-- **Packages:** building needs a C toolchain, `pkg-config` and the development files of `libxkbcommon`, `libwayland`, `libx11` and `fontconfig` (on Ubuntu: `build-essential pkg-config libxkbcommon-dev libwayland-dev libx11-dev libfontconfig-dev`). Running a window under X11 also needs `libxkbcommon-x11-0` at run time, which `winit` loads when it starts.
+- **Packages:** building needs a C toolchain, `pkg-config` and the development files of `libxkbcommon`, `libwayland`, `libx11`, `fontconfig` and ALSA (on Ubuntu: `build-essential pkg-config libxkbcommon-dev libwayland-dev libx11-dev libfontconfig-dev libasound2-dev`). Running a window under X11 also needs `libxkbcommon-x11-0` at run time, which `winit` loads when it starts.
 - **Window bounds** are kept under `$XDG_STATE_HOME`, else `~/.local/state`, in `<app identifier>/window-state/`. Wayland does not tell a program where its window is, so there only the size and the maximized flag are saved; the position comes back only on X11. The clipboard goes through X11, so on a Wayland session it needs Xwayland (GNOME always has it); with no X11 server reachable the clipboard reports itself unavailable.
-- **Not there yet:** the native services of the platform crate (file dialogs, context menus, the tray icon, single-instance activation, opening a URL and the system menu) have no Linux implementation and report themselves as unavailable or do nothing. `florui register`, the native icon and version information of `florui build`, and the conformance comparison against the pinned Chromium are Windows only for now.
+- **Services:** file dialogs go through the desktop portal (`xdg-desktop-portal` with a backend must be running); opening a URL goes through `xdg-open`; single-instance activation uses a lock file and a user-private socket under `$XDG_RUNTIME_DIR`; the reduced-motion preference is read from GNOME's `enable-animations` setting, and other desktops report no preference. The tray icon is a StatusNotifierItem, which GNOME shows through the AppIndicator extension that Ubuntu enables; that extension reports only a double-click, so a right-click on the icon does not arrive there. The window menu opens through the compositor on Wayland and through the window manager on X11. A window is named after the application identifier (its class on X11, its application id on Wayland) when the application uses single-instance activation or window persistence, so the shell matches it to the desktop entry that `florui register` writes; other applications keep the executable's name. The accessibility tree is served through AT-SPI, and the window is a frame named with its title.
+- **Limits:**
+  - Drag-and-drop of files works on X11 only and reports no pointer position while hovering; `winit` delivers none on Wayland.
+  - The native context menu is unavailable.
+  - Click-through for the whole window works on X11 and Wayland; click-through that keeps chosen regions clickable works on X11 only, and on Wayland asking for it reports that it was not applied.
+  - The clipboard goes through X11, so on a Wayland session it needs Xwayland (GNOME always has it); with no X11 server reachable it reports itself unavailable.
+  - `florui register` never sets a default handler. The request to become the default opens GNOME's Settings on the Apps panel, or KDE's default-application page; the KDE page was not tried.
+  - Keeping private symbols and diagnostics (`florui build`) and the conformance comparison against the pinned Chromium are Windows only; pixel parity with Chromium on Linux is not claimed.
+- **Not tried:** KDE and other compositors, other distributions, several monitors, a fractional display scale (200% was tried on Wayland and the content stayed sharp at twice the size), a real GPU, Orca by ear, and input methods other than ibus Cangjie. Tray activation, the default-handler request and the desktop-entry registration were checked on GNOME only.
 
 From the repository root:
 
@@ -115,7 +123,7 @@ builds only the selected package (not the whole workspace) in release mode and s
 
 The report also says whether the artifact includes the developer tooling: the inspector crate, or the `profiling` and `source-locations` features of the Florui crates. That is read from what `cargo` compiled for this build, so it is evidence about the dependency graph and not a scan of the executable, and an executable stays inspectable whatever was left out. Included tooling is a warning; `--strict` rejects it with exit code 2 and still writes the report. The build is not claimed to be reproducible.
 
-On Windows the staged executables also carry the application's identity, written into the copy (the file cargo produced is left alone, and its hashes are recorded as `built`). The version information comes from the configuration: `app.name`, `app.description`, `bundle.publisher` and `app.version`, whole, prerelease and build metadata included. The icon is `app.icons.windows`, else `app.icons.source`, an SVG or a PNG, written at 16, 24, 32, 48, 64, 128 and 256 pixels with transparent edges kept. A PNG is never enlarged: a 64 pixel PNG gives the sizes up to 64 and a warning, and one under 16 pixels is refused. A source that is not square is centered on a transparent square, not cropped. An icon that is declared but cannot be converted fails the build before anything is staged. The same icon is staged as `icon.ico`, and `report.json` lists its source, the source's SHA-256 and the sizes generated or left out. Without a declared icon the executable keeps the default one. The native icon is never used for the Web build. On other hosts the report says no resources were written. Installers, signing, the Windows application manifest and the macOS and Linux icon formats are not part of it yet.
+On Windows the staged executables also carry the application's identity, written into the copy (the file cargo produced is left alone, and its hashes are recorded as `built`). The version information comes from the configuration: `app.name`, `app.description`, `bundle.publisher` and `app.version`, whole, prerelease and build metadata included. The icon is `app.icons.windows`, else `app.icons.source`, an SVG or a PNG, written at 16, 24, 32, 48, 64, 128 and 256 pixels with transparent edges kept. A PNG is never enlarged: a 64 pixel PNG gives the sizes up to 64 and a warning, and one under 16 pixels is refused. A source that is not square is centered on a transparent square, not cropped. An icon that is declared but cannot be converted fails the build before anything is staged. The same icon is staged as `icon.ico`, and `report.json` lists its source, the source's SHA-256 and the sizes generated or left out. Without a declared icon the executable keeps the default one. The native icon is never used for the Web build. On Linux the executable is left as cargo produced it and the icon is staged as `icon-<size>.png` files at the same sizes, from `app.icons.linux`, else `app.icons.source`; `report.json` lists them and `florui register` installs them as the application's icons. On other hosts the report says no resources were written. Installers, signing, the Windows application manifest and the macOS icon format are not part of it yet.
 
 ### Check a build
 
@@ -163,7 +171,7 @@ translation framework, and other targets are not covered yet.
 
 `[app.activation]` declares the URL schemes (`url_schemes`) and file types (`file_associations`) the application
 opens; the running application receives them as typed activation events. `florui register` is the one explicit
-step that makes Windows know them, for the current user and from the staged build (`florui build` first):
+step that makes the operating system know them (Windows and Linux), for the current user and from the staged build (`florui build` first):
 
 ```sh
 florui register [--dry-run] [--artifacts DIR] [--exe NAME] [--json]
@@ -190,8 +198,18 @@ with a dot) as a statement of intent; each must be declared above. At run time i
 `florui_platform::request_default_handler(&permission, &target)`, which refuses what was not declared, refuses when the
 application is not registered, and otherwise opens the operating system's own Default apps page for this application, where
 the user decides. It never sets a default itself and its answer (`Opened`) says the page opened, not that the user chose this
-application. The `single_instance` example has a button that does this. Verified on Windows only, per user; machine-wide
-registration, installers and other operating systems are not covered.
+application. The `single_instance` example has a button that does this. Verified on Windows and, for Linux, on the GNOME
+desktop of Ubuntu 24.04, per user; machine-wide registration, installers, KDE and macOS are not covered.
+
+On Linux the same commands write, under `$XDG_DATA_HOME` (`~/.local/share` by default), a desktop entry named after the
+application identifier that launches the staged executable with `%U` and lists the schemes and MIME types, the icons from
+`florui build` as hicolor PNGs, and a MIME package only for a file type no installed type already claims (an extension that
+another type owns keeps that type, and the application becomes a candidate for it). It then runs `update-desktop-database`,
+`update-mime-database` and `gtk-update-icon-cache` when they exist. The record keeps the SHA-256 of every file written, and
+`unregister` removes only files that are still as written, naming the others as left alone. A desktop entry or MIME package
+that does not carry this application's owner marker is reported as a conflict before anything is written. The launcher passes
+a file as a `file://` URI, which the activation event turns back into a plain path. A window matches the entry by its class or
+application id, which is the identifier when the application uses single-instance activation or window persistence.
 
 Run `florui --help` for the other commands.
 

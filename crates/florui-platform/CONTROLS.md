@@ -53,3 +53,12 @@ Narrator (Windows 11) was run against the `controlled_form`, `popover` and
   collapsed.
 
 NVDA and JAWS were not tried.
+
+On Linux (Ubuntu 24.04, GNOME, native Wayland session) the `controlled_form`
+example's tree was read through AT-SPI: the window is a frame named with its
+title, and the fields, spin button, combo box, check box, radio buttons and push
+buttons appear with their roles and names. Orca was not run, so nothing was
+confirmed by ear, and the other examples' trees were not read. Typing with an
+ibus input method (Cangjie) in a text field showed the underlined preedit and the
+candidate window at the caret, and committed the chosen character; other input
+methods were not tried.
