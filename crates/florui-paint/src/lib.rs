@@ -3134,7 +3134,7 @@ fn paint_node(
                     style,
                     color,
                     (content_x, content_y),
-                    wrap_width,
+                    (wrap_width, content_width / scale_factor),
                     scale_factor,
                     clip,
                 );
@@ -3341,8 +3341,19 @@ fn paint_node(
                     self_wrap(at.width, scale_factor),
                 ) {
                     let origin = (x + at.x, y + at.y);
-                    paint_inline_boxes(buffer, styles, &shaped, origin, scale_factor, clip);
-                    paint_inline_runs(buffer, styles, &shaped, origin, color, scale_factor, clip);
+                    let (runs, cuts) =
+                        inline_runs_for(font, style, &shaped, at.width / scale_factor);
+                    paint_inline_boxes(buffer, styles, &shaped, &cuts, origin, scale_factor, clip);
+                    paint_inline_runs(
+                        buffer,
+                        styles,
+                        &shaped,
+                        &runs,
+                        origin,
+                        color,
+                        scale_factor,
+                        clip,
+                    );
                 }
             }
         } else if florui_layout::is_inline_formatting_context(arena, styles, node) {
@@ -3372,8 +3383,19 @@ fn paint_node(
                     ),
                 );
                 let origin = (content_x + dx, content_y + dy);
-                paint_inline_boxes(buffer, styles, &shaped, origin, scale_factor, clip);
-                paint_inline_runs(buffer, styles, &shaped, origin, color, scale_factor, clip);
+                let (runs, cuts) =
+                    inline_runs_for(font, style, &shaped, content_width / scale_factor);
+                paint_inline_boxes(buffer, styles, &shaped, &cuts, origin, scale_factor, clip);
+                paint_inline_runs(
+                    buffer,
+                    styles,
+                    &shaped,
+                    &runs,
+                    origin,
+                    color,
+                    scale_factor,
+                    clip,
+                );
             }
         } else {
             let text = arena.text_content(node);
@@ -3399,7 +3421,7 @@ fn paint_node(
                 style,
                 color,
                 (content_x + dx, content_y + dy),
-                wrap_width,
+                (wrap_width, content_width / scale_factor),
                 scale_factor,
                 clip,
             );
@@ -3470,7 +3492,7 @@ fn paint_node_text(
     style: Option<&ComputedStyle>,
     color: Rgba,
     (x, y): (f32, f32),
-    wrap_width: f32,
+    (wrap_width, content_width): (f32, f32),
     scale_factor: f32,
     clip: Option<&Mask>,
 ) {
@@ -3491,8 +3513,53 @@ fn paint_node_text(
             scale_factor,
             clip,
             shadows: style.map_or(&[][..], |s| &s.text_shadow[..]),
+            ellipsis: style
+                .and_then(text_overflow_mark)
+                .map(|mark| (mark, content_width)),
         },
     );
+}
+
+/// What `text-overflow` puts where a line that is wider than its box is cut,
+/// for a box that clips: the ellipsis, or the author's string.
+fn text_overflow_mark(style: &ComputedStyle) -> Option<String> {
+    if !style.overflow_clips {
+        return None;
+    }
+    match &style.text_overflow {
+        florui_style::TextOverflow::Clip => None,
+        florui_style::TextOverflow::Ellipsis => Some("\u{2026}".to_owned()),
+        florui_style::TextOverflow::Text(text) => Some(text.clone()),
+    }
+}
+
+/// The glyph runs of an inline context, with its overflowing lines cut where
+/// `text-overflow` says so, and for each line cut where its content now ends.
+fn inline_runs_for<'a>(
+    font: &mut Font,
+    style: Option<&ComputedStyle>,
+    inline: &'a florui_layout::InlineShaped,
+    limit: f32,
+) -> (
+    std::borrow::Cow<'a, [florui_text::ShapedRun]>,
+    Vec<(u32, f32)>,
+) {
+    let Some(mark) = style.and_then(text_overflow_mark) else {
+        return (std::borrow::Cow::Borrowed(&inline.layout.runs), Vec::new());
+    };
+    let mut runs = inline.layout.runs.clone();
+    let cuts = font.ellipsize_runs(
+        &mut runs,
+        florui_layout::node_text_style(style),
+        &mark,
+        limit,
+        0,
+    );
+    if cuts.is_empty() {
+        (std::borrow::Cow::Borrowed(&inline.layout.runs), cuts)
+    } else {
+        (std::borrow::Cow::Owned(runs), cuts)
+    }
 }
 
 /// Blits `image`'s own decoded pixels into `rect` (already resolved
@@ -4746,6 +4813,8 @@ struct TextPaint<'a> {
     scale_factor: f32,
     clip: Option<&'a Mask>,
     shadows: &'a [florui_style::TextShadow],
+    /// The mark a clipped line ends in, and the width of the box it is cut at.
+    ellipsis: Option<(String, f32)>,
 }
 
 fn paint_text(buffer: &mut Surface, font: &mut Font, params: TextPaint<'_>) {
@@ -4759,8 +4828,12 @@ fn paint_text(buffer: &mut Surface, font: &mut Font, params: TextPaint<'_>) {
         scale_factor,
         clip,
         shadows,
+        ellipsis,
     } = params;
-    let shaped = font.shape_wrapped(style, text, wrap_width);
+    let mut shaped = font.shape_wrapped(style, text, wrap_width);
+    if let Some((mark, limit)) = &ellipsis {
+        font.ellipsize_runs(&mut shaped.runs, style, mark, *limit, 0);
+    }
     text_shadow::paint(buffer, &shaped.runs, (x, y), shadows, scale_factor, clip);
     paint_shaped_runs(buffer, &shaped.runs, x, y, color, scale_factor, clip);
 }
@@ -4773,6 +4846,7 @@ fn paint_inline_boxes(
     buffer: &mut Surface,
     styles: &StyleMap,
     inline: &florui_layout::InlineShaped,
+    cuts: &[(u32, f32)],
     (origin_x, origin_y): (f32, f32),
     scale_factor: f32,
     clip: Option<&Mask>,
@@ -4785,6 +4859,15 @@ fn paint_inline_boxes(
         let Some(style) = styles.get(&inline.nodes[fragment.element]) else {
             continue;
         };
+        // A line cut by `text-overflow` ends where its mark does.
+        let mut fragment = *fragment;
+        if let Some(&(_, end)) = cuts.iter().find(|(line, _)| *line == fragment.line) {
+            if fragment.x >= end {
+                continue;
+            }
+            fragment.width = fragment.width.min(end - fragment.x);
+        }
+        let fragment = &fragment;
         let mut border = style.border;
         let has_border = [border.top, border.right, border.bottom, border.left]
             .iter()
@@ -4844,16 +4927,17 @@ fn paint_inline_boxes(
 
 /// The glyph runs of `inline`, each in the color and shadow of its own
 /// element, underlined when its element or one around it is.
+#[allow(clippy::too_many_arguments)]
 fn paint_inline_runs(
     buffer: &mut Surface,
     styles: &StyleMap,
     inline: &florui_layout::InlineShaped,
+    runs: &[florui_text::ShapedRun],
     (origin_x, origin_y): (f32, f32),
     container_color: Rgba,
     scale_factor: f32,
     clip: Option<&Mask>,
 ) {
-    let runs = &inline.layout.runs;
     let mut underlined = vec![false; inline.nodes.len()];
     for element in 0..inline.nodes.len() {
         let own = styles
@@ -8238,6 +8322,32 @@ mod tests {
         assert!(rect.y >= 30.0, "the span is under the block");
         let [r, g, b] = pixel_rgb(&canvas, rect.x as u32 + 1, rect.y as u32 + 1);
         assert!(g > 0xc0 && r < 0x40 && b < 0x40);
+    }
+
+    #[test]
+    fn text_overflow_ends_a_clipped_line_in_an_ellipsis_and_clip_does_not() {
+        // The rows of ink in the last 12 columns of a 90px box: three dots
+        // sit on the baseline, while the cut letter fills the x-height.
+        let ink_rows = |overflow: &str| {
+            let (canvas, ..) = painted_paragraph(
+                &format!(
+                    ".p {{ width: 90px; overflow: hidden; white-space: nowrap; color: #ffffff; text-overflow: {overflow}; }}"
+                ),
+                vec![Element::text("The quick brown fox jumps")],
+            );
+            (0..30u32)
+                .filter(|&y| {
+                    (78..90).any(|x| {
+                        let [r, g, b] = pixel_rgb(&canvas, x, y);
+                        r > 0x80 && g > 0x80 && b > 0x80
+                    })
+                })
+                .count()
+        };
+        let ellipsis = ink_rows("ellipsis");
+        let clip = ink_rows("clip");
+        assert!(ellipsis > 0 && ellipsis <= 4, "{ellipsis} rows of dots");
+        assert!(clip > ellipsis + 4, "{clip} rows of cut letters");
     }
 
     #[test]
