@@ -40,13 +40,16 @@
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
+use parley::{Alignment, AlignmentOptions, IndentOptions};
 use parley::{
-    FontContext, FontData, FontFamily as ParleyFontFamily, FontWeight, InlineBox, InlineBoxKind,
-    LayoutContext, LineHeight as ParleyLineHeight, PositionedLayoutItem, StyleProperty,
+    FontContext, FontData, FontFamily as ParleyFontFamily, FontWeight, LayoutContext,
+    LineHeight as ParleyLineHeight, PositionedLayoutItem, StyleProperty,
 };
 use peniko::Blob;
 
 pub mod editing;
+pub use inline::{InlineElement, InlineItem};
+mod inline;
 mod inline_memo;
 
 /// Open Sans (SIL Open Font License 1.1) — see `fonts/NOTICE.md` for
@@ -95,8 +98,68 @@ impl LineHeight {
     }
 }
 
+/// `text-align` of a paragraph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextAlign {
+    #[default]
+    Start,
+    End,
+    Center,
+    Justify,
+}
+
+/// `text-indent` of a paragraph. A percentage is of the width the text is
+/// wrapped at, so it is resolved when the lines are broken.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct TextIndent {
+    pub length: f32,
+    pub percent: f32,
+    pub hanging: bool,
+    pub each_line: bool,
+}
+
+/// `vertical-align` of an inline run: how its box sits against its parent's.
+/// `Raise` lifts the box by a length plus a fraction of its own line height
+/// (a negative one lowers it).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum VerticalAlign {
+    #[default]
+    Baseline,
+    Sub,
+    Super,
+    TextTop,
+    TextBottom,
+    Middle,
+    Top,
+    Bottom,
+    Raise {
+        length: f32,
+        percent: f32,
+    },
+}
+
+impl VerticalAlign {
+    fn bits(self) -> [u32; 3] {
+        match self {
+            VerticalAlign::Baseline => [0, 0, 0],
+            VerticalAlign::Sub => [1, 0, 0],
+            VerticalAlign::Super => [2, 0, 0],
+            VerticalAlign::TextTop => [3, 0, 0],
+            VerticalAlign::TextBottom => [4, 0, 0],
+            VerticalAlign::Middle => [5, 0, 0],
+            VerticalAlign::Top => [6, 0, 0],
+            VerticalAlign::Bottom => [7, 0, 0],
+            VerticalAlign::Raise { length, percent } => [8, length.to_bits(), percent.to_bits()],
+        }
+    }
+}
+
 /// What a run of text is shaped with. Two runs shape alike only when every field
 /// matches bit for bit, which is also what the memos key on.
+///
+/// `align` and `indent` belong to the paragraph: in an inline run only the
+/// container's count. `vertical_align` belongs to an inline run, and is
+/// ignored by the container.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TextStyle {
     pub family: FontFamily,
@@ -107,18 +170,13 @@ pub struct TextStyle {
     pub letter_spacing: f32,
     /// Added after every space, in pixels.
     pub word_spacing: f32,
-}
-
-/// A font's vertical metrics at one size, which line boxes are built from.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct StyleMetrics {
-    ascent: f32,
-    descent: f32,
-    leading: f32,
+    pub align: TextAlign,
+    pub indent: TextIndent,
+    pub vertical_align: VerticalAlign,
 }
 
 /// A [`TextStyle`] as the bits the memos compare and hash.
-pub(crate) type StyleBits = (u8, u32, u32, (u8, u32), u32, u32);
+pub(crate) type StyleBits = [u32; 15];
 
 impl TextStyle {
     pub fn new(family: FontFamily, font_size: f32, font_weight: f32) -> Self {
@@ -129,7 +187,25 @@ impl TextStyle {
             line_height: LineHeight::Normal,
             letter_spacing: 0.0,
             word_spacing: 0.0,
+            align: TextAlign::Start,
+            indent: TextIndent::default(),
+            vertical_align: VerticalAlign::Baseline,
         }
+    }
+
+    pub fn with_align(mut self, align: TextAlign) -> Self {
+        self.align = align;
+        self
+    }
+
+    pub fn with_indent(mut self, indent: TextIndent) -> Self {
+        self.indent = indent;
+        self
+    }
+
+    pub fn with_vertical_align(mut self, vertical_align: VerticalAlign) -> Self {
+        self.vertical_align = vertical_align;
+        self
     }
 
     pub fn with_line_height(mut self, line_height: LineHeight) -> Self {
@@ -144,14 +220,47 @@ impl TextStyle {
     }
 
     pub(crate) fn bits(&self) -> StyleBits {
-        (
-            self.family as u8,
+        let (line_height_kind, line_height_value) = self.line_height.bits();
+        let [vertical_kind, vertical_length, vertical_percent] = self.vertical_align.bits();
+        [
+            self.family as u32,
             self.font_size.to_bits(),
             self.font_weight.to_bits(),
-            self.line_height.bits(),
+            u32::from(line_height_kind),
+            line_height_value,
             self.letter_spacing.to_bits(),
             self.word_spacing.to_bits(),
+            self.align as u32,
+            self.indent.length.to_bits(),
+            self.indent.percent.to_bits(),
+            u32::from(self.indent.hanging) | (u32::from(self.indent.each_line) << 1),
+            vertical_kind,
+            vertical_length,
+            vertical_percent,
+            0,
+        ]
+    }
+
+    /// The indent in pixels for a paragraph wrapped at `max_width`, with
+    /// Parley's options for its keywords.
+    fn paragraph_indent(&self, max_width: Option<f32>) -> (f32, IndentOptions) {
+        let amount = self.indent.length + self.indent.percent * max_width.unwrap_or(0.0);
+        (
+            amount,
+            IndentOptions {
+                each_line: self.indent.each_line,
+                hanging: self.indent.hanging,
+            },
         )
+    }
+
+    fn parley_alignment(&self) -> Alignment {
+        match self.align {
+            TextAlign::Start => Alignment::Start,
+            TextAlign::End => Alignment::End,
+            TextAlign::Center => Alignment::Center,
+            TextAlign::Justify => Alignment::Justify,
+        }
     }
 
     /// The Parley properties that differ from Parley's own defaults, so a
@@ -214,6 +323,9 @@ pub struct ShapedRun {
     /// instance regardless of what was shaped.
     pub normalized_coords: Vec<i16>,
     pub glyphs: Vec<ShapedGlyph>,
+    /// For a run of an inline context, the element the text belongs to
+    /// (see [`InlineElement`]); `0` everywhere else.
+    pub element: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -265,6 +377,27 @@ pub struct InlineLayout {
     pub baseline: f32,
     pub runs: Vec<ShapedRun>,
     pub boxes: Vec<PositionedBox>,
+    /// Where each inline element has text, one per element and line it
+    /// appears on, in line order.
+    pub fragments: Vec<InlineFragment>,
+}
+
+/// The part of an inline element on one line: its content area, from where
+/// its first glyph (or the inside of its leading padding and border) starts
+/// to where its last ends, between the line's top and the element's own
+/// baseline. `x`/`y` are relative to the inline block's origin.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InlineFragment {
+    pub element: usize,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub ascent: f32,
+    pub descent: f32,
+    /// This fragment holds the start of the element (its padding, border and
+    /// margin before the first glyph), and/or its end.
+    pub starts: bool,
+    pub ends: bool,
 }
 
 #[derive(Debug)]
@@ -403,7 +536,9 @@ pub struct Font {
     metrics_memo: MetricsMemo,
     inline_memo: inline_memo::InlineMemo,
     /// Vertical metrics by family, size and weight bits.
-    style_metrics: FxHashMap<(u8, u32, u32), StyleMetrics>,
+    style_metrics: FxHashMap<(u8, u32, u32), inline::StyleMetrics>,
+    /// The width of U+2007 per em, by family.
+    spacer_em: [Option<f32>; 2],
     /// Counts the fonts registered after loading, so a copy made earlier can tell
     /// it is out of date.
     generation: u64,
@@ -444,6 +579,7 @@ impl Font {
             metrics_memo: MetricsMemo::with_capacity(METRICS_MEMO_CAPACITY),
             inline_memo: inline_memo::InlineMemo::with_capacity(inline_memo::INLINE_MEMO_BYTES),
             style_metrics: FxHashMap::default(),
+            spacer_em: [None; 2],
             generation: 0,
         }
     }
@@ -476,6 +612,7 @@ impl Font {
             metrics_memo: MetricsMemo::with_capacity(METRICS_MEMO_CAPACITY),
             inline_memo: inline_memo::InlineMemo::with_capacity(inline_memo::INLINE_MEMO_BYTES),
             style_metrics: FxHashMap::default(),
+            spacer_em: [None; 2],
             generation: seed.generation,
         }
     }
@@ -491,6 +628,7 @@ impl Font {
         self.metrics_memo.clear();
         self.inline_memo.clear();
         self.style_metrics.clear();
+        self.spacer_em = [None; 2];
         self.generation += 1;
         Self::register_into(&mut self.font_cx, font_bytes)
     }
@@ -575,6 +713,8 @@ impl Font {
             .as_mut()
             .expect("just populated above if it was empty")
             .0;
+        let (indent, options) = style.paragraph_indent(max_width);
+        layout.set_text_indent(indent, options);
         layout.break_all_lines(max_width);
         Self::metrics_of_ref(layout)
     }
@@ -711,6 +851,7 @@ impl Font {
                     font_size: run.font_size(),
                     normalized_coords: run.normalized_coords().to_vec(),
                     glyphs,
+                    element: 0,
                 });
             }
         }
@@ -720,288 +861,6 @@ impl Font {
             width: layout.width(),
             height: layout.height(),
         }
-    }
-
-    /// [`Self::shape_inline`], remembered across calls: the same items at the
-    /// same wrap width answer from the memo without shaping or breaking lines,
-    /// which is what layout asks for at several widths in one pass, again on
-    /// every frame, and what paint asks for after it. The result is shared,
-    /// not copied.
-    pub fn shape_inline_memoized(
-        &mut self,
-        items: &[InlineContent<'_>],
-        strut: TextStyle,
-        max_width: Option<f32>,
-    ) -> Arc<InlineLayout> {
-        if let Some(layout) = self.inline_memo.get(items, &strut, max_width) {
-            florui_profile::count(florui_profile::Counter::InlineMemoHits, 1);
-            return layout;
-        }
-        florui_profile::count(florui_profile::Counter::InlineShapes, 1);
-        #[cfg(test)]
-        {
-            self.inline_memo.misses += 1;
-        }
-        let layout = Arc::new(self.shape_inline(items, strut, max_width));
-        self.inline_memo
-            .insert(items, &strut, max_width, Arc::clone(&layout));
-        layout
-    }
-
-    /// Lays out a real inline formatting context: `items` in source order,
-    /// each a text run with its own font or an in-flow box with a
-    /// pre-measured size — real multi-style text wrapping mixed with
-    /// atomic boxes, via Parley's own `RangedBuilder::push`/
-    /// `push_inline_box` (checked against Parley 0.11's actual doc example
-    /// for this exact feature, not assumed). `max_width` wraps the same way
-    /// [`Self::measure_wrapped`] does; `None` is a single unconstrained
-    /// line unless a box or line break forces more.
-    ///
-    /// Bounded, not a full inline formatting context: this only reports a
-    /// bounding box back for a [`InlineContent::Box`] item, not for a
-    /// [`InlineContent::Text`] item — a plain `display: inline` element's
-    /// own box (for painting its own background, or hit-testing it
-    /// directly) isn't available from this call, only its text's ink,
-    /// mixed into the block's own `runs`. See `florui_layout`'s own module
-    /// docs for why this bound was chosen and what it costs.
-    ///
-    /// `strut` is the container's own text style: as in CSS, every line has
-    /// at least the height of an empty line in it, and a line's box is the
-    /// union, around the shared baseline, of each item's half-leading box
-    /// (see [`Self::line_box_of`]). Parley's own line height is the tallest
-    /// run's and attributes a run's style by its first span, so the lines are
-    /// measured and placed here instead.
-    pub fn shape_inline(
-        &mut self,
-        items: &[InlineContent<'_>],
-        strut: TextStyle,
-        max_width: Option<f32>,
-    ) -> InlineLayout {
-        let mut text = String::new();
-        for item in items {
-            if let InlineContent::Text { text: run_text, .. } = item {
-                text.push_str(run_text);
-            }
-        }
-        let has_box = items
-            .iter()
-            .any(|item| matches!(item, InlineContent::Box { .. }));
-        if text.is_empty() && !has_box {
-            return InlineLayout {
-                width: 0.0,
-                height: 0.0,
-                baseline: 0.0,
-                runs: Vec::new(),
-                boxes: Vec::new(),
-            };
-        }
-
-        // Resolved before the builder borrows `self` mutably below — only
-        // two possible families exist, so both names are cheap to clone
-        // up front rather than re-borrowing `self` per item.
-        let sans_serif_family_name = self.sans_serif_family_name.clone();
-        let monospace_family_name = self.monospace_family_name.clone();
-        let family_name = |family: FontFamily| match family {
-            FontFamily::SansSerif => &sans_serif_family_name,
-            FontFamily::Monospace => &monospace_family_name,
-        };
-
-        let mut builder = self
-            .layout_cx
-            .ranged_builder(&mut self.font_cx, &text, 1.0, true);
-        // Parley's ranged builder needs a base style to resolve every
-        // range against, even though every byte range with real text below
-        // sets its own font-size/family explicitly — nothing ever actually
-        // renders at this default.
-        builder.push_default(StyleProperty::FontSize(16.0));
-
-        let mut offset = 0usize;
-        let mut spans: Vec<(std::ops::Range<usize>, TextStyle)> = Vec::new();
-        for item in items {
-            match item {
-                InlineContent::Text {
-                    text: run_text,
-                    style,
-                } => {
-                    let end = offset + run_text.len();
-                    if !run_text.is_empty() {
-                        let family_name = family_name(style.family);
-                        builder.push(StyleProperty::FontSize(style.font_size), offset..end);
-                        builder.push(
-                            StyleProperty::FontWeight(FontWeight::new(style.font_weight)),
-                            offset..end,
-                        );
-                        builder.push(
-                            StyleProperty::FontFamily(ParleyFontFamily::named(
-                                family_name.as_str(),
-                            )),
-                            offset..end,
-                        );
-                        for extra in style.parley_extras(false).into_iter().flatten() {
-                            builder.push(extra, offset..end);
-                        }
-                        spans.push((offset..end, *style));
-                    }
-                    offset = end;
-                }
-                InlineContent::Box { id, width, height } => {
-                    builder.push_inline_box(InlineBox {
-                        id: *id,
-                        kind: InlineBoxKind::InFlow,
-                        index: offset,
-                        width: *width,
-                        height: *height,
-                    });
-                }
-            }
-        }
-
-        let mut layout: parley::Layout<[u8; 4]> = builder.build(&text);
-        layout.break_all_lines(max_width);
-
-        let strut_box = self.line_box_of(strut);
-        let span_boxes: Vec<(std::ops::Range<usize>, (f32, f32))> = spans
-            .into_iter()
-            .map(|(range, style)| (range, self.line_box_of(style)))
-            .collect();
-
-        let mut runs = Vec::new();
-        let mut boxes = Vec::new();
-        let mut cursor = 0.0f32;
-        let mut first_baseline = None;
-        for line in layout.lines() {
-            // The text the line shows: trailing whitespace hangs and adds
-            // nothing to the line's boxes.
-            let range = line.text_range();
-            let has_text = range.start < range.end && range.end <= text.len();
-            let visible_end = if range.start <= range.end && range.end <= text.len() {
-                range.start + text[range.clone()].trim_end().len()
-            } else {
-                0
-            };
-            let (mut above, mut below) = (0.0f32, 0.0f32);
-            for (span, (span_above, span_below)) in &span_boxes {
-                if span.start < visible_end && span.end > range.start {
-                    above = above.max(*span_above);
-                    below = below.max(*span_below);
-                }
-            }
-
-            let mut line_runs = Vec::new();
-            let mut line_boxes = Vec::new();
-            for item in line.items() {
-                match item {
-                    PositionedLayoutItem::GlyphRun(glyph_run) => {
-                        let run = glyph_run.run();
-                        let glyphs = glyph_run
-                            .positioned_glyphs()
-                            .map(|glyph| ShapedGlyph {
-                                id: glyph.id,
-                                x: glyph.x,
-                                y: glyph.y,
-                            })
-                            .collect();
-                        line_runs.push(ShapedRun {
-                            font: run.font().clone(),
-                            font_size: run.font_size(),
-                            normalized_coords: run.normalized_coords().to_vec(),
-                            glyphs,
-                        });
-                    }
-                    PositionedLayoutItem::InlineBox(positioned) => {
-                        // An atomic box sits on the baseline.
-                        above = above.max(positioned.height);
-                        line_boxes.push(PositionedBox {
-                            id: positioned.id,
-                            x: positioned.x,
-                            y: positioned.y,
-                        });
-                    }
-                }
-            }
-
-            // Parley puts a line's top on a whole pixel.
-            // A line holding nothing but atomic boxes has no strut: a box's
-            // baseline is its own text's, which is not known here, and
-            // reserving the strut's depth below the box would add a gap.
-            if has_text || line_boxes.is_empty() {
-                above = above.max(strut_box.0);
-                below = below.max(strut_box.1);
-            }
-
-            let baseline = cursor.round() + above;
-            let shift = baseline - line.metrics().baseline;
-            for glyph in line_runs.iter_mut().flat_map(|run| run.glyphs.iter_mut()) {
-                glyph.y += shift;
-            }
-            for positioned in &mut line_boxes {
-                positioned.y += shift;
-            }
-            runs.extend(line_runs);
-            boxes.extend(line_boxes);
-            first_baseline.get_or_insert(baseline);
-            cursor += above + below;
-        }
-
-        InlineLayout {
-            width: layout.width(),
-            height: cursor,
-            baseline: first_baseline.unwrap_or(0.0),
-            runs,
-            boxes,
-        }
-    }
-
-    /// Ascent and descent of a font at a size, and the line gap, from the
-    /// metrics Parley reports for one glyph; remembered per family, size and
-    /// weight.
-    fn style_metrics(&mut self, style: TextStyle) -> StyleMetrics {
-        let key = (
-            style.family as u8,
-            style.font_size.to_bits(),
-            style.font_weight.to_bits(),
-        );
-        if let Some(metrics) = self.style_metrics.get(&key) {
-            return *metrics;
-        }
-        let plain = TextStyle::new(style.family, style.font_size, style.font_weight);
-        let mut layout = self.build_unbroken(plain, "x");
-        layout.break_all_lines(None);
-        let metrics = layout.lines().next().map_or(
-            StyleMetrics {
-                ascent: 0.0,
-                descent: 0.0,
-                leading: 0.0,
-            },
-            |line| {
-                let line = line.metrics();
-                StyleMetrics {
-                    ascent: line.ascent,
-                    descent: line.descent,
-                    leading: line.leading,
-                }
-            },
-        );
-        self.style_metrics.insert(key, metrics);
-        metrics
-    }
-
-    /// How far a run in `style` reaches above and below its baseline in a
-    /// line, summing to its line height. The split is Parley's, which copies
-    /// Chrome's: ascent and descent rounded to whole pixels, and the leading
-    /// left over (negative for a short line height) divided with the smaller
-    /// half above. A line of one style therefore comes out exactly as
-    /// Parley's own.
-    fn line_box_of(&mut self, style: TextStyle) -> (f32, f32) {
-        let metrics = self.style_metrics(style);
-        let line_height = match style.line_height {
-            LineHeight::Normal => metrics.ascent + metrics.descent + metrics.leading,
-            LineHeight::Number(n) => n * style.font_size,
-            LineHeight::Length(px) => px,
-        };
-        let (ascent, descent) = (metrics.ascent.round(), metrics.descent.round());
-        let above = ascent + ((line_height - (ascent + descent)) * 0.5).floor();
-        (above, line_height - above)
     }
 
     /// [`Self::layout_wrapped`] with no width constraint — a single
@@ -1038,7 +897,10 @@ impl Font {
             return None;
         }
         let mut layout = self.build_unbroken(style, text);
+        let (indent, options) = style.paragraph_indent(max_width);
+        layout.set_text_indent(indent, options);
         layout.break_all_lines(max_width);
+        layout.align(style.parley_alignment(), AlignmentOptions::default());
         Some(layout)
     }
 
@@ -1050,6 +912,21 @@ impl Font {
     /// unlike [`Self::build_layout`], this has nothing sensible to return
     /// for an empty string, so callers must check first.
     fn build_unbroken(&mut self, style: TextStyle, text: &str) -> parley::Layout<[u8; 4]> {
+        // A normal line height is Chrome's: the font's ascent, descent and line
+        // gap, each rounded to a whole pixel.
+        let normal = matches!(style.line_height, LineHeight::Normal)
+            .then(|| self.style_metrics(style).normal_line_height());
+        self.build_with(style, text, normal)
+    }
+
+    /// [`Self::build_unbroken`] with the line height to use when the style's is
+    /// `normal`.
+    fn build_with(
+        &mut self,
+        style: TextStyle,
+        text: &str,
+        normal_line_height: Option<f32>,
+    ) -> parley::Layout<[u8; 4]> {
         let family_name = self.family_name(style.family).to_owned();
         let mut builder = self
             .layout_cx
@@ -1063,6 +940,11 @@ impl Font {
         )));
         for extra in style.parley_extras(true).into_iter().flatten() {
             builder.push_default(extra);
+        }
+        if let Some(height) = normal_line_height {
+            builder.push_default(StyleProperty::LineHeight(ParleyLineHeight::Absolute(
+                height,
+            )));
         }
         builder.build(text)
     }
@@ -1189,25 +1071,19 @@ mod tests {
     fn what_keeps_being_asked_for_survives_while_the_unused_is_dropped() {
         // Two generations of two entries each.
         let mut memo = MetricsMemo::with_capacity(4);
-        memo.insert((0, 0, 0, (0, 0), 0, 0), "hot", None, metrics(1.0));
-        memo.insert((0, 0, 0, (0, 0), 0, 0), "cold", None, metrics(2.0));
-        memo.insert((0, 0, 0, (0, 0), 0, 0), "c", None, metrics(3.0));
+        memo.insert([0; 15], "hot", None, metrics(1.0));
+        memo.insert([0; 15], "cold", None, metrics(2.0));
+        memo.insert([0; 15], "c", None, metrics(3.0));
         // "hot" and "cold" are now the previous generation; asking for "hot"
         // brings it back into the current one.
-        assert_eq!(
-            memo.get((0, 0, 0, (0, 0), 0, 0), "hot", None),
-            Some(metrics(1.0))
-        );
+        assert_eq!(memo.get([0; 15], "hot", None), Some(metrics(1.0)));
 
-        memo.insert((0, 0, 0, (0, 0), 0, 0), "d", None, metrics(4.0));
-        memo.insert((0, 0, 0, (0, 0), 0, 0), "e", None, metrics(5.0));
+        memo.insert([0; 15], "d", None, metrics(4.0));
+        memo.insert([0; 15], "e", None, metrics(5.0));
 
-        assert_eq!(
-            memo.get((0, 0, 0, (0, 0), 0, 0), "hot", None),
-            Some(metrics(1.0))
-        );
+        assert_eq!(memo.get([0; 15], "hot", None), Some(metrics(1.0)));
         assert!(
-            memo.get((0, 0, 0, (0, 0), 0, 0), "cold", None).is_none(),
+            memo.get([0; 15], "cold", None).is_none(),
             "never asked for again"
         );
     }
@@ -1216,12 +1092,7 @@ mod tests {
     fn the_memo_never_holds_more_than_its_capacity() {
         let mut memo = MetricsMemo::with_capacity(10);
         for i in 0..200 {
-            memo.insert(
-                (0, 0, 0, (0, 0), 0, 0),
-                &format!("text {i}"),
-                None,
-                metrics(i as f32),
-            );
+            memo.insert([0; 15], &format!("text {i}"), None, metrics(i as f32));
             assert!(
                 memo.entries() <= 10,
                 "after {i} inserts: {}",
@@ -1233,22 +1104,13 @@ mod tests {
     #[test]
     fn a_promoted_entry_keeps_its_exact_answer_and_width() {
         let mut memo = MetricsMemo::with_capacity(6);
-        memo.insert((0, 0, 0, (0, 0), 0, 0), "wide", Some(40), metrics(7.0));
-        memo.insert((0, 0, 0, (0, 0), 0, 0), "wide", None, metrics(9.0));
-        memo.insert((0, 0, 0, (0, 0), 0, 0), "other", None, metrics(1.0));
+        memo.insert([0; 15], "wide", Some(40), metrics(7.0));
+        memo.insert([0; 15], "wide", None, metrics(9.0));
+        memo.insert([0; 15], "other", None, metrics(1.0));
 
-        assert_eq!(
-            memo.get((0, 0, 0, (0, 0), 0, 0), "wide", Some(40)),
-            Some(metrics(7.0))
-        );
-        assert_eq!(
-            memo.get((0, 0, 0, (0, 0), 0, 0), "wide", None),
-            Some(metrics(9.0))
-        );
-        assert!(
-            memo.get((0, 0, 0, (0, 0), 0, 0), "wide", Some(41))
-                .is_none()
-        );
+        assert_eq!(memo.get([0; 15], "wide", Some(40)), Some(metrics(7.0)));
+        assert_eq!(memo.get([0; 15], "wide", None), Some(metrics(9.0)));
+        assert!(memo.get([0; 15], "wide", Some(41)).is_none());
     }
 
     #[test]
@@ -1758,7 +1620,7 @@ mod tests {
         let normal = sans(16.0);
         let line = Font::load_embedded().shape_inline(&items, normal, None);
         // 50 above the baseline, then what an empty 16px line has below it.
-        close(line.height, 50.0 + 21.789 - 16.0);
+        close(line.height, 50.0 + 5.0);
         close(line.boxes[0].y, 0.0);
         close(line.baseline, 50.0);
     }

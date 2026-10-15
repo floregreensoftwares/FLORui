@@ -322,6 +322,7 @@ impl Font {
                     font_size: run.font_size(),
                     normalized_coords: run.normalized_coords().to_vec(),
                     glyphs,
+                    element: 0,
                 });
             }
         }
