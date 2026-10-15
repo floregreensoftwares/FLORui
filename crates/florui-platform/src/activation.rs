@@ -82,16 +82,62 @@ pub fn classify_launch(
             url: single.clone(),
         };
     }
-    if !trailing.is_empty()
-        && trailing
+    // A desktop launcher may pass a local file as a `file://` URI.
+    let files: Vec<String> = trailing
+        .iter()
+        .map(|arg| file_uri_to_path(arg).unwrap_or_else(|| arg.clone()))
+        .collect();
+    if !files.is_empty()
+        && files
             .iter()
             .all(|arg| matches_known_extension(arg, file_extensions))
     {
         return ActivationEvent::OpenFiles {
-            paths: trailing.iter().map(PathBuf::from).collect(),
+            paths: files.iter().map(PathBuf::from).collect(),
         };
     }
     ActivationEvent::Launch { args }
+}
+
+/// The local path a `file://` URI names (empty or `localhost` host), with its
+/// percent escapes decoded.
+fn file_uri_to_path(value: &str) -> Option<String> {
+    let rest = value.strip_prefix("file://")?;
+    let path = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !path.starts_with('/') {
+        return None;
+    }
+    let bytes = path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && let Some(byte) = bytes
+                .get(i + 1..i + 3)
+                .and_then(|hex| std::str::from_utf8(hex).ok())
+                .and_then(|hex| u8::from_str_radix(hex, 16).ok())
+        {
+            decoded.push(byte);
+            i += 3;
+        } else {
+            decoded.push(bytes[i]);
+            i += 1;
+        }
+    }
+    let decoded = String::from_utf8(decoded).ok()?;
+    Some(if cfg!(windows) {
+        drop_slash_before_drive(&decoded)
+    } else {
+        decoded
+    })
+}
+
+/// `/C:/dir/file` as a URI writes a Windows path becomes `C:/dir/file`.
+fn drop_slash_before_drive(path: &str) -> String {
+    match path.as_bytes() {
+        [b'/', drive, b':', ..] if drive.is_ascii_alphabetic() => path[1..].to_owned(),
+        _ => path.to_owned(),
+    }
 }
 
 /// The scheme portion of `value` (before `://`), only if that scheme is
@@ -317,6 +363,49 @@ mod tests {
             ActivationEvent::OpenFiles {
                 paths: vec![PathBuf::from("C:\\docs\\plan.garden")]
             }
+        );
+    }
+    #[test]
+    fn a_file_uri_from_a_launcher_becomes_a_path() {
+        let event = classify_launch(
+            args(&[
+                "file:///home/me/My%20Plan.garden",
+                "file://localhost/tmp/b.garden",
+            ]),
+            &[],
+            &["garden".to_owned()],
+        );
+        assert_eq!(
+            event,
+            ActivationEvent::OpenFiles {
+                paths: vec![
+                    PathBuf::from("/home/me/My Plan.garden"),
+                    PathBuf::from("/tmp/b.garden")
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn a_drive_letter_loses_the_slash_the_uri_put_before_it() {
+        assert_eq!(drop_slash_before_drive("/C:/tmp/a b.txt"), "C:/tmp/a b.txt");
+        assert_eq!(drop_slash_before_drive("/tmp/a.txt"), "/tmp/a.txt");
+        assert_eq!(drop_slash_before_drive("/1:/a.txt"), "/1:/a.txt");
+        #[cfg(windows)]
+        assert_eq!(
+            file_uri_to_path("file:///C:/tmp/a%20b.txt"),
+            Some("C:/tmp/a b.txt".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_file_uri_for_another_host_is_not_a_local_file() {
+        assert_eq!(file_uri_to_path("file://example.com/a.garden"), None);
+        assert_eq!(file_uri_to_path("file:relative.garden"), None);
+        assert_eq!(file_uri_to_path("/plain/path.garden"), None);
+        assert_eq!(
+            file_uri_to_path("file:///bad%zzescape"),
+            Some("/bad%zzescape".to_owned())
         );
     }
 
