@@ -2,7 +2,8 @@
 //! [`crate::os::windows::menu`] for the real implementation. Apps never
 //! call [`show_context_menu`] directly — see
 //! [`crate::WindowControls::show_context_menu`] for the public entry
-//! point.
+//! point. On Linux the context menu is `Unavailable` (see
+//! `crate::os::linux::menu`); only the window menu exists there.
 //!
 //! This is a real OS-drawn popup (`TrackPopupMenuEx`): labels,
 //! enabled/checked state, and a display-only shortcut hint are the whole
@@ -77,7 +78,12 @@ pub(crate) use crate::os::windows::menu::show_context_menu;
 #[cfg(target_os = "windows")]
 pub(crate) use crate::os::windows::menu::{show_system_menu_at, show_system_menu_at_cursor};
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+pub(crate) use crate::os::linux::menu::{show_system_menu_at, show_system_menu_at_cursor};
+#[cfg(target_os = "linux")]
+pub(crate) use stub::show_context_menu;
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 pub(crate) use stub::{show_context_menu, show_system_menu_at, show_system_menu_at_cursor};
 
 #[cfg(not(target_os = "windows"))]
@@ -86,14 +92,18 @@ mod stub {
 
     use super::{ContextMenuOutcome, MenuEntry};
 
+    /// Windows draws this one natively; Linux has no toolkit-free equivalent
+    /// (see `crate::os::linux::menu`).
     pub(crate) fn show_context_menu(_window: &Window, _items: &[MenuEntry]) -> ContextMenuOutcome {
         ContextMenuOutcome::Unavailable
     }
 
-    /// No system menu exists as a distinct OS concept outside Windows.
+    /// No system menu exists as a distinct OS concept on these platforms.
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     pub(crate) fn show_system_menu_at_cursor(_window: &Window) {}
 
     /// See [`show_system_menu_at_cursor`]'s own doc.
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     pub(crate) fn show_system_menu_at(_window: &Window, _screen_x: i32, _screen_y: i32) {}
 }
 

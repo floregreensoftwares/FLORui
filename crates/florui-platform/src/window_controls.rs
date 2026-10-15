@@ -410,7 +410,8 @@ impl WindowControls {
     /// Shows the real OS system menu (Restore/Move/Size/Minimize/Maximize/
     /// Close) at the current cursor position -- called by
     /// [`crate::desktop::DesktopHost`] on a real right-click of
-    /// [`WINDOW_DRAG_REGION_ID`]. No-op outside Windows -- see
+    /// [`WINDOW_DRAG_REGION_ID`]. The window manager's own window menu on
+    /// Linux; a no-op on macOS -- see
     /// [`crate::menu`]'s own stub.
     pub(crate) fn show_system_menu_at_cursor(&self) {
         crate::menu::show_system_menu_at_cursor(&self.window);
