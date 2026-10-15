@@ -364,7 +364,7 @@ fn single_instance_capability_check() -> Check {
 /// merely being set. Machine-level, like [`reduced_motion_check`]:
 /// independent of whether the current project even opts into it.
 fn window_persistence_capability_check() -> Check {
-    if !cfg!(target_os = "windows") {
+    if !cfg!(any(target_os = "windows", target_os = "linux")) {
         return Check {
             id: "environment.window_persistence_capability",
             category: "environment",
@@ -402,11 +402,14 @@ fn window_persistence_capability_check() -> Check {
             observed: Some("false".to_string()),
             expected: None,
             evidence: "could not write a window-state file to the OS application-data location \
-                       (LOCALAPPDATA) window persistence depends on"
+                       (LOCALAPPDATA on Windows, XDG_STATE_HOME or HOME on Linux) window \
+                       persistence depends on"
                 .to_string(),
             reason: None,
             remediation: Some(
-                "check that LOCALAPPDATA is set and writable for the current user".to_string(),
+                "check that LOCALAPPDATA (Windows) or XDG_STATE_HOME / HOME (Linux) is set and \
+                 writable for the current user"
+                    .to_string(),
             ),
         }
     }
@@ -1988,7 +1991,12 @@ mod tests {
             assert_eq!(persistence.status, Status::Pass);
         } else {
             assert_eq!(single_instance.status, Status::NotApplicable);
-            assert_eq!(persistence.status, Status::NotApplicable);
+            let expected = if cfg!(target_os = "linux") {
+                Status::Pass
+            } else {
+                Status::NotApplicable
+            };
+            assert_eq!(persistence.status, expected);
         }
     }
 }
