@@ -122,6 +122,10 @@ pub(crate) enum UserEvent {
     /// application — see [`run_single_instance`]. Not per-window, unlike
     /// every other variant here: activation isn't scoped to one window.
     Activation(ActivationEvent),
+    /// A tray icon event was queued by the D-Bus thread -- see
+    /// `crate::os::linux::tray`.
+    #[cfg(target_os = "linux")]
+    Tray,
     /// A [`crate::WindowControls::open_file_dialog`]/`save_file_dialog`
     /// call's background thread finished — routed back through the event
     /// loop so the app's own `on_result` callback runs on the UI thread,
@@ -313,6 +317,18 @@ pub fn run_windows_observed(
     run_windows_with(initial, Some(Rc::new(RefCell::new(observer))))
 }
 
+/// Lets a tray icon's D-Bus thread wake this loop; see `crate::os::linux::tray`.
+#[cfg(target_os = "linux")]
+fn install_tray_waker(event_loop: &EventLoop<UserEvent>) {
+    let proxy = event_loop.create_proxy();
+    crate::os::linux::tray::set_waker(move || {
+        let _ = proxy.send_event(UserEvent::Tray);
+    });
+}
+
+#[cfg(not(target_os = "linux"))]
+fn install_tray_waker(_event_loop: &EventLoop<UserEvent>) {}
+
 fn run_windows_with(
     initial: Vec<WindowSpec>,
     observer: Option<SharedObserver>,
@@ -321,6 +337,7 @@ fn run_windows_with(
         .build()
         .map_err(RunError::EventLoop)?;
     event_loop.set_control_flow(ControlFlow::Wait);
+    install_tray_waker(&event_loop);
 
     let mut host = DesktopHost {
         windows: HashMap::new(),
@@ -398,6 +415,7 @@ pub fn run_single_instance(
                 .build()
                 .map_err(RunError::EventLoop)?;
             event_loop.set_control_flow(ControlFlow::Wait);
+            install_tray_waker(&event_loop);
 
             let activation_queue = Rc::new(RefCell::new(ActivationQueue::default()));
             let proxy = event_loop.create_proxy();
@@ -2431,6 +2449,8 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 }
             }
             UserEvent::RequestClose(id) => self.close_if_confirmed(event_loop, id),
+            #[cfg(target_os = "linux")]
+            UserEvent::Tray => crate::os::linux::tray::deliver_pending(),
             UserEvent::Activation(activation_event) => {
                 let Some(queue) = &self.activation_queue else {
                     return;

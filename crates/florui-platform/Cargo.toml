@@ -17,7 +17,7 @@ profiling = ["florui/profiling", "florui-profile/profiling"]
 # driving UiRuntime on its own shouldn't have to pull them in.
 # `dep:windows-sys` is a no-op outside the Windows-only dependency table
 # below — every other target simply never has it in its resolved graph.
-desktop = ["dep:notify", "dep:softbuffer", "dep:winit", "dep:wgpu", "dep:pollster", "dep:windows-sys", "dep:windows", "dep:windows-core", "dep:florui-icon", "dep:serde", "dep:serde_json", "dep:arboard", "dep:accesskit", "dep:accesskit_winit", "dep:x11rb", "dep:rfd"]
+desktop = ["dep:notify", "dep:softbuffer", "dep:winit", "dep:wgpu", "dep:pollster", "dep:windows-sys", "dep:windows", "dep:windows-core", "dep:florui-icon", "dep:serde", "dep:serde_json", "dep:arboard", "dep:accesskit", "dep:accesskit_winit", "dep:x11rb", "dep:rfd", "dep:zbus"]
 
 [dependencies]
 florui = { path = "../florui" }
@@ -145,3 +145,6 @@ x11rb = { version = "0.13.2", optional = true, default-features = false, feature
 # through the system libdbus, loaded at run time, so it adds no system
 # library to the build.
 rfd = { version = "0.17.2", optional = true, default-features = false, features = ["xdg-portal"] }
+# `os::linux::tray`: the StatusNotifierItem D-Bus interface, the tray protocol
+# that GNOME with the AppIndicator extension, KDE and most panels host.
+zbus = { version = "5", optional = true }

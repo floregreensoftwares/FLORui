@@ -7,4 +7,5 @@ pub mod menu;
 pub mod open_url;
 pub mod overlay;
 pub mod single_instance;
+pub mod tray;
 mod x11;
