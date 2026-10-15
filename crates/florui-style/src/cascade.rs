@@ -2579,7 +2579,7 @@ mod tests {
         assert_eq!(wrapping(4), (WhiteSpaceCollapse::PreserveBreaks, true));
         assert_eq!(wrapping(5), (WhiteSpaceCollapse::BreakSpaces, true));
         // They inherit.
-        assert_eq!(computed[&child(kids[1])].text_wrap, false);
+        assert!(!computed[&child(kids[1])].text_wrap);
         assert_eq!(
             computed[&child(kids[2])].white_space_collapse,
             WhiteSpaceCollapse::Preserve
