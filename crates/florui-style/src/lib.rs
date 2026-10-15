@@ -62,9 +62,9 @@ pub use cascade::{
     Appearance, AspectRatio, BackdropBlur, BorderSide, BoxShadow, BoxSizing, ComputedStyle,
     ContainerType, ContentAlignment, Corners, Display, Edges, FilterFunction, FlexDirection,
     FlexWrap, FontFamily, GlassMaterial, GlassQuality, GlassSpec, GridPlacement, GridTrackSize,
-    ItemAlignment, LengthPercentage, LineHeight, ObjectFit, Position, Resize, TextAlign,
-    TextIndent, TextShadow, TransformFunction, VerticalAlign, Viewport, compute,
-    compute_with_container_query_signature,
+    ItemAlignment, LengthPercentage, LineHeight, ObjectFit, OverflowWrap, Position, Resize,
+    TextAlign, TextIndent, TextOverflow, TextShadow, TransformFunction, VerticalAlign, Viewport,
+    WhiteSpaceCollapse, WordBreak, compute, compute_with_container_query_signature,
 };
 pub use color::{ColorParseError, Rgba, parse_hex_color};
 pub use container_query_adapter::{ContentBoxSize, resolve_container_query_signatures};

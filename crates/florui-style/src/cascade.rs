@@ -104,6 +104,50 @@ pub enum TextAlign {
     Justify,
 }
 
+/// How `white-space` treats the white space of the text: `collapse`
+/// (`normal`, `nowrap`) folds a run of spaces and a line break into one space,
+/// `preserve` (`pre`, `pre-wrap`) keeps both, `preserve-breaks` (`pre-line`)
+/// keeps only the line breaks, and `break-spaces` (`white-space-collapse`)
+/// keeps both and lets every preserved space take a place at a line's end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WhiteSpaceCollapse {
+    #[default]
+    Collapse,
+    Preserve,
+    PreserveBreaks,
+    BreakSpaces,
+}
+
+/// `word-break`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WordBreak {
+    #[default]
+    Normal,
+    BreakAll,
+    KeepAll,
+    BreakWord,
+}
+
+/// `overflow-wrap` (and its alias `word-wrap`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OverflowWrap {
+    #[default]
+    Normal,
+    BreakWord,
+    Anywhere,
+}
+
+/// `text-overflow` for the end of a line: what stands where a clipped line
+/// is cut.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum TextOverflow {
+    #[default]
+    Clip,
+    Ellipsis,
+    /// A string of the author's own.
+    Text(String),
+}
+
 /// `text-indent`. A percentage is of the containing block's width, so it
 /// stays unresolved until the text is wrapped; `hanging` indents every line
 /// but the first and `each_line` also indents the line after a forced break.
@@ -493,6 +537,18 @@ pub struct ComputedStyle {
     pub word_spacing: f32,
     /// Inherits. See [`TextIndent`].
     pub text_indent: TextIndent,
+    /// `white-space-collapse`. Inherits.
+    pub white_space_collapse: WhiteSpaceCollapse,
+    /// Whether text wraps at a soft wrap opportunity (`text-wrap-mode: wrap`,
+    /// the initial value) or not (`nowrap`, as `white-space: nowrap` and `pre`
+    /// make it). Inherits.
+    pub text_wrap: bool,
+    /// Inherits. See [`WordBreak`].
+    pub word_break: WordBreak,
+    /// Inherits. See [`OverflowWrap`].
+    pub overflow_wrap: OverflowWrap,
+    /// Does not inherit. See [`TextOverflow`].
+    pub text_overflow: TextOverflow,
     /// Does not inherit. See [`VerticalAlign`].
     pub vertical_align: VerticalAlign,
     /// This node's own layout algorithm, applied to *its children* — a
@@ -747,6 +803,11 @@ impl ComputedStyle {
             letter_spacing: _,
             word_spacing: _,
             text_indent: _,
+            white_space_collapse: _,
+            text_wrap: _,
+            word_break: _,
+            overflow_wrap: _,
+            text_overflow: _,
             vertical_align: _,
             display: _,
             flex_direction: _,
@@ -2473,6 +2534,74 @@ mod tests {
         assert_eq!(computed[&child(spaced)].letter_spacing, 3.0, "inherited");
         assert_eq!(computed[words].word_spacing, 14.0);
         assert_eq!(computed[words].letter_spacing, 0.0);
+    }
+
+    #[test]
+    fn white_space_word_break_overflow_wrap_and_text_overflow_read_and_inherit() {
+        use crate::{OverflowWrap, TextOverflow, WhiteSpaceCollapse, WordBreak};
+        let tree: Element = view! {
+            <div>
+                <p class="normal"><span>{"a"}</span></p>
+                <p class="nowrap"><span>{"b"}</span></p>
+                <p class="pre"><span>{"c"}</span></p>
+                <p class="prewrap">{"d"}</p>
+                <p class="preline">{"e"}</p>
+                <p class="breakspaces">{"f"}</p>
+                <p class="breakall"><span>{"g"}</span></p>
+                <p class="anywhere"><span>{"h"}</span></p>
+                <p class="ellipsis"><span>{"i"}</span></p>
+                <p class="string">{"j"}</p>
+                <pre>{"k"}</pre>
+                <textarea></textarea>
+            </div>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".nowrap { white-space: nowrap; } .pre { white-space: pre; } \
+             .prewrap { white-space: pre-wrap; } .preline { white-space: pre-line; } \
+             .breakspaces { white-space: break-spaces; } \
+             .breakall { word-break: break-all; } .anywhere { overflow-wrap: anywhere; } \
+             .ellipsis { text-overflow: ellipsis; } .string { text-overflow: '~'; }",
+            &InteractionState::new(),
+        );
+        let kids = arena.children(arena.roots()[0]).to_vec();
+        let child = |parent: crate::NodeId| arena.children(parent)[0];
+        let wrapping = |i: usize| {
+            (
+                computed[&kids[i]].white_space_collapse,
+                computed[&kids[i]].text_wrap,
+            )
+        };
+        assert_eq!(wrapping(0), (WhiteSpaceCollapse::Collapse, true));
+        assert_eq!(wrapping(1), (WhiteSpaceCollapse::Collapse, false));
+        assert_eq!(wrapping(2), (WhiteSpaceCollapse::Preserve, false));
+        assert_eq!(wrapping(3), (WhiteSpaceCollapse::Preserve, true));
+        assert_eq!(wrapping(4), (WhiteSpaceCollapse::PreserveBreaks, true));
+        assert_eq!(wrapping(5), (WhiteSpaceCollapse::BreakSpaces, true));
+        // They inherit.
+        assert_eq!(computed[&child(kids[1])].text_wrap, false);
+        assert_eq!(
+            computed[&child(kids[2])].white_space_collapse,
+            WhiteSpaceCollapse::Preserve
+        );
+        assert_eq!(computed[&kids[6]].word_break, WordBreak::BreakAll);
+        assert_eq!(computed[&child(kids[6])].word_break, WordBreak::BreakAll);
+        assert_eq!(computed[&kids[7]].overflow_wrap, OverflowWrap::Anywhere);
+        assert_eq!(
+            computed[&child(kids[7])].overflow_wrap,
+            OverflowWrap::Anywhere
+        );
+        // `text-overflow` does not.
+        assert_eq!(computed[&kids[8]].text_overflow, TextOverflow::Ellipsis);
+        assert_eq!(computed[&child(kids[8])].text_overflow, TextOverflow::Clip);
+        assert_eq!(
+            computed[&kids[9]].text_overflow,
+            TextOverflow::Text("~".into())
+        );
+        // The user-agent sheet: a pre and a textarea keep their white space.
+        assert_eq!(wrapping(10), (WhiteSpaceCollapse::Preserve, false));
+        assert_eq!(wrapping(11), (WhiteSpaceCollapse::Preserve, true));
+        assert_eq!(computed[&kids[11]].overflow_wrap, OverflowWrap::BreakWord);
     }
 
     #[test]

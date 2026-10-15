@@ -1819,6 +1819,11 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         letter_spacing: text.letter_spacing.0.resolve(font_size).px(),
         word_spacing: text.word_spacing.resolve(font_size).px(),
         text_indent: to_text_indent(&text.text_indent, values),
+        white_space_collapse: to_white_space_collapse(text.white_space_collapse),
+        text_wrap: text.text_wrap_mode == style::computed_values::text_wrap_mode::T::Wrap,
+        word_break: to_word_break(text.word_break),
+        overflow_wrap: to_overflow_wrap(text.overflow_wrap),
+        text_overflow: to_text_overflow(&values.get_text().text_overflow),
         vertical_align: to_vertical_align(&box_style.vertical_align),
         display: to_display(values.get_box().display),
         flex_direction: to_flex_direction(position.flex_direction),
@@ -3054,6 +3059,47 @@ fn to_text_indent(
         length: to_length_percentage(&value.length),
         hanging: has("hanging"),
         each_line: has("each-line"),
+    }
+}
+
+fn to_white_space_collapse(
+    value: style::computed_values::white_space_collapse::T,
+) -> crate::WhiteSpaceCollapse {
+    use style::computed_values::white_space_collapse::T;
+    match value {
+        T::Collapse => crate::WhiteSpaceCollapse::Collapse,
+        T::Preserve => crate::WhiteSpaceCollapse::Preserve,
+        T::PreserveBreaks => crate::WhiteSpaceCollapse::PreserveBreaks,
+        T::BreakSpaces => crate::WhiteSpaceCollapse::BreakSpaces,
+    }
+}
+
+fn to_word_break(value: style::computed_values::word_break::T) -> crate::WordBreak {
+    use style::computed_values::word_break::T;
+    match value {
+        T::Normal => crate::WordBreak::Normal,
+        T::BreakAll => crate::WordBreak::BreakAll,
+        T::KeepAll => crate::WordBreak::KeepAll,
+    }
+}
+
+fn to_overflow_wrap(value: style::computed_values::overflow_wrap::T) -> crate::OverflowWrap {
+    use style::computed_values::overflow_wrap::T;
+    match value {
+        T::Normal => crate::OverflowWrap::Normal,
+        T::BreakWord => crate::OverflowWrap::BreakWord,
+        T::Anywhere => crate::OverflowWrap::Anywhere,
+    }
+}
+
+/// The end side of `text-overflow`: with two values the second is the end of a
+/// left-to-right line.
+fn to_text_overflow(value: &style::values::computed::TextOverflow) -> crate::TextOverflow {
+    use style::values::specified::text::TextOverflowSide;
+    match &value.second {
+        TextOverflowSide::Clip => crate::TextOverflow::Clip,
+        TextOverflowSide::Ellipsis => crate::TextOverflow::Ellipsis,
+        TextOverflowSide::String(text) => crate::TextOverflow::Text(text.to_string()),
     }
 }
 

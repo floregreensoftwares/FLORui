@@ -260,6 +260,12 @@ const CSS: &str = "
         padding-left: 2px;
         font-family: monospace;
         font-size: 13.3333px;
+        white-space: pre-wrap;
+        overflow-wrap: break-word;
+    }
+
+    pre {
+        white-space: pre;
     }
 
     select {
