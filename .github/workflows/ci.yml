@@ -57,3 +57,40 @@ jobs:
           $env:FLORUI_CHROMIUM_TEST = $chrome.Path
           cargo test -p florui-conformance -- --ignored
 
+
+  # The same lint and tests on Linux, with the toolchain `rust-toolchain.toml`
+  # pins. No Chromium conformance run and no benchmark here: both stay on
+  # Windows. The window tests that need a real session are ignored, so no
+  # display is needed.
+  lint-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libxkbcommon-dev libwayland-dev libx11-dev libfontconfig-dev libasound2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # Without debug info the workspace's test binaries fit the runner's disk
+  # (with it they come to about 30 GB).
+  test-linux:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libxkbcommon-dev libwayland-dev libx11-dev libfontconfig-dev libasound2-dev libxkbcommon-x11-0 fonts-noto-color-emoji mesa-vulkan-drivers
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+      - run: cargo test --workspace --doc
