@@ -676,21 +676,10 @@ impl UiRuntime {
             if style.width.is_some() {
                 continue;
             }
-            let family = match style.font_family {
-                florui_style::FontFamily::SansSerif => florui_text::FontFamily::SansSerif,
-                florui_style::FontFamily::Monospace => florui_text::FontFamily::Monospace,
-            };
-            let (font_size, font_weight) = (style.font_size, style.font_weight);
+            let text_style = florui_layout::text_style_of(style);
             let content_width = options
                 .iter()
-                .map(|option| {
-                    self.font
-                        .measure(
-                            florui_text::TextStyle::new(family, font_size, font_weight),
-                            &option.label,
-                        )
-                        .width
-                })
+                .map(|option| self.font.measure(text_style, &option.label).width)
                 .fold(0.0_f32, f32::max);
             let needed = content_width
                 + style.padding.left
