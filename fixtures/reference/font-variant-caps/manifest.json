@@ -1,0 +1,59 @@
+{
+    "id":  "font-variant-caps",
+    "description":  "font-variant-caps small-caps and all-small-caps, the font-variant shorthand, and an inline element that resets it",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  400,
+                     "height_css_px":  130,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { width: 380px; background-color: #e8ecff; color: #112233; font-size: 20px; } .sc { font-variant-caps: small-caps; } .asc { font-variant-caps: all-small-caps; } .short { font-variant: small-caps; } .normal { font-variant: normal; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "sc",
+                                        "css":  "",
+                                        "text":  "Hello World fi 1111 AVAVA"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "asc",
+                                        "css":  "",
+                                        "text":  "Hello World fi 1111 AVAVA"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "short",
+                                        "css":  "",
+                                        "text":  "Hello World small caps"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "short",
+                                        "css":  "",
+                                        "children":  [
+                                                         "plain ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "normal",
+                                                             "css":  "",
+                                                             "text":  "normal"
+                                                         },
+                                                         " small"
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  9.2,
+                           "geometry_tolerance_px":  1.5,
+                           "reason":  "Measured against Chromium 153 on Windows: 8.45% of the pixels differ and the box is the same size; what is left is the two engines\u0027 glyph rasterization, as in the other text fixtures. Without the property the same fixture measures 13.26%, so it fails."
+                       }
+}

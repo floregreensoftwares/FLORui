@@ -1,0 +1,67 @@
+{
+    "id":  "font-synthesis",
+    "description":  "faux bold and faux italic for a font that has neither (Fira Mono), and font-synthesis turning them and synthesized small capitals off",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  350,
+                     "height_css_px":  175,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { width: 330px; background-color: #e8ecff; color: #112233; font-family: \"Fira Mono\"; font-size: 18px; } .b { font-weight: 700; } .i { font-style: italic; } .bi { font-weight: 700; font-style: italic; } .none { font-weight: 700; font-style: italic; font-synthesis: none; } .small { font-variant-caps: small-caps; } .smallnone { font-variant-caps: small-caps; font-synthesis: none; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "css":  "",
+                                        "text":  "Plain Hag gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b",
+                                        "css":  "",
+                                        "text":  "Bold Hag gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "i",
+                                        "css":  "",
+                                        "text":  "Italic Hag gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bi",
+                                        "css":  "",
+                                        "text":  "Bold italic Hag"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "none",
+                                        "css":  "",
+                                        "text":  "Synthesis none Hag"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "small",
+                                        "css":  "",
+                                        "text":  "Small caps Hag gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "smallnone",
+                                        "css":  "",
+                                        "text":  "Small caps none Hag"
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  14.5,
+                           "geometry_tolerance_px":  1.5,
+                           "reason":  "Measured against Chromium 153 on Windows: 13.72% of the pixels differ and the box is the same size; what is left is the two engines\u0027 glyph rasterization, as in the other text fixtures. With font-synthesis ignored (the rows that turn it off drawn slanted and thickened) the same fixture measures 15.42%, so it fails."
+                       }
+}

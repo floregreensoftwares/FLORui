@@ -1,0 +1,7 @@
+.wrap { display: inline-block; background-color: #e8ecff; color: #112233; font-size: 20px; }
+.tnum { font-variant-numeric: tabular-nums; }
+.noliga { font-variant-ligatures: none; }
+.feat { font-feature-settings: "tnum" 1, "case" 1; }
+.kern { font-kerning: none; }
+.var { font-variation-settings: "wght" 700; }
+.var-w { font-variation-settings: "wdth" 75; }

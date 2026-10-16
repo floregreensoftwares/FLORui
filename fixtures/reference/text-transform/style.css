@@ -1,0 +1,4 @@
+.wrap { isolation: isolate; width: 300px; background-color: #e8ecff; color: #112233; font-size: 16px; }
+.upper { text-transform: uppercase; }
+.lower { text-transform: lowercase; }
+.cap { text-transform: capitalize; }
