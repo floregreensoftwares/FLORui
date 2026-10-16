@@ -174,11 +174,154 @@ pub enum VerticalAlign {
     Raise(LengthPercentage),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// `font-family`: the two embedded families when that is all that is asked
+/// for, otherwise the list itself in CSS syntax, in which `sans-serif` and
+/// `monospace` have become the embedded fonts that stand for them.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum FontFamily {
     #[default]
     SansSerif,
     Monospace,
+    Stack(std::sync::Arc<str>),
+}
+
+/// Which of the lines of `text-decoration-line` are drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DecorationLines {
+    pub underline: bool,
+    pub overline: bool,
+    pub line_through: bool,
+}
+
+impl DecorationLines {
+    pub fn any(self) -> bool {
+        self.underline || self.overline || self.line_through
+    }
+}
+
+/// `text-decoration-style`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DecorationStyle {
+    #[default]
+    Solid,
+    Double,
+    Dotted,
+    Dashed,
+    Wavy,
+}
+
+/// `text-decoration-thickness`; a length is in pixels, a percentage is of the
+/// font size.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum DecorationThickness {
+    #[default]
+    Auto,
+    FromFont,
+    Length(f32),
+    Percent(f32),
+}
+
+/// `text-underline-offset`; a percentage is of the font size.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum UnderlineOffset {
+    #[default]
+    Auto,
+    Length(f32),
+    Percent(f32),
+}
+
+/// `text-decoration-skip-ink`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SkipInk {
+    #[default]
+    Auto,
+    None,
+    All,
+}
+
+/// `text-underline-position`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnderlinePosition {
+    #[default]
+    Auto,
+    Under,
+    Left,
+    Right,
+}
+
+/// The decoration an element declares. A decoration goes over the text of
+/// the element and of every inline box inside it, in its own color and style.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct TextDecoration {
+    pub lines: DecorationLines,
+    pub style: DecorationStyle,
+    /// `None` is `currentcolor`: the color of the text it is over.
+    pub color: Option<Rgba>,
+    pub thickness: DecorationThickness,
+    pub underline_offset: UnderlineOffset,
+    pub skip_ink: SkipInk,
+    pub position: UnderlinePosition,
+}
+
+/// Which forms `font-synthesis` lets the renderer make up when the font has none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontSynthesis {
+    pub weight: bool,
+    pub style: bool,
+    pub small_caps: bool,
+    pub position: bool,
+}
+
+impl Default for FontSynthesis {
+    fn default() -> Self {
+        Self {
+            weight: true,
+            style: true,
+            small_caps: true,
+            position: true,
+        }
+    }
+}
+
+/// `font-style`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum FontStyle {
+    #[default]
+    Normal,
+    Italic,
+    /// Leaned by this many degrees.
+    Oblique(f32),
+}
+
+/// The case part of `text-transform`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextCase {
+    #[default]
+    None,
+    Uppercase,
+    Lowercase,
+    Capitalize,
+}
+
+/// `text-transform`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TextTransform {
+    pub case: TextCase,
+    pub full_width: bool,
+    pub full_size_kana: bool,
+}
+
+/// `font-variant-caps`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontVariantCaps {
+    #[default]
+    Normal,
+    SmallCaps,
+    AllSmallCaps,
+    PetiteCaps,
+    AllPetiteCaps,
+    Unicase,
+    TitlingCaps,
 }
 
 /// `line-height`. A number stays a multiple of the element's own font size, so
@@ -610,6 +753,20 @@ pub struct ComputedStyle {
     pub font_family: FontFamily,
     /// Inherits; initial `400.0` (`normal`), CSS's numeric 1–1000 scale.
     pub font_weight: f32,
+    /// Inherited `font-style`.
+    pub font_style: FontStyle,
+    /// Inherited `font-variant-caps`.
+    pub font_variant_caps: FontVariantCaps,
+    /// Inherited `font-synthesis`.
+    pub font_synthesis: FontSynthesis,
+    /// Inherited OpenType features, in CSS syntax: `font-feature-settings`
+    /// and what `font-variant-ligatures`, `-numeric`, `-east-asian` and
+    /// `font-kerning` ask for.
+    pub font_features: Option<std::sync::Arc<str>>,
+    /// Inherited `font-variation-settings`, in CSS syntax.
+    pub font_variations: Option<std::sync::Arc<str>>,
+    /// Inherited `text-transform`.
+    pub text_transform: TextTransform,
     /// Inherits; initial [`LineHeight::Normal`].
     pub line_height: LineHeight,
     /// `letter-spacing` in pixels, added after every character. Inherits; a
@@ -739,11 +896,9 @@ pub struct ComputedStyle {
     /// function over a percentage or as an intrinsic keyword; see
     /// [`Deferred`]. Empty for nearly every node.
     pub deferred: Vec<Deferred>,
-    /// `text-decoration`/`text-decoration-line` — true only when the
-    /// value includes `underline`. `overline`/`line-through`/`blink`
-    /// aren't tracked; this is `<a>`'s own default-stylesheet need, not a
-    /// claim of full property coverage.
-    pub text_decoration_underline: bool,
+    /// `text-decoration` and its longhands, with the mirrored thickness,
+    /// offset, skip-ink and position; see [`TextDecoration`].
+    pub text_decoration: TextDecoration,
     /// Inherited; see [`TextAlign`].
     pub text_align: TextAlign,
     /// Inherited `text-shadow`, the first layer on top.
@@ -755,7 +910,7 @@ pub struct ComputedStyle {
     pub backdrop_blur: BackdropBlur,
     /// `cursor: pointer` — true only for that one keyword; every other
     /// value (including `auto`) reads `false`, the same narrow scope as
-    /// [`Self::text_decoration_underline`].
+    /// [`Self::text_decoration`].
     pub cursor_pointer: bool,
     /// Whether this node clips its own content (including descendants) to
     /// its padding box — real CSS's `overflow-x`/`overflow-y`, collapsed
@@ -860,7 +1015,7 @@ impl ComputedStyle {
             border,
             box_shadow,
             opacity,
-            text_decoration_underline,
+            text_decoration,
             text_align,
             text_shadow,
             glass,
@@ -916,6 +1071,12 @@ impl ComputedStyle {
             pointer_events_none: _,
             visibility: _,
             deferred: _,
+            font_style: _,
+            font_variant_caps: _,
+            font_synthesis: _,
+            font_features: _,
+            font_variations: _,
+            text_transform: _,
             overflow_clips: _,
             overflow_scrolls_x: _,
             overflow_scrolls_y: _,
@@ -941,7 +1102,7 @@ impl ComputedStyle {
         self.border.left.color = border.left.color;
         self.box_shadow.clone_from(box_shadow);
         self.opacity = *opacity;
-        self.text_decoration_underline = *text_decoration_underline;
+        self.text_decoration = *text_decoration;
         self.text_align = *text_align;
         self.text_shadow.clone_from(text_shadow);
         self.glass = *glass;
@@ -1172,7 +1333,7 @@ mod tests {
             changed.color = rgba(20);
             changed.border.left.color = rgba(30);
             changed.opacity = 0.5;
-            changed.text_decoration_underline = true;
+            changed.text_decoration.lines.underline = true;
             changed.cursor_pointer = true;
             changed.placeholder_color = Some(rgba(40));
             changed.box_shadow = vec![BoxShadow {
@@ -1808,9 +1969,9 @@ mod tests {
         let not_underlined = arena
             .find(|a, id| a.classes(id).iter().any(|c| c == "b"))
             .unwrap();
-        assert!(computed[&underlined].text_decoration_underline);
+        assert!(computed[&underlined].text_decoration.lines.underline);
         assert!(
-            !computed[&not_underlined].text_decoration_underline,
+            !computed[&not_underlined].text_decoration.lines.underline,
             "line-through alone must not read as underline"
         );
     }
@@ -3282,18 +3443,119 @@ mod tests {
     }
 
     #[test]
-    fn font_family_named_falls_back_to_sans_serif() {
-        // This crate has no embedded font backing an arbitrary requested
-        // name — it must fall back to its own default rather than erroring
-        // or silently picking something else unpredictable.
+    fn a_named_font_family_is_kept_as_a_list_ending_in_the_embedded_fallback() {
         let tree: Element = view! { <div class="fancy" /> };
         let (arena, computed) = styles(
             &tree,
-            ".fancy { font-family: Helvetica; }",
+            ".fancy { font-family: Helvetica, \"Fira Mono\", serif; }",
             &InteractionState::new(),
         );
         let node = arena.roots()[0];
-        assert_eq!(computed[&node].font_family, FontFamily::SansSerif);
+        assert_eq!(
+            computed[&node].font_family,
+            FontFamily::Stack("\"Helvetica\", \"Fira Mono\", serif".into())
+        );
+        let (arena, computed) = styles(
+            &view! { <div class="fancy" /> },
+            ".fancy { font-family: serif, monospace; }",
+            &InteractionState::new(),
+        );
+        assert_eq!(
+            computed[&arena.roots()[0]].font_family,
+            FontFamily::Stack("serif, \"Fira Mono\"".into()),
+            "nothing after monospace is ever reached"
+        );
+    }
+
+    #[test]
+    fn text_decoration_reads_its_lines_style_color_thickness_offset_and_skip_ink() {
+        let tree: Element = view! { <div class="a"><span class="b" /></div> };
+        let css = ".a { font-size: 20px; text-decoration: underline overline wavy #c0392b 3px; \
+                   text-underline-offset: 0.25em; text-decoration-skip-ink: none; \
+                   text-underline-position: under; } \
+                   .b { text-decoration: line-through; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let a = computed[&arena.roots()[0]].text_decoration;
+        assert!(a.lines.underline && a.lines.overline && !a.lines.line_through);
+        assert_eq!(a.style, DecorationStyle::Wavy);
+        assert_eq!(a.color, Some(Rgba::opaque(0xc0, 0x39, 0x2b)));
+        assert_eq!(a.thickness, DecorationThickness::Length(3.0));
+        assert_eq!(a.underline_offset, UnderlineOffset::Length(5.0));
+        assert_eq!(a.skip_ink, SkipInk::None);
+        assert_eq!(a.position, UnderlinePosition::Under);
+        let b = computed[&arena.children(arena.roots()[0])[0]].text_decoration;
+        assert!(b.lines.line_through && !b.lines.underline, "not inherited");
+        assert_eq!(b.style, DecorationStyle::Solid);
+        assert_eq!(b.color, None, "currentcolor");
+        assert_eq!(
+            b.thickness,
+            DecorationThickness::Auto,
+            "the shorthand resets it"
+        );
+        let (arena, computed) = styles(
+            &view! { <div class="c" /> },
+            ".c { text-decoration: underline from-font; }",
+            &InteractionState::new(),
+        );
+        assert_eq!(
+            computed[&arena.roots()[0]].text_decoration.thickness,
+            DecorationThickness::FromFont
+        );
+    }
+
+    #[test]
+    fn monospace_alone_has_chromiums_smaller_default_sizes() {
+        let tree: Element = view! {
+            <div>
+                <div class="mono" />
+                <div class="mono large" />
+                <div class="mono small" />
+                <div class="mono px" />
+                <div class="listed" />
+                <div class="mono"><span class="inherits" /></div>
+            </div>
+        };
+        let css = ".mono { font-family: monospace; } .large { font-size: large; } \
+                   .small { font-size: small; } .px { font-size: 20px; } \
+                   .listed { font-family: \"Fira Mono\", monospace; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let root = arena.roots()[0];
+        let kids = arena.children(root);
+        let size = |index: usize| computed[&kids[index]].font_size;
+        assert_eq!(size(0), 13.0);
+        assert_eq!(size(1), 16.0);
+        assert_eq!(size(2), 12.0);
+        assert_eq!(size(3), 20.0, "a length is a length");
+        assert_eq!(size(4), 16.0, "only a list that is exactly monospace");
+        let inherited = arena.children(kids[5])[0];
+        assert_eq!(computed[&inherited].font_size, 13.0);
+    }
+
+    #[test]
+    fn font_style_transform_variant_and_features_are_read() {
+        let tree: Element = view! { <div class="a"><span class="b" /></div> };
+        let css = ".a { font-style: italic; text-transform: uppercase full-width; \
+                   font-variant: all-small-caps tabular-nums; font-kerning: none; \
+                   font-feature-settings: \"ss01\" 1; font-variation-settings: \"wght\" 650; } \
+                   .b { font-style: oblique 20deg; font-variant-caps: normal; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let a = &computed[&arena.roots()[0]];
+        assert_eq!(a.font_style, FontStyle::Italic);
+        assert_eq!(a.text_transform.case, TextCase::Uppercase);
+        assert!(a.text_transform.full_width);
+        assert_eq!(a.font_variant_caps, FontVariantCaps::AllSmallCaps);
+        assert_eq!(
+            a.font_features.as_deref(),
+            Some("\"tnum\" 1, \"kern\" 0, \"ss01\" 1")
+        );
+        assert_eq!(a.font_variations.as_deref(), Some("\"wght\" 650"));
+        let b = &computed[&arena.children(arena.roots()[0])[0]];
+        assert_eq!(b.font_style, FontStyle::Oblique(20.0));
+        assert_eq!(b.font_variant_caps, FontVariantCaps::Normal);
+        assert_eq!(
+            b.text_transform, a.text_transform,
+            "text-transform inherits"
+        );
     }
 
     #[test]
