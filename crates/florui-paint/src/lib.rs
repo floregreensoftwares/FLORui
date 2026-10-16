@@ -3694,10 +3694,12 @@ fn fill_rect(
     clip: Option<&Mask>,
 ) {
     let (lx, ly) = buffer.local(x, y);
-    let x0 = lx.max(0.0);
-    let y0 = ly.max(0.0);
-    let x1 = (lx + width).max(0.0).min(buffer.width() as f32);
-    let y1 = (ly + height).max(0.0).min(buffer.height() as f32);
+    // Each edge goes to the nearest pixel, as a browser snaps a box; the
+    // rasterizer would cut the fraction off the position and the size instead.
+    let x0 = lx.round().max(0.0);
+    let y0 = ly.round().max(0.0);
+    let x1 = (lx + width).round().max(0.0).min(buffer.width() as f32);
+    let y1 = (ly + height).round().max(0.0).min(buffer.height() as f32);
     let Some(rect) = Rect::from_ltrb(x0, y0, x1, y1) else {
         return;
     };
@@ -6883,6 +6885,38 @@ mod tests {
         assert_eq!(pixel_rgb(&buffer, 0, 10), card, "border of the hidden box");
         assert_eq!(pixel_rgb(&buffer, 26, 10), card, "shadow of the hidden box");
         assert_eq!(pixel_rgb(&buffer, 5, 5), [0, 0, 0xff], "the visible child");
+    }
+
+    #[test]
+    fn a_fractional_width_is_painted_rounded_like_a_browser_does() {
+        let tree: Element = view! { <div class="a" /> };
+        let css = ".a { width: 78.945px; height: 10px; background-color: #ff0000; }";
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let buffer = paint_to_buffer(
+            &mut font,
+            100,
+            10,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        );
+        let red = (0..100)
+            .filter(|&x| pixel_rgb(&buffer, x, 5) == [0xff, 0, 0])
+            .count();
+        assert_eq!(red, 79);
     }
 
     #[test]
