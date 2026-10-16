@@ -13,6 +13,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::os::fd::{AsFd, AsRawFd, FromRawFd};
+use std::os::unix::fs::FileExt;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -752,15 +753,22 @@ macro_rules! ignore_events {
 
 ignore_events!(WlSubcompositor, WlSubsurface, WlShm, WlShmPool, WlSurface);
 
-impl Dispatch<WlBuffer, ()> for State {
+/// Whether the compositor still holds a buffer: set when it is attached,
+/// cleared by the `release` event.
+struct BufferUse(Arc<AtomicBool>);
+
+impl Dispatch<WlBuffer, BufferUse> for State {
     fn event(
         _: &mut Self,
         _: &WlBuffer,
-        _: wl_buffer::Event,
-        _: &(),
+        event: wl_buffer::Event,
+        in_use: &BufferUse,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if let wl_buffer::Event::Release = event {
+            in_use.0.store(false, Ordering::SeqCst);
+        }
     }
 }
 
@@ -795,28 +803,141 @@ fn key_for(code: u32) -> Option<PopupKey> {
     }
 }
 
-/// A buffer holding `frame`, in shared memory the compositor reads.
-fn shm_buffer(shm: &WlShm, qh: &QueueHandle<State>, frame: &PopupFrame) -> Option<WlBuffer> {
+/// A `width` x `height` `Argb8888` buffer in shared memory the compositor
+/// reads, and the file that backs it, for writing the pixels into.
+fn shm_buffer_in(
+    shm: &WlShm,
+    qh: &QueueHandle<State>,
+    width: u32,
+    height: u32,
+    in_use: Arc<AtomicBool>,
+) -> Option<(WlBuffer, std::fs::File)> {
+    let size = u64::from(width) * u64::from(height) * 4;
     // SAFETY: a plain system call; the result is checked and owned below.
-    let raw = unsafe { libc::memfd_create(c"florui-menu".as_ptr(), libc::MFD_CLOEXEC) };
+    let raw = unsafe { libc::memfd_create(c"florui-shm".as_ptr(), libc::MFD_CLOEXEC) };
     if raw < 0 {
         return None;
     }
     // SAFETY: `raw` is a file descriptor this call just made and nothing else owns.
-    let mut file = std::fs::File::from(unsafe { std::os::fd::OwnedFd::from_raw_fd(raw) });
-    file.write_all(&frame.bgra).ok()?;
-    let pool = shm.create_pool(file.as_fd(), i32::try_from(frame.bgra.len()).ok()?, qh, ());
+    let file = std::fs::File::from(unsafe { std::os::fd::OwnedFd::from_raw_fd(raw) });
+    file.set_len(size).ok()?;
+    let pool = shm.create_pool(file.as_fd(), i32::try_from(size).ok()?, qh, ());
     let buffer = pool.create_buffer(
         0,
-        i32::try_from(frame.width).ok()?,
-        i32::try_from(frame.height).ok()?,
-        i32::try_from(frame.width * 4).ok()?,
+        i32::try_from(width).ok()?,
+        i32::try_from(height).ok()?,
+        i32::try_from(width * 4).ok()?,
         wl_shm::Format::Argb8888,
         qh,
-        (),
+        BufferUse(in_use),
     );
     pool.destroy();
+    Some((buffer, file))
+}
+
+/// A buffer holding `frame`.
+fn shm_buffer(shm: &WlShm, qh: &QueueHandle<State>, frame: &PopupFrame) -> Option<WlBuffer> {
+    let (buffer, file) = shm_buffer_in(shm, qh, frame.width, frame.height, Arc::default())?;
+    file.write_all_at(&frame.bgra, 0).ok()?;
     Some(buffer)
+}
+
+/// Presents the frames of a window with an alpha channel. `softbuffer` makes
+/// its Wayland buffers `Xrgb8888`, which cannot be transparent, so a window
+/// that has transparent parts is shown through buffers of this module's own,
+/// attached to the window's surface. Two buffers take turns, and one the
+/// compositor is still reading is not written to.
+pub(crate) struct ShmPresenter {
+    surface: WlSurface,
+    size: (u32, u32),
+    slots: Vec<Slot>,
+    scratch: Vec<u8>,
+}
+
+struct Slot {
+    buffer: WlBuffer,
+    file: std::fs::File,
+    in_use: Arc<AtomicBool>,
+}
+
+/// `None` unless `window` is on a compositor with shared-memory buffers.
+pub(crate) fn shm_presenter(window: &Window) -> Option<ShmPresenter> {
+    with_link(|link| {
+        link.state.shm.as_ref()?;
+        Some(ShmPresenter {
+            surface: surface_of(&link.conn, window)?,
+            size: (0, 0),
+            slots: Vec::new(),
+            scratch: Vec::new(),
+        })
+    })
+    .flatten()
+}
+
+impl ShmPresenter {
+    /// Shows a `width` x `height` frame given as premultiplied RGBA, rows top
+    /// to bottom. `false` when it could not be shown.
+    pub(crate) fn present(&mut self, width: u32, height: u32, rgba: &[u8]) -> bool {
+        if rgba.len() != width as usize * height as usize * 4 {
+            return false;
+        }
+        with_link(|link| {
+            let Some(shm) = &link.state.shm else {
+                return false;
+            };
+            if self.size != (width, height) {
+                for slot in self.slots.drain(..) {
+                    slot.buffer.destroy();
+                }
+                self.size = (width, height);
+            }
+            let free = self
+                .slots
+                .iter()
+                .position(|slot| !slot.in_use.load(Ordering::SeqCst));
+            let index = match free {
+                Some(index) => index,
+                None => {
+                    let in_use = Arc::new(AtomicBool::new(false));
+                    let Some((buffer, file)) =
+                        shm_buffer_in(shm, &link.qh, width, height, Arc::clone(&in_use))
+                    else {
+                        return false;
+                    };
+                    self.slots.push(Slot {
+                        buffer,
+                        file,
+                        in_use,
+                    });
+                    self.slots.len() - 1
+                }
+            };
+            self.scratch.clear();
+            self.scratch.extend(
+                rgba.chunks_exact(4)
+                    .flat_map(|pixel| [pixel[2], pixel[1], pixel[0], pixel[3]]),
+            );
+            let slot = &self.slots[index];
+            if slot.file.write_all_at(&self.scratch, 0).is_err() {
+                return false;
+            }
+            slot.in_use.store(true, Ordering::SeqCst);
+            self.surface.attach(Some(&slot.buffer), 0, 0);
+            self.surface
+                .damage_buffer(0, 0, width as i32, height as i32);
+            self.surface.commit();
+            link.conn.flush().is_ok()
+        })
+        .unwrap_or(false)
+    }
+}
+
+impl Drop for ShmPresenter {
+    fn drop(&mut self) {
+        for slot in self.slots.drain(..) {
+            slot.buffer.destroy();
+        }
+    }
 }
 
 /// A menu that is open on a window: the subsurface it is drawn in, a

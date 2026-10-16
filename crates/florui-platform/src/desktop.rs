@@ -1061,6 +1061,14 @@ fn sync_input_regions(
     controls.sync_input_regions(&regions);
 }
 
+/// A pixel of the CPU presenter's buffer. A buffer that has an alpha channel
+/// (a Linux window's does, wherever it is composited) is premultiplied, as the
+/// canvas is; the Windows GDI one ignores the byte.
+fn cpu_pixel(red: u8, green: u8, blue: u8, alpha: u8) -> u32 {
+    let alpha = if cfg!(target_os = "linux") { alpha } else { 0 };
+    u32::from_be_bytes([alpha, red, green, blue])
+}
+
 /// Whichever presentation path [`DesktopHost::resumed`] actually got —
 /// see [`crate::gpu`]'s own doc for the fallback contract between them.
 /// `Cpu` is still `softbuffer`, unchanged from before this existed.
@@ -1070,6 +1078,9 @@ enum Presenter {
         surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
         _context: softbuffer::Context<Arc<Window>>,
     },
+    /// Wayland, where `softbuffer` has no alpha channel.
+    #[cfg(target_os = "linux")]
+    Shm(crate::os::linux::ShmPresenter),
     /// Between a lost presenter being dropped and its replacement; draws
     /// nothing.
     Detached,
@@ -1088,6 +1099,10 @@ fn new_presenter(
     };
     if let Some(gpu) = gpu {
         return Ok(Presenter::Gpu(Box::new(gpu)));
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(shm) = crate::os::linux::shm_presenter(window) {
+        return Ok(Presenter::Shm(shm));
     }
     let context = softbuffer::Context::new(window.clone())?;
     let surface = softbuffer::Surface::new(&context, window.clone())?;
@@ -1624,6 +1639,12 @@ impl WindowState {
                 }
             }
             Presenter::Detached => {}
+            #[cfg(target_os = "linux")]
+            Presenter::Shm(presenter) => {
+                if !presenter.present(width.get(), height.get(), canvas.data()) {
+                    eprintln!("florui-platform: could not present the frame");
+                }
+            }
             Presenter::Cpu { surface, .. } => {
                 if let Err(error) = surface.resize(width, height) {
                     eprintln!("florui-platform: could not resize the render surface: {error}");
@@ -1636,10 +1657,6 @@ impl WindowState {
                         return;
                     }
                 };
-                // `softbuffer`'s own pixel format has no alpha channel at
-                // all (see `crate::appearance`'s own doc) — the canvas is
-                // always painted fully opaque today regardless, so
-                // dropping alpha here is a no-op, not a lossy conversion.
                 // Only what changed is converted; the rest is the last frame's.
                 let (frame_width, frame_height) =
                     (canvas.width() as usize, canvas.height() as usize);
@@ -1650,7 +1667,7 @@ impl WindowState {
                         canvas
                             .pixels()
                             .iter()
-                            .map(|p| u32::from_be_bytes([0, p.red(), p.green(), p.blue()])),
+                            .map(|p| cpu_pixel(p.red(), p.green(), p.blue(), p.alpha())),
                     );
                 } else if let Some(rects) = &changed {
                     let pixels = canvas.pixels();
@@ -1664,7 +1681,7 @@ impl WindowState {
                             for x in x0..x1 {
                                 let p = pixels[y * frame_width + x];
                                 self.cpu_frame[y * frame_width + x] =
-                                    u32::from_be_bytes([0, p.red(), p.green(), p.blue()]);
+                                    cpu_pixel(p.red(), p.green(), p.blue(), p.alpha());
                             }
                         }
                     }
@@ -2737,6 +2754,18 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cpu_pixel_carries_its_alpha_only_where_the_buffer_has_that_channel() {
+        let pixel = cpu_pixel(0x10, 0x20, 0x30, 0x80);
+        let expected = if cfg!(target_os = "linux") {
+            0x8010_2030
+        } else {
+            0x0010_2030
+        };
+        assert_eq!(pixel, expected);
+        assert_eq!(cpu_pixel(1, 2, 3, 0xff) & 0x00ff_ffff, 0x0001_0203);
+    }
 
     #[test]
     fn window_options_default_respects_reduced_motion() {
