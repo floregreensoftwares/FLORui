@@ -64,7 +64,7 @@ pub use cascade::{
     FlexWrap, FontFamily, GlassMaterial, GlassQuality, GlassSpec, GridPlacement, GridTrackSize,
     ItemAlignment, LengthPercentage, LineHeight, ObjectFit, OverflowWrap, Position, Resize,
     TextAlign, TextIndent, TextOverflow, TextShadow, TransformFunction, VerticalAlign, Viewport,
-    WhiteSpaceCollapse, WordBreak, compute, compute_with_container_query_signature,
+    Visibility, WhiteSpaceCollapse, WordBreak, compute, compute_with_container_query_signature,
 };
 pub use color::{ColorParseError, Rgba, parse_hex_color};
 pub use container_query_adapter::{ContentBoxSize, resolve_container_query_signatures};
