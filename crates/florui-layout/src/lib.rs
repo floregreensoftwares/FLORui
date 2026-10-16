@@ -2834,14 +2834,15 @@ pub fn layout_parent(arena: &Tree, id: NodeId) -> Option<NodeId> {
 ///
 /// A box fixed to the viewport stays where it is: it is not shifted by the
 /// scroll of its parent, and what the scroll of the ancestors above would
-/// carry along is undone.
+/// carry along is undone. A sticky box is then held in view (see
+/// [`apply_sticky`]), which happens with nothing scrolled too.
 pub fn apply_scroll_offsets(
     arena: &Tree,
     layouts: &HashMap<NodeId, BoxLayout>,
     scroll_offsets: &HashMap<NodeId, (f32, f32)>,
     styles: &StyleMap,
 ) -> HashMap<NodeId, BoxLayout> {
-    layouts
+    let mut shifted: HashMap<NodeId, BoxLayout> = layouts
         .iter()
         .map(|(&id, &layout)| {
             let parent = layout_parent(arena, id);
@@ -2878,7 +2879,137 @@ pub fn apply_scroll_offsets(
                 },
             )
         })
-        .collect()
+        .collect();
+    apply_sticky(arena, styles, &mut shifted);
+    shifted
+}
+
+/// Holds each `position: sticky` box inside the view of its scrolling
+/// ancestor (the nearest one that clips) by its `top`/`right`/`bottom`/
+/// `left`, where `layouts` already has the scroll applied, and never past
+/// the content box of its parent. Boxes are visited in document order, so a
+/// sticky box inside a sticky one sees where the outer one now is.
+fn apply_sticky(arena: &Tree, styles: &StyleMap, layouts: &mut HashMap<NodeId, BoxLayout>) {
+    let mut sticky: Vec<NodeId> = layouts
+        .keys()
+        .copied()
+        .filter(|id| {
+            styles
+                .get(id)
+                .is_some_and(|s| s.position == StylePosition::Sticky)
+        })
+        .collect();
+    sticky.sort_unstable();
+    for node in sticky {
+        let (Some(style), Some(parent)) = (styles.get(&node), arena.parent(node)) else {
+            continue;
+        };
+        let mut scroller = Some(parent);
+        while let Some(candidate) = scroller {
+            if styles.get(&candidate).is_some_and(|s| s.overflow_clips) {
+                break;
+            }
+            scroller = arena.parent(candidate);
+        }
+        let (Some(scroller), Some(own), Some(parent_box)) = (
+            scroller,
+            layouts.get(&node).copied(),
+            layouts.get(&parent).copied(),
+        ) else {
+            continue;
+        };
+        let scroller_style = styles.get(&scroller);
+        let scroller_box = layouts.get(&scroller).copied();
+        let (Some(scroller_style), Some(scroller_box)) = (scroller_style, scroller_box) else {
+            continue;
+        };
+        let (at_x, at_y) = absolute_position(arena, layouts, node);
+        let (scroller_x, scroller_y) = absolute_position(arena, layouts, scroller);
+        let (parent_x, parent_y) = absolute_position(arena, layouts, parent);
+        let border = scroller_style.border;
+        let view = (
+            scroller_x + border.left.width,
+            scroller_y + border.top.width,
+            scroller_box.width - border.left.width - border.right.width,
+            scroller_box.height - border.top.width - border.bottom.width,
+        );
+        let parent_style = styles.get(&parent);
+        let (inset_left, inset_top) = parent_style.map_or((0.0, 0.0), |s| {
+            (
+                s.border.left.width + s.padding.left,
+                s.border.top.width + s.padding.top,
+            )
+        });
+        let (inset_right, inset_bottom) = parent_style.map_or((0.0, 0.0), |s| {
+            (
+                s.border.right.width + s.padding.right,
+                s.border.bottom.width + s.padding.bottom,
+            )
+        });
+        let block = (
+            parent_x + inset_left,
+            parent_y + inset_top,
+            parent_x + parent_box.width - inset_right,
+            parent_y + parent_box.height - inset_bottom,
+        );
+        let margin = |side: Option<f32>| side.unwrap_or(0.0);
+        let resolve = |inset: Option<florui_style::LengthPercentage>, of: f32| {
+            inset.map(|lp| lp.length + lp.percentage * of)
+        };
+        // One axis: where the box starts, its size, the view and the block it
+        // may move within (start, end), the margins, and the two insets.
+        let hold = |start: f32,
+                    size: f32,
+                    (view_start, view_size): (f32, f32),
+                    (block_start, block_end): (f32, f32),
+                    (margin_start, margin_end): (f32, f32),
+                    (inset_start, inset_end): (Option<f32>, Option<f32>)|
+         -> f32 {
+            let mut moved = start;
+            if let Some(end) = inset_end {
+                moved = moved.min(view_start + view_size - end - size);
+            }
+            if let Some(begin) = inset_start {
+                moved = moved.max(view_start + begin);
+            }
+            if moved > start {
+                moved = moved.min((block_end - size - margin_end).max(start));
+            } else if moved < start {
+                moved = moved.max((block_start + margin_start).min(start));
+            }
+            moved
+        };
+        let new_x = hold(
+            at_x,
+            own.width,
+            (view.0, view.2),
+            (block.0, block.2),
+            (margin(style.margin.left), margin(style.margin.right)),
+            (
+                resolve(style.inset.left, view.2),
+                resolve(style.inset.right, view.2),
+            ),
+        );
+        let new_y = hold(
+            at_y,
+            own.height,
+            (view.1, view.3),
+            (block.1, block.3),
+            (margin(style.margin.top), margin(style.margin.bottom)),
+            (
+                resolve(style.inset.top, view.3),
+                resolve(style.inset.bottom, view.3),
+            ),
+        );
+        layouts.insert(
+            node,
+            BoxLayout {
+                x: own.x + new_x - at_x,
+                y: own.y + new_y - at_y,
+                ..own
+            },
+        );
+    }
 }
 
 /// The topmost node whose box contains `(x, y)` (both relative to the
@@ -5547,6 +5678,53 @@ mod tests {
             absolute_position(&arena, &scrolled, plain).1,
             absolute_position(&arena, &layouts, plain).1 - 30.0 - 4.0,
             "what is not fixed still scrolls"
+        );
+    }
+
+    #[test]
+    fn a_sticky_box_is_held_in_the_view_of_its_scroller_and_inside_its_parent() {
+        let tree: Element = view! {
+            <div class="scroller">
+                <div class="parent">
+                    <div class="gap" />
+                    <div class="stuck" />
+                    <div class="tail" />
+                </div>
+                <div class="filler" />
+            </div>
+        };
+        let (arena, styles, layouts) = fixed_layout(
+            &tree,
+            ".scroller { overflow: hidden; height: 50px; margin-top: 8px; padding-top: 1px; } \
+             .parent { height: 120px; } .gap { height: 30px; } \
+             .stuck { position: sticky; top: 4px; height: 10px; } .tail { height: 80px; } \
+             .filler { height: 200px; }",
+        );
+        let (scroller, stuck) = (
+            node_with_class(&arena, "scroller"),
+            node_with_class(&arena, "stuck"),
+        );
+        let natural = absolute_position(&arena, &layouts, stuck).1;
+        let view_top = absolute_position(&arena, &layouts, scroller).1;
+        let drawn = |offset: f32| {
+            let mut offsets = HashMap::new();
+            offsets.insert(scroller, (0.0, offset));
+            let scrolled = apply_scroll_offsets(&arena, &layouts, &offsets, &styles);
+            absolute_position(&arena, &scrolled, stuck).1
+        };
+        assert_eq!(drawn(0.0), natural, "in the view already, it stays");
+        assert_eq!(drawn(10.0), natural - 10.0, "still below its inset");
+        assert_eq!(
+            drawn(60.0),
+            view_top + 4.0,
+            "held 4px from the top of the view"
+        );
+        let parent_bottom =
+            absolute_position(&arena, &layouts, node_with_class(&arena, "parent")).1 + 120.0;
+        assert_eq!(
+            drawn(200.0),
+            parent_bottom - 200.0 - 10.0,
+            "never past the bottom of its parent, which has scrolled away"
         );
     }
 

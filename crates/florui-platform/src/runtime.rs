@@ -96,6 +96,9 @@ pub struct UiRuntime {
     range_dragging: Option<FocusPath>,
     arena: Arena,
     styles: StyleMap,
+    /// Whether any box is `position: sticky`, which holds where it is drawn
+    /// even when nothing is scrolled.
+    has_sticky: bool,
     layouts: HashMap<NodeId, BoxLayout>,
     /// Every select's own options, by the select's `id` — see
     /// [`crate::select::normalize`]'s own doc for why this exists
@@ -301,6 +304,7 @@ impl UiRuntime {
             range_dragging: None,
             arena: Arena::build(&Element::Fragment(Vec::new())),
             styles: StyleMap::new(),
+            has_sticky: false,
             layouts: HashMap::new(),
             option_summaries: HashMap::new(),
             multiselect_anchor: None,
@@ -615,6 +619,9 @@ impl UiRuntime {
             viewport,
         )
         .expect("this tree's explicit sizes never produce a layout failure");
+        self.has_sticky = styles
+            .values()
+            .any(|s| s.position == florui_style::Position::Sticky);
         self.styles = styles;
         let post_layout_span = florui_profile::span(florui_profile::Phase::PostLayout);
         self.icon_registry
@@ -885,7 +892,7 @@ impl UiRuntime {
     /// does not render again.
     pub fn hit_test(&self, x: f32, y: f32) -> Option<NodeId> {
         let offsets = self.scroll_registry.offsets_by_node(&self.arena);
-        if offsets.values().all(|&offset| offset == (0.0, 0.0)) {
+        if !self.has_sticky && offsets.values().all(|&offset| offset == (0.0, 0.0)) {
             return florui_layout::hit_test(&self.arena, &self.layouts, &self.styles, x, y);
         }
         let scrolled =
