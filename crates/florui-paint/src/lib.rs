@@ -2961,8 +2961,16 @@ fn paint_node(
             },
         );
         let rounded = !outline.is_square();
+        // A hidden box keeps its place and paints nothing of its own; a
+        // descendant that is visible again still paints, and so does an
+        // inline element of its text.
+        let shown = style.is_none_or(|s| s.visibility.is_visible());
 
-        let backdrop_filter: &[FilterFunction] = style.map_or(&[][..], |s| &s.backdrop_filter[..]);
+        let backdrop_filter: &[FilterFunction] = if shown {
+            style.map_or(&[][..], |s| &s.backdrop_filter[..])
+        } else {
+            &[]
+        };
         // The material applies to a node that also has a `backdrop-filter`.
         let glass = style
             .filter(|_| !backdrop_filter.is_empty())
@@ -2984,8 +2992,13 @@ fn paint_node(
             );
         }
 
+        // The layout border stays: it is where the content sits.
         let border = scaled_border(style.map_or(NO_BORDER, |s| s.border), scale_factor);
-        let box_shadow: &[florui_style::BoxShadow] = style.map_or(&[][..], |s| &s.box_shadow[..]);
+        let box_shadow: &[florui_style::BoxShadow] = if shown {
+            style.map_or(&[][..], |s| &s.box_shadow[..])
+        } else {
+            &[]
+        };
 
         // Real CSS's own painting order for a normal-flow box with no
         // stacking context: outer (non-inset) shadows sit behind
@@ -2999,7 +3012,7 @@ fn paint_node(
         }
 
         let background = style.map_or(Rgba::TRANSPARENT, |s| s.background_color);
-        if background.a != 0 {
+        if shown && background.a != 0 {
             let _span = florui_profile::span(florui_profile::Phase::RasterFill);
             if rounded {
                 fill_rounded_rect(buffer, &outline, background, clip);
@@ -3009,6 +3022,7 @@ fn paint_node(
         }
 
         if let Some(style) = style
+            && shown
             && !style.background_layers.is_empty()
         {
             let _span = florui_profile::span(florui_profile::Phase::RasterLayers);
@@ -3028,7 +3042,7 @@ fn paint_node(
             paint_box_shadows_clipped(buffer, &outline, border, box_shadow, true, clip);
         }
 
-        {
+        if shown {
             let _span = florui_profile::span(florui_profile::Phase::RasterBorders);
             if rounded {
                 paint_rounded_border(buffer, &outline, border, clip);
@@ -3088,6 +3102,14 @@ fn paint_node(
         // split: shape at the size layout actually measured, paint at the
         // size the canvas actually needs.
         let wrap_width = wrap_width(content_width, scale_factor);
+
+        // Only the inline elements of a context can show themselves again.
+        if !shown
+            && anonymous.is_empty()
+            && !florui_layout::is_inline_formatting_context(arena, styles, node)
+        {
+            return;
+        }
 
         if is_control_icon_node(arena, node)
             && style.is_some_and(|s| s.appearance != florui_style::Appearance::None)
@@ -4859,6 +4881,9 @@ fn paint_inline_boxes(
         let Some(style) = styles.get(&inline.nodes[fragment.element]) else {
             continue;
         };
+        if !style.visibility.is_visible() {
+            continue;
+        }
         // A line cut by `text-overflow` ends where its mark does.
         let mut fragment = *fragment;
         if let Some(&(_, end)) = cuts.iter().find(|(line, _)| *line == fragment.line) {
@@ -4954,6 +4979,10 @@ fn paint_inline_runs(
         }
         let group = &runs[start..end];
         let style = styles.get(&inline.nodes[element]);
+        if style.is_some_and(|s| !s.visibility.is_visible()) {
+            start = end;
+            continue;
+        }
         let color = style.map_or(container_color, |s| s.color);
         text_shadow::paint(
             buffer,
@@ -6778,6 +6807,111 @@ mod tests {
             [0x1e, 0x1e, 0x22],
             "an opacity: 0 child must paint nothing at all, leaving its parent's own \
              background untouched"
+        );
+    }
+
+    #[test]
+    fn a_hidden_box_paints_nothing_of_its_own_but_a_visible_child_still_paints() {
+        let tree: Element = view! {
+            <div class="card">
+                <div class="hid">
+                    <div class="back" />
+                </div>
+            </div>
+        };
+        let css = "
+            .card { width: 40px; height: 20px; background-color: #1e1e22; }
+            .hid { visibility: hidden; width: 20px; height: 20px; background-color: #ff0000;
+                   border: 2px solid #00ff00; box-shadow: 0 0 0 4px #ff00ff; }
+            .back { visibility: visible; width: 8px; height: 8px; background-color: #0000ff; }
+        ";
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let buffer = paint_to_buffer(
+            &mut font,
+            40,
+            20,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        );
+        let card = [0x1e, 0x1e, 0x22];
+        assert_eq!(
+            pixel_rgb(&buffer, 15, 15),
+            card,
+            "background of the hidden box"
+        );
+        assert_eq!(pixel_rgb(&buffer, 0, 10), card, "border of the hidden box");
+        assert_eq!(pixel_rgb(&buffer, 26, 10), card, "shadow of the hidden box");
+        assert_eq!(pixel_rgb(&buffer, 5, 5), [0, 0, 0xff], "the visible child");
+    }
+
+    #[test]
+    fn hidden_text_is_not_drawn_alone_or_as_an_inline_element() {
+        let paint = |tree: Element, css: &str| {
+            let arena = Arena::build(&tree);
+            let rules = florui_style::parse_stylesheet(css).unwrap();
+            let styles = florui_style::compute(
+                &arena,
+                &rules,
+                &InteractionState::new(),
+                florui_style::Viewport::default(),
+                &mut florui_style::AnimationTimeline::default(),
+            );
+            let mut font = Font::load_embedded();
+            let layouts =
+                florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT)
+                    .unwrap();
+            paint_to_buffer(
+                &mut font,
+                120,
+                30,
+                Rgba::opaque(0, 0, 0),
+                &arena,
+                &styles,
+                &layouts,
+                1.0,
+            )
+        };
+        let inked = |buffer: &_, x0: u32, x1: u32| {
+            (0..30).any(|y| (x0..x1).any(|x| pixel_rgb(buffer, x, y) != [0, 0, 0]))
+        };
+        let css = "p { color: #ffffff; font-size: 20px; margin: 0; } \
+                   .gone { visibility: hidden; }";
+        let alone: Element = view! { <p class="gone">"MMMM"</p> };
+        assert!(
+            !inked(&paint(alone, css), 0, 120),
+            "hidden text paints nothing"
+        );
+
+        let inline: Element = view! { <p>"MM"<span class="gone">"WWWW"</span>"MM"</p> };
+        let buffer = paint(inline, css);
+        let visible: Element = view! { <p>"MM"<span>"WWWW"</span>"MM"</p> };
+        let reference = paint(visible, css);
+        // "MM" ends near x = 50 at this size; the span follows it.
+        assert!(
+            inked(&buffer, 0, 45),
+            "the text before the hidden span is drawn"
+        );
+        assert!(
+            inked(&reference, 55, 120),
+            "the span would be drawn if visible"
+        );
+        assert!(
+            !inked(&buffer, 55, 120),
+            "the hidden span's glyphs are not drawn"
         );
     }
 
