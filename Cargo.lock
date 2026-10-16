@@ -1861,6 +1861,7 @@ dependencies = [
  "florui",
  "florui-layout",
  "florui-paint",
+ "florui-primitives",
  "florui-style",
  "florui-text",
  "futures",

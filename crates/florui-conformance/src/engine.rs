@@ -73,24 +73,13 @@ pub struct EngineRender {
     pub elements: Vec<crate::regions::ElementInfo>,
 }
 
-/// The fixed set of tags this harness's fixtures build — a `&'static str`
-/// is what [`Element::node`] needs, which a JSON-loaded `String` can't
-/// borrow from; matching against this small, known set is simpler than a
-/// generic (and here unneeded) leak-and-intern scheme.
+/// [`Element::node`] needs a `&'static str`, which a JSON-loaded `String`
+/// can't borrow from; the primitive registry already owns one for every
+/// tag `view!` accepts, so fixtures can use exactly those.
 fn to_static_tag(tag: &str) -> Result<&'static str, EngineError> {
-    Ok(match tag {
-        "div" => "div",
-        "span" => "span",
-        "p" => "p",
-        "button" => "button",
-        "h1" => "h1",
-        "h2" => "h2",
-        "h3" => "h3",
-        "h4" => "h4",
-        "h5" => "h5",
-        "h6" => "h6",
-        other => return Err(EngineError::UnknownTag(other.to_owned())),
-    })
+    florui_primitives::find(tag)
+        .map(|primitive| primitive.tag)
+        .ok_or_else(|| EngineError::UnknownTag(tag.to_owned()))
 }
 
 /// Builds a real, possibly-nested `Element` from `spec`, recursively —
@@ -283,6 +272,18 @@ mod tests {
         assert_eq!(render.element_box_css_px.x, 0.0);
         assert_eq!(render.element_box_css_px.y, 0.0);
         assert_eq!(render.image.dimensions(), (200, 100));
+    }
+
+    #[test]
+    fn every_registered_tag_is_accepted() {
+        for primitive in florui_primitives::PRIMITIVES {
+            assert!(
+                to_static_tag(primitive.tag).is_ok(),
+                "{} rejected",
+                primitive.tag
+            );
+        }
+        assert!(render_fixture(&spec("ul"), "", "#000000", 200, 100, 1.0).is_ok());
     }
 
     #[test]
