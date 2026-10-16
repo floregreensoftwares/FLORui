@@ -120,6 +120,12 @@ use style::stylesheets::Origin;
 use crate::stylesheet_parse::{Rule, parse_stylesheet_with_origin};
 
 const CSS: &str = "
+    /* The default family is the embedded sans-serif, not the style engine's
+       own initial one (serif), which only an author can ask for. */
+    :where(:root) {
+        font-family: sans-serif;
+    }
+
     div, p, h1, h2, h3, h4, h5, h6, img, icon, form, fieldset, legend {
         display: block;
     }
@@ -468,7 +474,7 @@ mod tests {
             computed[&a].color,
             crate::color::Rgba::opaque(0x00, 0x00, 0xee)
         );
-        assert!(computed[&a].text_decoration_underline);
+        assert!(computed[&a].text_decoration.lines.underline);
         assert!(computed[&a].cursor_pointer);
     }
 
@@ -497,7 +503,7 @@ mod tests {
             computed[&a].color,
             crate::color::Rgba::opaque(0x55, 0x1a, 0x8b)
         );
-        assert!(computed[&a].text_decoration_underline);
+        assert!(computed[&a].text_decoration.lines.underline);
         assert!(computed[&a].cursor_pointer);
     }
 
