@@ -2724,7 +2724,8 @@ pub fn hit_test(
                 }
             }
             let outline = border_box_outline(styles, node, ax, ay, layout);
-            let pointer_events_none = style.is_some_and(|s| s.pointer_events_none);
+            let pointer_events_none =
+                style.is_some_and(|s| s.pointer_events_none || !s.visibility.is_visible());
             // An inline element that wraps over lines is hit only inside its
             // piece of each (see [`piece_id`]).
             let in_a_piece = !layouts.contains_key(&piece_id(node, 0))
@@ -3085,7 +3086,8 @@ mod tests {
                     }
                 }
                 let outline = border_box_outline(styles, node, ax, ay, layout);
-                let pointer_events_none = style.is_some_and(|s| s.pointer_events_none);
+                let pointer_events_none =
+                    style.is_some_and(|s| s.pointer_events_none || !s.visibility.is_visible());
                 if admitted && !pointer_events_none && outline.contains(point.0, point.1) {
                     hit = Some(node);
                 }
@@ -5126,6 +5128,44 @@ mod tests {
             super::hit_test(&arena, &layouts, &styles, 10.0, 10.0),
             Some(card),
             "the click passes through the overlay to the card"
+        );
+    }
+
+    #[test]
+    fn a_hidden_box_keeps_its_space_and_cannot_be_hit_but_a_visible_child_can() {
+        let tree: Element = view! {
+            <div class="stack">
+                <div class="a" />
+                <div class="b">
+                    <div class="shown" />
+                </div>
+                <div class="c" />
+            </div>
+        };
+        let (arena, styles, layouts) = layout_with_styles(
+            &tree,
+            ".a, .b, .c { width: 40px; height: 20px; } \
+             .b { visibility: hidden; } \
+             .shown { width: 10px; height: 10px; visibility: visible; }",
+        );
+        let find = |class: &str| {
+            arena
+                .find(|a, id| a.classes(id).iter().any(|c| c == class))
+                .unwrap()
+        };
+        assert_eq!(
+            layouts[&find("c")].y,
+            40.0,
+            "the hidden box still takes its space"
+        );
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 30.0, 30.0),
+            Some(arena.roots()[0])
+        );
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 5.0, 25.0),
+            Some(find("shown")),
+            "a descendant that is visible again is hit"
         );
     }
 
