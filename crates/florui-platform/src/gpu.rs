@@ -217,16 +217,10 @@ impl GpuPresenter {
             .find(|f| matches!(f, TextureFormat::Rgba8Unorm))
             .or_else(|| capabilities.formats.first().copied())?;
 
-        let alpha_mode = opaque_alpha_mode(&capabilities.alpha_modes)?;
+        let (alpha_mode, capability) = alpha_mode_for(&capabilities.alpha_modes)?;
 
         Self::configure(
-            window,
-            device,
-            queue,
-            surface,
-            format,
-            alpha_mode,
-            PresentationCapability::GpuOpaque,
+            window, device, queue, surface, format, alpha_mode, capability,
         )
     }
 
@@ -509,6 +503,21 @@ pub fn probe_graphics() -> Result<GraphicsProbe, String> {
     })
 }
 
+/// The mode to present with, and what it makes of the window. A Linux
+/// compositor that lists `PreMultiplied` composites the frame's alpha, which
+/// the painted bytes are already made for; elsewhere the frame is opaque.
+fn alpha_mode_for(
+    supported: &[CompositeAlphaMode],
+) -> Option<(CompositeAlphaMode, PresentationCapability)> {
+    if cfg!(target_os = "linux") && supported.contains(&CompositeAlphaMode::PreMultiplied) {
+        return Some((
+            CompositeAlphaMode::PreMultiplied,
+            PresentationCapability::GpuTransparent,
+        ));
+    }
+    opaque_alpha_mode(supported).map(|mode| (mode, PresentationCapability::GpuOpaque))
+}
+
 /// The alpha mode for a window that draws every pixel opaque: `Opaque` when
 /// the surface offers it, else the nearest the surface does. Some
 /// compositors (Vulkan on Wayland) list only `PreMultiplied` and `Inherit`,
@@ -549,6 +558,22 @@ fn create_upload_texture(
 #[cfg(test)]
 mod alpha_mode_tests {
     use super::*;
+
+    #[test]
+    fn a_linux_surface_that_composites_alpha_is_presented_with_it() {
+        use CompositeAlphaMode::{Inherit, Opaque, PreMultiplied};
+        let on_linux = cfg!(target_os = "linux");
+        let (mode, capability) = alpha_mode_for(&[Opaque, PreMultiplied]).unwrap();
+        assert_eq!(mode == PreMultiplied, on_linux);
+        assert_eq!(
+            capability == PresentationCapability::GpuTransparent,
+            on_linux
+        );
+        let (mode, capability) = alpha_mode_for(&[Opaque, Inherit]).unwrap();
+        assert_eq!(mode, Opaque);
+        assert_eq!(capability, PresentationCapability::GpuOpaque);
+        assert!(alpha_mode_for(&[]).is_none());
+    }
 
     #[test]
     fn opaque_is_chosen_whenever_the_surface_offers_it() {
@@ -597,6 +622,22 @@ mod tests {
     use crate::desktop::UserEvent;
 
     use super::*;
+
+    #[test]
+    fn a_linux_surface_that_composites_alpha_is_presented_with_it() {
+        use CompositeAlphaMode::{Inherit, Opaque, PreMultiplied};
+        let on_linux = cfg!(target_os = "linux");
+        let (mode, capability) = alpha_mode_for(&[Opaque, PreMultiplied]).unwrap();
+        assert_eq!(mode == PreMultiplied, on_linux);
+        assert_eq!(
+            capability == PresentationCapability::GpuTransparent,
+            on_linux
+        );
+        let (mode, capability) = alpha_mode_for(&[Opaque, Inherit]).unwrap();
+        assert_eq!(mode, Opaque);
+        assert_eq!(capability, PresentationCapability::GpuOpaque);
+        assert!(alpha_mode_for(&[]).is_none());
+    }
 
     #[derive(Default)]
     struct App {

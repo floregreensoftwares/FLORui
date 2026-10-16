@@ -13,6 +13,7 @@ pub mod tray;
 pub mod wayland;
 mod x11;
 
+pub(crate) use wayland::{ShmPresenter, shm_presenter};
 pub(crate) use x11::pointer_in_window;
 
 use std::sync::{Arc, OnceLock};
