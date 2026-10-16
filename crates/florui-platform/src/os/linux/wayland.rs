@@ -10,9 +10,9 @@
 //! given to [`init`] when data a thread read is ready.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
-use std::os::fd::{AsFd, AsRawFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,6 +22,7 @@ use std::time::Duration;
 use wayland_backend::client::{Backend, ObjectId};
 use wayland_client::backend::WaylandError;
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
+use wayland_client::protocol::wl_buffer::{self, WlBuffer};
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
 use wayland_client::protocol::wl_data_device_manager::{DndAction, WlDataDeviceManager};
@@ -32,6 +33,10 @@ use wayland_client::protocol::wl_pointer::{self, WlPointer};
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_registry::WlRegistry;
 use wayland_client::protocol::wl_seat::{self, Capability, WlSeat};
+use wayland_client::protocol::wl_shm::{self, WlShm};
+use wayland_client::protocol::wl_shm_pool::WlShmPool;
+use wayland_client::protocol::wl_subcompositor::WlSubcompositor;
+use wayland_client::protocol::wl_subsurface::WlSubsurface;
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum, event_created_child,
@@ -40,6 +45,9 @@ use winit::raw_window_handle::{
     HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
 };
 use winit::window::{Window, WindowId};
+
+use crate::menu::ContextMenuOutcome;
+use crate::menu_popup::{MenuPopup, PopupFrame, PopupKey};
 
 /// How long a read from another client may take before it is given up on.
 const READ_TIMEOUT: Duration = Duration::from_secs(2);
@@ -95,6 +103,26 @@ struct State {
     selection: Option<WlDataOffer>,
     own: Option<Own>,
     waker: Option<Arc<dyn Fn() + Send + Sync>>,
+    subcompositor: Option<WlSubcompositor>,
+    shm: Option<WlShm>,
+    /// The surface the pointer is over and where, while a menu is open.
+    pointer_over: Option<ObjectId>,
+    pointer_at: (f32, f32),
+    popup: Option<PopupInput>,
+}
+
+/// What a menu that is open is told by the pointer and keyboard this module
+/// listens to.
+struct PopupInput {
+    child: ObjectId,
+    events: VecDeque<PopupEvent>,
+}
+
+enum PopupEvent {
+    Moved((f32, f32)),
+    Left,
+    Pressed(Option<(f32, f32)>),
+    Key(u32),
 }
 
 struct Link {
@@ -145,6 +173,8 @@ fn connect(window: &Window, waker: Arc<dyn Fn() + Send + Sync>) -> Option<Link> 
     state.compositor = globals.bind(&qh, 1..=6, ()).ok();
     state.seat = globals.bind(&qh, 1..=7, ()).ok();
     state.manager = globals.bind(&qh, 1..=3, ()).ok();
+    state.subcompositor = globals.bind(&qh, 1..=1, ()).ok();
+    state.shm = globals.bind(&qh, 1..=1, ()).ok();
     if let (Some(manager), Some(seat)) = (&state.manager, &state.seat) {
         state.device = Some(manager.get_data_device(seat, &qh, ()));
     }
@@ -552,8 +582,21 @@ impl Dispatch<WlKeyboard, ()> for State {
     ) {
         match event {
             wl_keyboard::Event::Enter { serial, .. }
-            | wl_keyboard::Event::Key { serial, .. }
-            | wl_keyboard::Event::Modifiers { serial, .. } => state.serial = serial,
+            | wl_keyboard::Event::Modifiers { serial, .. } => {
+                state.serial = serial;
+            }
+            wl_keyboard::Event::Key {
+                serial,
+                key,
+                state: WEnum::Value(wl_keyboard::KeyState::Pressed),
+                ..
+            } => {
+                state.serial = serial;
+                if let Some(popup) = &mut state.popup {
+                    popup.events.push_back(PopupEvent::Key(key));
+                }
+            }
+            wl_keyboard::Event::Key { serial, .. } => state.serial = serial,
             _ => {}
         }
     }
@@ -568,8 +611,43 @@ impl Dispatch<WlPointer, ()> for State {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_pointer::Event::Button { serial, .. } = event {
-            state.serial = serial;
+        match event {
+            wl_pointer::Event::Enter {
+                serial,
+                surface,
+                surface_x,
+                surface_y,
+            } => {
+                state.serial = serial;
+                state.pointer_over = Some(surface.id());
+                state.pointer_at = (surface_x as f32, surface_y as f32);
+                state.popup_pointer(true);
+            }
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => {
+                state.pointer_at = (surface_x as f32, surface_y as f32);
+                state.popup_pointer(true);
+            }
+            wl_pointer::Event::Leave { .. } => {
+                state.pointer_over = None;
+                if let Some(popup) = &mut state.popup {
+                    popup.events.push_back(PopupEvent::Left);
+                }
+            }
+            wl_pointer::Event::Button {
+                serial,
+                state: button,
+                ..
+            } => {
+                state.serial = serial;
+                if button == WEnum::Value(wl_pointer::ButtonState::Pressed) {
+                    state.popup_pointer(false);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -654,6 +732,217 @@ impl Dispatch<WlDataSource, ()> for State {
             _ => {}
         }
     }
+}
+
+macro_rules! ignore_events {
+    ($($proxy:ty),* $(,)?) => {$(
+        impl Dispatch<$proxy, ()> for State {
+            fn event(
+                _: &mut Self,
+                _: &$proxy,
+                _: <$proxy as Proxy>::Event,
+                _: &(),
+                _: &Connection,
+                _: &QueueHandle<Self>,
+            ) {
+            }
+        }
+    )*};
+}
+
+ignore_events!(WlSubcompositor, WlSubsurface, WlShm, WlShmPool, WlSurface);
+
+impl Dispatch<WlBuffer, ()> for State {
+    fn event(
+        _: &mut Self,
+        _: &WlBuffer,
+        _: wl_buffer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl State {
+    /// Tells an open menu what the pointer did: `moved`, or a press. A press
+    /// or a move over the menu's own surface is at the pointer's position in
+    /// it; anywhere else a move is the pointer leaving, and a press dismisses.
+    fn popup_pointer(&mut self, moved: bool) {
+        let Some(popup) = &mut self.popup else {
+            return;
+        };
+        let over_menu = self.pointer_over.as_ref() == Some(&popup.child);
+        popup.events.push_back(match (moved, over_menu) {
+            (true, true) => PopupEvent::Moved(self.pointer_at),
+            (true, false) => PopupEvent::Left,
+            (false, true) => PopupEvent::Pressed(Some(self.pointer_at)),
+            (false, false) => PopupEvent::Pressed(None),
+        });
+    }
+}
+
+/// evdev key codes, which is what a `wl_keyboard` reports.
+fn key_for(code: u32) -> Option<PopupKey> {
+    match code {
+        103 => Some(PopupKey::Up),
+        108 => Some(PopupKey::Down),
+        102 => Some(PopupKey::Home),
+        107 => Some(PopupKey::End),
+        28 | 96 | 57 => Some(PopupKey::Activate),
+        1 => Some(PopupKey::Dismiss),
+        _ => None,
+    }
+}
+
+/// A buffer holding `frame`, in shared memory the compositor reads.
+fn shm_buffer(shm: &WlShm, qh: &QueueHandle<State>, frame: &PopupFrame) -> Option<WlBuffer> {
+    // SAFETY: a plain system call; the result is checked and owned below.
+    let raw = unsafe { libc::memfd_create(c"florui-menu".as_ptr(), libc::MFD_CLOEXEC) };
+    if raw < 0 {
+        return None;
+    }
+    // SAFETY: `raw` is a file descriptor this call just made and nothing else owns.
+    let mut file = std::fs::File::from(unsafe { std::os::fd::OwnedFd::from_raw_fd(raw) });
+    file.write_all(&frame.bgra).ok()?;
+    let pool = shm.create_pool(file.as_fd(), i32::try_from(frame.bgra.len()).ok()?, qh, ());
+    let buffer = pool.create_buffer(
+        0,
+        i32::try_from(frame.width).ok()?,
+        i32::try_from(frame.height).ok()?,
+        i32::try_from(frame.width * 4).ok()?,
+        wl_shm::Format::Argb8888,
+        qh,
+        (),
+    );
+    pool.destroy();
+    Some(buffer)
+}
+
+/// A menu that is open on a window: the subsurface it is drawn in, a
+/// subsurface of the window's own surface so that it stays inside what the
+/// compositor draws for the window. It listens to the seat's pointer and
+/// keyboard directly, and is driven by [`advance_menu`] from the loop.
+pub(crate) struct MenuSession {
+    parent: WlSurface,
+    child: WlSurface,
+    subsurface: WlSubsurface,
+    buffer: Option<WlBuffer>,
+}
+
+/// Opens `popup` over `window` at `at` (the window's logical pixels). `None`
+/// when the compositor lacks what a subsurface needs.
+pub(crate) fn open_menu(
+    window: &Window,
+    popup: &mut MenuPopup,
+    at: (f32, f32),
+) -> Option<MenuSession> {
+    with_link(|link| {
+        let compositor = link.state.compositor.clone()?;
+        let subcompositor = link.state.subcompositor.clone()?;
+        let parent = surface_of(&link.conn, window)?;
+        // Where it goes: at the pointer, moved back inside the window.
+        let inside = window.inner_size().to_logical::<f32>(window.scale_factor());
+        let (width, height) = popup.size();
+        let x = at.0.min(inside.width - width).max(0.0);
+        let y = if at.1 + height > inside.height {
+            (at.1 - height).max(0.0)
+        } else {
+            at.1
+        };
+        let child = compositor.create_surface(&link.qh, ());
+        let subsurface = subcompositor.get_subsurface(&child, &parent, &link.qh, ());
+        subsurface.set_position(x as i32, y as i32);
+        subsurface.set_desync();
+        child.set_buffer_scale(popup.scale() as i32);
+        link.state.popup = Some(PopupInput {
+            child: child.id(),
+            events: VecDeque::new(),
+        });
+        let mut session = MenuSession {
+            parent,
+            child,
+            subsurface,
+            buffer: None,
+        };
+        session.present(link, &popup.frame());
+        Some(session)
+    })
+    .flatten()
+}
+
+impl MenuSession {
+    fn present(&mut self, link: &Link, frame: &PopupFrame) {
+        let Some(shm) = &link.state.shm else {
+            return;
+        };
+        if let Some(next) = shm_buffer(shm, &link.qh, frame) {
+            self.child.attach(Some(&next), 0, 0);
+            self.child
+                .damage_buffer(0, 0, frame.width as i32, frame.height as i32);
+            self.child.commit();
+            // The position is applied with the parent's next commit.
+            self.parent.commit();
+            if let Some(old) = self.buffer.replace(next) {
+                old.destroy();
+            }
+            let _ = link.conn.flush();
+        }
+    }
+}
+
+impl Drop for MenuSession {
+    fn drop(&mut self) {
+        if let Some(buffer) = self.buffer.take() {
+            buffer.destroy();
+        }
+        self.subsurface.destroy();
+        self.child.destroy();
+        self.parent.commit();
+        with_link(|link| {
+            link.state.popup = None;
+            let _ = link.conn.flush();
+        });
+    }
+}
+
+/// Applies what the pointer and keyboard did since the last call to `popup`.
+/// `Some` once the menu is chosen from or dismissed.
+pub(crate) fn advance_menu(
+    session: &mut MenuSession,
+    popup: &mut MenuPopup,
+) -> Option<ContextMenuOutcome> {
+    with_link(|link| {
+        let events: Vec<PopupEvent> = link.state.popup.as_mut()?.events.drain(..).collect();
+        let mut changed = false;
+        for event in events {
+            let chosen = match event {
+                PopupEvent::Moved((x, y)) => {
+                    popup.pointer_moved(x, y);
+                    changed = true;
+                    None
+                }
+                PopupEvent::Left => {
+                    popup.pointer_left();
+                    changed = true;
+                    None
+                }
+                PopupEvent::Pressed(pressed) => popup.pointer_pressed(pressed),
+                PopupEvent::Key(code) => key_for(code).and_then(|key| {
+                    changed = true;
+                    popup.key_pressed(key)
+                }),
+            };
+            if chosen.is_some() {
+                return chosen;
+            }
+        }
+        if changed {
+            session.present(link, &popup.frame());
+        }
+        None
+    })
+    .flatten()
 }
 
 /// Whether the loop has been woken for the compositor and not yet run.

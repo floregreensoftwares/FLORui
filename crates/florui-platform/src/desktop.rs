@@ -126,10 +126,10 @@ pub(crate) enum UserEvent {
     /// `crate::os::linux::tray`.
     #[cfg(target_os = "linux")]
     Tray,
-    /// The compositor sent this process something on the Wayland connection that
-    /// a thread was waiting for; the loop only has to run once more.
+    /// The display server sent this process something that a thread was
+    /// waiting for; the loop only has to run once more.
     #[cfg(target_os = "linux")]
-    Wayland,
+    DisplayServer,
     /// A [`crate::WindowControls::open_file_dialog`]/`save_file_dialog`
     /// call's background thread finished — routed back through the event
     /// loop so the app's own `on_result` callback runs on the UI thread,
@@ -2165,10 +2165,10 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             #[cfg(target_os = "linux")]
             {
                 let proxy = self.proxy.clone();
-                crate::os::linux::wayland::init(
+                crate::os::linux::init_display(
                     &window,
                     Arc::new(move || {
-                        let _ = proxy.send_event(UserEvent::Wayland);
+                        let _ = proxy.send_event(UserEvent::DisplayServer);
                     }),
                 );
             }
@@ -2367,9 +2367,16 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             state.update_and_request_redraw();
         }
         #[cfg(target_os = "linux")]
-        for (id, step) in crate::os::linux::wayland::pump() {
-            if let Some(state) = self.windows.get_mut(&id) {
-                state.feed_wayland_drag(step);
+        {
+            for (id, step) in crate::os::linux::wayland::pump() {
+                if let Some(state) = self.windows.get_mut(&id) {
+                    state.feed_wayland_drag(step);
+                }
+            }
+            // A menu that has been chosen from tells its caller here, where
+            // nothing of the windows is borrowed.
+            if let Some((callback, outcome)) = crate::os::linux::menu::pump_menu() {
+                callback(outcome);
             }
         }
         let now = std::time::Instant::now();
@@ -2546,7 +2553,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             #[cfg(target_os = "linux")]
             UserEvent::Tray => crate::os::linux::tray::deliver_pending(),
             #[cfg(target_os = "linux")]
-            UserEvent::Wayland => {}
+            UserEvent::DisplayServer => {}
             UserEvent::Activation(activation_event) => {
                 let Some(queue) = &self.activation_queue else {
                     return;
