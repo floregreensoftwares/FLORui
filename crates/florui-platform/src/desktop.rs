@@ -1531,6 +1531,7 @@ impl WindowState {
         // frame painted small has bounds that are not the window's.
         if sharp {
             self.accessibility_adapter.update_if_active(|| {
+                self.accessibility_tree.set_styles(arena, styles);
                 let (update, reverse) =
                     self.accessibility_tree
                         .build(arena, focused, &node_bounds, interaction);

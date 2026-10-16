@@ -91,6 +91,22 @@ pub(crate) fn activates_on_space(arena: &Arena, id: NodeId) -> bool {
     arena.tag(id) != "a"
 }
 
+/// Whether `id` is drawn at all, which a node must be to take focus: neither
+/// it nor an ancestor is `display: none`, and it is not `visibility: hidden`.
+pub(crate) fn is_rendered(arena: &Arena, styles: &florui_style::StyleMap, id: NodeId) -> bool {
+    let mut current = Some(id);
+    while let Some(node) = current {
+        if styles
+            .get(&node)
+            .is_some_and(|s| s.display == florui_style::Display::None)
+        {
+            return false;
+        }
+        current = arena.parent(node);
+    }
+    styles.get(&id).is_none_or(|s| s.visibility.is_visible())
+}
+
 /// Every focusable node, in document order — both the tab-traversal
 /// sequence and the candidate list [`florui_style::FocusPath::resolve`]
 /// needs.
