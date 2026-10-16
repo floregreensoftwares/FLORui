@@ -1855,6 +1855,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
             style::values::specified::PointerEvents::None
         ),
         visibility: to_visibility(values.get_inherited_box().visibility),
+        deferred: to_deferred(values),
         text_align: to_text_align(text.text_align),
         text_shadow: to_text_shadows(&text.text_shadow.0, &text.color),
         glass: to_glass(values),
@@ -3173,6 +3174,138 @@ fn to_optional_margin(
         GenericMargin::LengthPercentage(lp) => lp.to_length().map(|length| length.px()),
         _ => None,
     }
+}
+
+/// What `values` holds that only layout can turn into a number: a percentage
+/// where this crate keeps no percentage (the properties that have one
+/// natively are the exception for a plain one), a math function over one, and
+/// the keywords naming a size that depends on content or room.
+fn to_deferred(values: &ComputedValues) -> Vec<crate::cascade::Deferred> {
+    use crate::cascade::DeferredSlot as Slot;
+    use style::values::computed::LengthPercentage;
+    use style::values::generics::NonNegative;
+    use style::values::generics::length::{GenericMargin, GenericMaxSize, GenericSize};
+    use style::values::generics::position::GenericInset;
+
+    type Out = Vec<crate::cascade::Deferred>;
+
+    fn math(out: &mut Out, slot: Slot, lp: &LengthPercentage) {
+        let natively = matches!(
+            slot,
+            Slot::Width
+                | Slot::Height
+                | Slot::MinWidth
+                | Slot::MinHeight
+                | Slot::InsetTop
+                | Slot::InsetRight
+                | Slot::InsetBottom
+                | Slot::InsetLeft
+        );
+        if lp.has_percentage() && !(natively && lp.to_percentage().is_some()) {
+            out.push(crate::cascade::Deferred {
+                slot,
+                value: crate::cascade::DeferredValue::Math(crate::cascade::Calc::new(lp)),
+            });
+        }
+    }
+
+    fn keyword(out: &mut Out, slot: Slot, keyword: crate::cascade::SizeKeyword) {
+        out.push(crate::cascade::Deferred {
+            slot,
+            value: crate::cascade::DeferredValue::Keyword(keyword),
+        });
+    }
+
+    fn fit_content_of(out: &mut Out, slot: Slot, lp: &LengthPercentage) {
+        out.push(crate::cascade::Deferred {
+            slot,
+            value: crate::cascade::DeferredValue::FitContentOf(crate::cascade::Calc::new(lp)),
+        });
+    }
+
+    fn size(out: &mut Out, slot: Slot, value: &GenericSize<NonNegative<LengthPercentage>>) {
+        use crate::cascade::SizeKeyword as K;
+        match value {
+            GenericSize::LengthPercentage(lp) => math(out, slot, &lp.0),
+            GenericSize::MaxContent => keyword(out, slot, K::MaxContent),
+            GenericSize::MinContent => keyword(out, slot, K::MinContent),
+            GenericSize::FitContent => keyword(out, slot, K::FitContent),
+            GenericSize::Stretch | GenericSize::WebkitFillAvailable => {
+                keyword(out, slot, K::Stretch)
+            }
+            GenericSize::FitContentFunction(lp) => fit_content_of(out, slot, &lp.0),
+            _ => {}
+        }
+    }
+
+    fn max_size(out: &mut Out, slot: Slot, value: &GenericMaxSize<NonNegative<LengthPercentage>>) {
+        use crate::cascade::SizeKeyword as K;
+        match value {
+            GenericMaxSize::LengthPercentage(lp) => math(out, slot, &lp.0),
+            GenericMaxSize::MaxContent => keyword(out, slot, K::MaxContent),
+            GenericMaxSize::MinContent => keyword(out, slot, K::MinContent),
+            GenericMaxSize::FitContent => keyword(out, slot, K::FitContent),
+            GenericMaxSize::Stretch | GenericMaxSize::WebkitFillAvailable => {
+                keyword(out, slot, K::Stretch)
+            }
+            GenericMaxSize::FitContentFunction(lp) => fit_content_of(out, slot, &lp.0),
+            _ => {}
+        }
+    }
+
+    let position = values.get_position();
+    let margin = values.get_margin();
+    let padding = values.get_padding();
+    let mut out = Out::new();
+    size(&mut out, Slot::Width, &position.width);
+    size(&mut out, Slot::Height, &position.height);
+    size(&mut out, Slot::MinWidth, &position.min_width);
+    size(&mut out, Slot::MinHeight, &position.min_height);
+    max_size(&mut out, Slot::MaxWidth, &position.max_width);
+    max_size(&mut out, Slot::MaxHeight, &position.max_height);
+    if let style::values::generics::flex::GenericFlexBasis::Size(basis) = &position.flex_basis {
+        size(&mut out, Slot::FlexBasis, basis);
+    }
+    for (slot, value) in [
+        (Slot::MarginTop, &margin.margin_top),
+        (Slot::MarginRight, &margin.margin_right),
+        (Slot::MarginBottom, &margin.margin_bottom),
+        (Slot::MarginLeft, &margin.margin_left),
+    ] {
+        if let GenericMargin::LengthPercentage(lp) = value {
+            math(&mut out, slot, lp);
+        }
+    }
+    for (slot, value) in [
+        (Slot::PaddingTop, &padding.padding_top),
+        (Slot::PaddingRight, &padding.padding_right),
+        (Slot::PaddingBottom, &padding.padding_bottom),
+        (Slot::PaddingLeft, &padding.padding_left),
+    ] {
+        math(&mut out, slot, &value.0);
+    }
+    for (slot, value) in [
+        (Slot::InsetTop, &position.top),
+        (Slot::InsetRight, &position.right),
+        (Slot::InsetBottom, &position.bottom),
+        (Slot::InsetLeft, &position.left),
+    ] {
+        if let GenericInset::LengthPercentage(lp) = value {
+            math(&mut out, slot, lp);
+        }
+    }
+    for (slot, value) in [
+        (Slot::ColumnGap, &position.column_gap),
+        (Slot::RowGap, &position.row_gap),
+    ] {
+        if let style::values::generics::length::GenericLengthPercentageOrNormal::LengthPercentage(
+            lp,
+        ) = value
+        {
+            math(&mut out, slot, &lp.0);
+        }
+    }
+    out
 }
 
 fn to_visibility(
