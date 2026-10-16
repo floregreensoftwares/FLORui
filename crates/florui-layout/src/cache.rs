@@ -20,8 +20,9 @@ pub struct LayoutCache {
     /// The Taffy node of each arena node laid out last time, by arena id.
     slots: Vec<Option<Slot>>,
     /// The synthetic block wrapping the roots of the document and of the
-    /// overlays, which Taffy lays out as two separate trees.
-    groups: [Option<Group>; 2],
+    /// overlays, which Taffy lays out as two separate trees, and the one
+    /// holding the boxes fixed to the viewport.
+    groups: [Option<Group>; 3],
     /// The fonts the cached measures were made with.
     font_generation: u64,
     /// Which layout last wrote a slot; a slot that is older is gone.
@@ -85,7 +86,7 @@ impl LayoutCache {
         LayoutCache {
             tree,
             slots: Vec::new(),
-            groups: [None, None],
+            groups: [None, None, None],
             font_generation: 0,
             epoch: 0,
             styles: None,
@@ -213,6 +214,10 @@ impl LayoutCache {
         }
 
         let mut inline_leaves: Vec<(NodeId, InlineContext)> = Vec::new();
+        let flow_root = taffy::Style {
+            display: Display::Block,
+            ..Default::default()
+        };
         self.sync_group(
             0,
             font,
@@ -220,6 +225,7 @@ impl LayoutCache {
             styles,
             arena.document_roots(),
             &mut inline_leaves,
+            &flow_root,
         )
         .map_err(LayoutError)?;
         self.sync_group(
@@ -229,6 +235,18 @@ impl LayoutCache {
             styles,
             arena.overlay_roots(),
             &mut inline_leaves,
+            &flow_root,
+        )
+        .map_err(LayoutError)?;
+        let fixed = viewport_fixed_nodes(arena, styles);
+        self.sync_group(
+            2,
+            font,
+            arena,
+            styles,
+            &fixed,
+            &mut inline_leaves,
+            &viewport_root_style(available),
         )
         .map_err(LayoutError)?;
         self.drop_unused().map_err(LayoutError)?;
@@ -251,6 +269,7 @@ impl LayoutCache {
                 .filter_map(|(node, slot)| slot.as_ref().map(|slot| (node, slot.id)))
                 .chain(anonymous.iter().map(|(&key, &id)| (key, id))),
             &inline_leaves,
+            &fixed,
             |node| {
                 if is_anonymous(node) {
                     anonymous[&node]
@@ -264,7 +283,9 @@ impl LayoutCache {
     }
 
     /// Brings the Taffy nodes of `roots` and everything under them to what
-    /// the arena says, and the group wrapping them to hold exactly them.
+    /// the arena says, and the group wrapping them to hold exactly them (but
+    /// for the ones fixed to the viewport, which the group of those holds).
+    #[allow(clippy::too_many_arguments)]
     fn sync_group(
         &mut self,
         group: usize,
@@ -273,6 +294,7 @@ impl LayoutCache {
         styles: &StyleMap,
         roots: &[NodeId],
         inline_leaves: &mut Vec<(NodeId, InlineContext)>,
+        style: &taffy::Style,
     ) -> Result<(), taffy::TaffyError> {
         if roots.is_empty() {
             if let Some(unused) = self.groups[group].take() {
@@ -283,19 +305,23 @@ impl LayoutCache {
         for &root in roots {
             self.sync_subtree(font, arena, styles, root, inline_leaves)?;
         }
-        let children: Vec<taffy::NodeId> = roots.iter().map(|&root| self.id_of(root)).collect();
+        let children: Vec<taffy::NodeId> = roots
+            .iter()
+            .filter(|&&root| group == 2 || !is_viewport_fixed(arena, styles, root))
+            .map(|&root| self.id_of(root))
+            .collect();
         match &mut self.groups[group] {
             Some(existing) => {
                 if existing.children != children {
                     self.tree.set_children(existing.id, &children)?;
                     existing.children = children;
                 }
+                if self.tree.style(existing.id)? != style {
+                    self.tree.set_style(existing.id, style.clone())?;
+                }
             }
             slot @ None => {
-                let id = self.tree.new_leaf(taffy::Style {
-                    display: Display::Block,
-                    ..Default::default()
-                })?;
+                let id = self.tree.new_leaf(style.clone())?;
                 self.tree.set_children(id, &children)?;
                 *slot = Some(Group { id, children });
             }
@@ -349,7 +375,7 @@ impl LayoutCache {
                             .iter()
                             .filter_map(|part| match part {
                                 Part::Block(child) => Some(*child),
-                                Part::Run(_) => None,
+                                Part::Run(_) | Part::Spot(_) => None,
                             })
                             .collect();
                         stack.push(Step::BuildMixed(node, parts));
@@ -359,7 +385,9 @@ impl LayoutCache {
                     } else {
                         stack.push(Step::Build(node));
                         for &child in arena_children.iter().rev() {
-                            stack.push(Step::Visit(child));
+                            if !is_viewport_fixed(arena, styles, child) {
+                                stack.push(Step::Visit(child));
+                            }
                         }
                     }
                 }
@@ -369,6 +397,11 @@ impl LayoutCache {
                     for part in &parts {
                         match part {
                             Part::Block(child) => children.push(self.id_of(*child)),
+                            Part::Spot(fixed) => {
+                                let spot = self.tree.new_leaf(static_spot_style())?;
+                                self.anonymous.insert(static_spot_id(*fixed), spot);
+                                children.push(spot);
+                            }
                             Part::Run(range) => {
                                 let context = build_run_content_items(
                                     font,
@@ -402,16 +435,21 @@ impl LayoutCache {
                     )?;
                 }
                 Step::Build(node) => {
-                    let children: Vec<taffy::NodeId> = arena
-                        .children(node)
-                        .iter()
-                        .map(|&child| self.id_of(child))
-                        .collect();
-                    let children_are_new = arena.children(node).iter().all(|&child| {
-                        self.slots[child]
+                    let mut children: Vec<taffy::NodeId> =
+                        Vec::with_capacity(arena.children(node).len());
+                    let mut children_are_new = true;
+                    for &child in arena.children(node) {
+                        if is_viewport_fixed(arena, styles, child) {
+                            let spot = self.tree.new_leaf(static_spot_style())?;
+                            self.anonymous.insert(static_spot_id(child), spot);
+                            children.push(spot);
+                            continue;
+                        }
+                        children.push(self.id_of(child));
+                        children_are_new &= self.slots[child]
                             .as_ref()
-                            .is_some_and(|slot| slot.created == self.epoch)
-                    });
+                            .is_some_and(|slot| slot.created == self.epoch);
+                    }
                     self.place(
                         node,
                         to_taffy_style(styles.get(&node)),

@@ -888,7 +888,8 @@ impl UiRuntime {
         if offsets.values().all(|&offset| offset == (0.0, 0.0)) {
             return florui_layout::hit_test(&self.arena, &self.layouts, &self.styles, x, y);
         }
-        let scrolled = florui_layout::apply_scroll_offsets(&self.arena, &self.layouts, &offsets);
+        let scrolled =
+            florui_layout::apply_scroll_offsets(&self.arena, &self.layouts, &offsets, &self.styles);
         florui_layout::hit_test(&self.arena, &scrolled, &self.styles, x, y)
     }
 
@@ -896,12 +897,19 @@ impl UiRuntime {
     /// by every scrolled ancestor's offset, for comparing against a pointer.
     pub(crate) fn drawn_position(&self, node: NodeId) -> (f32, f32) {
         let (mut x, mut y) = florui_layout::absolute_position(&self.arena, &self.layouts, node);
+        if florui_layout::is_viewport_fixed(&self.arena, &self.styles, node) {
+            return (x, y);
+        }
         let mut current = self.arena.parent(node);
         while let Some(ancestor) = current {
             if let Some(id) = self.arena.id_attr(ancestor) {
                 let (offset_x, offset_y) = self.scroll_registry.current_offset(id);
                 x -= offset_x;
                 y -= offset_y;
+            }
+            // What is above a fixed box does not move it.
+            if florui_layout::is_viewport_fixed(&self.arena, &self.styles, ancestor) {
+                break;
             }
             current = self.arena.parent(ancestor);
         }
