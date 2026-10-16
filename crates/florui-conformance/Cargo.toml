@@ -13,6 +13,7 @@ chromiumoxide = "0.9.1"
 florui = { path = "../florui" }
 florui-layout = { path = "../florui-layout" }
 florui-paint = { path = "../florui-paint" }
+florui-primitives = { path = "../florui-primitives" }
 florui-style = { path = "../florui-style" }
 florui-text = { path = "../florui-text" }
 taffy = "0.14"
