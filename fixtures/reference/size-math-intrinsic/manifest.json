@@ -1,0 +1,27 @@
+{
+  "id": "size-math-intrinsic",
+  "description": "Widths written with clamp, min, max and calc over a percentage, percentages in max-width and margin, and the intrinsic keywords",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": { "width_css_px": 220, "height_css_px": 260, "device_pixel_ratio": 1 },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "wrap",
+    "css": ".wrap { width: 200px; background-color: #223; } .wrap > div { height: 12px; margin-bottom: 3px; background-color: #556; } .clamp { width: clamp(50px, 30%, 100px); } .min { width: min(80%, 120px); background-color: #e85 !important; } .max { width: max(20%, 30px); } .calc { width: calc(50% - 10px); background-color: #4c8 !important; } .maxw { width: 100%; max-width: 30%; } .margin { margin-left: 10%; background-color: #48c !important; } .fit { color: transparent; width: fit-content; height: auto !important; background-color: #a4b !important; } .maxc { color: transparent; width: max-content; height: auto !important; background-color: #fc0 !important; } .minc { color: transparent; width: min-content; height: auto !important; background-color: #e33 !important; } .stretch { width: stretch; margin-left: 20px; }",
+    "children": [
+      { "tag": "div", "class": "clamp", "css": "" },
+      { "tag": "div", "class": "min", "css": "" },
+      { "tag": "div", "class": "max", "css": "" },
+      { "tag": "div", "class": "calc", "css": "" },
+      { "tag": "div", "class": "maxw", "css": "" },
+      { "tag": "div", "class": "margin", "css": "" },
+      { "tag": "div", "class": "fit", "css": "", "text": "alpha beta" },
+      { "tag": "div", "class": "maxc", "css": "", "text": "alpha beta gamma delta" },
+      { "tag": "div", "class": "minc", "css": "", "text": "alpha beta gamma" },
+      { "tag": "div", "class": "stretch", "css": "" }
+    ]
+  },
+  "classification": { "kind": "exact" }
+}
