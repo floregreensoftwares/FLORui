@@ -1,0 +1,34 @@
+{
+  "id": "visibility-hidden",
+  "description": "A box with visibility hidden keeps its space and draws nothing; a descendant that is visible again still draws",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 140,
+    "height_css_px": 160,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "wrap",
+    "css": ".wrap { width: 120px; padding: 10px; background-color: #223; } .a, .b, .c { width: 100px; height: 30px; background-color: #556; border: 3px solid #fff; box-shadow: 4px 4px 0 #e85; } .c { background-color: #4c8; } .b { visibility: hidden; background-color: #e33; } .shown { visibility: visible; width: 40px; height: 12px; background-color: #48c; } .inherits { width: 40px; height: 12px; background-color: #fc0; }",
+    "children": [
+      { "tag": "div", "class": "a", "css": "" },
+      {
+        "tag": "div",
+        "class": "b",
+        "css": "",
+        "children": [
+          { "tag": "div", "class": "shown", "css": "" },
+          { "tag": "div", "class": "inherits", "css": "" }
+        ]
+      },
+      { "tag": "div", "class": "c", "css": "" }
+    ]
+  },
+  "classification": {
+    "kind": "exact"
+  }
+}
