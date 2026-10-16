@@ -220,13 +220,11 @@ impl ChromiumDriver {
                 builder = builder.arg(switch.trim_start_matches("--"));
             }
         }
-        // Chromium on Linux draws text with subpixel anti-aliasing where the
-        // background is opaque; Florui draws it in grayscale, as Chromium does
-        // on Windows, so the comparison asks for the same.
-        #[cfg(target_os = "linux")]
-        {
-            builder = builder.arg("disable-lcd-text");
-        }
+        // Chromium draws text with subpixel anti-aliasing where the background
+        // is opaque, on Windows as on Linux (measured: the pixels of a glyph
+        // edge differ per color channel); Florui draws it in grayscale, so the
+        // comparison asks for the same.
+        builder = builder.arg("disable-lcd-text");
         let config = builder
             .build()
             .map_err(|message| DriverError::Configure { message })?;
