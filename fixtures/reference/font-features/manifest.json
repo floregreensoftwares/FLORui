@@ -1,0 +1,67 @@
+{
+    "id":  "font-features",
+    "description":  "OpenType features from font-variant-numeric, -ligatures, font-feature-settings and font-kerning, and font-variation-settings axes",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  300,
+                     "height_css_px":  220,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { display: inline-block; background-color: #e8ecff; color: #112233; font-size: 20px; } .tnum { font-variant-numeric: tabular-nums; } .noliga { font-variant-ligatures: none; } .feat { font-feature-settings: \"tnum\" 1, \"case\" 1; } .kern { font-kerning: none; } .var { font-variation-settings: \"wght\" 700; } .var-w { font-variation-settings: \"wdth\" 75; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "tnum",
+                                        "css":  "",
+                                        "text":  "1111 0000 1.1.1"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "noliga",
+                                        "css":  "",
+                                        "text":  "fi ffl fl fj ffi"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "feat",
+                                        "css":  "",
+                                        "text":  "(A) 1111 [b]"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "kern",
+                                        "css":  "",
+                                        "text":  "AVAVA To Ty Wa"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "var",
+                                        "css":  "",
+                                        "text":  "Variation wght"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "var-w",
+                                        "css":  "",
+                                        "text":  "Variation wdth"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "css":  "",
+                                        "text":  "1111 0000 1.1.1 fi ffl AVAVA To"
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  10.9,
+                           "geometry_tolerance_px":  1.5,
+                           "reason":  "Measured against Chromium 153 on Windows: 10.22% of the pixels differ and the box is the same size; what is left is the two engines\u0027 glyph rasterization, as in the other text fixtures. Without the properties the same fixture measures 11.75%, so it fails."
+                       }
+}

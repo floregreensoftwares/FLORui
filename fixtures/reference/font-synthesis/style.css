@@ -1,0 +1,7 @@
+.wrap { width: 330px; background-color: #e8ecff; color: #112233; font-family: "Fira Mono"; font-size: 18px; }
+.b { font-weight: 700; }
+.i { font-style: italic; }
+.bi { font-weight: 700; font-style: italic; }
+.none { font-weight: 700; font-style: italic; font-synthesis: none; }
+.small { font-variant-caps: small-caps; }
+.smallnone { font-variant-caps: small-caps; font-synthesis: none; }

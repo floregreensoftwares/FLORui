@@ -1,0 +1,132 @@
+{
+    "id":  "text-decoration",
+    "description":  "text-decoration lines, styles, colors, thickness, offset and skip-ink, and how a decoration reaches the inline elements inside",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  360,
+                     "height_css_px":  480,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { width: 340px; background-color: #e8ecff; color: #112233; font-size: 20px; line-height: 30px; } .u { text-decoration: underline; } .o { text-decoration: overline; } .l { text-decoration: line-through; } .all { text-decoration: underline overline line-through; } .dbl { text-decoration: underline double; } .dot { text-decoration: underline dotted; } .dash { text-decoration: underline dashed; } .wavy { text-decoration: underline wavy; } .red { text-decoration: underline #c0392b; } .thick { text-decoration: underline 4px; } .offset { text-decoration: underline; text-underline-offset: 6px; } .noskip { text-decoration: underline; text-decoration-skip-ink: none; } .font { text-decoration: underline from-font; } .big { font-size: 32px; line-height: 40px; text-decoration: underline; } .outer { text-decoration: underline #c0392b; } .inner { color: #27ae60; } .own { text-decoration: line-through #2980b9; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "u",
+                                        "css":  "",
+                                        "text":  "Underline gypsy jqp Hag"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "o",
+                                        "css":  "",
+                                        "text":  "Overline gypsy jqp Hag"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "l",
+                                        "css":  "",
+                                        "text":  "Line-through gypsy jqp"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "all",
+                                        "css":  "",
+                                        "text":  "All three lines gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "dbl",
+                                        "css":  "",
+                                        "text":  "Double underline gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "dot",
+                                        "css":  "",
+                                        "text":  "Dotted underline gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "dash",
+                                        "css":  "",
+                                        "text":  "Dashed underline gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "wavy",
+                                        "css":  "",
+                                        "text":  "Wavy underline gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "red",
+                                        "css":  "",
+                                        "text":  "Colored underline gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "thick",
+                                        "css":  "",
+                                        "text":  "Thick underline gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "offset",
+                                        "css":  "",
+                                        "text":  "Offset underline gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "noskip",
+                                        "css":  "",
+                                        "text":  "No skip ink gypsy jqp"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "font",
+                                        "css":  "",
+                                        "text":  "From font gypsy jqp"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "big",
+                                        "css":  "",
+                                        "text":  "Big underline gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "outer",
+                                        "css":  "",
+                                        "children":  [
+                                                         "outer ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "inner",
+                                                             "css":  "",
+                                                             "text":  "inner green"
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "own",
+                                                             "css":  "",
+                                                             "text":  "own strike"
+                                                         },
+                                                         " end"
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  14.5,
+                           "geometry_tolerance_px":  1.5,
+                           "reason":  "Measured against Chromium 153 on Windows: 13.81% of the pixels differ and the box is the same size; the lines (their rows, thickness, color, the stretches skip-ink leaves out, the dotted and double forms) land on Chromium\u0027s pixels, and what is left is the two engines\u0027 glyph rasterization and the shape of the dashes and the wave. Without the properties the same fixture measures 17.39%, so it fails."
+                       }
+}
