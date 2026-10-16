@@ -75,6 +75,11 @@ pub(crate) struct AccessibilityTree {
     /// The name of the window node. Windows names a window from its HWND, so
     /// only hosts without that give it one here.
     window_label: Option<String>,
+    /// Nodes that are `display: none`, which assistive technology never sees.
+    removed: HashSet<NodeId>,
+    /// Nodes that are not visible, and whether a visible node lies beneath:
+    /// one that does keeps its place in the tree but loses its own meaning.
+    invisible: HashMap<NodeId, bool>,
     /// How many trees this has built, for tests that check one was not.
     #[cfg(test)]
     builds: u64,
@@ -87,8 +92,34 @@ impl AccessibilityTree {
             next_id: 1,
             identity: None,
             window_label: None,
+            removed: HashSet::new(),
+            invisible: HashMap::new(),
             #[cfg(test)]
             builds: 0,
+        }
+    }
+
+    /// Tells the next [`Self::build`] which nodes the styles keep from view:
+    /// `display: none` removes a node, `visibility: hidden` takes away its
+    /// meaning (and its place too, when nothing beneath it shows).
+    pub(crate) fn set_styles(&mut self, arena: &Arena, styles: &florui_style::StyleMap) {
+        self.removed.clear();
+        self.invisible.clear();
+        let nodes = arena.find_all(|_, _| true);
+        // Document order puts a parent before its children, so walking it
+        // backwards sees every child first.
+        let mut shows = vec![false; nodes.iter().max().map_or(0, |&last| last + 1)];
+        for &node in nodes.iter().rev() {
+            let style = styles.get(&node);
+            if style.is_some_and(|s| s.display == florui_style::Display::None) {
+                self.removed.insert(node);
+                continue;
+            }
+            let below = arena.children(node).iter().any(|&child| shows[child]);
+            if style.is_some_and(|s| !s.visibility.is_visible()) {
+                self.invisible.insert(node, below);
+            }
+            shows[node] = below || style.is_none_or(|s| s.visibility.is_visible());
         }
     }
 
@@ -579,6 +610,18 @@ impl AccessibilityTree {
             .collect();
         node.set_children(child_ids);
 
+        if self.removed.contains(&id) {
+            node.set_hidden();
+        } else if let Some(&shows_below) = self.invisible.get(&id) {
+            if shows_below {
+                let children = node.children().to_vec();
+                node = Node::new(Role::GenericContainer);
+                node.set_children(children);
+            } else {
+                node.set_hidden();
+            }
+        }
+
         if position.len() <= id {
             position.resize(id + 1, usize::MAX);
         }
@@ -968,6 +1011,47 @@ mod tests {
         let ak_id = *reverse.iter().find(|&(_, &n)| n == hidden).unwrap().0;
         let node = &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1;
         assert!(node.is_hidden());
+    }
+
+    #[test]
+    fn display_none_and_visibility_hidden_take_a_node_out_of_the_accessibility_tree() {
+        let tree: Element = view! {
+            <div>
+                <button id="gone">"Gone"</button>
+                <button id="hid">"Hidden"</button>
+                <div id="wrap"><button id="shown">"Shown"</button></div>
+                <button id="plain">"Plain"</button>
+            </div>
+        };
+        let css = "#gone { display: none; } #hid { visibility: hidden; } \
+                   #wrap { visibility: hidden; } #shown { visibility: visible; }";
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut ak_tree = AccessibilityTree::new();
+        ak_tree.set_styles(&arena, &styles);
+        let (update, reverse) =
+            ak_tree.build(&arena, None, &NodeBounds::new(), &InteractionState::new());
+        let node_of = |name: &str| {
+            let node = arena.find(|a, id| a.id_attr(id) == Some(name)).unwrap();
+            let ak_id = *reverse.iter().find(|&(_, &n)| n == node).unwrap().0;
+            &update.nodes.iter().find(|(id, _)| *id == ak_id).unwrap().1
+        };
+        assert!(node_of("gone").is_hidden());
+        assert!(node_of("hid").is_hidden());
+        assert!(!node_of("plain").is_hidden());
+        assert_eq!(node_of("plain").role(), Role::Button);
+        // Visible beneath a hidden parent: the parent keeps its place only.
+        assert!(!node_of("wrap").is_hidden());
+        assert_eq!(node_of("wrap").role(), Role::GenericContainer);
+        assert!(!node_of("shown").is_hidden());
+        assert_eq!(node_of("shown").role(), Role::Button);
     }
 
     #[test]

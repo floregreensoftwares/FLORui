@@ -578,6 +578,7 @@ impl HeadlessWindow {
         let accessibility: Vec<A11yNode> = if !self.assistive_technology {
             Vec::new()
         } else {
+            self.accessibility_tree.set_styles(arena, styles);
             let (update, reverse) =
                 self.accessibility_tree
                     .build(arena, focused, &bounds, interaction);

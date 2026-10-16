@@ -981,11 +981,11 @@ impl UiRuntime {
     }
 
     fn step_focus(&mut self, direction: isize) -> bool {
-        let order = focus::tab_stops(
-            &self.arena,
-            &focus::focus_candidates(&self.arena),
-            self.focused_node,
-        );
+        let candidates: Vec<NodeId> = focus::focus_candidates(&self.arena)
+            .into_iter()
+            .filter(|&id| focus::is_rendered(&self.arena, &self.styles, id))
+            .collect();
+        let order = focus::tab_stops(&self.arena, &candidates, self.focused_node);
         if order.is_empty() {
             return self.set_focused(None, true);
         }
@@ -3024,6 +3024,36 @@ mod tests {
             "tabbing past the last element must wrap back to the first"
         );
         assert_eq!(runtime.focused(), Some(a));
+    }
+
+    #[test]
+    fn tab_skips_a_hidden_control_and_one_inside_display_none() {
+        let rules =
+            florui_style::parse_stylesheet("#b { visibility: hidden; } #gone { display: none; }")
+                .unwrap();
+        let mut runtime = UiRuntime::with_rules(
+            rules,
+            || {
+                view! {
+                    <div>
+                        <button id="a" />
+                        <button id="b" />
+                        <div id="gone"><button id="inside" /></div>
+                        <button id="c" />
+                    </div>
+                }
+            },
+            viewport(),
+        );
+        let (a, c) = (node_id(&runtime, "a"), node_id(&runtime, "c"));
+        assert!(runtime.focus_next());
+        assert_eq!(runtime.focused(), Some(a));
+        assert!(runtime.focus_next());
+        assert_eq!(
+            runtime.focused(),
+            Some(c),
+            "hidden and display: none are skipped"
+        );
     }
 
     #[test]
