@@ -208,11 +208,46 @@ fn leaf_text(arena: &Tree, node: NodeId) -> &str {
 /// this exact translation too (an editable input's caret/selection ops
 /// reshape through the same font a plain text node would) — one shared
 /// mapping, not a second copy reimplementing it.
-pub fn to_text_font_family(value: florui_style::FontFamily) -> florui_text::FontFamily {
+pub fn to_text_font_family(value: &florui_style::FontFamily) -> florui_text::FontFamily {
     match value {
         florui_style::FontFamily::SansSerif => florui_text::FontFamily::SansSerif,
         florui_style::FontFamily::Monospace => florui_text::FontFamily::Monospace,
+        florui_style::FontFamily::Stack(css) => {
+            florui_text::FontFamily::Stack(interned(Interned::Family, css))
+        }
     }
+}
+
+/// The lists a style names that [`florui_text`] keeps once under a number.
+#[derive(Clone, Copy)]
+enum Interned {
+    Family,
+    Features,
+    Variations,
+}
+
+/// The number of `css` in `florui_text`, found without taking its lock when
+/// this thread has asked before: text styles are made for every node.
+fn interned(kind: Interned, css: &std::sync::Arc<str>) -> u32 {
+    use std::cell::RefCell;
+    thread_local! {
+        static KNOWN: RefCell<[HashMap<std::sync::Arc<str>, u32>; 3]> =
+            RefCell::new([HashMap::new(), HashMap::new(), HashMap::new()]);
+    }
+    KNOWN.with(|known| {
+        let mut known = known.borrow_mut();
+        let table = &mut known[kind as usize];
+        if let Some(&id) = table.get(&**css) {
+            return id;
+        }
+        let id = match kind {
+            Interned::Family => florui_text::intern_family_stack(css),
+            Interned::Features => florui_text::intern_features(css),
+            Interned::Variations => florui_text::intern_variations(css),
+        };
+        table.insert(css.clone(), id);
+        id
+    })
 }
 
 /// What a node's own text is shaped with: the one place a computed style
@@ -249,9 +284,48 @@ pub fn text_style_of(style: &ComputedStyle) -> florui_text::TextStyle {
         },
     };
     florui_text::TextStyle::new(
-        to_text_font_family(style.font_family),
+        to_text_font_family(&style.font_family),
         style.font_size,
         style.font_weight,
+    )
+    .with_font_style(match style.font_style {
+        florui_style::FontStyle::Normal => florui_text::FontStyle::Normal,
+        florui_style::FontStyle::Italic => florui_text::FontStyle::Italic,
+        florui_style::FontStyle::Oblique(degrees) => florui_text::FontStyle::Oblique(degrees),
+    })
+    .with_transform(florui_text::TextTransform {
+        case: match style.text_transform.case {
+            florui_style::TextCase::None => florui_text::TextCase::None,
+            florui_style::TextCase::Uppercase => florui_text::TextCase::Uppercase,
+            florui_style::TextCase::Lowercase => florui_text::TextCase::Lowercase,
+            florui_style::TextCase::Capitalize => florui_text::TextCase::Capitalize,
+        },
+        full_width: style.text_transform.full_width,
+        full_size_kana: style.text_transform.full_size_kana,
+    })
+    .with_caps(match style.font_variant_caps {
+        florui_style::FontVariantCaps::Normal => florui_text::FontCaps::Normal,
+        florui_style::FontVariantCaps::SmallCaps => florui_text::FontCaps::SmallCaps,
+        florui_style::FontVariantCaps::AllSmallCaps => florui_text::FontCaps::AllSmallCaps,
+        florui_style::FontVariantCaps::PetiteCaps => florui_text::FontCaps::PetiteCaps,
+        florui_style::FontVariantCaps::AllPetiteCaps => florui_text::FontCaps::AllPetiteCaps,
+        florui_style::FontVariantCaps::Unicase => florui_text::FontCaps::Unicase,
+        florui_style::FontVariantCaps::TitlingCaps => florui_text::FontCaps::TitlingCaps,
+    })
+    .with_no_synthesis(
+        (florui_text::NO_SYNTHETIC_STYLE * u8::from(!style.font_synthesis.style))
+            | (florui_text::NO_SYNTHETIC_CAPS * u8::from(!style.font_synthesis.small_caps))
+            | (florui_text::NO_SYNTHETIC_WEIGHT * u8::from(!style.font_synthesis.weight)),
+    )
+    .with_font_settings(
+        style
+            .font_features
+            .as_ref()
+            .map_or(0, |css| interned(Interned::Features, css)),
+        style
+            .font_variations
+            .as_ref()
+            .map_or(0, |css| interned(Interned::Variations, css)),
     )
     .with_line_height(line_height)
     .with_spacing(style.letter_spacing, style.word_spacing)
@@ -3416,7 +3490,7 @@ fn natural_width(
     if arena.children(node).is_empty() {
         let text = leaf_text(arena, node);
         if !text.is_empty() {
-            let family = to_text_font_family(style.font_family);
+            let family = to_text_font_family(&style.font_family);
             return font
                 .measure(
                     florui_text::TextStyle::new(family, style.font_size, style.font_weight),
@@ -3452,7 +3526,7 @@ fn natural_height(
     if arena.children(node).is_empty() {
         let text = leaf_text(arena, node);
         if !text.is_empty() {
-            let family = to_text_font_family(style.font_family);
+            let family = to_text_font_family(&style.font_family);
             return font
                 .measure_wrapped(
                     florui_text::TextStyle::new(family, style.font_size, style.font_weight),
@@ -6176,7 +6250,7 @@ mod tests {
         let node = arena.roots()[0];
 
         let expected = florui_text::Font::load_embedded().measure(
-            florui_text::TextStyle::new(florui_text::FontFamily::Monospace, 16.0, 400.0),
+            florui_text::TextStyle::new(florui_text::FontFamily::Monospace, 13.0, 400.0),
             "AAAAA",
         );
         assert_close(layouts[&node].width, expected.width);

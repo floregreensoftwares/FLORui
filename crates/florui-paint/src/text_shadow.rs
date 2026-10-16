@@ -38,6 +38,7 @@ pub(crate) fn paint(
             x + shadow.offset_x * scale_factor,
             y + shadow.offset_y * scale_factor,
             scale_factor,
+            None,
         );
         let Some(path) = builder.finish() else {
             continue;
