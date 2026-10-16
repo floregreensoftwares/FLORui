@@ -1113,6 +1113,10 @@ fn parse_inline_style(css: &str) -> Arc<Locked<PropertyDeclarationBlock>> {
         std::borrow::Cow::Owned(rewritten) => std::borrow::Cow::Owned(rewritten),
         std::borrow::Cow::Borrowed(_) => css,
     };
+    let css = match crate::property_mirror::rewrite_declarations(&css) {
+        std::borrow::Cow::Owned(rewritten) => std::borrow::Cow::Owned(rewritten),
+        std::borrow::Cow::Borrowed(_) => css,
+    };
     let url_data: style::stylesheets::UrlExtraData = url::Url::parse("about:florui")
         .expect("a fixed, valid URL literal")
         .into();
@@ -1782,7 +1786,8 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
     // `currentcolor` reference resolve against it, rather than an
     // arbitrary fallback.
     let color = to_absolute_rgba(&text.color);
-    let font_size = style::values::computed::Length::new(font.font_size.computed_size.0.px());
+    let font_size_px = effective_font_size(font);
+    let font_size = style::values::computed::Length::new(font_size_px);
 
     ComputedStyle {
         background_color: background
@@ -1813,7 +1818,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
             bottom: to_length(&padding.padding_bottom),
             left: to_length(&padding.padding_left),
         },
-        font_size: font.font_size.computed_size.0.px(),
+        font_size: font_size_px,
         font_weight: font.font_weight.value(),
         line_height: to_line_height(&font.line_height),
         letter_spacing: text.letter_spacing.0.resolve(font_size).px(),
@@ -1856,14 +1861,17 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         ),
         visibility: to_visibility(values.get_inherited_box().visibility),
         deferred: to_deferred(values),
+        font_style: to_font_style(&font.font_style),
+        font_variant_caps: to_font_variant_caps(values),
+        font_synthesis: to_font_synthesis(values),
+        font_features: to_font_features(values),
+        font_variations: to_font_variations(values),
+        text_transform: to_text_transform(text.text_transform),
         text_align: to_text_align(text.text_align),
         text_shadow: to_text_shadows(&text.text_shadow.0, &text.color),
         glass: to_glass(values),
         backdrop_blur: to_backdrop_blur(values),
-        text_decoration_underline: values
-            .get_text()
-            .text_decoration_line
-            .contains(style::values::computed::TextDecorationLine::UNDERLINE),
+        text_decoration: to_text_decoration(values, font_size_px),
         cursor_pointer: matches!(
             values.get_inherited_ui().cursor.keyword,
             style::values::computed::ui::CursorKind::Pointer
@@ -1947,6 +1955,8 @@ struct FlorNames {
     glass_quality: Atom,
     backdrop_blur: Atom,
     text_indent_keywords: Atom,
+    /// The mirrored properties of [`crate::property_mirror::MIRRORED`], in its order.
+    mirrors: Vec<Atom>,
 }
 
 thread_local! {
@@ -1963,6 +1973,10 @@ thread_local! {
         glass_quality: Atom::from("florui-glass-quality"),
         backdrop_blur: Atom::from("florui-backdrop-blur"),
         text_indent_keywords: Atom::from("florui-text-indent-keywords"),
+        mirrors: crate::property_mirror::MIRRORED
+            .iter()
+            .map(|name| Atom::from(format!("florui-{name}").as_str()))
+            .collect(),
     };
 }
 
@@ -1988,6 +2002,17 @@ fn florui_property(values: &ComputedValues, name: impl Fn(&FlorNames) -> &Atom) 
         value.to_css(&mut CssWriter::new(&mut css)).ok()?;
         Some(css)
     })
+}
+
+/// The value of a property of [`crate::property_mirror::MIRRORED`], as written
+/// (and inherited like the custom property carrying it).
+fn mirrored(values: &ComputedValues, name: &str) -> Option<String> {
+    let index = crate::property_mirror::MIRRORED
+        .iter()
+        .position(|mirrored| *mirrored == name)?;
+    florui_property(values, |names| &names.mirrors[index])
+        .map(|css| css.trim().to_owned())
+        .filter(|css| !css.is_empty())
 }
 
 /// Reads `--florui-scroll-behavior`: smooth only for the exact keyword.
@@ -2976,9 +3001,53 @@ fn to_gap(
 /// [`FlorFontFamily::SansSerif`], this crate's stand-in default.
 fn to_font_family(value: &style::values::computed::font::FontFamily) -> FlorFontFamily {
     use style::values::computed::font::{GenericFontFamily, SingleFontFamily};
-    match value.families.list.first() {
-        Some(SingleFontFamily::Generic(GenericFontFamily::Monospace)) => FlorFontFamily::Monospace,
-        _ => FlorFontFamily::SansSerif,
+    let mut names: Vec<String> = Vec::new();
+    for family in value.families.list.iter() {
+        match family {
+            // The embedded fonts that stand for these two are always found,
+            // so nothing after one of them is ever reached.
+            SingleFontFamily::Generic(GenericFontFamily::Monospace) => {
+                names.push("\"Fira Mono\"".to_owned());
+                break;
+            }
+            SingleFontFamily::Generic(GenericFontFamily::SansSerif) => {
+                names.push("\"Open Sans\"".to_owned());
+                break;
+            }
+            SingleFontFamily::Generic(generic) => {
+                names.push(generic_family_keyword(generic).to_owned())
+            }
+            SingleFontFamily::FamilyName(name) => {
+                let name = name
+                    .name
+                    .to_string()
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"");
+                names.push(format!("\"{name}\""));
+            }
+        }
+    }
+    match names.as_slice() {
+        [] => FlorFontFamily::SansSerif,
+        [only] if only == "\"Open Sans\"" => FlorFontFamily::SansSerif,
+        [only] if only == "\"Fira Mono\"" => FlorFontFamily::Monospace,
+        _ => FlorFontFamily::Stack(std::sync::Arc::from(names.join(", ").as_str())),
+    }
+}
+
+/// The CSS keyword of a generic family the system, not the embedded fonts,
+/// answers for.
+fn generic_family_keyword(
+    generic: &style::values::computed::font::GenericFontFamily,
+) -> &'static str {
+    use style::values::computed::font::GenericFontFamily as G;
+    match generic {
+        G::Serif => "serif",
+        G::Cursive => "cursive",
+        G::Fantasy => "fantasy",
+        G::SystemUi => "system-ui",
+        G::Monospace => "monospace",
+        _ => "sans-serif",
     }
 }
 
@@ -3306,6 +3375,304 @@ fn to_deferred(values: &ComputedValues) -> Vec<crate::cascade::Deferred> {
         }
     }
     out
+}
+
+/// The size of the font in pixels. The engine's default sizes are one for
+/// every family; Chromium's `monospace` (and only a list that is exactly that
+/// one generic) has its own, smaller: a size that comes from a keyword (the
+/// initial `medium` included) is that keyword's size in the monospace table.
+fn effective_font_size(font: &style::properties::style_structs::Font) -> f32 {
+    use style::values::computed::font::{GenericFontFamily, SingleFontFamily};
+    use style::values::specified::font::FontSizeKeyword as Keyword;
+
+    let own = font.font_size.computed_size.0.px();
+    let only_monospace = matches!(
+        font.font_family.families.list.as_ref(),
+        [SingleFontFamily::Generic(GenericFontFamily::Monospace)]
+    );
+    if !only_monospace {
+        return own;
+    }
+    let info = font.font_size.keyword_info;
+    let size = match info.kw {
+        Keyword::XXSmall => 9.0,
+        Keyword::XSmall => 10.0,
+        Keyword::Small => 12.0,
+        Keyword::Medium => 13.0,
+        Keyword::Large => 16.0,
+        Keyword::XLarge => 20.0,
+        Keyword::XXLarge => 26.0,
+        Keyword::XXXLarge => 39.0,
+        _ => return own,
+    };
+    size * info.factor + info.offset.px()
+}
+
+/// A length or a percentage as the mirrored properties carry them, text:
+/// pixels (a font-relative unit resolved against `font_size`) or a fraction.
+enum CssSize {
+    Px(f32),
+    Percent(f32),
+}
+
+fn parse_css_size(css: &str, font_size: f32) -> Option<CssSize> {
+    let css = css.trim().to_ascii_lowercase();
+    let split = css.find(|c: char| c.is_ascii_alphabetic() || c == '%')?;
+    let (number, unit) = css.split_at(split);
+    let number: f32 = number.parse().ok()?;
+    let px = match unit {
+        "%" => return Some(CssSize::Percent(number / 100.0)),
+        "px" => number,
+        "em" => number * font_size,
+        "rem" => number * 16.0,
+        "ex" => number * font_size * 0.5,
+        "pt" => number * 4.0 / 3.0,
+        "pc" => number * 16.0,
+        "in" => number * 96.0,
+        "cm" => number * 96.0 / 2.54,
+        "mm" => number * 96.0 / 25.4,
+        "q" => number * 96.0 / 101.6,
+        _ => return None,
+    };
+    Some(CssSize::Px(px))
+}
+
+fn to_text_decoration(values: &ComputedValues, font_size: f32) -> crate::TextDecoration {
+    use crate::{
+        DecorationLines, DecorationStyle, DecorationThickness, SkipInk, UnderlineOffset,
+        UnderlinePosition,
+    };
+    use style::computed_values::text_decoration_style::T as Style;
+    use style::values::computed::TextDecorationLine as Line;
+
+    let own = values.get_text();
+    let line = own.text_decoration_line;
+    let word = |name: &str| {
+        mirrored(values, name)
+            .map(|css| css.to_ascii_lowercase())
+            .unwrap_or_default()
+    };
+    crate::TextDecoration {
+        lines: DecorationLines {
+            underline: line.contains(Line::UNDERLINE),
+            overline: line.contains(Line::OVERLINE),
+            line_through: line.contains(Line::LINE_THROUGH),
+        },
+        style: match own.text_decoration_style {
+            Style::Double => DecorationStyle::Double,
+            Style::Dotted => DecorationStyle::Dotted,
+            Style::Dashed => DecorationStyle::Dashed,
+            Style::Wavy => DecorationStyle::Wavy,
+            _ => DecorationStyle::Solid,
+        },
+        color: own
+            .text_decoration_color
+            .as_absolute()
+            .map(to_absolute_rgba),
+        thickness: match word("text-decoration-thickness").as_str() {
+            "from-font" => DecorationThickness::FromFont,
+            css => match parse_css_size(css, font_size) {
+                Some(CssSize::Px(px)) => DecorationThickness::Length(px),
+                Some(CssSize::Percent(fraction)) => DecorationThickness::Percent(fraction),
+                None => DecorationThickness::Auto,
+            },
+        },
+        underline_offset: match parse_css_size(&word("text-underline-offset"), font_size) {
+            Some(CssSize::Px(px)) => UnderlineOffset::Length(px),
+            Some(CssSize::Percent(fraction)) => UnderlineOffset::Percent(fraction),
+            None => UnderlineOffset::Auto,
+        },
+        skip_ink: match word("text-decoration-skip-ink").as_str() {
+            "none" => SkipInk::None,
+            "all" => SkipInk::All,
+            _ => SkipInk::Auto,
+        },
+        position: match word("text-underline-position").as_str() {
+            "under" => UnderlinePosition::Under,
+            "left" => UnderlinePosition::Left,
+            "right" => UnderlinePosition::Right,
+            _ => UnderlinePosition::Auto,
+        },
+    }
+}
+
+/// `font-synthesis` and its longhands: the shorthand says which forms are
+/// allowed (`none` none of them), a longhand then says `auto` or `none`.
+fn to_font_synthesis(values: &ComputedValues) -> crate::FontSynthesis {
+    let mut synthesis = crate::FontSynthesis::default();
+    if let Some(css) = mirrored(values, "font-synthesis") {
+        let css = css.to_ascii_lowercase();
+        let allowed = |word: &str| css.split_whitespace().any(|w| w == word);
+        let none = allowed("none");
+        synthesis = crate::FontSynthesis {
+            weight: !none && allowed("weight"),
+            style: !none && allowed("style"),
+            small_caps: !none && allowed("small-caps"),
+            position: !none && allowed("position"),
+        };
+    }
+    let longhand = |name: &str, current: bool| match mirrored(values, name)
+        .map(|css| css.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("none") => false,
+        Some("auto") => true,
+        _ => current,
+    };
+    synthesis.style = longhand("font-synthesis-style", synthesis.style);
+    synthesis.small_caps = longhand("font-synthesis-small-caps", synthesis.small_caps);
+    synthesis.position = longhand("font-synthesis-position", synthesis.position);
+    if values.get_font().font_synthesis_weight
+        == style::computed_values::font_synthesis_weight::T::None
+    {
+        synthesis.weight = false;
+    }
+    synthesis
+}
+
+fn to_font_style(value: &style::values::computed::font::FontStyle) -> crate::FontStyle {
+    use style::values::computed::font::FontStyle;
+    if *value == FontStyle::ITALIC {
+        return crate::FontStyle::Italic;
+    }
+    match value.oblique_degrees() {
+        0.0 => crate::FontStyle::Normal,
+        degrees => crate::FontStyle::Oblique(degrees),
+    }
+}
+
+fn to_text_transform(value: style::values::computed::TextTransform) -> crate::TextTransform {
+    use style::values::specified::TextTransform as Flag;
+    crate::TextTransform {
+        case: if value.contains(Flag::UPPERCASE) {
+            crate::TextCase::Uppercase
+        } else if value.contains(Flag::LOWERCASE) {
+            crate::TextCase::Lowercase
+        } else if value.contains(Flag::CAPITALIZE) {
+            crate::TextCase::Capitalize
+        } else {
+            crate::TextCase::None
+        },
+        full_width: value.contains(Flag::FULL_WIDTH),
+        full_size_kana: value.contains(Flag::FULL_SIZE_KANA),
+    }
+}
+
+/// The engine's own `font-variant-caps` knows only `normal` and `small-caps`
+/// (the `font` shorthand sets it); every declaration of the property, and of
+/// `font-variant`, is carried by the mirror, which wins when there is one.
+fn to_font_variant_caps(values: &ComputedValues) -> crate::FontVariantCaps {
+    use crate::FontVariantCaps as Caps;
+    match mirrored(values, "font-variant-caps")
+        .map(|css| css.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("small-caps") => Caps::SmallCaps,
+        Some("all-small-caps") => Caps::AllSmallCaps,
+        Some("petite-caps") => Caps::PetiteCaps,
+        Some("all-petite-caps") => Caps::AllPetiteCaps,
+        Some("unicase") => Caps::Unicase,
+        Some("titling-caps") => Caps::TitlingCaps,
+        Some("normal") => Caps::Normal,
+        _ => match values.get_font().font_variant_caps {
+            style::computed_values::font_variant_caps::T::SmallCaps => Caps::SmallCaps,
+            _ => Caps::Normal,
+        },
+    }
+}
+
+/// The OpenType features the `font-variant-*` properties, `font-kerning` and
+/// `font-feature-settings` ask for, as CSS (`"liga" 0, "tnum"`), settings
+/// last so they win.
+fn to_font_features(values: &ComputedValues) -> Option<std::sync::Arc<str>> {
+    let mut features: Vec<String> = Vec::new();
+    let mut add = |tag: &str, value: u32| features.push(format!("\"{tag}\" {value}"));
+    let words = |css: Option<String>| -> Vec<String> {
+        css.map(|css| {
+            css.split_whitespace()
+                .map(str::to_ascii_lowercase)
+                .collect()
+        })
+        .unwrap_or_default()
+    };
+    for word in words(mirrored(values, "font-variant-ligatures")) {
+        match word.as_str() {
+            "none" => {
+                add("liga", 0);
+                add("clig", 0);
+            }
+            "common-ligatures" => {
+                add("liga", 1);
+                add("clig", 1);
+            }
+            "no-common-ligatures" => {
+                add("liga", 0);
+                add("clig", 0);
+            }
+            "discretionary-ligatures" => add("dlig", 1),
+            "no-discretionary-ligatures" => add("dlig", 0),
+            "historical-ligatures" => add("hlig", 1),
+            "no-historical-ligatures" => add("hlig", 0),
+            "contextual" => add("calt", 1),
+            "no-contextual" => add("calt", 0),
+            _ => {}
+        }
+    }
+    for word in words(mirrored(values, "font-variant-numeric")) {
+        match word.as_str() {
+            "lining-nums" => add("lnum", 1),
+            "oldstyle-nums" => add("onum", 1),
+            "proportional-nums" => add("pnum", 1),
+            "tabular-nums" => add("tnum", 1),
+            "diagonal-fractions" => add("frac", 1),
+            "stacked-fractions" => add("afrc", 1),
+            "ordinal" => add("ordn", 1),
+            "slashed-zero" => add("zero", 1),
+            _ => {}
+        }
+    }
+    for word in words(mirrored(values, "font-variant-east-asian")) {
+        match word.as_str() {
+            "jis78" => add("jp78", 1),
+            "jis83" => add("jp83", 1),
+            "jis90" => add("jp90", 1),
+            "jis04" => add("jp04", 1),
+            "simplified" => add("smpl", 1),
+            "traditional" => add("trad", 1),
+            "full-width" => add("fwid", 1),
+            "proportional-width" => add("pwid", 1),
+            "ruby" => add("ruby", 1),
+            _ => {}
+        }
+    }
+    for word in words(mirrored(values, "font-variant-position")) {
+        match word.as_str() {
+            "sub" => add("subs", 1),
+            "super" => add("sups", 1),
+            _ => {}
+        }
+    }
+    match mirrored(values, "font-kerning")
+        .map(|css| css.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("none") => add("kern", 0),
+        Some("normal") => add("kern", 1),
+        _ => {}
+    }
+    if let Some(settings) = mirrored(values, "font-feature-settings")
+        && !settings.eq_ignore_ascii_case("normal")
+    {
+        features.push(settings);
+    }
+    (!features.is_empty()).then(|| std::sync::Arc::from(features.join(", ").as_str()))
+}
+
+/// `font-variation-settings`, carried by the mirror as written (`"wght" 650`).
+fn to_font_variations(values: &ComputedValues) -> Option<std::sync::Arc<str>> {
+    mirrored(values, "font-variation-settings")
+        .filter(|css| !css.eq_ignore_ascii_case("normal"))
+        .map(|css| std::sync::Arc::from(css.as_str()))
 }
 
 fn to_visibility(
