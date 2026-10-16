@@ -62,6 +62,7 @@ use taffy::prelude::*;
 use taffy::{Baselines, compute_leaf_layout};
 
 mod cache;
+mod deferred;
 mod transform;
 
 pub use cache::LayoutCache;
@@ -1322,7 +1323,7 @@ fn compute_layout_in_place(
     // see that pass's own comment for why they aren't ordinary Taffy nodes.
     let mut inline_leaves: Vec<(NodeId, InlineContext)> = Vec::new();
 
-    layout_root_group(
+    let mut group_roots = vec![layout_root_group(
         font,
         arena,
         styles,
@@ -1331,7 +1332,7 @@ fn compute_layout_in_place(
         &mut tree,
         &mut taffy_ids,
         &mut inline_leaves,
-    )?;
+    )?];
 
     // A second, independent layout pass, its own synthetic wrapper -- so
     // Taffy treats it as its own top of computation, landing at (0, 0)
@@ -1340,7 +1341,7 @@ fn compute_layout_in_place(
     // there's nothing to portal, the common case, at the cost of one
     // `is_empty` check.
     if !arena.overlay_roots().is_empty() {
-        layout_root_group(
+        group_roots.push(layout_root_group(
             font,
             arena,
             styles,
@@ -1349,11 +1350,11 @@ fn compute_layout_in_place(
             &mut tree,
             &mut taffy_ids,
             &mut inline_leaves,
-        )?;
+        )?);
     }
 
     let fixed = viewport_fixed_nodes(arena, styles);
-    layout_fixed_group(
+    group_roots.extend(layout_fixed_group(
         font,
         arena,
         styles,
@@ -1362,6 +1363,17 @@ fn compute_layout_in_place(
         &mut tree,
         &mut taffy_ids,
         &mut inline_leaves,
+    )?);
+
+    deferred::resolve(
+        font,
+        arena,
+        styles,
+        &mut tree,
+        &|node| taffy_ids.get(&node).copied(),
+        &group_roots,
+        available,
+        taffy_ids.len(),
     )?;
 
     collect_layouts(
@@ -1686,7 +1698,7 @@ fn layout_root_group(
     tree: &mut TaffyTree<LeafContext>,
     taffy_ids: &mut HashMap<NodeId, taffy::NodeId>,
     inline_leaves: &mut Vec<(NodeId, InlineContext)>,
-) -> Result<(), LayoutError> {
+) -> Result<taffy::NodeId, LayoutError> {
     for &root in roots {
         build_node(font, arena, styles, root, tree, taffy_ids, inline_leaves)
             .map_err(LayoutError)?;
@@ -1710,7 +1722,8 @@ fn layout_root_group(
         )
         .map_err(LayoutError)?;
 
-    run_layout(font, tree, synthetic_root, available, taffy_ids.len())
+    run_layout(font, tree, synthetic_root, available, taffy_ids.len())?;
+    Ok(synthetic_root)
 }
 
 /// Lays out the tree under `synthetic_root` against `available`; the half of
@@ -2498,9 +2511,9 @@ fn layout_fixed_group(
     tree: &mut TaffyTree<LeafContext>,
     taffy_ids: &mut HashMap<NodeId, taffy::NodeId>,
     inline_leaves: &mut Vec<(NodeId, InlineContext)>,
-) -> Result<(), LayoutError> {
+) -> Result<Option<taffy::NodeId>, LayoutError> {
     if fixed.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     for &node in fixed {
         if !taffy_ids.contains_key(&node) {
@@ -2512,7 +2525,8 @@ fn layout_fixed_group(
     let root = tree
         .new_with_children(viewport_root_style(available), &children)
         .map_err(LayoutError)?;
-    run_layout(font, tree, root, available, taffy_ids.len())
+    run_layout(font, tree, root, available, taffy_ids.len())?;
+    Ok(Some(root))
 }
 
 fn to_taffy_box_sizing(value: StyleBoxSizing) -> BoxSizing {
@@ -5570,6 +5584,141 @@ mod tests {
         arena
             .find(|a, id| a.classes(id).iter().any(|c| c == class))
             .unwrap()
+    }
+
+    /// The width of `.target` laid out with `css`, in a 200px wide parent.
+    fn target_width(css: &str) -> f32 {
+        let tree: Element = view! {
+            <div class="parent">
+                <div class="target">"alpha beta gamma"</div>
+            </div>
+        };
+        let (arena, _, layouts) = fixed_layout(
+            &tree,
+            &format!(".parent {{ width: 200px; }} .target {{ {css} }}"),
+        );
+        // A percentage of 200 comes out a few millionths off in `f32`.
+        (layouts[&node_with_class(&arena, "target")].width * 100.0).round() / 100.0
+    }
+
+    #[test]
+    fn math_functions_over_a_percentage_resolve_against_the_parent() {
+        assert_eq!(target_width("width: calc(50% - 10px);"), 90.0);
+        assert_eq!(target_width("width: clamp(50px, 30%, 100px);"), 60.0);
+        assert_eq!(target_width("width: clamp(50px, 10%, 100px);"), 50.0);
+        assert_eq!(target_width("width: clamp(50px, 80%, 100px);"), 100.0);
+        assert_eq!(target_width("width: min(80%, 120px);"), 120.0);
+        assert_eq!(target_width("width: max(20%, 30px);"), 40.0);
+        assert_eq!(
+            target_width("width: calc(100% - 20px); min-width: calc(50% + 70px);"),
+            180.0
+        );
+    }
+
+    #[test]
+    fn a_percentage_where_a_length_only_was_read_is_resolved_too() {
+        assert_eq!(target_width("width: 100%; max-width: 30%;"), 60.0);
+        assert_eq!(
+            target_width("width: auto; margin-left: 10%; margin-right: 5px;"),
+            175.0
+        );
+        assert_eq!(target_width("width: auto; padding-left: 10%;"), 200.0);
+        assert_eq!(
+            target_width("width: 50%; max-width: calc(25% + 10px);"),
+            60.0
+        );
+    }
+
+    #[test]
+    fn intrinsic_widths_follow_the_content_and_the_room() {
+        let min = target_width("width: min-content;");
+        let max = target_width("width: max-content;");
+        assert!(min > 0.0 && min < max, "min {min} max {max}");
+        assert!(max < 200.0, "max-content {max} is the text on one line");
+        assert_eq!(target_width("width: fit-content;"), max, "room enough");
+        assert_eq!(target_width("width: stretch;"), 200.0);
+        assert_eq!(target_width("width: stretch; margin-left: 20px;"), 180.0);
+        assert_eq!(
+            target_width("width: fit-content(10px);"),
+            min,
+            "no less than min-content"
+        );
+        assert_eq!(target_width("width: fit-content(1000px);"), max);
+        assert_eq!(
+            target_width("width: 50%; min-width: min-content;"),
+            100.0f32.max(min)
+        );
+    }
+
+    #[test]
+    fn an_intrinsic_width_may_overflow_a_narrow_parent() {
+        let tree: Element = view! {
+            <div class="parent">
+                <div class="target">"alpha beta gamma"</div>
+            </div>
+        };
+        let (arena, _, layouts) = fixed_layout(
+            &tree,
+            ".parent { width: 20px; } .target { width: max-content; }",
+        );
+        let width = layouts[&node_with_class(&arena, "target")].width;
+        assert!(width > 20.0, "{width}");
+    }
+
+    #[test]
+    fn a_height_written_as_math_needs_a_known_parent_height() {
+        let tree: Element = view! {
+            <div class="known">
+                <div class="child" />
+            </div>
+        };
+        let (arena, _, layouts) = fixed_layout(
+            &tree,
+            ".known { height: 80px; } .child { height: calc(50% + 5px); }",
+        );
+        assert_eq!(layouts[&node_with_class(&arena, "child")].height, 45.0);
+        let tree: Element = view! {
+            <div class="unknown">
+                <div class="child" />
+            </div>
+        };
+        let (arena, _, layouts) = fixed_layout(&tree, ".child { height: calc(50% + 5px); }");
+        assert_eq!(
+            layouts[&node_with_class(&arena, "child")].height,
+            0.0,
+            "a percentage of an unknown height is auto"
+        );
+    }
+
+    #[test]
+    fn deferred_sizes_lay_out_the_same_in_a_kept_tree() {
+        let tree: Element = view! {
+            <div class="parent">
+                <div class="a">"alpha beta gamma"</div>
+                <div class="b">"alpha beta gamma"</div>
+                <div class="c" />
+            </div>
+        };
+        let (arena, styles, fresh) = fixed_layout(
+            &tree,
+            ".parent { width: 200px; height: 90px; padding: 5px; } \
+             .a { width: calc(50% - 10px); } .b { width: fit-content; margin-left: 10%; } \
+             .c { width: clamp(20px, 30%, 50px); height: calc(50% + 5px); }",
+        );
+        let mut font = florui_text::Font::load_embedded();
+        let available = Size {
+            width: AvailableSpace::Definite(200.0),
+            height: AvailableSpace::Definite(100.0),
+        };
+        let mut cache = LayoutCache::new();
+        for _ in 0..3 {
+            let (kept, _) = cache
+                .compute(&mut font, &arena, &styles, available)
+                .unwrap();
+            for (node, layout) in &fresh {
+                assert_eq!(kept.get(node), Some(layout), "box of node {node}");
+            }
+        }
     }
 
     #[test]

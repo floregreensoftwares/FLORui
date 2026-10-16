@@ -255,6 +255,22 @@ impl LayoutCache {
         for group in self.groups.iter().flatten() {
             run_layout(font, &mut self.tree, group.id, available, node_count)?;
         }
+        let roots: Vec<taffy::NodeId> = self.groups.iter().flatten().map(|g| g.id).collect();
+        let kept = &self.slots;
+        deferred::resolve(
+            font,
+            arena,
+            styles,
+            &mut self.tree,
+            &|node| {
+                kept.get(node)
+                    .and_then(|slot| slot.as_ref())
+                    .map(|slot| slot.id)
+            },
+            &roots,
+            available,
+            node_count,
+        )?;
 
         let slots = &self.slots;
         let anonymous = &self.anonymous;
