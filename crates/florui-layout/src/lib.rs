@@ -497,6 +497,7 @@ fn layout_kind(arena: &Tree, styles: &StyleMap, node: NodeId) -> LayoutKind {
         match item {
             StyleInlineItem::Text(text) => inline |= !text.trim().is_empty(),
             StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
+                _ if is_viewport_fixed(arena, styles, *child) => {}
                 Some(StyleDisplay::Inline) if inline_subtree_is_inline(arena, styles, *child) => {
                     inline = true;
                 }
@@ -523,6 +524,8 @@ fn layout_kind(arena: &Tree, styles: &StyleMap, node: NodeId) -> LayoutKind {
 enum Part {
     Block(NodeId),
     Run(std::ops::Range<usize>),
+    /// Where a viewport-fixed child would have sat in the flow.
+    Spot(NodeId),
 }
 
 /// The pieces of `node` when its content mixes inline-level runs with
@@ -541,14 +544,18 @@ fn mixed_parts_of(arena: &Tree, styles: &StyleMap, node: NodeId) -> Vec<Part> {
     let mut parts = Vec::new();
     let mut start = 0;
     let mut content = false;
+    let fixed = |child: &NodeId| is_viewport_fixed(arena, styles, *child);
     let close = |parts: &mut Vec<Part>, start: usize, end: usize, content: bool| {
         if content {
             parts.push(Part::Run(start..end));
-            return;
         }
         for item in &items[start..end] {
             if let StyleInlineItem::Element(child) = item {
-                parts.push(Part::Block(*child));
+                if fixed(child) {
+                    parts.push(Part::Spot(*child));
+                } else if !content {
+                    parts.push(Part::Block(*child));
+                }
             }
         }
     };
@@ -556,6 +563,7 @@ fn mixed_parts_of(arena: &Tree, styles: &StyleMap, node: NodeId) -> Vec<Part> {
         match item {
             StyleInlineItem::Text(text) => content |= !text.trim().is_empty(),
             StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
+                _ if fixed(child) => {}
                 Some(StyleDisplay::Inline) if inline_subtree_is_inline(arena, styles, *child) => {
                     content = true;
                 }
@@ -606,6 +614,41 @@ pub fn piece_id(node: NodeId, piece: usize) -> NodeId {
     PIECE | (node << 16) | piece.min(0xffff)
 }
 
+/// Marks the stand-in that sits where a fixed box would have been in its
+/// parent's flow, to read the static position from; never reported.
+const STATIC_SPOT: NodeId = 1 << 59;
+
+fn static_spot_id(node: NodeId) -> NodeId {
+    STATIC_SPOT | node
+}
+
+/// Whether `node` is placed against the viewport: `position: fixed`, with no
+/// ancestor that transforms or filters (which then holds it like an
+/// absolutely positioned one). Laid out and painted apart from its parent.
+pub fn is_viewport_fixed(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
+    if styles
+        .get(&node)
+        .is_none_or(|s| s.position != StylePosition::Fixed)
+    {
+        return false;
+    }
+    let mut current = arena.parent(node);
+    while let Some(ancestor) = current {
+        if styles.get(&ancestor).is_some_and(|s| {
+            !s.transform.is_empty() || !s.filter.is_empty() || !s.backdrop_filter.is_empty()
+        }) {
+            return false;
+        }
+        current = arena.parent(ancestor);
+    }
+    true
+}
+
+/// Every viewport-fixed node, in document order.
+fn viewport_fixed_nodes(arena: &Tree, styles: &StyleMap) -> Vec<NodeId> {
+    arena.find_all(|arena, id| is_viewport_fixed(arena, styles, id))
+}
+
 /// Marks the id under which the baseline of an inline-block with content is
 /// reported (as the `y` of its entry), so painting does not lay it out again.
 const BASELINE: NodeId = 1 << 60;
@@ -624,6 +667,7 @@ fn inline_subtree_is_inline(arena: &Tree, styles: &StyleMap, node: NodeId) -> bo
     arena.inline_items(node).iter().all(|item| match item {
         StyleInlineItem::Text(_) => true,
         StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
+            _ if is_viewport_fixed(arena, styles, *child) => true,
             Some(StyleDisplay::Inline) => inline_subtree_is_inline(arena, styles, *child),
             Some(StyleDisplay::InlineBlock | StyleDisplay::None) => true,
             _ => false,
@@ -788,6 +832,7 @@ fn nested_block(
             &tree,
             ids.iter().map(|(&node, &id)| (node, id)),
             &leaves,
+            &[],
             |node| ids[&node],
         )?;
         Ok((layouts, extents, leaves))
@@ -868,12 +913,13 @@ fn last_line_baseline(
             let mut run_number = 0;
             parts
                 .iter()
-                .map(|part| match part {
-                    Part::Block(child) => *child,
+                .filter_map(|part| match part {
+                    Part::Block(child) => Some(*child),
                     Part::Run(_) => {
                         run_number += 1;
-                        anonymous_id(node, run_number - 1)
+                        Some(anonymous_id(node, run_number - 1))
                     }
+                    Part::Spot(_) => None,
                 })
                 .collect()
         }
@@ -882,7 +928,8 @@ fn last_line_baseline(
     blocks.iter().rev().find_map(|&child| {
         let child_style = styles.get(&child);
         if child_style.is_some_and(|s| {
-            s.display == StyleDisplay::None || s.position == StylePosition::Absolute
+            s.display == StyleDisplay::None
+                || matches!(s.position, StylePosition::Absolute | StylePosition::Fixed)
         }) {
             return None;
         }
@@ -987,6 +1034,7 @@ fn flatten_items(
             StyleInlineItem::Element(child) => {
                 let child_style = styles.get(child);
                 match child_style.map(|s| s.display) {
+                    _ if is_viewport_fixed(arena, styles, *child) => {}
                     Some(StyleDisplay::None) => context.hidden.push(*child),
                     Some(StyleDisplay::InlineBlock) => {
                         let (width, height, baseline, nested) = if arena.children(*child).is_empty()
@@ -1304,6 +1352,18 @@ fn compute_layout_in_place(
         )?;
     }
 
+    let fixed = viewport_fixed_nodes(arena, styles);
+    layout_fixed_group(
+        font,
+        arena,
+        styles,
+        &fixed,
+        available,
+        &mut tree,
+        &mut taffy_ids,
+        &mut inline_leaves,
+    )?;
+
     collect_layouts(
         font,
         arena,
@@ -1311,6 +1371,7 @@ fn compute_layout_in_place(
         &tree,
         taffy_ids.iter().map(|(&node, &id)| (node, id)),
         &inline_leaves,
+        &fixed,
         |node| taffy_ids[&node],
     )
 }
@@ -1318,6 +1379,7 @@ fn compute_layout_in_place(
 /// Reads every node's box and content extent back out of a laid-out `tree`,
 /// then places the boxes of each inline formatting context's own items (see
 /// the second pass below). `id_of` finds the Taffy node of an arena node.
+#[allow(clippy::too_many_arguments)]
 fn collect_layouts(
     font: &mut florui_text::Font,
     arena: &Tree,
@@ -1325,6 +1387,7 @@ fn collect_layouts(
     tree: &TaffyTree<LeafContext>,
     nodes: impl Iterator<Item = (NodeId, taffy::NodeId)>,
     inline_leaves: &[(NodeId, InlineContext)],
+    fixed: &[NodeId],
     id_of: impl Fn(NodeId) -> taffy::NodeId,
 ) -> Result<LayoutsAndContentExtents, LayoutError> {
     let node_count = nodes.size_hint().1.unwrap_or_default();
@@ -1545,7 +1608,61 @@ fn collect_layouts(
         }
     }
 
+    place_fixed(arena, styles, fixed, &mut result, &mut content_extents);
     Ok((result, content_extents))
+}
+
+/// Turns the boxes of the fixed nodes, laid out against the viewport, into
+/// boxes relative to their parents like all others, and drops the stand-ins
+/// that held their static positions. An axis with both insets `auto` takes
+/// the stand-in's position, or the parent's content box when there is none
+/// (a parent whose content is all inline).
+fn place_fixed(
+    arena: &Tree,
+    styles: &StyleMap,
+    fixed: &[NodeId],
+    layouts: &mut HashMap<NodeId, BoxLayout>,
+    extents: &mut HashMap<NodeId, ContentExtent>,
+) {
+    for &node in fixed {
+        let spot = layouts.remove(&static_spot_id(node));
+        extents.remove(&static_spot_id(node));
+        let Some(own) = layouts.get(&node).copied() else {
+            continue;
+        };
+        let style = styles.get(&node);
+        let parent = arena.parent(node);
+        let parent_origin = parent.map_or((0.0, 0.0), |p| absolute_position(arena, layouts, p));
+        let (auto_x, auto_y) = style.map_or((false, false), |s| {
+            (
+                s.inset.left.is_none() && s.inset.right.is_none(),
+                s.inset.top.is_none() && s.inset.bottom.is_none(),
+            )
+        });
+        let parent_style = parent.and_then(|p| styles.get(&p));
+        let content_offset = parent_style.map_or((0.0, 0.0), |s| {
+            (
+                s.border.left.width + s.padding.left,
+                s.border.top.width + s.padding.top,
+            )
+        });
+        let static_at = spot.map_or(content_offset, |spot| (spot.x, spot.y));
+        let x = own.x
+            + if auto_x {
+                parent_origin.0 + static_at.0
+            } else {
+                0.0
+            }
+            - parent_origin.0;
+        let y = own.y
+            + if auto_y {
+                parent_origin.1 + static_at.1
+            } else {
+                0.0
+            }
+            - parent_origin.1;
+        layouts.insert(node, BoxLayout { x, y, ..own });
+    }
 }
 
 /// Builds `roots` (via [`build_node`], already root-agnostic) and lays
@@ -1578,7 +1695,11 @@ fn layout_root_group(
     // A synthetic block container wraps every root in this group so
     // multiple top-level elements have somewhere to stack; its own id is
     // never looked up, only real `arena` nodes are.
-    let root_children: Vec<taffy::NodeId> = roots.iter().map(|id| taffy_ids[id]).collect();
+    let root_children: Vec<taffy::NodeId> = roots
+        .iter()
+        .filter(|&&id| !is_viewport_fixed(arena, styles, id))
+        .map(|id| taffy_ids[id])
+        .collect();
     let synthetic_root = tree
         .new_with_children(
             taffy::Style {
@@ -2257,7 +2378,7 @@ fn build_node(
                         .iter()
                         .filter_map(|part| match part {
                             Part::Block(child) => Some(*child),
-                            Part::Run(_) => None,
+                            Part::Run(_) | Part::Spot(_) => None,
                         })
                         .collect();
                     stack.push(BuildStep::BuildMixed(node, parts));
@@ -2268,7 +2389,9 @@ fn build_node(
                 } else {
                     stack.push(BuildStep::Build(node));
                     for &child in arena_children.iter().rev() {
-                        stack.push(BuildStep::Visit(child));
+                        if !is_viewport_fixed(arena, styles, child) {
+                            stack.push(BuildStep::Visit(child));
+                        }
                     }
                     continue;
                 };
@@ -2280,6 +2403,11 @@ fn build_node(
                 for part in &parts {
                     match part {
                         Part::Block(child) => children.push(taffy_ids[child]),
+                        Part::Spot(fixed) => {
+                            let spot = tree.new_leaf(static_spot_style())?;
+                            taffy_ids.insert(static_spot_id(*fixed), spot);
+                            children.push(spot);
+                        }
                         Part::Run(range) => {
                             let context = build_run_content_items(
                                 font,
@@ -2309,11 +2437,17 @@ fn build_node(
             }
             BuildStep::Build(node) => {
                 let style = to_taffy_style(styles.get(&node));
-                let children: Vec<taffy::NodeId> = arena
-                    .children(node)
-                    .iter()
-                    .map(|child| taffy_ids[child])
-                    .collect();
+                let mut children: Vec<taffy::NodeId> =
+                    Vec::with_capacity(arena.children(node).len());
+                for &child in arena.children(node) {
+                    if is_viewport_fixed(arena, styles, child) {
+                        let spot = tree.new_leaf(static_spot_style())?;
+                        taffy_ids.insert(static_spot_id(child), spot);
+                        children.push(spot);
+                    } else {
+                        children.push(taffy_ids[&child]);
+                    }
+                }
                 let id = tree.new_with_children(style, &children)?;
                 taffy_ids.insert(node, id);
             }
@@ -2321,6 +2455,64 @@ fn build_node(
     }
 
     Ok(taffy_ids[&root])
+}
+
+/// A zero-sized box in the flow of a fixed box's parent, which Taffy gives
+/// the position the fixed box would have had unpositioned.
+fn static_spot_style() -> taffy::Style {
+    taffy::Style {
+        position: Position::Absolute,
+        size: Size {
+            width: Dimension::length(0.0),
+            height: Dimension::length(0.0),
+        },
+        ..Default::default()
+    }
+}
+
+/// The root the fixed boxes are laid out in: the viewport, when it is known.
+fn viewport_root_style(available: Size<AvailableSpace>) -> taffy::Style {
+    let side = |space: AvailableSpace| match space {
+        AvailableSpace::Definite(length) => Dimension::length(length),
+        _ => Dimension::auto(),
+    };
+    taffy::Style {
+        display: Display::Block,
+        size: Size {
+            width: side(available.width),
+            height: side(available.height),
+        },
+        ..Default::default()
+    }
+}
+
+/// Lays out `fixed`, building the ones not built yet, as children of a root
+/// the size of the viewport (`available`).
+#[allow(clippy::too_many_arguments)]
+fn layout_fixed_group(
+    font: &mut florui_text::Font,
+    arena: &Arena,
+    styles: &StyleMap,
+    fixed: &[NodeId],
+    available: Size<AvailableSpace>,
+    tree: &mut TaffyTree<LeafContext>,
+    taffy_ids: &mut HashMap<NodeId, taffy::NodeId>,
+    inline_leaves: &mut Vec<(NodeId, InlineContext)>,
+) -> Result<(), LayoutError> {
+    if fixed.is_empty() {
+        return Ok(());
+    }
+    for &node in fixed {
+        if !taffy_ids.contains_key(&node) {
+            build_node(font, arena, styles, node, tree, taffy_ids, inline_leaves)
+                .map_err(LayoutError)?;
+        }
+    }
+    let children: Vec<taffy::NodeId> = fixed.iter().map(|node| taffy_ids[node]).collect();
+    let root = tree
+        .new_with_children(viewport_root_style(available), &children)
+        .map_err(LayoutError)?;
+    run_layout(font, tree, root, available, taffy_ids.len())
 }
 
 fn to_taffy_box_sizing(value: StyleBoxSizing) -> BoxSizing {
@@ -2363,11 +2555,19 @@ fn to_taffy_style(style: Option<&ComputedStyle>) -> taffy::Style {
             bottom: to_length_percentage_auto(style.margin.bottom),
         },
         position: to_taffy_position(style.position),
-        inset: Rect {
-            left: to_inset_length_percentage_auto(style.inset.left),
-            right: to_inset_length_percentage_auto(style.inset.right),
-            top: to_inset_length_percentage_auto(style.inset.top),
-            bottom: to_inset_length_percentage_auto(style.inset.bottom),
+        // Not applied to a static box, and to a sticky one only once scrolled.
+        inset: if matches!(
+            style.position,
+            StylePosition::Static | StylePosition::Sticky
+        ) {
+            Rect::auto()
+        } else {
+            Rect {
+                left: to_inset_length_percentage_auto(style.inset.left),
+                right: to_inset_length_percentage_auto(style.inset.right),
+                top: to_inset_length_percentage_auto(style.inset.top),
+                bottom: to_inset_length_percentage_auto(style.inset.bottom),
+            }
         },
         // These four only affect *this node's own children*, and only take
         // effect at all when `display` above is `Flex` — Taffy ignores them
@@ -2514,8 +2714,14 @@ fn to_inset_length_percentage_auto(
 /// rule).
 fn to_taffy_position(value: StylePosition) -> Position {
     match value {
-        StylePosition::Static | StylePosition::Relative => Position::Relative,
-        StylePosition::Absolute => Position::Absolute,
+        // A sticky box sits in the flow where it would; its insets only
+        // matter once it is scrolled (see [`apply_scroll_offsets`]).
+        StylePosition::Static | StylePosition::Relative | StylePosition::Sticky => {
+            Position::Relative
+        }
+        // A fixed box is laid out against the viewport in a root of its own,
+        // an absolute child of it.
+        StylePosition::Absolute | StylePosition::Fixed => Position::Absolute,
     }
 }
 
@@ -2625,16 +2831,41 @@ pub fn layout_parent(arena: &Tree, id: NodeId) -> Option<NodeId> {
 /// box (its clip boundary in its own parent's coordinates) is never
 /// shifted by its own offset, only by an ancestor's — scrolling moves a
 /// node's *content*, not the node itself.
+///
+/// A box fixed to the viewport stays where it is: it is not shifted by the
+/// scroll of its parent, and what the scroll of the ancestors above would
+/// carry along is undone.
 pub fn apply_scroll_offsets(
     arena: &Tree,
     layouts: &HashMap<NodeId, BoxLayout>,
     scroll_offsets: &HashMap<NodeId, (f32, f32)>,
+    styles: &StyleMap,
 ) -> HashMap<NodeId, BoxLayout> {
     layouts
         .iter()
         .map(|(&id, &layout)| {
+            let parent = layout_parent(arena, id);
+            if !scroll_offsets.is_empty() && is_viewport_fixed(arena, styles, id) {
+                let (mut carried_x, mut carried_y) = (0.0, 0.0);
+                let mut above = parent.and_then(|parent| layout_parent(arena, parent));
+                while let Some(ancestor) = above {
+                    if let Some(&(x, y)) = scroll_offsets.get(&ancestor) {
+                        carried_x += x;
+                        carried_y += y;
+                    }
+                    above = layout_parent(arena, ancestor);
+                }
+                return (
+                    id,
+                    BoxLayout {
+                        x: layout.x + carried_x,
+                        y: layout.y + carried_y,
+                        ..layout
+                    },
+                );
+            }
             let Some((offset_x, offset_y)) =
-                layout_parent(arena, id).and_then(|parent| scroll_offsets.get(&parent).copied())
+                parent.and_then(|parent| scroll_offsets.get(&parent).copied())
             else {
                 return (id, layout);
             };
@@ -2686,6 +2917,8 @@ pub fn hit_test(
         /// The parent's absolute origin, carried down so no node walks its
         /// ancestors to find its own.
         parent_origin: (f32, f32),
+        /// A box fixed to the viewport, now that its turn has come.
+        its_turn: bool,
     }
 
     let mut hit = None;
@@ -2698,15 +2931,47 @@ pub fn hit_test(
             parent_point: (x, y),
             admitted: true,
             parent_origin: (0.0, 0.0),
+            its_turn: false,
         })
         .collect();
-    while let Some(Visit {
-        node,
-        parent_point,
-        admitted,
-        parent_origin,
-    }) = stack.pop()
-    {
+    // Fixed boxes are drawn above the rest of their scope, so they are
+    // looked at after it.
+    let mut fixed: Vec<Visit> = Vec::new();
+    loop {
+        let Some(Visit {
+            node,
+            parent_point,
+            admitted,
+            parent_origin,
+            its_turn,
+        }) = stack.pop()
+        else {
+            if fixed.is_empty() {
+                break;
+            }
+            fixed.sort_by_key(|visit| {
+                (
+                    styles.get(&visit.node).and_then(|s| s.z_index).unwrap_or(0),
+                    visit.node,
+                )
+            });
+            stack.extend(fixed.drain(..).rev().map(|visit| Visit {
+                admitted: true,
+                its_turn: true,
+                ..visit
+            }));
+            continue;
+        };
+        if !its_turn && is_viewport_fixed(arena, styles, node) {
+            fixed.push(Visit {
+                node,
+                parent_point,
+                admitted,
+                parent_origin,
+                its_turn,
+            });
+            continue;
+        }
         let mut point = parent_point;
         let mut admits_children = admitted;
         let mut origin = parent_origin;
@@ -2753,8 +3018,26 @@ pub fn hit_test(
             }
         }
         // Nothing under a node a clipping ancestor rejects can be hit, so its
-        // subtree is not visited.
+        // subtree is not visited -- but for the boxes fixed to the viewport,
+        // which no ancestor clips.
         if !admits_children {
+            let mut below = arena.children(node).to_vec();
+            while let Some(descendant) = below.pop() {
+                if is_viewport_fixed(arena, styles, descendant) {
+                    let parent_origin = arena
+                        .parent(descendant)
+                        .map_or((0.0, 0.0), |p| absolute_position(arena, layouts, p));
+                    fixed.push(Visit {
+                        node: descendant,
+                        parent_point: (x, y),
+                        admitted: true,
+                        parent_origin,
+                        its_turn: false,
+                    });
+                } else {
+                    below.extend_from_slice(arena.children(descendant));
+                }
+            }
             continue;
         }
         for &child in arena.children(node).iter().rev() {
@@ -2763,6 +3046,7 @@ pub fn hit_test(
                 parent_point: point,
                 admitted: admits_children,
                 parent_origin: origin,
+                its_turn: false,
             });
         }
     }
@@ -4141,7 +4425,7 @@ mod tests {
 
         let mut scroll_offsets = HashMap::new();
         scroll_offsets.insert(card, (3.0, 4.0));
-        let scrolled = apply_scroll_offsets(&arena, &layouts, &scroll_offsets);
+        let scrolled = apply_scroll_offsets(&arena, &layouts, &scroll_offsets, &StyleMap::new());
 
         // `card` is not itself anyone's scrolled child -- its own box is
         // untouched.
@@ -5129,6 +5413,202 @@ mod tests {
             Some(card),
             "the click passes through the overlay to the card"
         );
+    }
+
+    /// `css` laid out inside a viewport of 200 x 100.
+    fn fixed_layout(tree: &Element, css: &str) -> (Arena, StyleMap, HashMap<NodeId, BoxLayout>) {
+        let arena = Arena::build(tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = florui_text::Font::load_embedded();
+        let available = Size {
+            width: AvailableSpace::Definite(200.0),
+            height: AvailableSpace::Definite(100.0),
+        };
+        let layouts = compute_layout(&mut font, &arena, &styles, available).unwrap();
+        (arena, styles, layouts)
+    }
+
+    fn node_with_class(arena: &Arena, class: &str) -> NodeId {
+        arena
+            .find(|a, id| a.classes(id).iter().any(|c| c == class))
+            .unwrap()
+    }
+
+    #[test]
+    fn a_fixed_box_is_placed_against_the_viewport_not_its_parent() {
+        let tree: Element = view! {
+            <div class="page">
+                <div class="parent">
+                    <div class="pinned" />
+                    <div class="pinned-end" />
+                </div>
+            </div>
+        };
+        let (arena, _, layouts) = fixed_layout(
+            &tree,
+            ".page { padding: 40px; } .parent { margin-left: 30px; width: 80px; height: 50px; } \
+             .pinned { position: fixed; top: 5px; left: 7px; width: 10px; height: 10px; } \
+             .pinned-end { position: fixed; bottom: 4px; right: 6px; width: 20px; height: 8px; }",
+        );
+        let pinned = node_with_class(&arena, "pinned");
+        let end = node_with_class(&arena, "pinned-end");
+        assert_eq!(absolute_position(&arena, &layouts, pinned), (7.0, 5.0));
+        assert_eq!(
+            absolute_position(&arena, &layouts, end),
+            (200.0 - 6.0 - 20.0, 100.0 - 4.0 - 8.0)
+        );
+        assert_eq!(
+            layouts[&node_with_class(&arena, "parent")].height,
+            50.0,
+            "a fixed box takes no room in its parent"
+        );
+    }
+
+    #[test]
+    fn a_fixed_box_with_auto_insets_keeps_its_static_position() {
+        let tree: Element = view! {
+            <div class="page">
+                <div class="before" />
+                <div class="pinned" />
+                <div class="after" />
+            </div>
+        };
+        let (arena, _, layouts) = fixed_layout(
+            &tree,
+            ".page { padding: 10px; } .before { height: 30px; } \
+             .pinned { position: fixed; width: 10px; height: 10px; } \
+             .after { height: 5px; }",
+        );
+        let pinned = node_with_class(&arena, "pinned");
+        assert_eq!(absolute_position(&arena, &layouts, pinned), (10.0, 40.0));
+        assert_eq!(
+            absolute_position(&arena, &layouts, node_with_class(&arena, "after")),
+            (10.0, 40.0),
+            "the next sibling takes the place it would have had"
+        );
+    }
+
+    #[test]
+    fn a_transformed_ancestor_holds_a_fixed_box_like_an_absolute_one() {
+        let tree: Element = view! {
+            <div class="page">
+                <div class="moved">
+                    <div class="pinned" />
+                </div>
+            </div>
+        };
+        let (arena, styles, layouts) = fixed_layout(
+            &tree,
+            ".page { padding: 20px; } .moved { transform: translate(5px, 5px); width: 80px; height: 50px; } \
+             .pinned { position: fixed; top: 3px; left: 4px; width: 10px; height: 10px; }",
+        );
+        let pinned = node_with_class(&arena, "pinned");
+        assert!(!is_viewport_fixed(&arena, &styles, pinned));
+        assert_eq!(absolute_position(&arena, &layouts, pinned), (24.0, 23.0));
+    }
+
+    #[test]
+    fn a_fixed_box_does_not_follow_the_scroll_of_its_ancestors() {
+        let tree: Element = view! {
+            <div class="outer">
+                <div class="scroller">
+                    <div class="pinned" />
+                    <div class="plain" />
+                </div>
+            </div>
+        };
+        let (arena, styles, layouts) = fixed_layout(
+            &tree,
+            ".outer { padding: 10px; } .scroller { height: 40px; } \
+             .pinned { position: fixed; top: 5px; left: 5px; width: 10px; height: 10px; } \
+             .plain { width: 10px; height: 90px; }",
+        );
+        let (outer, scroller) = (
+            node_with_class(&arena, "outer"),
+            node_with_class(&arena, "scroller"),
+        );
+        let (pinned, plain) = (
+            node_with_class(&arena, "pinned"),
+            node_with_class(&arena, "plain"),
+        );
+        let mut offsets = HashMap::new();
+        offsets.insert(scroller, (0.0, 30.0));
+        offsets.insert(outer, (0.0, 4.0));
+        let scrolled = apply_scroll_offsets(&arena, &layouts, &offsets, &styles);
+        assert_eq!(absolute_position(&arena, &scrolled, pinned), (5.0, 5.0));
+        assert_eq!(
+            absolute_position(&arena, &scrolled, plain).1,
+            absolute_position(&arena, &layouts, plain).1 - 30.0 - 4.0,
+            "what is not fixed still scrolls"
+        );
+    }
+
+    #[test]
+    fn a_fixed_box_is_hit_above_a_later_sibling_and_outside_a_clipping_parent() {
+        let tree: Element = view! {
+            <div class="page">
+                <div class="clip">
+                    <div class="pinned" />
+                </div>
+                <div class="later" />
+            </div>
+        };
+        let (arena, styles, layouts) = fixed_layout(
+            &tree,
+            ".page { width: 200px; height: 100px; } .clip { width: 20px; height: 20px; overflow: hidden; } \
+             .pinned { position: fixed; top: 50px; left: 60px; width: 30px; height: 30px; } \
+             .later { width: 200px; height: 100px; }",
+        );
+        let pinned = node_with_class(&arena, "pinned");
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 70.0, 60.0),
+            Some(pinned)
+        );
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 70.0, 95.0),
+            Some(node_with_class(&arena, "later"))
+        );
+    }
+
+    #[test]
+    fn a_layout_kept_in_a_cache_places_fixed_boxes_as_one_built_anew() {
+        let tree: Element = view! {
+            <div class="page">
+                <div class="before" />
+                <div class="pinned" />
+                <div class="mixed">"text"<div class="block" /><div class="pinned2" />"more"</div>
+                <div class="after" />
+            </div>
+        };
+        let (arena, styles, fresh) = fixed_layout(
+            &tree,
+            ".page { padding: 10px; } .before { height: 30px; } \
+             .pinned { position: fixed; width: 10px; height: 10px; top: 4px; } \
+             .pinned2 { position: fixed; width: 10px; height: 10px; } \
+             .block { height: 7px; } .after { height: 5px; }",
+        );
+        let mut font = florui_text::Font::load_embedded();
+        let available = Size {
+            width: AvailableSpace::Definite(200.0),
+            height: AvailableSpace::Definite(100.0),
+        };
+        let mut cache = LayoutCache::new();
+        for _ in 0..3 {
+            let (kept, _) = cache
+                .compute(&mut font, &arena, &styles, available)
+                .unwrap();
+            assert_eq!(kept.len(), fresh.len());
+            for (node, layout) in &fresh {
+                assert_eq!(kept.get(node), Some(layout), "box of node {node}");
+            }
+        }
     }
 
     #[test]

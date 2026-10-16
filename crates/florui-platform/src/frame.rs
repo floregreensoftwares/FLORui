@@ -68,7 +68,8 @@ pub(crate) fn build_paint_parts(sources: PaintSources<'_>) -> PaintParts {
         scale_factor,
     } = sources;
     let scroll_offsets = scroll_registry.offsets_by_node(arena);
-    let scrolled_layouts = florui_layout::apply_scroll_offsets(arena, layouts, &scroll_offsets);
+    let scrolled_layouts =
+        florui_layout::apply_scroll_offsets(arena, layouts, &scroll_offsets, styles);
     let physical_layouts = scale_layouts(&scrolled_layouts, scale_factor as f32);
     let spinner_for = |node: NodeId| {
         if arena.input_type(node) != Some("number")
