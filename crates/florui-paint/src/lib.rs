@@ -56,6 +56,7 @@
 mod background;
 mod banded;
 mod blur;
+mod decoration;
 mod glyph_cache;
 mod gradient;
 mod image_source;
@@ -3565,6 +3566,13 @@ fn paint_node_text(
             ellipsis: style
                 .and_then(text_overflow_mark)
                 .map(|mark| (mark, content_width)),
+            decoration: style
+                .filter(|s| s.text_decoration.lines.any() && s.visibility.is_visible())
+                .map(|s| decoration::Declared {
+                    decoration: s.text_decoration,
+                    color: s.color,
+                    font_size: s.font_size,
+                }),
         },
     );
 }
@@ -4866,6 +4874,8 @@ struct TextPaint<'a> {
     shadows: &'a [florui_style::TextShadow],
     /// The mark a clipped line ends in, and the width of the box it is cut at.
     ellipsis: Option<(String, f32)>,
+    /// The decoration the element declares, if any.
+    decoration: Option<decoration::Declared>,
 }
 
 fn paint_text(buffer: &mut Surface, font: &mut Font, params: TextPaint<'_>) {
@@ -4880,13 +4890,30 @@ fn paint_text(buffer: &mut Surface, font: &mut Font, params: TextPaint<'_>) {
         clip,
         shadows,
         ellipsis,
+        decoration,
     } = params;
     let mut shaped = font.shape_wrapped(style, text, wrap_width);
     if let Some((mark, limit)) = &ellipsis {
         font.ellipsize_runs(&mut shaped.runs, style, mark, *limit, 0);
     }
+    let declared = [decoration];
+    let effective = [vec![0]];
+    let decorate = |buffer: &mut Surface, phase| {
+        decoration::paint(
+            buffer,
+            &shaped.runs,
+            &declared,
+            &effective,
+            (x, y),
+            scale_factor,
+            clip,
+            phase,
+        );
+    };
+    decorate(buffer, decoration::Phase::UnderAndOver);
     text_shadow::paint(buffer, &shaped.runs, (x, y), shadows, scale_factor, clip);
     paint_shaped_runs(buffer, &shaped.runs, x, y, color, scale_factor, clip);
+    decorate(buffer, decoration::Phase::LineThrough);
 }
 
 /// What each inline element of `inline` draws behind its text: its background
@@ -4980,7 +5007,7 @@ fn paint_inline_boxes(
 }
 
 /// The glyph runs of `inline`, each in the color and shadow of its own
-/// element, underlined when its element or one around it is.
+/// element, with the decorations the elements declare.
 #[allow(clippy::too_many_arguments)]
 fn paint_inline_runs(
     buffer: &mut Surface,
@@ -4992,13 +5019,34 @@ fn paint_inline_runs(
     scale_factor: f32,
     clip: Option<&Mask>,
 ) {
-    let mut underlined = vec![false; inline.nodes.len()];
-    for element in 0..inline.nodes.len() {
-        let own = styles
-            .get(&inline.nodes[element])
-            .is_some_and(|s| s.text_decoration_underline);
-        underlined[element] = own || (element > 0 && underlined[inline.parents[element]]);
-    }
+    let declared: Vec<Option<decoration::Declared>> = inline
+        .nodes
+        .iter()
+        .map(|node| {
+            styles
+                .get(node)
+                .filter(|s| s.text_decoration.lines.any() && s.visibility.is_visible())
+                .map(|s| decoration::Declared {
+                    decoration: s.text_decoration,
+                    color: s.color,
+                    font_size: s.font_size,
+                })
+        })
+        .collect();
+    let effective = decoration::effective_lists(&declared, &inline.parents);
+    let decorate = |buffer: &mut Surface, phase| {
+        decoration::paint(
+            buffer,
+            runs,
+            &declared,
+            &effective,
+            (origin_x, origin_y),
+            scale_factor,
+            clip,
+            phase,
+        );
+    };
+    decorate(buffer, decoration::Phase::UnderAndOver);
     let mut start = 0;
     while start < runs.len() {
         let element = runs[start].element;
@@ -5022,60 +5070,9 @@ fn paint_inline_runs(
             clip,
         );
         paint_shaped_runs(buffer, group, origin_x, origin_y, color, scale_factor, clip);
-        if underlined[element] {
-            for run in group {
-                if let Some(glyph) = run.glyphs.first().filter(|_| run.width > 0.0) {
-                    paint_underline(
-                        buffer,
-                        origin_x + run.x * scale_factor,
-                        origin_y,
-                        run.width,
-                        run.font_size,
-                        glyph.y,
-                        color,
-                        scale_factor,
-                        clip,
-                    );
-                }
-            }
-        }
         start = end;
     }
-}
-
-/// `text-decoration: underline`'s own mark, spanning `width` (logical
-/// units, same as `font_size`/`baseline`) at `baseline`'s own offset from
-/// the block's top. One mark for one run of one line: a caller with several
-/// calls it once for each.
-#[allow(clippy::too_many_arguments)]
-fn paint_underline(
-    buffer: &mut Surface,
-    x: f32,
-    y: f32,
-    width: f32,
-    font_size: f32,
-    baseline: f32,
-    color: Rgba,
-    scale_factor: f32,
-    clip: Option<&Mask>,
-) {
-    // Approximated from `font_size` (typographic convention, roughly what
-    // real fonts' own underline metrics land on for a UA default) rather
-    // than read from real font metrics, which this crate has no accessor
-    // for yet -- unlike the *positioning* logic around it (which reuses
-    // the real shaped baseline, not a guess), these two constants are a
-    // deliberate approximation.
-    let gap = font_size * 0.08;
-    let thickness = (font_size * 0.05).max(1.0);
-    fill_rect(
-        buffer,
-        x,
-        y + (baseline + gap) * scale_factor,
-        width * scale_factor,
-        thickness * scale_factor,
-        color,
-        clip,
-    );
+    decorate(buffer, decoration::Phase::LineThrough);
 }
 
 /// Fills every glyph across `runs` at `(x, y)` — the top-left of the whole
@@ -5108,23 +5105,87 @@ fn paint_shaped_runs(
     // whole path ends up in local space without touching each glyph
     // individually.
     let (x, y) = buffer.local(x, y);
-    let mut builder = PathBuilder::new();
-
-    append_glyphs(&mut builder, runs, x, y, scale_factor);
-
-    let Some(path) = builder.finish() else {
-        return;
-    };
     let mut paint = Paint::default();
     paint.set_color_rgba8(color.r, color.g, color.b, color.a);
     paint.anti_alias = true;
-    buffer.pixmap.fill_path(
-        &path,
-        &paint,
-        FillRule::Winding,
-        Transform::identity(),
-        clip,
-    );
+    // Runs a font has no bold for are drawn thickened, apart from the rest.
+    let split = runs.iter().any(|run| run.embolden);
+    for bold in [false, true] {
+        let mut builder = PathBuilder::new();
+        append_glyphs(
+            &mut builder,
+            runs,
+            x,
+            y,
+            scale_factor,
+            split.then_some(bold),
+        );
+        if let Some(path) = builder.finish() {
+            buffer.pixmap.fill_path(
+                &path,
+                &paint,
+                FillRule::Winding,
+                Transform::identity(),
+                clip,
+            );
+            if bold {
+                // As Skia thickens: the outline stroked as wide as a fraction of the size.
+                let size = runs
+                    .iter()
+                    .find(|run| run.embolden)
+                    .map_or(0.0, |run| run.font_size * scale_factor);
+                let ratio =
+                    1.0 / 24.0 + (1.0 / 32.0 - 1.0 / 24.0) * ((size - 9.0) / 27.0).clamp(0.0, 1.0);
+                let stroke = tiny_skia::Stroke {
+                    width: size * ratio,
+                    ..tiny_skia::Stroke::default()
+                };
+                buffer
+                    .pixmap
+                    .stroke_path(&path, &paint, &stroke, Transform::identity(), clip);
+            }
+        }
+        if !split {
+            break;
+        }
+    }
+}
+
+/// The outline of glyph `glyph` of `run` at `size`, from `instance` or, the
+/// first time, from the font (parsed once into `outlines` for the run).
+pub(crate) fn glyph_outline<'a>(
+    instance: &glyph_cache::Instance,
+    run: &'a florui_text::ShapedRun,
+    glyph: u32,
+    size: f32,
+    outlines: &mut Option<Option<skrifa::outline::OutlineGlyphCollection<'a>>>,
+) -> std::rc::Rc<[glyph_cache::Segment]> {
+    instance.outline(glyph, || {
+        let outlines = outlines.get_or_insert_with(|| {
+            FontRef::from_index(run.font.data.data(), run.font.index)
+                .ok()
+                .map(|font_ref| font_ref.outline_glyphs())
+        });
+        let Some(outline) = outlines
+            .as_ref()
+            .and_then(|outlines| outlines.get(GlyphId::new(glyph)))
+        else {
+            return Vec::new();
+        };
+        // Without the run's coordinates, every glyph draws at the font's
+        // default variable instance regardless of what was actually shaped: a
+        // bold run would measure wider (Parley resolves the wght axis correctly
+        // for layout) but paint no bolder at all.
+        let coords: Vec<NormalizedCoord> = run
+            .normalized_coords
+            .iter()
+            .map(|&bits| NormalizedCoord::from_bits(bits))
+            .collect();
+        let mut recorder = glyph_cache::Recorder::default();
+        let settings = DrawSettings::unhinted(GlyphSize::new(size), LocationRef::new(&coords));
+        let _ = outline.draw(settings, &mut recorder);
+        recorder.0
+    })
 }
 
 /// Appends every glyph of `runs` to `builder`, positioned from `(x, y)` and
@@ -5135,12 +5196,16 @@ fn append_glyphs(
     x: f32,
     y: f32,
     scale_factor: f32,
+    only: Option<bool>,
 ) {
     #[cfg(test)]
     if DIRECT_GLYPHS.with(std::cell::Cell::get) {
         return append_glyphs_direct(builder, runs, x, y, scale_factor);
     }
     for run in runs {
+        if only.is_some_and(|bold| bold != run.embolden) {
+            continue;
+        }
         let size = run.font_size * scale_factor;
         let instance = glyph_cache::instance(
             run.font.data.id(),
@@ -5152,39 +5217,13 @@ fn append_glyphs(
         // cache has not seen at this size yet.
         let mut outlines = None;
         for glyph in &run.glyphs {
-            let segments = instance.outline(glyph.id, || {
-                let outlines = outlines.get_or_insert_with(|| {
-                    FontRef::from_index(run.font.data.data(), run.font.index)
-                        .ok()
-                        .map(|font_ref| font_ref.outline_glyphs())
-                });
-                let Some(outline) = outlines
-                    .as_ref()
-                    .and_then(|outlines| outlines.get(GlyphId::new(glyph.id)))
-                else {
-                    return Vec::new();
-                };
-                // Without the run's coordinates, every glyph draws at the
-                // font's default variable instance regardless of what was
-                // actually shaped: a bold run would measure wider (Parley
-                // resolves the wght axis correctly for layout) but paint no
-                // bolder at all.
-                let coords: Vec<NormalizedCoord> = run
-                    .normalized_coords
-                    .iter()
-                    .map(|&bits| NormalizedCoord::from_bits(bits))
-                    .collect();
-                let mut recorder = glyph_cache::Recorder::default();
-                let settings =
-                    DrawSettings::unhinted(GlyphSize::new(size), LocationRef::new(&coords));
-                let _ = outline.draw(settings, &mut recorder);
-                recorder.0
-            });
+            let segments = glyph_outline(&instance, run, glyph.id, size, &mut outlines);
             glyph_cache::replay(
                 builder,
                 x + glyph.x * scale_factor,
                 y + glyph.y * scale_factor,
                 &segments,
+                run.skew,
             );
         }
     }
@@ -7792,6 +7831,204 @@ mod tests {
             plain_bottom, line_through_bottom,
             "line-through alone must not paint an underline mark"
         );
+    }
+
+    /// `css` painted over `tree`, `size` px, text in black on white, a
+    /// decoration in red wherever the css makes it so.
+    fn paint_text_css(tree: &Element, css: &str, size: (u32, u32)) -> Canvas {
+        let arena = Arena::build(tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        paint_to_buffer(
+            &mut font,
+            size.0,
+            size.1,
+            Rgba::opaque(255, 255, 255),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        )
+    }
+
+    fn is_pure_red(pixel: [u8; 3]) -> bool {
+        pixel == [255, 0, 0]
+    }
+
+    /// The rows with at least `min` pure red pixels.
+    fn red_rows(canvas: &Canvas, size: (u32, u32), min: u32) -> Vec<u32> {
+        (0..size.1)
+            .filter(|&y| {
+                (0..size.0)
+                    .filter(|&x| is_pure_red(pixel_rgb(canvas, x, y)))
+                    .count() as u32
+                    >= min
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_decoration_line_is_a_tenth_of_the_font_size_thick_and_sits_where_chromium_puts_it() {
+        for (size, thick) in [
+            (12, 1),
+            (16, 1),
+            (19, 1),
+            (20, 2),
+            (29, 2),
+            (30, 3),
+            (40, 4),
+        ] {
+            let tree: Element = view! { <div class="d">"HHHH"</div> };
+            let css = format!(
+                ".d {{ font-size: {size}px; line-height: 60px; text-decoration: underline red; }}"
+            );
+            let canvas = paint_text_css(&tree, &css, (120, 60));
+            let rows = red_rows(&canvas, (120, 60), 20);
+            assert_eq!(rows.len(), thick, "{size}px: rows {rows:?}");
+            // The baseline of a 60px line of this font: ascent and descent
+            // rounded, the rest of the line split in two, the smaller half above.
+            let mut font = Font::load_embedded();
+            let metrics = font.measure(
+                florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, size as f32, 400.0)
+                    .with_line_height(florui_text::LineHeight::Length(60.0)),
+                "H",
+            );
+            let above = rows[0] as f32 - metrics.baseline;
+            let gap = (thick as f32 / 2.0).ceil().max(1.0);
+            assert!(
+                (above - gap).abs() <= 1.0,
+                "{size}px: underline starts {above} below the baseline, wanted {gap}"
+            );
+        }
+    }
+
+    #[test]
+    fn overline_and_line_through_are_drawn_above_and_through_the_text() {
+        let tree: Element = view! { <div class="d">"HHHH"</div> };
+        let canvas = paint_text_css(
+            &tree,
+            ".d { font-size: 20px; line-height: 60px; text-decoration: overline line-through red; }",
+            (120, 60),
+        );
+        let rows = red_rows(&canvas, (120, 60), 20);
+        assert_eq!(rows.len(), 4, "two lines of 2px: {rows:?}");
+        let mut font = Font::load_embedded();
+        let baseline = font
+            .measure(
+                florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 20.0, 400.0)
+                    .with_line_height(florui_text::LineHeight::Length(60.0)),
+                "H",
+            )
+            .baseline;
+        let at = |y: u32| y as f32 - baseline;
+        assert!(
+            at(rows[0]) < -20.0,
+            "the overline is above the capitals: {rows:?}"
+        );
+        assert!(
+            (at(rows[2]) + 8.0).abs() <= 1.5,
+            "the strike is a third of the ascent up: {rows:?}"
+        );
+    }
+
+    #[test]
+    fn a_decoration_leaves_out_what_the_ink_reaches_unless_asked_not_to() {
+        let columns = |css: &str| {
+            let tree: Element = view! { <div class="d">"gjpqy"</div> };
+            let canvas = paint_text_css(&tree, css, (140, 50));
+            let rows = red_rows(&canvas, (140, 50), 10);
+            let row = rows[0];
+            (0..140)
+                .filter(|&x| is_pure_red(pixel_rgb(&canvas, x, row)))
+                .count()
+        };
+        let base = ".d { font-size: 28px; line-height: 50px; text-decoration: underline red; ";
+        let skipping = columns(&format!("{base} }}"));
+        let continuous = columns(&format!("{base} text-decoration-skip-ink: none; }}"));
+        assert!(
+            continuous > skipping + 10,
+            "skip-ink leaves out the stretches around the descenders ({skipping} against {continuous})"
+        );
+    }
+
+    #[test]
+    fn a_decoration_keeps_the_color_of_the_element_that_declared_it() {
+        let tree: Element = view! {
+            <div class="outer">"ab "<span class="inner">"cd"</span>" ef"</div>
+        };
+        // Not red, so only the decoration can be: it runs under the green text.
+        let canvas = paint_text_css(
+            &tree,
+            ".outer { font-size: 20px; line-height: 40px; text-decoration: underline #ff0000; \
+             color: #000000; } .inner { color: #00ff00; }",
+            (120, 40),
+        );
+        let rows = red_rows(&canvas, (120, 40), 40);
+        assert!(!rows.is_empty());
+        let row = rows[0];
+        let red_columns = (0..120)
+            .filter(|&x| is_pure_red(pixel_rgb(&canvas, x, row)))
+            .count();
+        assert!(
+            red_columns > 50,
+            "one line across all three runs: {red_columns}"
+        );
+    }
+
+    #[test]
+    fn dotted_dashed_and_double_lines_have_their_shapes() {
+        let case = |style: &str| {
+            let tree: Element = view! { <div class="d">"HHHHHHHH"</div> };
+            let canvas = paint_text_css(
+                &tree,
+                &format!(
+                    ".d {{ font-size: 20px; line-height: 40px; text-decoration: underline {style} red; }}"
+                ),
+                (150, 40),
+            );
+            let rows = red_rows(&canvas, (150, 40), 4);
+            let row = rows[0];
+            let on: Vec<bool> = (0..120)
+                .map(|x| is_pure_red(pixel_rgb(&canvas, x, row)))
+                .collect();
+            (rows, on)
+        };
+        let (rows, on) = case("dotted");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            &on[..8],
+            &[true, true, false, false, true, true, false, false]
+        );
+        let (rows, on) = case("dashed");
+        assert_eq!(rows.len(), 2);
+        assert!(
+            on[..6].iter().all(|&dash| dash),
+            "a dash of three thicknesses"
+        );
+        assert!(on[6..9].iter().any(|&dash| !dash), "then a gap");
+        let (rows, _) = case("double");
+        assert_eq!(rows.len(), 4, "two lines of two rows: {rows:?}");
+        assert_eq!(rows[2] - rows[1], 2, "one row between them");
+    }
+
+    #[test]
+    fn a_decoration_on_text_with_no_inline_element_is_drawn_too() {
+        let tree: Element = view! { <div class="d">"plain text only"</div> };
+        let canvas = paint_text_css(
+            &tree,
+            ".d { font-size: 20px; line-height: 40px; text-decoration: line-through red; }",
+            (200, 40),
+        );
+        assert_eq!(red_rows(&canvas, (200, 40), 40).len(), 2);
     }
 
     /// Positions and colors measured in Edge on a 200x30 number input whose

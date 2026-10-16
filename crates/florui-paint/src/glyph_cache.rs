@@ -65,20 +65,23 @@ pub(crate) fn replay(
     origin_x: f32,
     origin_y: f32,
     segments: &[Segment],
+    skew: f32,
 ) {
+    // A slanted run leans each point right by `skew` times its height above the baseline.
+    let px = |x: f32, y: f32| origin_x + x + skew * y;
     for segment in segments {
         match *segment {
-            Segment::Move(x, y) => builder.move_to(origin_x + x, origin_y - y),
-            Segment::Line(x, y) => builder.line_to(origin_x + x, origin_y - y),
+            Segment::Move(x, y) => builder.move_to(px(x, y), origin_y - y),
+            Segment::Line(x, y) => builder.line_to(px(x, y), origin_y - y),
             Segment::Quad(cx0, cy0, x, y) => {
-                builder.quad_to(origin_x + cx0, origin_y - cy0, origin_x + x, origin_y - y)
+                builder.quad_to(px(cx0, cy0), origin_y - cy0, px(x, y), origin_y - y)
             }
             Segment::Cubic(cx0, cy0, cx1, cy1, x, y) => builder.cubic_to(
-                origin_x + cx0,
+                px(cx0, cy0),
                 origin_y - cy0,
-                origin_x + cx1,
+                px(cx1, cy1),
                 origin_y - cy1,
-                origin_x + x,
+                px(x, y),
                 origin_y - y,
             ),
             Segment::Close => builder.close(),
@@ -192,9 +195,29 @@ mod tests {
                 Segment::Line(3.0, 4.0),
                 Segment::Close,
             ],
+            0.0,
         );
         let path = builder.finish().expect("a closed triangle-ish path");
         let points: Vec<_> = path.points().iter().map(|p| (p.x, p.y)).collect();
         assert_eq!(points, vec![(11.0, 18.0), (13.0, 16.0)]);
+    }
+
+    #[test]
+    fn a_skewed_replay_leans_each_point_by_its_height() {
+        let mut builder = PathBuilder::new();
+        replay(
+            &mut builder,
+            10.0,
+            20.0,
+            &[
+                Segment::Move(1.0, 2.0),
+                Segment::Line(3.0, 4.0),
+                Segment::Close,
+            ],
+            0.25,
+        );
+        let path = builder.finish().expect("a path");
+        let points: Vec<_> = path.points().iter().map(|p| (p.x, p.y)).collect();
+        assert_eq!(points, vec![(11.5, 18.0), (14.0, 16.0)]);
     }
 }
