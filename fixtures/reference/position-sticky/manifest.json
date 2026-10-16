@@ -1,0 +1,34 @@
+{
+  "id": "position-sticky",
+  "description": "A sticky box is held inside the view of its scrolling ancestor by its insets, even before anything is scrolled",
+  "html": "index.html",
+  "css": "style.css",
+  "element_id": "el",
+  "viewport": {
+    "width_css_px": 120,
+    "height_css_px": 80,
+    "device_pixel_ratio": 1
+  },
+  "canvas_color": "#ffffff",
+  "florui": {
+    "tag": "div",
+    "class": "wrap",
+    "css": ".wrap { margin: 10px 0 0 10px; width: 100px; height: 60px; overflow: hidden; background-color: #223; } .parent { padding-top: 5px; height: 135px; background-color: #334; } .a { position: sticky; top: 12px; height: 10px; width: 40px; background-color: #e85; } .gap { height: 90px; } .b { position: sticky; bottom: 6px; height: 10px; width: 60px; background-color: #4c8; } .rest { height: 25px; }",
+    "children": [
+      {
+        "tag": "div",
+        "class": "parent",
+        "css": "",
+        "children": [
+          { "tag": "div", "class": "a", "css": "" },
+          { "tag": "div", "class": "gap", "css": "" },
+          { "tag": "div", "class": "b", "css": "" },
+          { "tag": "div", "class": "rest", "css": "" }
+        ]
+      }
+    ]
+  },
+  "classification": {
+    "kind": "exact"
+  }
+}
