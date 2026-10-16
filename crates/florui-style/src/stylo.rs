@@ -3186,16 +3186,14 @@ fn to_visibility(
     }
 }
 
-/// `Fixed`/`Sticky` collapse to [`crate::cascade::Position::Static`]
-/// rather than [`crate::cascade::Position::Absolute`] — see
-/// [`crate::cascade::ComputedStyle::position`]'s own doc for why.
 fn to_position(value: style::values::computed::PositionProperty) -> crate::cascade::Position {
     use style::values::computed::PositionProperty;
     match value {
         PositionProperty::Static => crate::cascade::Position::Static,
         PositionProperty::Relative => crate::cascade::Position::Relative,
         PositionProperty::Absolute => crate::cascade::Position::Absolute,
-        PositionProperty::Fixed | PositionProperty::Sticky => crate::cascade::Position::Static,
+        PositionProperty::Fixed => crate::cascade::Position::Fixed,
+        PositionProperty::Sticky => crate::cascade::Position::Sticky,
     }
 }
 

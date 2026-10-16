@@ -224,15 +224,20 @@ pub enum Display {
     None,
 }
 
-/// `position` — `Fixed`/`Sticky` aren't supported yet, see
-/// [`ComputedStyle::position`]'s own doc for why they collapse to
-/// [`Self::Static`] rather than [`Self::Absolute`].
+/// `position`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Position {
     #[default]
     Static,
     Relative,
     Absolute,
+    /// Placed against the viewport and left in place by scrolling. Inside a
+    /// box that is transformed or filtered it is placed against that box
+    /// instead, as an `Absolute` one is.
+    Fixed,
+    /// In flow like `Relative`, then held inside its scrolling ancestor by
+    /// its `top`/`right`/`bottom`/`left` while that scrolls.
+    Sticky,
 }
 
 /// One track's sizing function, from `grid-template-columns`/`-rows` —
@@ -611,12 +616,8 @@ pub struct ComputedStyle {
     pub grid_column: (GridPlacement, GridPlacement),
     /// `grid-row-start`/`grid-row-end`.
     pub grid_row: (GridPlacement, GridPlacement),
-    /// `position`. `Fixed`/`Sticky` aren't supported yet — collapsed to
-    /// [`Position::Static`] rather than silently behaving like
-    /// [`Position::Absolute`], a real behavior mismatch an author asking
-    /// for viewport-relative or scroll-anchored positioning would hit
-    /// otherwise. `Absolute`'s real containing-block rule (the *nearest
-    /// explicitly* `relative`/`absolute` ancestor) is also simplified:
+    /// `position`. `Absolute`'s real containing-block rule (the *nearest
+    /// explicitly* `relative`/`absolute` ancestor) is simplified:
     /// this crate's own [`Position::Static`] still counts as a valid
     /// positioning context for an absolutely-positioned descendant, the
     /// same deviation the official Stylo→Taffy bridge crate itself
@@ -2177,7 +2178,7 @@ mod tests {
     }
 
     #[test]
-    fn position_fixed_and_sticky_collapse_to_static() {
+    fn position_fixed_and_sticky_are_read() {
         let tree: Element = view! {
             <div>
                 <div class="fixed" />
@@ -2191,12 +2192,8 @@ mod tests {
         );
         let root = arena.roots()[0];
         let (fixed, sticky) = (arena.children(root)[0], arena.children(root)[1]);
-        assert_eq!(
-            computed[&fixed].position,
-            Position::Static,
-            "fixed isn't supported yet -- inert, not silently absolute"
-        );
-        assert_eq!(computed[&sticky].position, Position::Static);
+        assert_eq!(computed[&fixed].position, Position::Fixed);
+        assert_eq!(computed[&sticky].position, Position::Sticky);
     }
 
     #[test]
