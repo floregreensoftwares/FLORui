@@ -655,6 +655,8 @@ pub struct ComputedStyle {
     /// hit (its descendants still can be, if they don't inherit `none`).
     /// `auto` and every other value read as `false`.
     pub pointer_events_none: bool,
+    /// Inherited `visibility`; see [`Visibility`].
+    pub visibility: Visibility,
     /// `text-decoration`/`text-decoration-line` — true only when the
     /// value includes `underline`. `overline`/`line-through`/`blink`
     /// aren't tracked; this is `<a>`'s own default-stylesheet need, not a
@@ -830,6 +832,7 @@ impl ComputedStyle {
             inset: _,
             z_index: _,
             pointer_events_none: _,
+            visibility: _,
             overflow_clips: _,
             overflow_scrolls_x: _,
             overflow_scrolls_y: _,
@@ -874,6 +877,25 @@ impl ComputedStyle {
         let mut repainted = self.clone();
         repainted.copy_paint_from(other);
         repainted == *other
+    }
+}
+
+/// `visibility`. A node that is not `Visible` keeps its box in layout but
+/// paints nothing of its own, cannot be hit and takes no focus; a
+/// descendant that computes `visible` again is still drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Visibility {
+    #[default]
+    Visible,
+    Hidden,
+    /// Like `Hidden` for everything but a table row or column, a flex item
+    /// and the like, which it takes out of the layout as well.
+    Collapse,
+}
+
+impl Visibility {
+    pub fn is_visible(self) -> bool {
+        self == Visibility::Visible
     }
 }
 
@@ -1708,6 +1730,31 @@ mod tests {
             !computed[&not_underlined].text_decoration_underline,
             "line-through alone must not read as underline"
         );
+    }
+
+    #[test]
+    fn visibility_inherits_and_a_descendant_can_show_itself_again() {
+        let tree: Element = view! {
+            <div class="hide">
+                <span class="inherits" />
+                <span class="shows" />
+            </div>
+        };
+        let css = ".hide { visibility: hidden; } .shows { visibility: visible; } \
+                   .inherits { visibility: collapse; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let of = |class: &str| {
+            let node = arena
+                .find(|a, id| a.classes(id).iter().any(|c| c == class))
+                .unwrap();
+            computed[&node].visibility
+        };
+        assert_eq!(of("hide"), Visibility::Hidden);
+        assert_eq!(of("shows"), Visibility::Visible);
+        assert_eq!(of("inherits"), Visibility::Collapse);
+        let plain: Element = view! { <div><span /></div> };
+        let (arena, computed) = styles(&plain, "", &InteractionState::new());
+        assert!(computed[&arena.roots()[0]].visibility.is_visible());
     }
 
     #[test]

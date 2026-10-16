@@ -1854,6 +1854,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
             values.get_inherited_ui().pointer_events,
             style::values::specified::PointerEvents::None
         ),
+        visibility: to_visibility(values.get_inherited_box().visibility),
         text_align: to_text_align(text.text_align),
         text_shadow: to_text_shadows(&text.text_shadow.0, &text.color),
         glass: to_glass(values),
@@ -3171,6 +3172,17 @@ fn to_optional_margin(
     match value {
         GenericMargin::LengthPercentage(lp) => lp.to_length().map(|length| length.px()),
         _ => None,
+    }
+}
+
+fn to_visibility(
+    value: style::properties::longhands::visibility::computed_value::T,
+) -> crate::cascade::Visibility {
+    use style::properties::longhands::visibility::computed_value::T;
+    match value {
+        T::Visible => crate::cascade::Visibility::Visible,
+        T::Hidden => crate::cascade::Visibility::Hidden,
+        T::Collapse => crate::cascade::Visibility::Collapse,
     }
 }
 
