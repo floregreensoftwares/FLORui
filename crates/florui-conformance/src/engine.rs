@@ -171,6 +171,9 @@ pub fn render_fixture(
         available,
     )
     .map_err(EngineError::Layout)?;
+    // Where the boxes are drawn: a sticky one is held in its scroller's view
+    // even with nothing scrolled.
+    let layouts = florui_layout::apply_scroll_offsets(&arena, &layouts, &HashMap::new(), &styles);
 
     let wrapper = arena.roots()[0];
     let node = arena.children(wrapper)[0];
