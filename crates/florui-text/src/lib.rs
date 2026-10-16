@@ -50,14 +50,23 @@ use peniko::Blob;
 pub mod editing;
 mod editor_core;
 mod ellipsis;
+mod features;
 pub use inline::{InlineElement, InlineItem};
 mod inline;
 mod inline_memo;
+mod settings;
+mod transform;
+pub use settings::{intern_family_stack, intern_features, intern_variations};
+pub use transform::{FontCaps, TextCase, TextTransform};
 
 /// Open Sans (SIL Open Font License 1.1) — see `fonts/NOTICE.md` for
 /// provenance and why it's this crate's sans-serif default despite not
 /// being metrically matched to Arial.
 pub const EMBEDDED_SANS_SERIF_FONT: &[u8] = include_bytes!("../fonts/OpenSans-Variable.ttf");
+/// The italic of [`EMBEDDED_SANS_SERIF_FONT`], the same family under the
+/// same license: what `font-style: italic` draws in sans-serif.
+pub const EMBEDDED_SANS_SERIF_ITALIC_FONT: &[u8] =
+    include_bytes!("../fonts/OpenSans-Italic-Variable.ttf");
 /// Fira Mono (SIL Open Font License 1.1) — see `fonts/NOTICE.md`.
 pub const EMBEDDED_MONOSPACE_FONT: &[u8] = include_bytes!("../fonts/FiraMono-Medium.ttf");
 
@@ -70,6 +79,56 @@ pub enum FontFamily {
     #[default]
     SansSerif,
     Monospace,
+    /// A `font-family` list, by the number [`intern_family_stack`] gave it.
+    Stack(u32),
+}
+
+impl FontFamily {
+    /// The embedded family this one measures like where a size per family is
+    /// kept: `0` for sans-serif and what a list falls back to, `1` for
+    /// monospace.
+    pub(crate) fn base(self) -> usize {
+        match self {
+            FontFamily::Monospace => 1,
+            FontFamily::SansSerif | FontFamily::Stack(_) => 0,
+        }
+    }
+
+    fn bits(self) -> u32 {
+        match self {
+            FontFamily::SansSerif => 0,
+            FontFamily::Monospace => 1,
+            FontFamily::Stack(id) => id.saturating_add(2),
+        }
+    }
+}
+
+/// `font-style`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum FontStyle {
+    #[default]
+    Normal,
+    Italic,
+    /// Slanted by this many degrees (a font with no italic is slanted by hand).
+    Oblique(f32),
+}
+
+impl FontStyle {
+    fn bits(self) -> (u32, u32) {
+        match self {
+            FontStyle::Normal => (0, 0),
+            FontStyle::Italic => (1, 0),
+            FontStyle::Oblique(degrees) => (2, degrees.to_bits()),
+        }
+    }
+
+    fn parley(self) -> parley::FontStyle {
+        match self {
+            FontStyle::Normal => parley::FontStyle::Normal,
+            FontStyle::Italic => parley::FontStyle::Italic,
+            FontStyle::Oblique(degrees) => parley::FontStyle::Oblique(Some(degrees)),
+        }
+    }
 }
 
 /// `line-height` of a run of text: `Normal` is the font's own line height, a
@@ -213,14 +272,43 @@ pub struct TextStyle {
     pub wrap: bool,
     pub word_break: WordBreak,
     pub overflow_wrap: OverflowWrap,
+    pub font_style: FontStyle,
+    pub transform: TextTransform,
+    pub caps: FontCaps,
+    /// OpenType features, by the number [`intern_features`] gave them; `0` is none.
+    pub features: u32,
+    /// Variable font axes, by the number [`intern_variations`] gave them; `0` is none.
+    pub variations: u32,
+    /// Which synthesized forms `font-synthesis` turns off: [`NO_SYNTHETIC_STYLE`],
+    /// [`NO_SYNTHETIC_CAPS`] and [`NO_SYNTHETIC_WEIGHT`] added together; `0` leaves all on.
+    pub no_synthesis: u8,
 }
 
+/// A font with no italic is not slanted by hand.
+pub const NO_SYNTHETIC_STYLE: u8 = 1;
+/// Small capitals are not made from capitals.
+pub const NO_SYNTHETIC_CAPS: u8 = 2;
+/// A font with no bold is not emboldened.
+pub const NO_SYNTHETIC_WEIGHT: u8 = 4;
+
 /// A [`TextStyle`] as the bits the memos compare and hash.
-pub(crate) type StyleBits = [u32; 15];
+pub(crate) type StyleBits = [u32; 20];
+
+/// Text ready to shape: see [`TextStyle::prepared`].
+pub(crate) struct Prepared<'a> {
+    pub text: std::borrow::Cow<'a, str>,
+    pub small: Vec<std::ops::Range<usize>>,
+}
 
 impl TextStyle {
     pub fn new(family: FontFamily, font_size: f32, font_weight: f32) -> Self {
         Self {
+            font_style: FontStyle::Normal,
+            transform: TextTransform::default(),
+            caps: FontCaps::Normal,
+            features: 0,
+            variations: 0,
+            no_synthesis: 0,
             family,
             font_size,
             font_weight,
@@ -278,11 +366,46 @@ impl TextStyle {
         self
     }
 
+    pub fn with_font_style(mut self, font_style: FontStyle) -> Self {
+        self.font_style = font_style;
+        self
+    }
+
+    pub fn with_transform(mut self, transform: TextTransform) -> Self {
+        self.transform = transform;
+        self
+    }
+
+    pub fn with_caps(mut self, caps: FontCaps) -> Self {
+        self.caps = caps;
+        self
+    }
+
+    /// OpenType features and variable font axes, as the numbers
+    /// [`intern_features`] and [`intern_variations`] gave them.
+    pub fn with_font_settings(mut self, features: u32, variations: u32) -> Self {
+        self.features = features;
+        self.variations = variations;
+        self
+    }
+
+    /// Turns off the synthesized forms in `no_synthesis` (see [`Self::no_synthesis`]).
+    pub fn with_no_synthesis(mut self, no_synthesis: u8) -> Self {
+        self.no_synthesis = no_synthesis;
+        self
+    }
+
     pub(crate) fn bits(&self) -> StyleBits {
         let (line_height_kind, line_height_value) = self.line_height.bits();
         let [vertical_kind, vertical_length, vertical_percent] = self.vertical_align.bits();
+        let (style_kind, style_angle) = self.font_style.bits();
         [
-            self.family as u32,
+            self.family.bits(),
+            style_kind,
+            style_angle,
+            self.transform.bits() | ((self.caps as u32) << 4) | (u32::from(self.no_synthesis) << 8),
+            self.features,
+            self.variations,
             self.font_size.to_bits(),
             self.font_weight.to_bits(),
             u32::from(line_height_kind),
@@ -376,6 +499,86 @@ impl TextStyle {
         }
     }
 
+    /// `text` as it is shaped: collapsed, transformed by `text-transform` and
+    /// with the small capitals of `font-variant-caps` made, and the byte ranges
+    /// of those capitals, which are set smaller. `in_word` is the state
+    /// `capitalize` carries from one run to the next.
+    pub(crate) fn prepared<'a>(
+        &self,
+        text: &'a str,
+        previous_space: &mut bool,
+        in_word: &mut bool,
+        native_caps: bool,
+    ) -> Prepared<'a> {
+        let collapsed = self.collapsed(text, previous_space);
+        let transformed = match collapsed {
+            std::borrow::Cow::Borrowed(text) => self.transform.apply(text, in_word),
+            std::borrow::Cow::Owned(text) => {
+                std::borrow::Cow::Owned(self.transform.apply(&text, in_word).into_owned())
+            }
+        };
+        if self.caps.is_synthesized() && !native_caps && self.no_synthesis & NO_SYNTHETIC_CAPS == 0
+        {
+            let (made, small) = transform::small_caps(&transformed, self.caps);
+            return Prepared {
+                text: std::borrow::Cow::Owned(made),
+                small,
+            };
+        }
+        Prepared {
+            text: transformed,
+            small: Vec::new(),
+        }
+    }
+
+    /// The features `font-variant-caps` asks of the font, in CSS.
+    fn caps_features(&self) -> Option<&'static str> {
+        match self.caps {
+            FontCaps::Normal => None,
+            FontCaps::SmallCaps => Some("\"smcp\" 1"),
+            FontCaps::AllSmallCaps => Some("\"smcp\" 1, \"c2sc\" 1"),
+            FontCaps::PetiteCaps => Some("\"pcap\" 1"),
+            FontCaps::AllPetiteCaps => Some("\"pcap\" 1, \"c2pc\" 1"),
+            FontCaps::Unicase => Some("\"unic\" 1"),
+            FontCaps::TitlingCaps => Some("\"titl\" 1"),
+        }
+    }
+
+    /// The tag a font must list for its small capitals to be used rather than
+    /// made.
+    fn caps_tag(&self) -> Option<[u8; 4]> {
+        match self.caps {
+            FontCaps::SmallCaps | FontCaps::AllSmallCaps => Some(*b"smcp"),
+            FontCaps::PetiteCaps | FontCaps::AllPetiteCaps => Some(*b"pcap"),
+            _ => None,
+        }
+    }
+
+    /// All the OpenType features this style asks for, in CSS: those of the
+    /// caps first, so the settings written out win.
+    fn feature_source(&self) -> Option<String> {
+        let settings = settings::features(self.features);
+        match (self.caps_features(), settings) {
+            (None, None) => None,
+            (Some(caps), None) => Some(caps.to_owned()),
+            (None, Some(settings)) => Some(settings.to_string()),
+            (Some(caps), Some(settings)) => Some(format!("{caps}, {settings}")),
+        }
+    }
+
+    /// The Parley family of this style: the embedded one named `name` for
+    /// the two it has, the list itself (and the embedded sans-serif last, for
+    /// whatever no name in it finds) for [`FontFamily::Stack`].
+    fn parley_family<'a>(&self, name: &'a str) -> ParleyFontFamily<'a> {
+        match self.family {
+            FontFamily::Stack(id) => match settings::family_stack(id) {
+                Some(css) => ParleyFontFamily::Source(format!("{css}, \"{name}\"").into()),
+                None => ParleyFontFamily::named(name),
+            },
+            _ => ParleyFontFamily::named(name),
+        }
+    }
+
     /// The indent in pixels for a paragraph wrapped at `max_width`, with
     /// Parley's options for its keywords.
     fn paragraph_indent(&self, max_width: Option<f32>) -> (f32, IndentOptions) {
@@ -404,8 +607,17 @@ impl TextStyle {
     fn parley_extras(
         &self,
         with_line_height: bool,
-    ) -> [Option<StyleProperty<'static, [u8; 4]>>; 6] {
+    ) -> [Option<StyleProperty<'static, [u8; 4]>>; 9] {
         [
+            (self.font_style != FontStyle::Normal)
+                .then(|| StyleProperty::FontStyle(self.font_style.parley())),
+            self.feature_source()
+                .map(|css| StyleProperty::FontFeatures(parley::FontFeatures::Source(css.into()))),
+            settings::variations(self.variations).map(|css| {
+                StyleProperty::FontVariations(parley::FontVariations::Source(
+                    css.to_string().into(),
+                ))
+            }),
             with_line_height
                 .then(|| self.line_height.parley().map(StyleProperty::LineHeight))
                 .flatten(),
@@ -458,6 +670,44 @@ pub struct ShapedGlyph {
     pub y: f32,
 }
 
+/// What a run's font lacks that is made up by hand: the tangent of the angle it
+/// is leaned by (no italic), and whether it is emboldened (no bold), each unless
+/// `font-synthesis` (`no_synthesis`) turned it off.
+pub(crate) fn synthesis_of<B: parley::Brush>(
+    run: &parley::Run<'_, B>,
+    no_synthesis: u8,
+) -> (f32, bool) {
+    let synthesis = run.synthesis();
+    let skew = synthesis
+        .skew()
+        .filter(|_| no_synthesis & NO_SYNTHETIC_STYLE == 0)
+        .map_or(0.0, |degrees| degrees.to_radians().tan());
+    (
+        skew,
+        synthesis.embolden() && no_synthesis & NO_SYNTHETIC_WEIGHT == 0,
+    )
+}
+
+/// What a run needs of its font to draw the decorations of its text.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct RunMetrics {
+    /// From the baseline up to the top of the font's tallest glyphs, unrounded.
+    pub ascent: f32,
+    /// From the baseline down to the bottom of the font's lowest glyphs.
+    pub descent: f32,
+    /// The thickness the font gives an underline, in pixels at the run's size.
+    pub underline_size: f32,
+}
+
+pub(crate) fn run_metrics_of<B: parley::Brush>(run: &parley::Run<'_, B>) -> RunMetrics {
+    let metrics = run.metrics();
+    RunMetrics {
+        ascent: metrics.ascent,
+        descent: metrics.descent,
+        underline_size: metrics.underline_size,
+    }
+}
+
 /// A sequence of glyphs sharing one font and size — Parley may itemize a
 /// single call to [`Font::shape`] into more than one run (script/bidi
 /// boundaries, or a fallback font substituted for a codepoint the
@@ -472,6 +722,12 @@ pub struct ShapedRun {
     /// when drawing outlines, or every run draws at the font's default
     /// instance regardless of what was shaped.
     pub normalized_coords: Vec<i16>,
+    /// How far a run the font has no italic for leans: the tangent of the angle
+    /// (`0` for an upright run or one in a real italic).
+    pub skew: f32,
+    /// Whether the font has no bold and the run is thickened by hand.
+    pub embolden: bool,
+    pub metrics: RunMetrics,
     pub glyphs: Vec<ShapedGlyph>,
     /// For a run of an inline context, the element the text belongs to
     /// (see [`InlineElement`]); `0` everywhere else.
@@ -479,8 +735,7 @@ pub struct ShapedRun {
     /// Where the run starts on its line and how far it advances.
     pub x: f32,
     pub width: f32,
-    /// The line the run is on, counting from `0` (`0` for the lines of an
-    /// edited text, which are not told apart).
+    /// The line the run is on, counting from `0`.
     pub line: u32,
 }
 
@@ -697,9 +952,12 @@ pub struct Font {
     metrics_memo: MetricsMemo,
     inline_memo: inline_memo::InlineMemo,
     /// Vertical metrics by family, size and weight bits.
-    style_metrics: FxHashMap<(u8, u32, u32), inline::StyleMetrics>,
+    style_metrics: FxHashMap<(u32, u32, u32, u32), inline::StyleMetrics>,
     /// The width of U+2007 per em, by family.
     spacer_em: [Option<f32>; 2],
+    /// Whether the first font that answers to a family has a feature, by the
+    /// family's name and the feature.
+    feature_support: FxHashMap<(String, [u8; 4]), bool>,
     /// Counts the fonts registered after loading, so a copy made earlier can tell
     /// it is out of date.
     generation: u64,
@@ -730,6 +988,9 @@ impl Font {
         let mut font_cx = FontContext::new();
         let sans_serif_family_name = Self::register_into(&mut font_cx, EMBEDDED_SANS_SERIF_FONT)
             .expect("the embedded sans-serif font is always valid");
+        // Same family name: a request for italic finds this face by its style.
+        Self::register_into(&mut font_cx, EMBEDDED_SANS_SERIF_ITALIC_FONT)
+            .expect("the embedded italic font is always valid");
         let monospace_family_name = Self::register_into(&mut font_cx, EMBEDDED_MONOSPACE_FONT)
             .expect("the embedded monospace font is always valid");
         Self {
@@ -741,6 +1002,7 @@ impl Font {
             inline_memo: inline_memo::InlineMemo::with_capacity(inline_memo::INLINE_MEMO_BYTES),
             style_metrics: FxHashMap::default(),
             spacer_em: [None; 2],
+            feature_support: FxHashMap::default(),
             generation: 0,
         }
     }
@@ -774,6 +1036,7 @@ impl Font {
             inline_memo: inline_memo::InlineMemo::with_capacity(inline_memo::INLINE_MEMO_BYTES),
             style_metrics: FxHashMap::default(),
             spacer_em: [None; 2],
+            feature_support: FxHashMap::default(),
             generation: seed.generation,
         }
     }
@@ -790,6 +1053,7 @@ impl Font {
         self.inline_memo.clear();
         self.style_metrics.clear();
         self.spacer_em = [None; 2];
+        self.feature_support.clear();
         self.generation += 1;
         Self::register_into(&mut self.font_cx, font_bytes)
     }
@@ -810,9 +1074,61 @@ impl Font {
             .map(str::to_owned)
     }
 
+    /// The names of the families `style` asks for, in order, the embedded
+    /// sans-serif last. A generic one (`serif`) names no family a font file can
+    /// be looked up by here and is left out.
+    fn family_candidates(&self, style: &TextStyle) -> Vec<String> {
+        let mut names = Vec::new();
+        if let FontFamily::Stack(id) = style.family
+            && let Some(css) = settings::family_stack(id)
+        {
+            for item in css.split(',') {
+                let item = item.trim();
+                if let Some(quoted) = item
+                    .strip_prefix('"')
+                    .and_then(|rest| rest.strip_suffix('"'))
+                {
+                    names.push(quoted.replace("\\\"", "\"").replace("\\\\", "\\"));
+                }
+            }
+        } else {
+            names.push(self.family_name(style.family).to_owned());
+        }
+        names.push(self.sans_serif_family_name.clone());
+        names
+    }
+
+    /// Whether the font that answers to `style`'s family has the feature the
+    /// style's `font-variant-caps` needs for small capitals of its own.
+    fn caps_in_font(&mut self, style: &TextStyle) -> bool {
+        let Some(tag) = style.caps_tag() else {
+            return false;
+        };
+        let names = self.family_candidates(style);
+        let key = (names.join(","), tag);
+        if let Some(&known) = self.feature_support.get(&key) {
+            return known;
+        }
+        let mut answer = false;
+        for name in &names {
+            let Some(family) = self.font_cx.collection.family_by_name(name) else {
+                continue;
+            };
+            let Some(info) = family.fonts().first() else {
+                continue;
+            };
+            answer = info
+                .load(None)
+                .is_some_and(|blob| features::font_has_feature(blob.data(), info.index(), tag));
+            break;
+        }
+        self.feature_support.insert(key, answer);
+        answer
+    }
+
     pub(crate) fn family_name(&self, family: FontFamily) -> &str {
         match family {
-            FontFamily::SansSerif => &self.sans_serif_family_name,
+            FontFamily::SansSerif | FontFamily::Stack(_) => &self.sans_serif_family_name,
             FontFamily::Monospace => &self.monospace_family_name,
         }
     }
@@ -969,7 +1285,7 @@ impl Font {
     /// [`Self::measure`], but exposing glyph ids and pen positions instead
     /// of just overall width/height.
     pub fn shape(&mut self, style: TextStyle, text: &str) -> ShapedText {
-        Self::shaped_text_of(self.layout_unwrapped(style, text))
+        Self::shaped_text_of(self.layout_unwrapped(style, text), style.no_synthesis)
     }
 
     /// Shapes `text` in `style` into
@@ -980,10 +1296,13 @@ impl Font {
     /// later lines simply carry larger `y` values, with no separate
     /// per-line structure to unpack.
     pub fn shape_wrapped(&mut self, style: TextStyle, text: &str, max_width: f32) -> ShapedText {
-        Self::shaped_text_of(self.layout_wrapped(style, text, max_width))
+        Self::shaped_text_of(
+            self.layout_wrapped(style, text, max_width),
+            style.no_synthesis,
+        )
     }
 
-    fn shaped_text_of(layout: Option<parley::Layout<[u8; 4]>>) -> ShapedText {
+    fn shaped_text_of(layout: Option<parley::Layout<[u8; 4]>>, no_synthesis: u8) -> ShapedText {
         let Some(layout) = layout else {
             return ShapedText {
                 runs: Vec::new(),
@@ -1007,10 +1326,14 @@ impl Font {
                         y: glyph.y,
                     })
                     .collect();
+                let synthesis = synthesis_of(run, no_synthesis);
                 runs.push(ShapedRun {
                     font: run.font().clone(),
                     font_size: run.font_size(),
                     normalized_coords: run.normalized_coords().to_vec(),
+                    skew: synthesis.0,
+                    embolden: synthesis.1,
+                    metrics: run_metrics_of(run),
                     glyphs,
                     element: 0,
                     x: glyph_run.offset(),
@@ -1092,15 +1415,16 @@ impl Font {
         normal_line_height: Option<f32>,
     ) -> parley::Layout<[u8; 4]> {
         let family_name = self.family_name(style.family).to_owned();
-        let text = style.collapsed(text, &mut true);
-        let text = text.as_ref();
+        let native_caps = style.caps.is_synthesized() && self.caps_in_font(&style);
+        let prepared = style.prepared(text, &mut true, &mut false, native_caps);
+        let text = prepared.text.as_ref();
         let mut builder = self
             .layout_cx
             .ranged_builder(&mut self.font_cx, text, 1.0, true);
         builder.push_default(StyleProperty::FontSize(style.font_size));
-        builder.push_default(StyleProperty::FontFamily(ParleyFontFamily::named(
-            family_name.as_str(),
-        )));
+        builder.push_default(StyleProperty::FontFamily(
+            style.parley_family(family_name.as_str()),
+        ));
         builder.push_default(StyleProperty::FontWeight(FontWeight::new(
             style.font_weight,
         )));
@@ -1112,6 +1436,12 @@ impl Font {
                 height,
             )));
         }
+        for range in &prepared.small {
+            builder.push(
+                StyleProperty::FontSize(style.font_size * style.caps.scale()),
+                range.clone(),
+            );
+        }
         builder.build(text)
     }
 }
@@ -1119,6 +1449,101 @@ impl Font {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn italic_uses_the_real_italic_face_where_there_is_one_and_a_slant_where_not() {
+        let mut font = Font::load_embedded();
+        let mut italic = |family| {
+            font.shape(
+                TextStyle::new(family, 16.0, 400.0).with_font_style(FontStyle::Italic),
+                "Hag",
+            )
+        };
+        let sans = italic(FontFamily::SansSerif);
+        let mono = italic(FontFamily::Monospace);
+        assert_eq!(
+            sans.runs[0].skew, 0.0,
+            "a real italic is not slanted by hand"
+        );
+        let upright = font.shape(TextStyle::new(FontFamily::SansSerif, 16.0, 400.0), "Hag");
+        assert_ne!(
+            sans.runs[0].font.data.id(),
+            upright.runs[0].font.data.id(),
+            "a different face than the upright one"
+        );
+        assert!(
+            (mono.runs[0].skew - 14f32.to_radians().tan()).abs() < 1e-3,
+            "{}",
+            mono.runs[0].skew
+        );
+    }
+
+    #[test]
+    fn font_synthesis_turns_off_the_slant_the_bold_and_the_small_capitals() {
+        let mut font = Font::load_embedded();
+        let mono_italic =
+            TextStyle::new(FontFamily::Monospace, 16.0, 400.0).with_font_style(FontStyle::Italic);
+        assert!(font.shape(mono_italic, "Hag").runs[0].skew > 0.2);
+        assert_eq!(
+            font.shape(mono_italic.with_no_synthesis(NO_SYNTHETIC_STYLE), "Hag")
+                .runs[0]
+                .skew,
+            0.0
+        );
+        let mono_bold = TextStyle::new(FontFamily::Monospace, 16.0, 700.0);
+        assert!(font.shape(mono_bold, "Hag").runs[0].embolden);
+        assert!(
+            !font
+                .shape(mono_bold.with_no_synthesis(NO_SYNTHETIC_WEIGHT), "Hag")
+                .runs[0]
+                .embolden
+        );
+        let sans_bold = TextStyle::new(FontFamily::SansSerif, 16.0, 700.0);
+        assert!(
+            !font.shape(sans_bold, "Hag").runs[0].embolden,
+            "Open Sans has a bold"
+        );
+        let sans = TextStyle::new(FontFamily::SansSerif, 16.0, 400.0);
+        let plain = font.measure(sans, "hello").width;
+        let small = font
+            .measure(sans.with_caps(FontCaps::SmallCaps), "hello")
+            .width;
+        let off = font
+            .measure(
+                sans.with_caps(FontCaps::SmallCaps)
+                    .with_no_synthesis(NO_SYNTHETIC_CAPS),
+                "hello",
+            )
+            .width;
+        assert_ne!(plain, small);
+        assert_eq!(plain, off, "no small capitals made: the text is as it was");
+    }
+
+    #[test]
+    fn text_transform_and_small_caps_change_what_is_shaped() {
+        let mut font = Font::load_embedded();
+        let style = TextStyle::new(FontFamily::SansSerif, 16.0, 400.0);
+        let upper = font.measure(
+            style.with_transform(TextTransform {
+                case: TextCase::Uppercase,
+                ..Default::default()
+            }),
+            "hello",
+        );
+        assert_eq!(upper.width, font.measure(style, "HELLO").width);
+        let all = font.measure(style.with_caps(FontCaps::AllSmallCaps), "hello");
+        let all_from_capitals = font.measure(style.with_caps(FontCaps::AllSmallCaps), "HELLO");
+        assert_eq!(
+            all.width, all_from_capitals.width,
+            "every letter is a small capital"
+        );
+        assert!(all.width < font.measure(style, "HELLO").width);
+        let small = font.measure(style.with_caps(FontCaps::SmallCaps), "Hello");
+        let capitals = font.measure(style, "HELLO");
+        let plain = font.measure(style, "Hello");
+        assert!(small.width < capitals.width && small.width > 0.5 * capitals.width);
+        assert_ne!(small.width, plain.width);
+    }
 
     #[test]
     fn loads_both_embedded_families_under_their_real_names() {
@@ -1237,19 +1662,19 @@ mod tests {
     fn what_keeps_being_asked_for_survives_while_the_unused_is_dropped() {
         // Two generations of two entries each.
         let mut memo = MetricsMemo::with_capacity(4);
-        memo.insert([0; 15], "hot", None, metrics(1.0));
-        memo.insert([0; 15], "cold", None, metrics(2.0));
-        memo.insert([0; 15], "c", None, metrics(3.0));
+        memo.insert([0; 20], "hot", None, metrics(1.0));
+        memo.insert([0; 20], "cold", None, metrics(2.0));
+        memo.insert([0; 20], "c", None, metrics(3.0));
         // "hot" and "cold" are now the previous generation; asking for "hot"
         // brings it back into the current one.
-        assert_eq!(memo.get([0; 15], "hot", None), Some(metrics(1.0)));
+        assert_eq!(memo.get([0; 20], "hot", None), Some(metrics(1.0)));
 
-        memo.insert([0; 15], "d", None, metrics(4.0));
-        memo.insert([0; 15], "e", None, metrics(5.0));
+        memo.insert([0; 20], "d", None, metrics(4.0));
+        memo.insert([0; 20], "e", None, metrics(5.0));
 
-        assert_eq!(memo.get([0; 15], "hot", None), Some(metrics(1.0)));
+        assert_eq!(memo.get([0; 20], "hot", None), Some(metrics(1.0)));
         assert!(
-            memo.get([0; 15], "cold", None).is_none(),
+            memo.get([0; 20], "cold", None).is_none(),
             "never asked for again"
         );
     }
@@ -1258,7 +1683,7 @@ mod tests {
     fn the_memo_never_holds_more_than_its_capacity() {
         let mut memo = MetricsMemo::with_capacity(10);
         for i in 0..200 {
-            memo.insert([0; 15], &format!("text {i}"), None, metrics(i as f32));
+            memo.insert([0; 20], &format!("text {i}"), None, metrics(i as f32));
             assert!(
                 memo.entries() <= 10,
                 "after {i} inserts: {}",
@@ -1270,13 +1695,13 @@ mod tests {
     #[test]
     fn a_promoted_entry_keeps_its_exact_answer_and_width() {
         let mut memo = MetricsMemo::with_capacity(6);
-        memo.insert([0; 15], "wide", Some(40), metrics(7.0));
-        memo.insert([0; 15], "wide", None, metrics(9.0));
-        memo.insert([0; 15], "other", None, metrics(1.0));
+        memo.insert([0; 20], "wide", Some(40), metrics(7.0));
+        memo.insert([0; 20], "wide", None, metrics(9.0));
+        memo.insert([0; 20], "other", None, metrics(1.0));
 
-        assert_eq!(memo.get([0; 15], "wide", Some(40)), Some(metrics(7.0)));
-        assert_eq!(memo.get([0; 15], "wide", None), Some(metrics(9.0)));
-        assert!(memo.get([0; 15], "wide", Some(41)).is_none());
+        assert_eq!(memo.get([0; 20], "wide", Some(40)), Some(metrics(7.0)));
+        assert_eq!(memo.get([0; 20], "wide", None), Some(metrics(9.0)));
+        assert!(memo.get([0; 20], "wide", Some(41)).is_none());
     }
 
     #[test]

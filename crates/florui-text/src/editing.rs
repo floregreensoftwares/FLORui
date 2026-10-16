@@ -16,6 +16,7 @@
 //! and [`Font::ime_cursor_area`] are the two things a caller needs to
 //! know while it's active.
 
+use crate::{run_metrics_of, synthesis_of};
 use parley::FontFamily as ParleyFontFamily;
 use parley::{FontWeight, StyleProperty};
 
@@ -33,6 +34,9 @@ pub struct TextEditor(
     Option<f32>,
     /// The width a percentage `text-indent` is of when there is no wrapping.
     f32,
+    /// The `font-synthesis` the last edit was styled with, as
+    /// [`TextStyle::no_synthesis`]: the forms its runs must not be made up in.
+    u8,
 );
 
 /// A selection or caret position, in byte offsets into [`TextEditor`]'s
@@ -113,7 +117,7 @@ pub enum TextEditOp {
 
 impl TextEditor {
     pub fn new(font_size: f32) -> Self {
-        Self(EditorCore::new(font_size), None, 0.0)
+        Self(EditorCore::new(font_size), None, 0.0, 0)
     }
 
     /// Wraps text at `width` logical pixels, or never for `None`. A
@@ -186,6 +190,7 @@ impl Font {
         op: TextEditOp,
         style: TextStyle,
     ) -> bool {
+        editor.3 = style.no_synthesis;
         let family_name = self.family_name(style.family).to_owned();
         // A normal line height is Chrome's, as it is for text that is not
         // edited.
@@ -348,7 +353,7 @@ impl Font {
         driver.refresh_layout();
         let layout = driver.layout();
         let mut runs = Vec::new();
-        for line in layout.lines() {
+        for (line_number, line) in layout.lines().enumerate() {
             for item in line.items() {
                 let parley::PositionedLayoutItem::GlyphRun(glyph_run) = item else {
                     continue;
@@ -362,15 +367,19 @@ impl Font {
                         y: glyph.y,
                     })
                     .collect();
+                let synthesis = synthesis_of(run, editor.3);
                 runs.push(ShapedRun {
                     font: run.font().clone(),
                     font_size: run.font_size(),
                     normalized_coords: run.normalized_coords().to_vec(),
+                    skew: synthesis.0,
+                    embolden: synthesis.1,
+                    metrics: run_metrics_of(run),
                     glyphs,
                     element: 0,
                     x: glyph_run.offset(),
                     width: glyph_run.advance(),
-                    line: 0,
+                    line: line_number as u32,
                 });
             }
         }
@@ -625,6 +634,31 @@ mod tests {
             TextStyle::new(FontFamily::SansSerif, 16.0, 400.0),
         );
         editor
+    }
+
+    #[test]
+    fn the_lines_of_an_edited_text_are_told_apart_and_follow_font_synthesis() {
+        let mut font = Font::load_embedded();
+        let mut editor = multiline(&mut font, "one\ntwo\nthree", None);
+        let lines: Vec<u32> = font
+            .shaped_runs_for_edit(&mut editor)
+            .iter()
+            .map(|run| run.line)
+            .collect();
+        assert_eq!(lines, vec![0, 1, 2]);
+        let bold = TextStyle::new(FontFamily::Monospace, 16.0, 700.0);
+        font.apply_text_edit(
+            &mut editor,
+            TextEditOp::InsertOrReplace(String::new()),
+            bold,
+        );
+        assert!(font.shaped_runs_for_edit(&mut editor)[0].embolden);
+        font.apply_text_edit(
+            &mut editor,
+            TextEditOp::InsertOrReplace(String::new()),
+            bold.with_no_synthesis(crate::NO_SYNTHETIC_WEIGHT),
+        );
+        assert!(!font.shaped_runs_for_edit(&mut editor)[0].embolden);
     }
 
     fn op(font: &mut Font, editor: &mut TextEditor, op: TextEditOp) -> bool {
