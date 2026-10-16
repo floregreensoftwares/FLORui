@@ -726,11 +726,16 @@ fn paint_nodes(
     text_inputs: Option<&HashMap<NodeId, TextInputPaint>>,
     images: Option<&HashMap<NodeId, ImagePaint>>,
 ) {
-    let mut stack: Vec<(NodeId, Option<ClipRect>)> = paint_order(styles, parent_display, nodes)
-        .into_iter()
-        .rev()
-        .map(|id| (id, clip.clone()))
-        .collect();
+    // The flag is set for a box fixed to the viewport once its turn has come.
+    let mut stack: Vec<(NodeId, Option<ClipRect>, bool)> =
+        paint_order(styles, parent_display, nodes)
+            .into_iter()
+            .rev()
+            .map(|id| (id, clip.clone(), false))
+            .collect();
+    // Boxes fixed to the viewport go over everything else in their scope, in
+    // `z-index` order, and nothing above them clips them.
+    let mut fixed: Vec<NodeId> = Vec::new();
     let mut mask_cache: Option<(ClipRect, Option<Mask>)> = None;
     // Nothing outside the surface can appear, whatever clips the tree has.
     let surface_rect = ClipRect::from_xywh(
@@ -740,7 +745,20 @@ fn paint_nodes(
         buffer.height() as f32,
     );
     let view = BAND_VIEW.with(|slot| slot.borrow().clone());
-    while let Some((node, node_clip)) = stack.pop() {
+    loop {
+        let Some((node, node_clip, its_turn)) = stack.pop() else {
+            if fixed.is_empty() {
+                break;
+            }
+            // Node ids follow document order.
+            fixed.sort_by_key(|id| (styles.get(id).and_then(|s| s.z_index).unwrap_or(0), *id));
+            stack.extend(fixed.drain(..).rev().map(|id| (id, None, true)));
+            continue;
+        };
+        if !its_turn && florui_layout::is_viewport_fixed(arena, styles, node) {
+            fixed.push(node);
+            continue;
+        }
         if view
             .as_ref()
             .is_some_and(|view| !view.subtree.contains(&node))
@@ -761,7 +779,7 @@ fn paint_nodes(
                 paint_order(styles, Some(Display::Inline), arena.children(node))
                     .into_iter()
                     .rev()
-                    .map(|id| (id, node_clip.clone())),
+                    .map(|id| (id, node_clip.clone(), false)),
             );
             continue;
         }
@@ -780,6 +798,15 @@ fn paint_nodes(
             // (no clip at all, paint everywhere): `ClipRect::to_mask`
             // returns `None` for both an absent clip and an empty one, so
             // this has to be checked before converting, not after.
+            // A box fixed to the viewport is not cut by it, though.
+            let mut below = arena.children(node).to_vec();
+            while let Some(descendant) = below.pop() {
+                if florui_layout::is_viewport_fixed(arena, styles, descendant) {
+                    fixed.push(descendant);
+                } else {
+                    below.extend_from_slice(arena.children(descendant));
+                }
+            }
             continue;
         }
         let node_abs = absolute_position(arena, layouts, node);
@@ -862,7 +889,7 @@ fn paint_nodes(
             paint_order(styles, child_display, arena.children(node))
                 .into_iter()
                 .rev()
-                .map(|id| (id, child_clip.clone())),
+                .map(|id| (id, child_clip.clone(), false)),
         );
     }
     // The mask this described goes away with `mask_cache`.
@@ -6856,6 +6883,65 @@ mod tests {
         assert_eq!(pixel_rgb(&buffer, 0, 10), card, "border of the hidden box");
         assert_eq!(pixel_rgb(&buffer, 26, 10), card, "shadow of the hidden box");
         assert_eq!(pixel_rgb(&buffer, 5, 5), [0, 0, 0xff], "the visible child");
+    }
+
+    #[test]
+    fn a_fixed_box_paints_over_later_siblings_and_outside_its_clipping_parent() {
+        let tree: Element = view! {
+            <div class="page">
+                <div class="clip">
+                    <div class="pinned" />
+                </div>
+                <div class="later" />
+            </div>
+        };
+        let css = "
+            .page { width: 60px; height: 40px; background-color: #000000; }
+            .clip { width: 10px; height: 10px; overflow: hidden; }
+            .pinned { position: fixed; top: 20px; left: 30px; width: 20px; height: 10px;
+                      background-color: #ff0000; }
+            .later { width: 60px; height: 40px; background-color: #00ff00; }
+        ";
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts = florui_layout::compute_layout(
+            &mut font,
+            &arena,
+            &styles,
+            Size {
+                width: taffy::AvailableSpace::Definite(60.0),
+                height: taffy::AvailableSpace::Definite(40.0),
+            },
+        )
+        .unwrap();
+        let buffer = paint_to_buffer(
+            &mut font,
+            60,
+            40,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        );
+        assert_eq!(
+            pixel_rgb(&buffer, 35, 25),
+            [0xff, 0, 0],
+            "over the later box"
+        );
+        assert_eq!(
+            pixel_rgb(&buffer, 5, 35),
+            [0, 0xff, 0],
+            "the later box elsewhere"
+        );
     }
 
     #[test]
