@@ -39,8 +39,8 @@
   },
   "classification": {
     "kind": "tolerant",
-    "threshold_percent": 2.5,
+    "threshold_percent": 4.5,
     "channel_tolerance": 8,
-    "reason": "Chromium and this engine build a Gaussian blur differently (kernel shape and rounding), so a pixel in the blurred area differs by a few levels of 255 and a pixel at a steep colour edge by more. Measured against desktop Chrome: 0.92% differ by more than 8 levels at a device pixel ratio of 2 (31% by any amount, mean error 1.1, max 84 at the steep teal edge). channel_tolerance 8 stops the harmless rounding from counting; the percentage left is the steep edges. With the backdrop blur read past the panel edge as transparent instead of mirrored (the defect this fixture found), about 30% of the pixels differed by more than that."
+    "reason": "Chromium and this engine build a Gaussian blur differently (kernel shape and rounding), so a pixel in the blurred area differs by a few levels of 255 and a pixel at a steep colour edge by more. Measured against desktop Chrome: 0.92% differ by more than 8 levels at a device pixel ratio of 2 (31% by any amount, mean error 1.1, max 84 at the steep teal edge). Chromium for Linux draws the panel's right and bottom edges differently from the Windows build, which the engine does not follow (its own render is identical on both): 3.80% against it, so the threshold leaves room for that. channel_tolerance 8 stops the harmless rounding from counting; the percentage left is the steep edges. With the backdrop blur read past the panel edge as transparent instead of mirrored (the defect this fixture found), about 30% of the pixels differed by more than that."
   }
 }
