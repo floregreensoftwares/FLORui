@@ -398,13 +398,29 @@ impl WindowControls {
 
     /// Shows a real native context menu at the current cursor position,
     /// blocking this thread until it closes -- the same synchronous shape
-    /// as [`Self::drag`], not the async open/save-dialog pattern: a
-    /// context menu is a short OS-pumped modal gesture, not something that
-    /// can be left open indefinitely. See [`crate::menu`]'s own doc for
-    /// what `items` can express and its documented limits (display-only
-    /// shortcuts, no CSS styling).
+    /// as [`Self::drag`]. Only Windows has it: its popup menu pumps the
+    /// application's messages while it is up, and nothing else can keep a
+    /// window answering its window manager while a thread waits. Elsewhere
+    /// this returns [`ContextMenuOutcome::Unavailable`]; use
+    /// [`Self::show_context_menu_with`], which works everywhere. See
+    /// [`crate::menu`]'s own doc for what `items` can express and its
+    /// documented limits (display-only shortcuts, no CSS styling).
     pub fn show_context_menu(&self, items: &[MenuEntry]) -> ContextMenuOutcome {
         crate::menu::show_context_menu(&self.window, items)
+    }
+
+    /// Shows a context menu at the current cursor position and gives what comes
+    /// of it to `on_outcome`, on the UI thread, like an open/save dialog's result:
+    /// at once where the OS draws the menu and waits for it (Windows), once
+    /// the menu has been chosen from or dismissed where it is drawn inside the
+    /// event loop (Linux). One menu is open at a time; asking for another while
+    /// it is open dismisses the new one.
+    pub fn show_context_menu_with(
+        &self,
+        items: &[MenuEntry],
+        on_outcome: impl Fn(ContextMenuOutcome) + 'static,
+    ) {
+        crate::menu::show_context_menu_with(&self.window, items, Box::new(on_outcome));
     }
 
     /// Shows the real OS system menu (Restore/Move/Size/Minimize/Maximize/

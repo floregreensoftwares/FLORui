@@ -2,15 +2,15 @@
 //! [`crate::os::windows::menu`] for the real implementation. Apps never
 //! call [`show_context_menu`] directly — see
 //! [`crate::WindowControls::show_context_menu`] for the public entry
-//! point. On Linux the context menu is `Unavailable` (see
-//! `crate::os::linux::menu`); only the window menu exists there.
+//! point.
 //!
-//! This is a real OS-drawn popup (`TrackPopupMenuEx`): labels,
-//! enabled/checked state, and a display-only shortcut hint are the whole
-//! surface. There is no way to style it — no CSS, no fonts, no colors; the
-//! platform theme owns every pixel. An app that needs a styled, florui-
-//! rendered popup instead wants a different, not-yet-built mechanism, not
-//! an option on this one.
+//! On Windows this is a real OS-drawn popup (`TrackPopupMenuEx`); on Linux no
+//! toolkit-free popup exists, so the menu is a small Florui tree painted in a
+//! popup surface of its own (see `crate::menu_popup` and
+//! `crate::os::linux::menu`) that follows the light or dark theme. Either
+//! way labels, enabled/checked state, and a display-only shortcut hint are the
+//! whole surface. There is no way to style it — no CSS, no fonts, no colors.
+//! An app that needs a menu of its own design wants a `Popover`.
 //!
 //! `shortcut` is display text only — this does not register a real OS
 //! keyboard accelerator, so choosing that text does not make the shortcut
@@ -80,30 +80,44 @@ pub(crate) use crate::os::windows::menu::{show_system_menu_at, show_system_menu_
 
 #[cfg(target_os = "linux")]
 pub(crate) use crate::os::linux::menu::{show_system_menu_at, show_system_menu_at_cursor};
-#[cfg(target_os = "linux")]
-pub(crate) use stub::show_context_menu;
 
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
-pub(crate) use stub::{show_context_menu, show_system_menu_at, show_system_menu_at_cursor};
+pub(crate) use stub::{show_system_menu_at, show_system_menu_at_cursor};
 
+/// The blocking menu: a Win32 popup menu pumps the application's messages while
+/// it is up. Nothing else can, without stopping the event loop and so leaving
+/// the window manager's pings unanswered, so there is none elsewhere; see
+/// [`show_context_menu_with`].
 #[cfg(not(target_os = "windows"))]
+pub(crate) fn show_context_menu(
+    _window: &winit::window::Window,
+    _items: &[MenuEntry],
+) -> ContextMenuOutcome {
+    ContextMenuOutcome::Unavailable
+}
+
+/// Shows the menu and gives what comes of it to `on_outcome`: at once on
+/// Windows, once the menu is chosen from or dismissed on Linux, where the event
+/// loop keeps running while it is open.
+pub(crate) fn show_context_menu_with(
+    window: &winit::window::Window,
+    items: &[MenuEntry],
+    on_outcome: Box<dyn Fn(ContextMenuOutcome)>,
+) {
+    #[cfg(target_os = "linux")]
+    crate::os::linux::menu::show_context_menu_with(window, items, on_outcome);
+    #[cfg(not(target_os = "linux"))]
+    on_outcome(show_context_menu(window, items));
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 mod stub {
     use winit::window::Window;
 
-    use super::{ContextMenuOutcome, MenuEntry};
-
-    /// Windows draws this one natively; Linux has no toolkit-free equivalent
-    /// (see `crate::os::linux::menu`).
-    pub(crate) fn show_context_menu(_window: &Window, _items: &[MenuEntry]) -> ContextMenuOutcome {
-        ContextMenuOutcome::Unavailable
-    }
-
     /// No system menu exists as a distinct OS concept on these platforms.
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     pub(crate) fn show_system_menu_at_cursor(_window: &Window) {}
 
     /// See [`show_system_menu_at_cursor`]'s own doc.
-    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     pub(crate) fn show_system_menu_at(_window: &Window, _screen_x: i32, _screen_y: i32) {}
 }
 

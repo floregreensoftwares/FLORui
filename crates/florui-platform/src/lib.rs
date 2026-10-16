@@ -182,6 +182,8 @@ pub mod gpu;
 
 #[cfg(feature = "desktop")]
 mod menu;
+#[cfg(any(target_os = "linux", test))]
+mod menu_popup;
 
 #[cfg(feature = "desktop")]
 pub use menu::{ContextMenuOutcome, MenuCommandId, MenuEntry};
