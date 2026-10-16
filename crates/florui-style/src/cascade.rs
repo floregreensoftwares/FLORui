@@ -393,6 +393,83 @@ impl LengthPercentage {
     }
 }
 
+/// A `calc()`, `min()`, `max()` or `clamp()` that is not a plain length or a
+/// plain percentage, kept as the style engine computed it until the size it
+/// is a percentage of is known.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Calc(style::values::computed::LengthPercentage);
+
+impl Calc {
+    pub(crate) fn new(value: &style::values::computed::LengthPercentage) -> Self {
+        Self(value.clone())
+    }
+
+    /// Its value where a percentage is of `basis`.
+    pub fn resolve(&self, basis: f32) -> f32 {
+        self.0
+            .resolve(style::values::computed::Length::new(basis))
+            .px()
+    }
+}
+
+/// The sizes named by a keyword that depend on what a box holds or on the
+/// room it has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SizeKeyword {
+    MinContent,
+    MaxContent,
+    /// `fit-content`: the room available, but no less than `min-content`
+    /// and no more than `max-content`.
+    FitContent,
+    /// `stretch`: all the room available.
+    Stretch,
+}
+
+/// What a property that cannot be turned into a number without layout holds.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeferredValue {
+    Math(Calc),
+    Keyword(SizeKeyword),
+    /// `fit-content(<length-percentage>)`: the room available, no more than
+    /// the argument, but no less than `min-content`.
+    FitContentOf(Calc),
+}
+
+/// The property a [`Deferred`] value is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeferredSlot {
+    Width,
+    Height,
+    MinWidth,
+    MinHeight,
+    MaxWidth,
+    MaxHeight,
+    FlexBasis,
+    MarginTop,
+    MarginRight,
+    MarginBottom,
+    MarginLeft,
+    PaddingTop,
+    PaddingRight,
+    PaddingBottom,
+    PaddingLeft,
+    InsetTop,
+    InsetRight,
+    InsetBottom,
+    InsetLeft,
+    ColumnGap,
+    RowGap,
+}
+
+/// A value layout resolves once the box it is a percentage of is known: the
+/// field of the same name in [`ComputedStyle`] holds what it is without that
+/// (`auto`, or `0`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Deferred {
+    pub slot: DeferredSlot,
+    pub value: DeferredValue,
+}
+
 /// One `transform` function, already reduced to this crate's documented
 /// initial (2D-only) subset. `skew()`/`skewX()`/`skewY()`, every 3D
 /// function (`translateZ`, `rotate3d`, `scale3d`, `matrix3d`,
@@ -658,6 +735,10 @@ pub struct ComputedStyle {
     pub pointer_events_none: bool,
     /// Inherited `visibility`; see [`Visibility`].
     pub visibility: Visibility,
+    /// The sizes, margins, paddings, offsets and gaps written as a math
+    /// function over a percentage or as an intrinsic keyword; see
+    /// [`Deferred`]. Empty for nearly every node.
+    pub deferred: Vec<Deferred>,
     /// `text-decoration`/`text-decoration-line` — true only when the
     /// value includes `underline`. `overline`/`line-through`/`blink`
     /// aren't tracked; this is `<a>`'s own default-stylesheet need, not a
@@ -834,6 +915,7 @@ impl ComputedStyle {
             z_index: _,
             pointer_events_none: _,
             visibility: _,
+            deferred: _,
             overflow_clips: _,
             overflow_scrolls_x: _,
             overflow_scrolls_y: _,

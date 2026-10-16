@@ -59,12 +59,13 @@ pub use background::{
     RadialGradient, RadialSize,
 };
 pub use cascade::{
-    Appearance, AspectRatio, BackdropBlur, BorderSide, BoxShadow, BoxSizing, ComputedStyle,
-    ContainerType, ContentAlignment, Corners, Display, Edges, FilterFunction, FlexDirection,
-    FlexWrap, FontFamily, GlassMaterial, GlassQuality, GlassSpec, GridPlacement, GridTrackSize,
-    ItemAlignment, LengthPercentage, LineHeight, ObjectFit, OverflowWrap, Position, Resize,
-    TextAlign, TextIndent, TextOverflow, TextShadow, TransformFunction, VerticalAlign, Viewport,
-    Visibility, WhiteSpaceCollapse, WordBreak, compute, compute_with_container_query_signature,
+    Appearance, AspectRatio, BackdropBlur, BorderSide, BoxShadow, BoxSizing, Calc, ComputedStyle,
+    ContainerType, ContentAlignment, Corners, Deferred, DeferredSlot, DeferredValue, Display,
+    Edges, FilterFunction, FlexDirection, FlexWrap, FontFamily, GlassMaterial, GlassQuality,
+    GlassSpec, GridPlacement, GridTrackSize, ItemAlignment, LengthPercentage, LineHeight,
+    ObjectFit, OverflowWrap, Position, Resize, SizeKeyword, TextAlign, TextIndent, TextOverflow,
+    TextShadow, TransformFunction, VerticalAlign, Viewport, Visibility, WhiteSpaceCollapse,
+    WordBreak, compute, compute_with_container_query_signature,
 };
 pub use color::{ColorParseError, Rgba, parse_hex_color};
 pub use container_query_adapter::{ContentBoxSize, resolve_container_query_signatures};
