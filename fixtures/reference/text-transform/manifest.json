@@ -1,0 +1,52 @@
+{
+    "id":  "text-transform",
+    "description":  "text-transform: uppercase, lowercase and capitalize across an inline element",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  320,
+                     "height_css_px":  120,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { isolation: isolate; width: 300px; background-color: #e8ecff; color: #112233; font-size: 16px; } .upper { text-transform: uppercase; } .lower { text-transform: lowercase; } .cap { text-transform: capitalize; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "upper",
+                                        "css":  "",
+                                        "text":  "Hello wide World, straße 3d"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "lower",
+                                        "css":  "",
+                                        "text":  "Hello WIDE World"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "cap",
+                                        "css":  "",
+                                        "children":  [
+                                                         "hello wide world-wide don\u0027t 3d ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "css":  "",
+                                                             "text":  "and"
+                                                         },
+                                                         "x e.g. x_y"
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  13,
+                           "geometry_tolerance_px":  1.5,
+                           "reason":  "Measured against Chromium 153 on Windows: about 12% of the pixels differ and the box is the same size; what is left is the two engines\u0027 glyph rasterization (Chromium hints and snaps the baseline), as in the other text fixtures. Without the property the same fixture measures 15.87%, so it fails."
+                       }
+}

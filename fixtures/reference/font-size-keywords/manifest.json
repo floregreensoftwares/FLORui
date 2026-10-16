@@ -1,0 +1,80 @@
+{
+    "id":  "font-size-keywords",
+    "description":  "font-size keywords larger, smaller, large and x-small, percentages and em, nested",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  210,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { width: 320px; background-color: #e8ecff; color: #112233; font-size: 16px; } .larger { font-size: larger; } .smaller { font-size: smaller; } .large { font-size: large; } .xs { font-size: x-small; } .pct { font-size: 150%; } .em { font-size: 0.75em; } .nest { font-size: larger; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "css":  "",
+                                        "text":  "Normal text sixteen"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "larger",
+                                        "css":  "",
+                                        "text":  "Larger than the parent"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "smaller",
+                                        "css":  "",
+                                        "text":  "Smaller than the parent"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "large",
+                                        "css":  "",
+                                        "text":  "Keyword large"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "xs",
+                                        "css":  "",
+                                        "text":  "Keyword x-small"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "pct",
+                                        "css":  "",
+                                        "text":  "One hundred fifty percent"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "em",
+                                        "css":  "",
+                                        "text":  "Three quarters of an em"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "larger",
+                                        "css":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "nest",
+                                                             "css":  "",
+                                                             "text":  "Larger inside larger"
+                                                         }
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  12.5,
+                           "geometry_tolerance_px":  1.5,
+                           "reason":  "Measured against Chromium 153 on Windows: 11.77% of the pixels differ and the box is the same size; what is left is the two engines\u0027 glyph rasterization, as in the other text fixtures. Without the property the same fixture measures 20.93% and the box is 11px off, so it fails."
+                       }
+}

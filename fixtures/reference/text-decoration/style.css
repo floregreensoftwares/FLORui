@@ -1,0 +1,18 @@
+.wrap { width: 340px; background-color: #e8ecff; color: #112233; font-size: 20px; line-height: 30px; }
+.u { text-decoration: underline; }
+.o { text-decoration: overline; }
+.l { text-decoration: line-through; }
+.all { text-decoration: underline overline line-through; }
+.dbl { text-decoration: underline double; }
+.dot { text-decoration: underline dotted; }
+.dash { text-decoration: underline dashed; }
+.wavy { text-decoration: underline wavy; }
+.red { text-decoration: underline #c0392b; }
+.thick { text-decoration: underline 4px; }
+.offset { text-decoration: underline; text-underline-offset: 6px; }
+.noskip { text-decoration: underline; text-decoration-skip-ink: none; }
+.font { text-decoration: underline from-font; }
+.big { font-size: 32px; line-height: 40px; text-decoration: underline; }
+.outer { text-decoration: underline #c0392b; }
+.inner { color: #27ae60; }
+.own { text-decoration: line-through #2980b9; }

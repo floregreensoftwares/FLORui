@@ -1,0 +1,5 @@
+.wrap { width: 380px; background-color: #e8ecff; color: #112233; font-size: 20px; }
+.sc { font-variant-caps: small-caps; }
+.asc { font-variant-caps: all-small-caps; }
+.short { font-variant: small-caps; }
+.normal { font-variant: normal; }

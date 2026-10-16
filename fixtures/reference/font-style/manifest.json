@@ -1,0 +1,76 @@
+{
+    "id":  "font-style",
+    "description":  "font-style italic and oblique: the embedded italic face, a slant for the font with none, and inline italic",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  190,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { width: 320px; background-color: #e8ecff; color: #112233; font-size: 18px; } .i { font-style: italic; } .o { font-style: oblique; } .bi { font-style: italic; font-weight: 700; } .mono { font-family: \"Fira Mono\", monospace; font-size: 16px; } .mono-i { font-family: \"Fira Mono\", monospace; font-size: 16px; font-style: italic; } .mixed { font-size: 18px; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "css":  "",
+                                        "text":  "Upright Hag gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "i",
+                                        "css":  "",
+                                        "text":  "Italic Hag gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "o",
+                                        "css":  "",
+                                        "text":  "Oblique Hag gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bi",
+                                        "css":  "",
+                                        "text":  "Bold italic Hag"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "mono",
+                                        "css":  "",
+                                        "text":  "Mono Hag gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "mono-i",
+                                        "css":  "",
+                                        "text":  "Mono italic Hag gypsy"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "mixed",
+                                        "css":  "",
+                                        "children":  [
+                                                         "plain ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "i",
+                                                             "css":  "",
+                                                             "text":  "inline italic"
+                                                         },
+                                                         " plain again"
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  13.5,
+                           "geometry_tolerance_px":  1.5,
+                           "reason":  "Measured against Chromium 153 on Windows: 12.71% of the pixels differ and the box is the same size; what is left is the two engines\u0027 glyph rasterization, as in the other text fixtures. Without the property the same fixture measures 14.62%, so it fails."
+                       }
+}
