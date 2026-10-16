@@ -13,6 +13,7 @@
 //! is not stretched by `justify`. Which element a glyph run belongs to travels
 //! in Parley's brush.
 
+use crate::{run_metrics_of, synthesis_of};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -205,30 +206,50 @@ impl Font {
         // The runs as laid out: each under its own element's white space, and
         // a space collapses with the one before even across elements.
         let mut previous_space = true;
-        let runs: Vec<std::borrow::Cow<'_, str>> = items
+        let mut in_word = false;
+        let empty = || crate::Prepared {
+            text: std::borrow::Cow::Borrowed(""),
+            small: Vec::new(),
+        };
+        // Whether each element's font has small capitals of its own.
+        let native_caps: Vec<bool> = elements
+            .iter()
+            .map(|element| element.style.caps.is_synthesized() && self.caps_in_font(&element.style))
+            .collect();
+        let runs: Vec<crate::Prepared<'_>> = items
             .iter()
             .map(|item| match *item {
-                InlineItem::Text { text, element } => {
-                    elements[element].style.collapsed(text, &mut previous_space)
-                }
+                InlineItem::Text { text, element } => elements[element].style.prepared(
+                    text,
+                    &mut previous_space,
+                    &mut in_word,
+                    native_caps[element],
+                ),
                 InlineItem::Box { .. } => {
                     previous_space = false;
-                    std::borrow::Cow::Borrowed("")
+                    in_word = false;
+                    empty()
                 }
-                InlineItem::Spacer { .. } => std::borrow::Cow::Borrowed(""),
+                InlineItem::Spacer { .. } => empty(),
             })
             .collect();
         let mut text = String::new();
         let mut spans: Vec<Span> = Vec::new();
+        // The small capitals of each run, where they are in `text`.
+        let mut small_caps: Vec<(Range<usize>, usize)> = Vec::new();
         for (item, run) in items.iter().zip(&runs) {
-            let run = run.as_ref();
+            let run_text = run.text.as_ref();
             match *item {
-                InlineItem::Text { element, .. } if !run.is_empty() => {
+                InlineItem::Text { element, .. } if !run_text.is_empty() => {
                     spans.push(Span {
-                        range: text.len()..text.len() + run.len(),
+                        range: text.len()..text.len() + run_text.len(),
                         element,
                     });
-                    text.push_str(run);
+                    for range in &run.small {
+                        small_caps
+                            .push((text.len() + range.start..text.len() + range.end, element));
+                    }
+                    text.push_str(run_text);
                 }
                 InlineItem::Spacer {
                     element,
@@ -279,7 +300,7 @@ impl Font {
 
         let mut offset = 0usize;
         for (item, run) in items.iter().zip(&runs) {
-            let run = run.as_ref();
+            let run = run.text.as_ref();
             match *item {
                 InlineItem::Text { element, .. } => {
                     if run.is_empty() {
@@ -287,14 +308,14 @@ impl Font {
                     }
                     let end = offset + run.len();
                     let style = elements[element].style;
-                    let family = family_names[style.family as usize].as_str();
+                    let family = family_names[style.family.base()].as_str();
                     builder.push(StyleProperty::FontSize(style.font_size), offset..end);
                     builder.push(
                         StyleProperty::FontWeight(FontWeight::new(style.font_weight)),
                         offset..end,
                     );
                     builder.push(
-                        StyleProperty::FontFamily(ParleyFontFamily::named(family)),
+                        StyleProperty::FontFamily(style.parley_family(family)),
                         offset..end,
                     );
                     for extra in style.parley_extras(false).into_iter().flatten() {
@@ -318,8 +339,8 @@ impl Font {
                     let range = offset..offset + SPACER.len_utf8();
                     let spacer_end = range.end;
                     let style = elements[element].style;
-                    let family = family_names[style.family as usize].as_str();
-                    let width = (inside + margin) / spacer_em[style.family as usize];
+                    let family = family_names[style.family.base()].as_str();
+                    let width = (inside + margin) / spacer_em[style.family.base()];
                     builder.push(StyleProperty::FontSize(width), range.clone());
                     builder.push(
                         StyleProperty::FontWeight(FontWeight::new(400.0)),
@@ -356,6 +377,15 @@ impl Font {
                     });
                 }
             }
+        }
+
+        // Last, so they win over the size their run was given.
+        for (range, element) in &small_caps {
+            let style = elements[*element].style;
+            builder.push(
+                StyleProperty::FontSize(style.font_size * style.caps.scale()),
+                range.clone(),
+            );
         }
 
         let mut layout: parley::Layout<[u8; 4]> = builder.build(&text);
@@ -420,14 +450,16 @@ impl Font {
     /// weight.
     pub(crate) fn style_metrics(&mut self, style: TextStyle) -> StyleMetrics {
         let key = (
-            style.family as u8,
+            style.family.bits(),
             style.font_size.to_bits(),
             style.font_weight.to_bits(),
+            style.font_style.bits().0,
         );
         if let Some(metrics) = self.style_metrics.get(&key) {
             return *metrics;
         }
-        let plain = TextStyle::new(style.family, style.font_size, style.font_weight);
+        let plain = TextStyle::new(style.family, style.font_size, style.font_weight)
+            .with_font_style(style.font_style);
         let mut layout = self.build_with(plain, "x", None);
         layout.break_all_lines(None);
         let mut metrics = StyleMetrics {
@@ -456,7 +488,7 @@ impl Font {
 
     /// How wide U+2007 is per em of font size in a family, at regular weight.
     fn spacer_em(&mut self, family: FontFamily) -> f32 {
-        if let Some(em) = self.spacer_em[family as usize] {
+        if let Some(em) = self.spacer_em[family.base()] {
             return em;
         }
         let mut width_of = |text: &str| {
@@ -466,7 +498,7 @@ impl Font {
         };
         let with = format!("x{SPACER}x");
         let em = ((width_of(&with) - width_of("xx")) / 1000.0).max(0.01);
-        self.spacer_em[family as usize] = Some(em);
+        self.spacer_em[family.base()] = Some(em);
         em
     }
 
@@ -607,6 +639,7 @@ fn place_line(
         match item {
             PositionedLayoutItem::GlyphRun(glyph_run) => {
                 let (element, kind) = element_of(glyph_run.style().brush);
+                let no_synthesis = elements[element].style.no_synthesis;
                 let run = glyph_run.run();
                 let glyphs = glyph_run
                     .positioned_glyphs()
@@ -617,11 +650,15 @@ fn place_line(
                     })
                     .collect();
                 let metrics = run.metrics();
+                let synthesis = synthesis_of(run, no_synthesis);
                 line_runs.push(LineRun {
                     shaped: ShapedRun {
                         font: run.font().clone(),
                         font_size: run.font_size(),
                         normalized_coords: run.normalized_coords().to_vec(),
+                        skew: synthesis.0,
+                        embolden: synthesis.1,
+                        metrics: run_metrics_of(run),
                         glyphs,
                         element,
                         x: glyph_run.offset(),
