@@ -158,6 +158,42 @@ struct RawRect {
     height: f64,
 }
 
+/// Chromium starts its sandbox with an unprivileged user namespace, which it
+/// cannot do as root or where the kernel forbids them (Ubuntu 23.10 and later
+/// restrict them by default). The harness loads only this repository's own
+/// fixture files, so there it starts Chromium without one rather than not at
+/// all.
+fn sandbox_unavailable() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let restrict =
+            std::fs::read_to_string("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").ok();
+        let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+        sandbox_blocked(restrict.as_deref(), effective_uid(&status) == Some(0))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn sandbox_blocked(restrict_userns: Option<&str>, root: bool) -> bool {
+    root || restrict_userns.is_some_and(|value| value.trim() == "1")
+}
+
+/// The effective user id in the text of `/proc/self/status`.
+#[cfg(any(target_os = "linux", test))]
+fn effective_uid(status: &str) -> Option<u32> {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Uid:"))?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
+}
+
 impl ChromiumDriver {
     pub fn launch(options: ChromiumOptions) -> Result<Self, DriverError> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -174,6 +210,23 @@ impl ChromiumDriver {
         } else {
             builder.with_head()
         };
+        if sandbox_unavailable() {
+            builder = builder.no_sandbox();
+        }
+        // Extra command-line switches for Chromium, for finding out what a
+        // difference between the two renderers depends on.
+        if let Ok(extra) = std::env::var("FLORUI_CHROMIUM_ARGS") {
+            for switch in extra.split_whitespace() {
+                builder = builder.arg(switch.trim_start_matches("--"));
+            }
+        }
+        // Chromium on Linux draws text with subpixel anti-aliasing where the
+        // background is opaque; Florui draws it in grayscale, as Chromium does
+        // on Windows, so the comparison asks for the same.
+        #[cfg(target_os = "linux")]
+        {
+            builder = builder.arg("disable-lcd-text");
+        }
         let config = builder
             .build()
             .map_err(|message| DriverError::Configure { message })?;
@@ -314,5 +367,27 @@ impl ChromiumDriver {
 impl Drop for ChromiumDriver {
     fn drop(&mut self) {
         let _ = self.runtime.block_on(self.browser.close());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_sandbox_is_given_up_only_as_root_or_where_user_namespaces_are_restricted() {
+        assert!(!sandbox_blocked(None, false));
+        assert!(!sandbox_blocked(Some("0\n"), false));
+        assert!(sandbox_blocked(Some("1\n"), false));
+        assert!(sandbox_blocked(Some("0"), true));
+        assert!(sandbox_blocked(None, true));
+    }
+
+    #[test]
+    fn the_effective_user_id_is_the_second_one_listed() {
+        let status = "Name:\tflorui\nUid:\t1000\t0\t1000\t1000\nGid:\t1000\t1000\t1000\t1000\n";
+        assert_eq!(effective_uid(status), Some(0));
+        assert_eq!(effective_uid("Name:\tflorui\n"), None);
+        assert_eq!(effective_uid("Uid:\tx\ty\n"), None);
     }
 }

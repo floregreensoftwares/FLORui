@@ -94,3 +94,29 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
       - run: cargo test --workspace --doc
+
+  # The Chromium-dependent tests on Linux, against the Linux build of the pinned
+  # Chrome for Testing. Chromium cannot start its sandbox on the runner's
+  # kernel, which the harness detects.
+  conformance-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libxkbcommon-dev libwayland-dev libx11-dev libfontconfig-dev libasound2-dev libxkbcommon-x11-0 fonts-noto-color-emoji mesa-vulkan-drivers
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache pinned Chrome for Testing
+        uses: actions/cache@v4
+        with:
+          path: .tools/chromium
+          key: chromium-linux-${{ hashFiles('crates/florui-conformance/chromium-pin.json') }}
+      - name: Fetch pinned Chrome for Testing
+        run: bash scripts/fetch-chromium.sh
+      - name: Run Chromium-dependent conformance tests
+        run: |
+          version=$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' crates/florui-conformance/chromium-pin.json | head -1)
+          export FLORUI_CHROMIUM_TEST="$PWD/.tools/chromium/$version/chrome-linux64/chrome"
+          cargo test -p florui-conformance -- --ignored

@@ -4,5 +4,9 @@
   "channel": "Stable",
   "platform": "win64",
   "url": "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.36/win64/chrome-win64.zip",
-  "sha256": "8edfaa0923c11a30a9315a5e7e5794c5efb60146edea7e3f749f7fdc2aa026cb"
+  "sha256": "8edfaa0923c11a30a9315a5e7e5794c5efb60146edea7e3f749f7fdc2aa026cb",
+  "linux64": {
+    "url": "https://storage.googleapis.com/chrome-for-testing-public/153.0.8010.36/linux64/chrome-linux64.zip",
+    "sha256": "167a098c4fdec156b58a9f678c90a84f9072d789f9c6e7b35496a6987b8b7ef8"
+  }
 }
