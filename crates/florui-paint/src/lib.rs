@@ -65,7 +65,9 @@ mod image_source;
 mod incremental;
 mod layer_cache;
 mod material;
+mod projection;
 mod rounded;
+mod scene3d;
 mod shadow_cache;
 mod text_shadow;
 
@@ -101,6 +103,7 @@ use florui_style::{
     Tree,
 };
 use florui_text::Font;
+use projection::Projection;
 use rounded::RoundedRectPath;
 use skrifa::instance::{LocationRef, NormalizedCoord, Size as GlyphSize};
 use skrifa::outline::DrawSettings;
@@ -898,13 +901,26 @@ fn paint_nodes(
             }
             continue;
         }
+        if styles.get(&node).is_some_and(florui_layout::preserves_3d) {
+            scene3d::paint_scene(
+                buffer,
+                arena,
+                styles,
+                layouts,
+                font,
+                node,
+                scale_factor,
+                node_clip,
+                text_inputs,
+                images,
+            );
+            continue;
+        }
         let node_abs = absolute_position(arena, layouts, node);
-        let transform = match (styles.get(&node), layouts.get(&node)) {
-            (Some(style), Some(&layout)) => {
-                resolve_transform(style, &layout, node_abs.0, node_abs.1, scale_factor)
-            }
-            _ => Transform::identity(),
-        };
+        let transform = resolve_projection(arena, styles, layouts, node, node_abs, scale_factor);
+        if backface_is_hidden(styles, layouts, node, node_abs, &transform) {
+            continue;
+        }
         let has_filter = styles.get(&node).is_some_and(|s| !s.filter.is_empty());
         if opacity < 1.0 || !transform.is_identity() || has_filter {
             paint_group(
@@ -1825,38 +1841,66 @@ fn subtree_extent(
         };
         let child_abs_x = abs_x + child_layout.x;
         let child_abs_y = abs_y + child_layout.y;
-        let Some(child_extent) = subtree_extent(
-            arena,
-            styles,
-            layouts,
-            font,
-            child,
-            child_abs_x,
-            child_abs_y,
-            scale_factor,
-        ) else {
-            continue;
-        };
-
-        let child_style = styles.get(&child);
-        let child_transform = child_style
-            .map(|s| resolve_transform(s, &child_layout, child_abs_x, child_abs_y, scale_factor))
-            .unwrap_or(Transform::identity());
-        let child_has_filter = child_style.is_some_and(|s| !s.filter.is_empty());
-        let child_is_group =
-            child_opacity < 1.0 || !child_transform.is_identity() || child_has_filter;
-
-        let (cx0, cy0, cx1, cy1) = if child_is_group {
-            let filter_pad = child_style.map_or(0.0, |s| filter_inflation(&s.filter, scale_factor));
-            let (fx0, fy0, fx1, fy1) = (
-                child_extent.0 - filter_pad,
-                child_extent.1 - filter_pad,
-                child_extent.2 + filter_pad,
-                child_extent.3 + filter_pad,
-            );
-            map_rect_aabb(fx0, fy0, fx1, fy1, child_transform)
+        let (cx0, cy0, cx1, cy1) = if styles.get(&child).is_some_and(florui_layout::preserves_3d) {
+            // A 3D context places its own boxes; what it inks is already in
+            // this box's plane.
+            match scene3d::scene_extent(arena, styles, layouts, font, child, scale_factor) {
+                Some(bounds) => bounds,
+                None => continue,
+            }
         } else {
-            child_extent
+            let Some(child_extent) = subtree_extent(
+                arena,
+                styles,
+                layouts,
+                font,
+                child,
+                child_abs_x,
+                child_abs_y,
+                scale_factor,
+            ) else {
+                continue;
+            };
+
+            let child_style = styles.get(&child);
+            let child_transform = resolve_projection(
+                arena,
+                styles,
+                layouts,
+                child,
+                (child_abs_x, child_abs_y),
+                scale_factor,
+            );
+            if backface_is_hidden(
+                styles,
+                layouts,
+                child,
+                (child_abs_x, child_abs_y),
+                &child_transform,
+            ) {
+                continue;
+            }
+            let child_has_filter = child_style.is_some_and(|s| !s.filter.is_empty());
+            let child_is_group =
+                child_opacity < 1.0 || !child_transform.is_identity() || child_has_filter;
+
+            let (cx0, cy0, cx1, cy1) = if child_is_group {
+                let filter_pad =
+                    child_style.map_or(0.0, |s| filter_inflation(&s.filter, scale_factor));
+                let (fx0, fy0, fx1, fy1) = (
+                    child_extent.0 - filter_pad,
+                    child_extent.1 - filter_pad,
+                    child_extent.2 + filter_pad,
+                    child_extent.3 + filter_pad,
+                );
+                match child_transform.map_rect_aabb(fx0, fy0, fx1, fy1) {
+                    Some(bounds) => bounds,
+                    None => continue,
+                }
+            } else {
+                child_extent
+            };
+            (cx0, cy0, cx1, cy1)
         };
 
         let (cx0, cy0, cx1, cy1) = match &clip_to_padding {
@@ -1975,23 +2019,38 @@ fn group_extent(
     node_abs: (f32, f32),
     scale_factor: f32,
     target: TargetRegion,
-    transform: Transform,
+    transform: Projection,
+    own_only: bool,
 ) -> GroupSizing {
     #[cfg(test)]
     if FORCE_FULL_TARGET_GROUPS.with(|flag| flag.get()) {
         return record_sizing(GroupSizing::FullTarget(FallbackReason::AreaReachesTarget));
     }
 
-    let Some((x0, y0, x1, y1)) = subtree_extent(
-        arena,
-        styles,
-        layouts,
-        font,
-        node,
-        node_abs.0,
-        node_abs.1,
-        scale_factor,
-    ) else {
+    let extent = if own_only {
+        own_extent(
+            arena,
+            styles,
+            layouts,
+            font,
+            node,
+            node_abs.0,
+            node_abs.1,
+            scale_factor,
+        )
+    } else {
+        subtree_extent(
+            arena,
+            styles,
+            layouts,
+            font,
+            node,
+            node_abs.0,
+            node_abs.1,
+            scale_factor,
+        )
+    };
+    let Some((x0, y0, x1, y1)) = extent else {
         return record_sizing(GroupSizing::FullTarget(FallbackReason::NothingToPaint));
     };
 
@@ -2007,7 +2066,7 @@ fn group_extent(
     // bound). Inflated by the same filter reach as above: a pixel just
     // inside the clamped edge still needs blur samples from just
     // outside it.
-    let (x0, y0, x1, y1) = match transform.invert() {
+    let (x0, y0, x1, y1) = match transform.affine().and_then(|affine| affine.invert()) {
         Some(inverse) => {
             let target_x0 = target.origin.0 as f32;
             let target_y0 = target.origin.1 as f32;
@@ -2102,10 +2161,51 @@ fn paint_group(
     scale_factor: f32,
     clip: Option<ClipRect>,
     opacity: f32,
-    transform: Transform,
+    transform: Projection,
     text_inputs: Option<&HashMap<NodeId, TextInputPaint>>,
     images: Option<&HashMap<NodeId, ImagePaint>>,
 ) {
+    let Some(group) = render_group(
+        buffer,
+        arena,
+        styles,
+        layouts,
+        font,
+        node,
+        node_abs,
+        scale_factor,
+        clip.clone(),
+        transform,
+        false,
+        text_inputs,
+        images,
+    ) else {
+        return;
+    };
+    let _composite_span = florui_profile::span(florui_profile::Phase::RasterComposite);
+    composite_group(buffer, &group, clip, opacity, transform);
+}
+
+/// Renders `node`'s box and, unless `own_only`, its whole subtree into a fresh
+/// surface sized to what it can ink and filtered by its own `filter`; `None`
+/// when nothing of it can show. `transform` is where the surface will be placed,
+/// which bounds how much of it is worth painting.
+#[allow(clippy::too_many_arguments)]
+fn render_group(
+    buffer: &Surface,
+    arena: &Tree,
+    styles: &StyleMap,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    font: &mut Font,
+    node: NodeId,
+    node_abs: (f32, f32),
+    scale_factor: f32,
+    clip: Option<ClipRect>,
+    transform: Projection,
+    own_only: bool,
+    text_inputs: Option<&HashMap<NodeId, TextInputPaint>>,
+    images: Option<&HashMap<NodeId, ImagePaint>>,
+) -> Option<Surface> {
     let target_rect = ClipRect::from_xywh(
         buffer.origin.0 as f32,
         buffer.origin.1 as f32,
@@ -2139,10 +2239,11 @@ fn paint_group(
             scale_factor,
             visible_target,
             transform,
+            own_only,
         )
     };
     let (width, height, origin) = match sizing {
-        GroupSizing::Empty => return,
+        GroupSizing::Empty => return None,
         GroupSizing::Bounded {
             width,
             height,
@@ -2150,9 +2251,7 @@ fn paint_group(
         } => (width, height, origin),
         GroupSizing::FullTarget(_) => (buffer.width(), buffer.height(), buffer.origin),
     };
-    let Some(mut group) = Surface::new(width, height, origin) else {
-        return;
-    };
+    let mut group = Surface::new(width, height, origin)?;
     let inner_mask = clip.as_ref().and_then(|c| c.to_mask(&group));
     paint_node(
         &mut group,
@@ -2166,21 +2265,24 @@ fn paint_group(
         text_inputs,
         images,
     );
-    let content_clip = clip_for_children(arena, styles, layouts, node, clip.clone(), scale_factor);
-    let child_display = styles.get(&node).map(|s| s.display);
-    paint_nodes(
-        &mut group,
-        arena,
-        styles,
-        layouts,
-        font,
-        child_display,
-        arena.children(node),
-        scale_factor,
-        content_clip,
-        text_inputs,
-        images,
-    );
+    if !own_only {
+        let content_clip =
+            clip_for_children(arena, styles, layouts, node, clip.clone(), scale_factor);
+        let child_display = styles.get(&node).map(|s| s.display);
+        paint_nodes(
+            &mut group,
+            arena,
+            styles,
+            layouts,
+            font,
+            child_display,
+            arena.children(node),
+            scale_factor,
+            content_clip,
+            text_inputs,
+            images,
+        );
+    }
     paint_outline_of(
         &mut group,
         arena,
@@ -2191,15 +2293,39 @@ fn paint_group(
         inner_mask.as_ref(),
     );
 
-    let _composite_span = florui_profile::span(florui_profile::Phase::RasterComposite);
     let filter = styles.get(&node).map_or(&[][..], |s| &s.filter[..]);
     apply_filters(&mut group.pixmap, &scaled_filters(filter, scale_factor));
+    Some(group)
+}
 
+/// Places a rendered group on `buffer` through `transform`, at `opacity` and
+/// within `clip`.
+fn composite_group(
+    buffer: &mut Surface,
+    group: &Surface,
+    clip: Option<ClipRect>,
+    opacity: f32,
+    transform: Projection,
+) {
+    let Some(affine) = transform.affine() else {
+        let composite_mask = clip.and_then(|c| c.to_mask(buffer));
+        projection::draw_projected(
+            &mut buffer.pixmap,
+            buffer.origin,
+            &group.pixmap,
+            group.origin,
+            &transform.0,
+            None,
+            opacity,
+            composite_mask.as_ref(),
+        );
+        return;
+    };
     // A turned or scaled group is sampled between its pixels; nearest-pixel
     // sampling leaves the edge of a rotated disc in steps.
     let paint = PixmapPaint {
         opacity,
-        quality: if transform.is_translate() {
+        quality: if affine.is_translate() {
             FilterQuality::Nearest
         } else {
             FilterQuality::Bilinear
@@ -2220,7 +2346,7 @@ fn paint_group(
     // (`buffer.origin == (0, 0)`), and stays correct for a group nested
     // inside another bounded one too.
     let to_target = Transform::from_translate(-(buffer.origin.0 as f32), -(buffer.origin.1 as f32))
-        .pre_concat(transform);
+        .pre_concat(affine);
     let composite_mask = clip.and_then(|c| c.to_mask(buffer));
     // A group that is only moved is drawn by the same pixels shifted by a whole
     // number, without the per-pixel sampling a general transform needs.
@@ -2363,53 +2489,55 @@ fn whole_pixel_shift(transform: Transform) -> Option<(i32, i32)> {
 /// How near half a pixel a translation may be and still be left to the general path.
 const HALF_PIXEL_BAND: f32 = 1.0e-3;
 
-/// `style`'s `transform` about its `transform-origin` as a canvas matrix —
-/// the identity (a cheap no-op composite, taken by [`paint_nodes`]'s own
-/// fast path) for `none`. `x`/`y` are the node's absolute border-box position
-/// in the canvas's physical pixels and `scale_factor` converts authored
-/// lengths to them. The math is [`florui_layout::resolve_transform`], shared
-/// with hit testing so a node is hit where it is drawn.
-fn resolve_transform(
-    style: &ComputedStyle,
-    layout: &BoxLayout,
-    x: f32,
-    y: f32,
+/// `node`'s transforms (and its parent's `perspective`) about its
+/// `transform-origin`, as a [`Projection`] of its plane — the identity (a cheap
+/// no-op composite, taken by [`paint_nodes`]'s own fast path) for `none`.
+/// `node_abs` is the node's absolute border-box position in the canvas's
+/// physical pixels and `scale_factor` converts authored lengths to them. The
+/// math is [`florui_layout::resolve_node_transform`], shared with hit testing
+/// so a node is hit where it is drawn.
+fn resolve_projection(
+    arena: &Tree,
+    styles: &StyleMap,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    node: NodeId,
+    node_abs: (f32, f32),
     scale_factor: f32,
-) -> Transform {
-    let m = florui_layout::resolve_transform(style, layout, x, y, scale_factor);
-    Transform::from_row(m.a, m.b, m.c, m.d, m.e, m.f)
+) -> Projection {
+    Projection(florui_layout::resolve_node_transform(
+        arena,
+        styles,
+        layouts,
+        node,
+        node_abs.0,
+        node_abs.1,
+        scale_factor,
+    ))
 }
 
-/// `node`'s own border box at `(x, y, width, height)`, after applying
-/// [`resolve_transform`] to its four corners and taking the axis-aligned
-/// bounding box of the result — real CSS's own `getBoundingClientRect()`
-/// semantics for a transformed element (CSSOM View's spec: the
-/// *transformed* border box, not the pre-transform layout one). Painting
-/// itself never needs this — [`resolve_transform`]'s own [`Transform`]
-/// composites the whole rendered group directly instead of remeasuring a
-/// box — but anything comparing this crate's own geometry against a real
-/// browser's (`florui-conformance`'s own harness) needs to compare on the
-/// same terms, or every transformed fixture would show a geometry
-/// mismatch that isn't a real bug.
-pub fn transformed_bounding_box(
-    style: &ComputedStyle,
-    layout: &BoxLayout,
-    x: f32,
-    y: f32,
-    scale_factor: f32,
-) -> (f32, f32, f32, f32) {
-    let transform = resolve_transform(style, layout, x, y, scale_factor);
-    let (min_x, min_y, max_x, max_y) =
-        map_rect_aabb(x, y, x + layout.width, y + layout.height, transform);
-    (min_x, min_y, max_x - min_x, max_y - min_y)
+/// Whether `node` is `backface-visibility: hidden` and turned to show its
+/// back, so that it (with everything it holds) is not drawn.
+fn backface_is_hidden(
+    styles: &StyleMap,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    node: NodeId,
+    node_abs: (f32, f32),
+    projection: &Projection,
+) -> bool {
+    // Almost no node hides its back: look at the box only for one that does.
+    let Some(style) = styles.get(&node).filter(|s| s.backface_hidden) else {
+        return false;
+    };
+    let Some(layout) = layouts.get(&node) else {
+        return false;
+    };
+    florui_layout::hides_its_back(style, layout, &projection.0, node_abs)
 }
 
-/// Maps an axis-aligned rectangle's own four corners through `transform`
-/// and returns the axis-aligned bounding box of the result, as `(min_x,
-/// min_y, max_x, max_y)` — the same corner-mapping
-/// [`transformed_bounding_box`] always did, pulled out so
-/// [`group_extent`] can reuse it for a nested group's own contribution to
-/// its enclosing group's bounds.
+/// Maps an axis-aligned rectangle's own four corners through the affine
+/// `transform` and returns the axis-aligned bounding box of the result, as
+/// `(min_x, min_y, max_x, max_y)`; [`group_extent`] uses it to map the visible
+/// target back into a group's own space.
 fn map_rect_aabb(x0: f32, y0: f32, x1: f32, y1: f32, transform: Transform) -> (f32, f32, f32, f32) {
     let corners = [(x0, y0), (x1, y0), (x0, y1), (x1, y1)];
     let mut min_x = f32::INFINITY;
@@ -10449,28 +10577,406 @@ mod tests {
     }
 
     #[test]
-    fn an_unsupported_skew_function_is_treated_as_identity() {
-        // `skew()` isn't in this crate's documented 2D subset (see
-        // `TransformFunction`'s own doc) and drops out of the resolved
-        // list entirely — so a box with only a skew must paint exactly
-        // where it would with no `transform` at all, not distorted and
-        // not silently discarded along with the rest of its own styles.
-        let with_skew = single_box_buffer(
+    fn skew_shears_the_box_about_its_centre() {
+        let skewed = single_box_buffer(
             ".box { background-color: #ff0000; transform: skewX(30deg); }",
             30,
             1.0,
         );
-        let without_transform = single_box_buffer(".box { background-color: #ff0000; }", 30, 1.0);
-        for y in 0..30 {
-            for x in 0..30 {
-                assert_eq!(
-                    pixel_rgb(&with_skew, x, y),
-                    pixel_rgb(&without_transform, x, y)
-                );
+        let red = [255, 0, 0];
+        // The 10x10 box at the origin shears by tan(30deg) per pixel of
+        // height about its centre: its top edge moves left, its bottom edge right.
+        assert_eq!(pixel_rgb(&skewed, 11, 9), red, "bottom edge moved right");
+        assert_eq!(
+            pixel_rgb(&skewed, 11, 0),
+            [0, 0, 0],
+            "top edge is not there"
+        );
+        assert_eq!(
+            pixel_rgb(&skewed, 0, 9),
+            [0, 0, 0],
+            "bottom-left corner left"
+        );
+        assert_eq!(pixel_rgb(&skewed, 0, 0), red, "top-left corner stays");
+        let upright = single_box_buffer(".box { background-color: #ff0000; }", 30, 1.0);
+        assert_eq!(pixel_rgb(&upright, 11, 9), [0, 0, 0]);
+    }
+
+    #[test]
+    fn the_individual_properties_draw_where_their_transform_equivalents_do() {
+        let pairs = [
+            ("translate: 6px 3px", "transform: translate(6px, 3px)"),
+            ("rotate: 20deg", "transform: rotate(20deg)"),
+            ("scale: 1.5", "transform: scale(1.5)"),
+            (
+                "translate: 4px 2px; rotate: 15deg; scale: 1.2",
+                "transform: translate(4px, 2px) rotate(15deg) scale(1.2)",
+            ),
+        ];
+        for (individual, transform) in pairs {
+            let a = single_box_buffer_at(
+                &format!(".box {{ background-color: #ff0000; {individual}; }}"),
+                40,
+                1.0,
+                12.0,
+                12.0,
+            );
+            let b = single_box_buffer_at(
+                &format!(".box {{ background-color: #ff0000; {transform}; }}"),
+                40,
+                1.0,
+                12.0,
+                12.0,
+            );
+            for y in 0..40 {
+                for x in 0..40 {
+                    assert_eq!(
+                        pixel_rgb(&a, x, y),
+                        pixel_rgb(&b, x, y),
+                        "{individual} vs {transform} at ({x}, {y})"
+                    );
+                }
+            }
+        }
+        let moved = single_box_buffer(
+            ".box { background-color: #ff0000; translate: 20px 0; }",
+            40,
+            1.0,
+        );
+        assert_eq!(pixel_rgb(&moved, 25, 5), [255, 0, 0]);
+        assert_eq!(pixel_rgb(&moved, 5, 5), [0, 0, 0]);
+    }
+
+    const WHITE: [u8; 3] = [255, 255, 255];
+    const RED: [u8; 3] = [255, 0, 0];
+    const BLUE: [u8; 3] = [0, 0, 255];
+    const GREEN: [u8; 3] = [0, 255, 0];
+
+    fn same_pixels(a: &Canvas, b: &Canvas, size: (u32, u32)) {
+        for y in 0..size.1 {
+            for x in 0..size.0 {
+                assert_eq!(pixel_rgb(a, x, y), pixel_rgb(b, x, y), "at ({x}, {y})");
             }
         }
     }
 
+    #[test]
+    fn a_parents_perspective_draws_what_perspective_in_the_childs_transform_does() {
+        let tree: Element = view! { <div class="stage"><div class="card" /></div> };
+        let by_parent = paint_text_css(
+            &tree,
+            ".stage { width: 100px; height: 100px; perspective: 100px; } \
+             .card { width: 100px; height: 100px; background-color: #ff0000; \
+                     transform: rotateY(60deg); }",
+            (140, 100),
+        );
+        let by_function = paint_text_css(
+            &tree,
+            ".stage { width: 100px; height: 100px; } \
+             .card { width: 100px; height: 100px; background-color: #ff0000; \
+                     transform: perspective(100px) rotateY(60deg); }",
+            (140, 100),
+        );
+        same_pixels(&by_parent, &by_function, (140, 100));
+        // And it is foreshortened: the left half grows toward the viewer, the
+        // right half shrinks away (measured against Chrome in the fixtures).
+        assert_eq!(pixel_rgb(&by_parent, 20, 50), RED);
+        assert_eq!(
+            pixel_rgb(&by_parent, 20, 3),
+            RED,
+            "the near edge is taller than the box"
+        );
+        assert_eq!(
+            pixel_rgb(&by_parent, 85, 50),
+            WHITE,
+            "the far edge is short of it"
+        );
+        assert_eq!(pixel_rgb(&by_parent, 70, 5), WHITE);
+    }
+
+    #[test]
+    fn a_perspective_free_turn_only_narrows_the_box() {
+        let tree: Element = view! { <div class="card" /> };
+        let canvas = paint_text_css(
+            &tree,
+            ".card { width: 100px; height: 40px; background-color: #ff0000; \
+                    transform: rotateY(60deg); }",
+            (120, 60),
+        );
+        // cos(60deg) = 0.5: 50px wide about the centre (50, 20), full height.
+        assert_eq!(pixel_rgb(&canvas, 30, 20), RED);
+        assert_eq!(pixel_rgb(&canvas, 70, 20), RED);
+        assert_eq!(pixel_rgb(&canvas, 20, 20), WHITE);
+        assert_eq!(pixel_rgb(&canvas, 80, 20), WHITE);
+        assert_eq!(pixel_rgb(&canvas, 50, 2), RED);
+    }
+
+    #[test]
+    fn a_box_behind_the_eye_is_not_drawn() {
+        let tree: Element = view! { <div class="stage"><div class="card" /></div> };
+        let canvas = paint_text_css(
+            &tree,
+            ".stage { width: 100px; height: 100px; perspective: 100px; } \
+             .card { width: 100px; height: 100px; background-color: #ff0000; \
+                     transform: translateZ(150px); }",
+            (200, 200),
+        );
+        for (x, y) in [(50, 50), (0, 0), (150, 150), (199, 199)] {
+            assert_eq!(pixel_rgb(&canvas, x, y), WHITE, "at ({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn a_hidden_back_is_not_painted_and_a_visible_one_is() {
+        let tree: Element = view! { <div class="box" /> };
+        let hidden = paint_text_css(
+            &tree,
+            ".box { width: 50px; height: 50px; background-color: #ff0000; \
+                   backface-visibility: hidden; transform: rotateY(180deg); }",
+            (60, 60),
+        );
+        assert_eq!(pixel_rgb(&hidden, 25, 25), WHITE);
+        let visible = paint_text_css(
+            &tree,
+            ".box { width: 50px; height: 50px; background-color: #ff0000; \
+                   transform: rotateY(180deg); }",
+            (60, 60),
+        );
+        assert_eq!(pixel_rgb(&visible, 25, 25), RED);
+        let front = paint_text_css(
+            &tree,
+            ".box { width: 50px; height: 50px; background-color: #ff0000; \
+                   backface-visibility: hidden; }",
+            (60, 60),
+        );
+        assert_eq!(pixel_rgb(&front, 25, 25), RED);
+    }
+
+    #[test]
+    fn a_two_faced_card_shows_the_face_that_looks_at_the_viewer() {
+        let tree: Element = view! {
+            <div class="card">
+                <div class="front" />
+                <div class="back" />
+            </div>
+        };
+        let css = |turn: &str| {
+            format!(
+                ".card {{ width: 50px; height: 50px; transform-style: preserve-3d; \
+                         transform: {turn}; }} \
+                 .front, .back {{ position: absolute; width: 50px; height: 50px; \
+                                  backface-visibility: hidden; }} \
+                 .front {{ background-color: #ff0000; }} \
+                 .back {{ background-color: #0000ff; transform: rotateY(180deg); }}"
+            )
+        };
+        let upright = paint_text_css(&tree, &css("none"), (60, 60));
+        assert_eq!(pixel_rgb(&upright, 25, 25), RED);
+        let flipped = paint_text_css(&tree, &css("rotateY(180deg)"), (60, 60));
+        assert_eq!(pixel_rgb(&flipped, 25, 25), BLUE);
+    }
+
+    #[test]
+    fn planes_in_a_3d_context_are_drawn_by_depth_not_by_tree_order() {
+        let tree: Element = view! {
+            <div class="ctx">
+                <div class="near" />
+                <div class="far" />
+            </div>
+        };
+        let css = |style: &str| {
+            format!(
+                ".ctx {{ width: 60px; height: 60px; transform-style: {style}; }} \
+                 .near, .far {{ position: absolute; width: 60px; height: 60px; }} \
+                 .near {{ background-color: #ff0000; transform: translateZ(40px); }} \
+                 .far {{ background-color: #0000ff; }}"
+            )
+        };
+        let deep = paint_text_css(&tree, &css("preserve-3d"), (70, 70));
+        assert_eq!(pixel_rgb(&deep, 30, 30), RED, "the nearer plane is on top");
+        let flat = paint_text_css(&tree, &css("flat"), (70, 70));
+        assert_eq!(
+            pixel_rgb(&flat, 30, 30),
+            BLUE,
+            "flat, the later box is on top"
+        );
+    }
+
+    #[test]
+    fn crossing_planes_are_cut_where_they_meet() {
+        let tree: Element = view! {
+            <div class="ctx">
+                <div class="flat" />
+                <div class="upright" />
+            </div>
+        };
+        let canvas = paint_text_css(
+            &tree,
+            ".ctx { width: 100px; height: 100px; perspective: 300px; \
+                    transform-style: preserve-3d; } \
+             .flat { position: absolute; width: 100px; height: 100px; \
+                     background-color: #00ff00; } \
+             .upright { position: absolute; width: 100px; height: 100px; \
+                        background-color: #ff0000; transform: rotateY(60deg); }",
+            (140, 100),
+        );
+        // The turned plane's left half is in front of the flat one and its
+        // right half behind it, whatever the tree order says.
+        assert_eq!(pixel_rgb(&canvas, 30, 50), RED);
+        assert_eq!(pixel_rgb(&canvas, 70, 50), GREEN);
+        // Tree order alone would paint the turned plane over the flat one.
+        let flat_parent = paint_text_css(
+            &tree,
+            ".ctx { width: 100px; height: 100px; perspective: 300px; } \
+             .flat { position: absolute; width: 100px; height: 100px; \
+                     background-color: #00ff00; } \
+             .upright { position: absolute; width: 100px; height: 100px; \
+                        background-color: #ff0000; transform: rotateY(60deg); }",
+            (140, 100),
+        );
+        assert_eq!(pixel_rgb(&flat_parent, 70, 50), RED);
+    }
+
+    #[test]
+    fn a_plane_in_a_3d_context_keeps_its_own_opacity_and_a_flattening_property_flattens() {
+        let tree: Element = view! {
+            <div class="ctx">
+                <div class="near" />
+                <div class="far" />
+            </div>
+        };
+        let css = |ctx_extra: &str, near_extra: &str| {
+            format!(
+                ".ctx {{ width: 60px; height: 60px; transform-style: preserve-3d; {ctx_extra} }} \
+                 .near, .far {{ position: absolute; width: 60px; height: 60px; }} \
+                 .near {{ background-color: #ff0000; transform: translateZ(40px); {near_extra} }} \
+                 .far {{ background-color: #0000ff; }}"
+            )
+        };
+        // Half-transparent red over the blue plane behind it.
+        let faded = paint_text_css(&tree, &css("", "opacity: 0.5;"), (70, 70));
+        let [r, g, b] = pixel_rgb(&faded, 30, 30);
+        assert!(
+            (125..=130).contains(&r) && g == 0 && (125..=130).contains(&b),
+            "{r} {g} {b}"
+        );
+        // `overflow` on the context makes it flat again, so tree order rules.
+        let clipped = paint_text_css(&tree, &css("overflow: hidden;", ""), (70, 70));
+        assert_eq!(pixel_rgb(&clipped, 30, 30), BLUE);
+        let translucent = paint_text_css(&tree, &css("opacity: 0.99;", ""), (70, 70));
+        assert_ne!(pixel_rgb(&translucent, 30, 30), RED);
+    }
+
+    #[test]
+    fn an_ancestors_clip_cuts_a_3d_context() {
+        let tree: Element = view! {
+            <div class="clip"><div class="ctx"><div class="plane" /></div></div>
+        };
+        let canvas = paint_text_css(
+            &tree,
+            ".clip { width: 40px; height: 40px; overflow: hidden; } \
+             .ctx { width: 80px; height: 80px; transform-style: preserve-3d; } \
+             .plane { width: 80px; height: 80px; background-color: #ff0000; \
+                      transform: rotateX(20deg); }",
+            (90, 90),
+        );
+        assert_eq!(pixel_rgb(&canvas, 20, 20), RED);
+        assert_eq!(pixel_rgb(&canvas, 60, 20), WHITE);
+        assert_eq!(pixel_rgb(&canvas, 20, 60), WHITE);
+    }
+
+    #[test]
+    fn the_individual_translate_scale_and_rotate_axis_forms_apply() {
+        let tree: Element = view! { <div class="box" /> };
+        let moved = paint_text_css(
+            &tree,
+            ".box { width: 20px; height: 20px; background-color: #ff0000; translate: 30px 10px 99px; }",
+            (80, 50),
+        );
+        assert_eq!(pixel_rgb(&moved, 40, 20), RED);
+        assert_eq!(pixel_rgb(&moved, 5, 5), WHITE);
+        let flattened = paint_text_css(
+            &tree,
+            ".box { width: 20px; height: 20px; background-color: #ff0000; scale: 1 1 0; }",
+            (40, 40),
+        );
+        assert_eq!(pixel_rgb(&flattened, 10, 10), RED);
+        let edge_on = paint_text_css(
+            &tree,
+            ".box { width: 20px; height: 20px; background-color: #ff0000; rotate: y 90deg; }",
+            (40, 40),
+        );
+        assert_eq!(
+            pixel_rgb(&edge_on, 10, 10),
+            WHITE,
+            "seen edge-on it has no area"
+        );
+    }
+
+    #[test]
+    fn projected_groups_paint_the_same_on_a_bounded_and_a_full_surface() {
+        let tree: Element = view! {
+            <div class="stage">
+                <div class="card" />
+                <div class="ctx"><div class="a" /><div class="b" /></div>
+            </div>
+        };
+        let css = ".stage { width: 200px; height: 120px; perspective: 150px; } \
+                   .card { position: absolute; left: 10px; top: 10px; width: 80px; height: 60px; \
+                           background-color: #ff0000; transform: rotateY(40deg) rotateX(20deg); } \
+                   .ctx { position: absolute; left: 110px; top: 20px; width: 60px; height: 60px; \
+                          transform-style: preserve-3d; transform: rotateY(-30deg); } \
+                   .a { position: absolute; width: 60px; height: 60px; background-color: #00aa00; } \
+                   .b { position: absolute; width: 60px; height: 60px; background-color: #0000ff; \
+                        transform: rotateY(90deg); }";
+        assert_bounded_and_full_target_paint_within(2, || paint_text_css(&tree, css, (220, 130)));
+    }
+
+    #[test]
+    fn a_3d_context_paints_the_inline_content_of_its_boxes_once() {
+        let tree: Element = view! {
+            <div class="ctx">"Hello "<span class="mark">"flowing words"</span>" end"</div>
+        };
+        let css = |style: &str| {
+            format!(
+                ".ctx {{ width: 200px; height: 40px; font-size: 16px; \
+                         transform-style: {style}; }} \
+                 .mark {{ background-color: #ffd0d0; color: #000000; }}"
+            )
+        };
+        let flat = paint_text_css(&tree, &css("flat"), (220, 50));
+        let preserved = paint_text_css(&tree, &css("preserve-3d"), (220, 50));
+        same_pixels(&flat, &preserved, (220, 50));
+    }
+
+    #[test]
+    fn backface_visibility_follows_the_accumulated_turn_only_inside_a_3d_context() {
+        // Each case is what Chrome 153 draws for a red 100x100 child with
+        // backface-visibility: hidden under a parent turned by 180deg.
+        let tree: Element = view! { <div class="p"><div class="c" /></div> };
+        let css = |parent_extra: &str, child_extra: &str| {
+            format!(
+                ".p {{ width: 100px; height: 100px; transform: rotateY(180deg); {parent_extra} }} \
+                 .c {{ width: 100px; height: 100px; background-color: #ff0000; \
+                       backface-visibility: hidden; {child_extra} }}"
+            )
+        };
+        let flat = paint_text_css(&tree, &css("", ""), (110, 110));
+        assert_eq!(
+            pixel_rgb(&flat, 50, 50),
+            RED,
+            "a flat parent does not turn the child away"
+        );
+        let preserved =
+            paint_text_css(&tree, &css("transform-style: preserve-3d;", ""), (110, 110));
+        assert_eq!(pixel_rgb(&preserved, 50, 50), WHITE, "a 3D context does");
+        let own_turn = paint_text_css(&tree, &css("", "transform: rotateY(180deg);"), (110, 110));
+        assert_eq!(
+            pixel_rgb(&own_turn, 50, 50),
+            WHITE,
+            "the child's own turn is judged on its own"
+        );
+    }
     #[test]
     fn blur_spreads_a_solid_boxs_own_color_past_its_own_edge() {
         let filtered = single_box_buffer_at(
