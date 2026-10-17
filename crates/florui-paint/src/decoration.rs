@@ -145,21 +145,21 @@ pub(crate) fn paint(
         let color = declared.decoration.color.unwrap_or(declared.color);
         let ascent = span.metrics.ascent;
         let baseline = span.baseline;
-        let mut lines_to_paint: Vec<(f32, bool)> = Vec::new();
+        let mut lines_to_paint: Vec<(f32, bool, Kind)> = Vec::new();
         match phase {
             Phase::UnderAndOver => {
                 if lines.underline {
                     let top = baseline + underline_offset(&declared, &span.metrics, thickness);
-                    lines_to_paint.push((top, true));
+                    lines_to_paint.push((top, true, Kind::Under));
                     if declared.decoration.style == DecorationStyle::Double {
-                        lines_to_paint.push((top + thickness + 1.0, true));
+                        lines_to_paint.push((top + thickness + 1.0, true, Kind::Under));
                     }
                 }
                 if lines.overline {
                     let top = baseline - ascent.round() - thickness;
-                    lines_to_paint.push((top, true));
+                    lines_to_paint.push((top, true, Kind::Over));
                     if declared.decoration.style == DecorationStyle::Double {
-                        lines_to_paint.push((top - thickness - 1.0, true));
+                        lines_to_paint.push((top - thickness - 1.0, true, Kind::Over));
                     }
                 }
             }
@@ -168,17 +168,37 @@ pub(crate) fn paint(
                     let center = baseline - ascent / 3.0;
                     if declared.decoration.style == DecorationStyle::Double {
                         let half = (thickness + 1.0) / 2.0;
-                        lines_to_paint.push((center - half - thickness / 2.0, false));
-                        lines_to_paint.push((center + half - thickness / 2.0, false));
+                        lines_to_paint.push((
+                            center - half - thickness / 2.0,
+                            false,
+                            Kind::Through,
+                        ));
+                        lines_to_paint.push((
+                            center + half - thickness / 2.0,
+                            false,
+                            Kind::Through,
+                        ));
                     } else {
-                        lines_to_paint.push((center - thickness / 2.0, false));
+                        lines_to_paint.push((center - thickness / 2.0, false, Kind::Through));
                     }
                 }
             }
         }
-        for (top, skips_ink) in lines_to_paint {
+        for (top, skips_ink, kind) in lines_to_paint {
+            let wavy = declared.decoration.style == DecorationStyle::Wavy;
+            let top = if wavy {
+                wavy_top(kind, top, thickness)
+            } else {
+                top
+            };
+            let (band_top, band_bottom) = if wavy {
+                let reach = wave_amplitude(thickness) + thickness / 2.0;
+                (top + thickness / 2.0 - reach, top + thickness / 2.0 + reach)
+            } else {
+                (top, top + thickness)
+            };
             let gaps = if skips_ink && declared.decoration.skip_ink != SkipInk::None {
-                ink_gaps(&span, top, top + thickness, thickness, scale)
+                ink_gaps(&span, band_top, band_bottom, thickness, scale)
             } else {
                 Vec::new()
             };
@@ -195,6 +215,30 @@ pub(crate) fn paint(
             );
         }
     }
+}
+
+/// Which of the lines a decoration draws.
+#[derive(Clone, Copy)]
+enum Kind {
+    Under,
+    Over,
+    Through,
+}
+
+/// Where a wavy line starts, given where the straight one would: the wave's
+/// middle sits below an underline, above an overline and a little above the
+/// middle of a line-through, by the amounts Chromium measures.
+fn wavy_top(kind: Kind, top: f32, thickness: f32) -> f32 {
+    top + match kind {
+        Kind::Under => 1.5 + thickness / 2.0,
+        Kind::Over => -1.5 * thickness - 0.5,
+        Kind::Through => -(thickness - 1.0) / 2.0,
+    }
+}
+
+/// How far the middle of a wave rises and falls.
+fn wave_amplitude(thickness: f32) -> f32 {
+    thickness * 0.875 + 0.3
 }
 
 fn thickness_of(declared: &Declared, metrics: &florui_text::RunMetrics) -> f32 {
@@ -357,6 +401,13 @@ fn paint_line(
     clip: Option<&Mask>,
 ) {
     let (top, thickness) = place;
+    // Chromium starts a dotted or dashed line on a whole device pixel and cuts
+    // its length to whole pixels, and fits the pattern to that length.
+    let x = if matches!(style, DecorationStyle::Dotted | DecorationStyle::Dashed) {
+        snapped(x, origin.0, scale)
+    } else {
+        x
+    };
     // The pieces the style draws along the line, before the gaps are cut.
     let pieces: Vec<(f32, f32)> = match style {
         DecorationStyle::Solid | DecorationStyle::Double => vec![x],
@@ -390,6 +441,14 @@ fn paint_line(
             }
         }
     }
+}
+
+/// `x` (logical pixels from the text, which starts `origin` device pixels in) as
+/// whole device pixels: the start rounded, the length cut down.
+fn snapped(x: (f32, f32), origin: f32, scale: f32) -> (f32, f32) {
+    let start = (origin + x.0 * scale).round();
+    let width = ((x.1 - x.0) * scale).floor();
+    ((start - origin) / scale, (start + width - origin) / scale)
 }
 
 /// `from..to` with the `gaps` taken out.
@@ -446,7 +505,10 @@ fn dashes(x: (f32, f32), dash: f32, gap: f32) -> Vec<(f32, f32)> {
     pieces
 }
 
-/// A wavy line, as a row of quadratic arcs stroked `thickness` wide.
+/// A wavy line: a sine wave about the line's middle, `thickness` wide, with
+/// Chromium's proportions (a period of four thicknesses and three pixels, and
+/// a crest-to-trough height of 1.75 thicknesses), starting on its way down at
+/// the left end of the whole line, so the pieces left by the gaps stay in step.
 #[allow(clippy::too_many_arguments)]
 fn wave(
     buffer: &mut Surface,
@@ -461,10 +523,9 @@ fn wave(
     use tiny_skia::{LineCap, Paint, PathBuilder, Stroke, Transform};
 
     let (top, thickness) = place;
-    // A wave 3 thicknesses high (the stroke included) and 5.5 long.
-    let amplitude = thickness * 1.25;
-    let wavelength = thickness * 5.5;
-    let middle = top + thickness * 1.75;
+    let amplitude = wave_amplitude(thickness);
+    let wavelength = thickness * 4.0 + 3.0;
+    let middle = top + thickness / 2.0;
     let mut paint = Paint::default();
     paint.set_color_rgba8(color.r, color.g, color.b, color.a);
     paint.anti_alias = true;
@@ -475,24 +536,21 @@ fn wave(
     };
     for (from, to) in cut(x.0, x.1, gaps) {
         let mut builder = PathBuilder::new();
-        let (lx, ly) = buffer.local(origin.0 + from * scale, origin.1 + middle * scale);
-        builder.move_to(lx, ly);
+        let step = (wavelength / 16.0).min(0.5 / scale.max(1.0));
         let mut at = from;
-        let mut up = false;
-        while at < to {
-            let next = (at + wavelength / 2.0).min(to);
-            let control_x = (at + next) / 2.0;
-            let control_y = middle
-                + if up {
-                    -amplitude * 2.0
-                } else {
-                    amplitude * 2.0
-                };
-            let (cx, cy) = buffer.local(origin.0 + control_x * scale, origin.1 + control_y * scale);
-            let (ex, ey) = buffer.local(origin.0 + next * scale, origin.1 + middle * scale);
-            builder.quad_to(cx, cy, ex, ey);
-            at = next;
-            up = !up;
+        loop {
+            let phase = std::f32::consts::TAU * (at - x.0) / wavelength;
+            let y = middle + amplitude * phase.sin();
+            let (px, py) = buffer.local(origin.0 + at * scale, origin.1 + y * scale);
+            if at == from {
+                builder.move_to(px, py);
+            } else {
+                builder.line_to(px, py);
+            }
+            if at >= to {
+                break;
+            }
+            at = (at + step).min(to);
         }
         if let Some(path) = builder.finish() {
             buffer
@@ -521,4 +579,24 @@ fn fill_rect_smooth(
     buffer
         .pixmap
         .fill_rect(rect, &paint, Transform::identity(), clip);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_dashed_line_is_cut_to_whole_device_pixels() {
+        assert_eq!(snapped((0.0, 223.72), 0.0, 1.0), (0.0, 223.0));
+        assert_eq!(snapped((0.3, 10.2), 0.0, 2.0), (0.5, 10.0));
+    }
+
+    #[test]
+    fn the_dash_gap_is_fitted_to_the_line_as_chromium_does() {
+        // 23 dashes of 6 with 22 gaps of (223 - 138) / 22, not 22 with a wider gap.
+        let pieces = dashes((0.0, 223.0), 6.0, 4.0);
+        assert_eq!(pieces.len(), 23);
+        assert!((pieces[1].0 - 6.0 - 85.0 / 22.0).abs() < 1e-3, "{pieces:?}");
+        assert!((pieces[22].1 - 223.0).abs() < 1e-3);
+    }
 }

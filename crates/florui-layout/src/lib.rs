@@ -3490,13 +3490,7 @@ fn natural_width(
     if arena.children(node).is_empty() {
         let text = leaf_text(arena, node);
         if !text.is_empty() {
-            let family = to_text_font_family(&style.font_family);
-            return font
-                .measure(
-                    florui_text::TextStyle::new(family, style.font_size, style.font_weight),
-                    text,
-                )
-                .width;
+            return font.measure(text_style_of(style), text).width;
         }
     }
     0.0
@@ -3526,13 +3520,8 @@ fn natural_height(
     if arena.children(node).is_empty() {
         let text = leaf_text(arena, node);
         if !text.is_empty() {
-            let family = to_text_font_family(&style.font_family);
             return font
-                .measure_wrapped(
-                    florui_text::TextStyle::new(family, style.font_size, style.font_weight),
-                    text,
-                    cross_axis_width,
-                )
+                .measure_wrapped(text_style_of(style), text, cross_axis_width)
                 .height;
         }
     }
@@ -5823,6 +5812,111 @@ mod tests {
             50.0,
             "a fixed box takes no room in its parent"
         );
+    }
+
+    #[test]
+    fn a_fixed_box_inside_an_inline_block_with_text_is_placed_against_the_viewport() {
+        let tree: Element = view! {
+            <div class="page">
+                <div class="chip">"label"<div class="pinned" /></div>
+                <div class="chip2"><span>"in"</span><div class="pinned2" /></div>
+            </div>
+        };
+        let (arena, _, layouts) = fixed_layout(
+            &tree,
+            ".page { padding: 40px; } .chip, .chip2 { display: inline-block; } \
+             .pinned { position: fixed; top: 5px; left: 7px; width: 10px; height: 10px; } \
+             .pinned2 { position: fixed; bottom: 4px; right: 6px; width: 20px; height: 8px; }",
+        );
+        let pinned = node_with_class(&arena, "pinned");
+        let pinned2 = node_with_class(&arena, "pinned2");
+        assert_eq!(absolute_position(&arena, &layouts, pinned), (7.0, 5.0));
+        assert_eq!(layouts[&pinned].width, 10.0);
+        assert_eq!(absolute_position(&arena, &layouts, pinned2), (174.0, 88.0));
+    }
+
+    #[test]
+    fn a_fixed_box_with_content_inside_inline_content_has_its_own_size() {
+        let tree: Element = view! {
+            <div class="page">
+                "intro "
+                <div class="chip">"label"<div class="pinned">"hello"</div></div>
+                " outro"
+                <div class="auto" />
+            </div>
+        };
+        let (arena, _, layouts) = fixed_layout(
+            &tree,
+            ".page { padding: 40px; } .chip { display: inline-block; } \
+             .pinned { position: fixed; top: 5px; left: 7px; } \
+             .auto { position: fixed; width: 10px; height: 10px; }",
+        );
+        let pinned = node_with_class(&arena, "pinned");
+        let auto = node_with_class(&arena, "auto");
+        assert_eq!(absolute_position(&arena, &layouts, pinned), (7.0, 5.0));
+        assert!(layouts[&pinned].width > 20.0 && layouts[&pinned].height > 10.0);
+        assert_eq!(layouts[&auto].width, 10.0);
+        assert!(
+            absolute_position(&arena, &layouts, auto).1 >= 40.0,
+            "static position"
+        );
+    }
+
+    #[test]
+    fn a_fixed_box_nested_in_inline_content_is_placed_against_the_viewport() {
+        let tree: Element = view! {
+            <div class="page">
+                <div class="outer">
+                    "a"
+                    <div class="inner"><span>"b"<div class="deep" /></span></div>
+                </div>
+                <button>"go"<div class="inbtn" /></button>
+                <p>"text "<span><div class="inspan" /></span></p>
+            </div>
+        };
+        let (arena, _, layouts) = fixed_layout(
+            &tree,
+            ".page { padding: 40px; } .outer, .inner { display: inline-block; } \
+             .deep, .inbtn, .inspan { position: fixed; top: 5px; left: 7px; width: 10px; height: 10px; }",
+        );
+        for class in ["deep", "inbtn", "inspan"] {
+            let node = node_with_class(&arena, class);
+            assert_eq!(
+                absolute_position(&arena, &layouts, node),
+                (7.0, 5.0),
+                "{class}"
+            );
+            assert_eq!(layouts[&node].width, 10.0, "{class}");
+        }
+    }
+
+    #[test]
+    fn a_collapsed_flex_item_keeps_its_place_and_size_as_chromium_lays_it_out() {
+        let tree: Element = view! {
+            <div class="row">
+                <div class="item first" />
+                <div class="item gone" />
+                <div class="item last" />
+            </div>
+        };
+        let (arena, _, layouts) = fixed_layout(
+            &tree,
+            ".row { display: flex; width: 764px; } \
+             .item { width: 50px; margin: 0 7px; padding: 3px; border: 2px solid; } \
+             .first { height: 20px; } .gone { height: 40px; visibility: collapse; } \
+             .last { height: 30px; }",
+        );
+        let at = |class| {
+            let node = node_with_class(&arena, class);
+            (
+                absolute_position(&arena, &layouts, node).0,
+                layouts[&node].width,
+                layouts[&node].height,
+            )
+        };
+        assert_eq!(at("gone"), (81.0, 60.0, 50.0));
+        assert_eq!(at("last"), (155.0, 60.0, 40.0));
+        assert_eq!(layouts[&node_with_class(&arena, "row")].height, 50.0);
     }
 
     #[test]
