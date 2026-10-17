@@ -1,0 +1,33 @@
+.wrap { position: relative; width: 500px; height: 400px; background-color: #ffffff; }
+.b { position: absolute; width: 60px; height: 30px; box-sizing: content-box; background-color: #dddddd; border: 2px solid #333333; }
+.solid { outline: 4px solid #ff0000; outline-offset: 3px; }
+.neg { outline: 4px solid #ff0000; outline-offset: -2px; }
+.radius { outline: 4px solid #ff0000; outline-offset: 3px; border-radius: 12px; }
+.dashed { outline: 6px dashed #ff0000; outline-offset: 2px; }
+.double { outline: 6px double #ff0000; }
+.groove { outline: 6px groove #ff0000; }
+.dotted-r { outline: 6px dotted #ff0000; outline-offset: 2px; border-radius: 12px; }
+.auto { outline: auto; }
+.auto-r { outline: auto; border-radius: 12px; }
+.thick { outline: 10px solid #3366cc; outline-offset: 0; }
+.inset-off { outline: 3px inset #3366cc; outline-offset: 5px; }
+.pos-solid { left: 25px; top: 25px; }
+.pos-neg { left: 145px; top: 25px; }
+.pos-radius { left: 265px; top: 25px; }
+.pos-dashed { left: 385px; top: 25px; }
+.pos-double { left: 25px; top: 110px; }
+.pos-groove { left: 145px; top: 110px; }
+.pos-dotted-r { left: 265px; top: 110px; }
+.pos-auto { left: 385px; top: 110px; }
+.pos-auto-r { left: 25px; top: 195px; }
+.pos-thick { left: 145px; top: 195px; }
+.pos-inset-off { left: 265px; top: 195px; }
+.line { position: absolute; margin: 0; font-size: 16px; line-height: 24px; }
+.line1 { left: 300px; top: 190px; }
+.line2 { left: 300px; top: 225px; width: 110px; }
+.mark { outline: 3px solid #ff0000; }
+.autom { outline: auto; }
+.line3 { left: 20px; top: 300px; width: 110px; }
+.line4 { left: 200px; top: 300px; width: 110px; }
+.markd { outline: 3px dashed #ff0000; outline-offset: 2px; }
+.markdbl { outline: 6px double #3366cc; }
