@@ -1,0 +1,38 @@
+.wrap { position: relative; width: 500px; height: 330px; background-color: #ffffff; }
+.b { position: absolute; width: 100px; height: 50px; box-sizing: border-box; background-color: #eef2ff; border-color: #3366cc; }
+.dashed { border: 6px dashed #3366cc; }
+.dotted { border: 6px dotted #3366cc; }
+.double { border: 6px double #3366cc; }
+.groove { border: 6px groove #3366cc; }
+.ridge { border: 6px ridge #3366cc; }
+.inset { border: 6px inset #3366cc; }
+.outset { border: 6px outset #3366cc; }
+.dashed2 { border: 2px dashed #cc3333; }
+.dashed1 { border: 1px dashed #cc3333; }
+.dotted2 { border: 2px dotted #cc3333; }
+.dotted1 { border: 1px dotted #cc3333; }
+.r-dashed { border: 6px dashed #3366cc; border-radius: 20px; }
+.r-dotted { border: 6px dotted #3366cc; border-radius: 20px; }
+.r-double { border: 10px double #3366cc; border-radius: 20px; }
+.r-groove { border: 8px groove #3366cc; border-radius: 20px; }
+.r-inset { border: 8px inset #3366cc; border-radius: 20px; }
+.mixed { border-style: solid dashed dotted double; border-width: 6px; border-color: #cc3333 #33cc33 #3333cc #cc33cc; }
+.thin-double { border: 2px double #3366cc; }
+.pos-dashed { left: 10px; top: 10px; }
+.pos-dotted { left: 130px; top: 10px; }
+.pos-double { left: 250px; top: 10px; }
+.pos-groove { left: 370px; top: 10px; }
+.pos-ridge { left: 10px; top: 75px; }
+.pos-inset { left: 130px; top: 75px; }
+.pos-outset { left: 250px; top: 75px; }
+.pos-dashed2 { left: 370px; top: 75px; }
+.pos-dashed1 { left: 10px; top: 140px; }
+.pos-dotted2 { left: 130px; top: 140px; }
+.pos-dotted1 { left: 250px; top: 140px; }
+.pos-r-dashed { left: 370px; top: 140px; }
+.pos-r-dotted { left: 10px; top: 205px; }
+.pos-r-double { left: 130px; top: 205px; }
+.pos-r-groove { left: 250px; top: 205px; }
+.pos-r-inset { left: 370px; top: 205px; }
+.pos-mixed { left: 10px; top: 270px; }
+.pos-thin-double { left: 130px; top: 270px; }

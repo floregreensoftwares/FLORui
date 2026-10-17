@@ -1,0 +1,10 @@
+.wrap { position: relative; width: 500px; height: 180px; background-color: #ffffff; }
+.b { position: absolute; width: 110px; height: 70px; box-sizing: border-box; background-color: #eef2ff; border: 8px solid #222222; }
+.grad1 { border-image: linear-gradient(to right, #ff0000, #0000ff) 1; }
+.grad-slice { border-image: repeating-linear-gradient(45deg, #333333 0px, #333333 6px, #ffcc00 6px, #ffcc00 12px) 30 / 12px / 0 stretch; border-width: 12px; }
+.grad-outset { border-image: linear-gradient(135deg, #00aa44, #aa00aa) 1 / 8px / 6px; }
+.grad-width { border-image: linear-gradient(to bottom, #ff6600, #0066ff) 1; border-image-width: 2; border-width: 6px; }
+.pos-grad1 { left: 20px; top: 20px; }
+.pos-grad-slice { left: 145px; top: 20px; }
+.pos-grad-outset { left: 270px; top: 20px; }
+.pos-grad-width { left: 395px; top: 20px; }
