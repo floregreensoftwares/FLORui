@@ -72,22 +72,26 @@ fn source_pixels(
     area: (f32, f32),
     scale: f32,
 ) -> Option<std::rc::Rc<Pixmap>> {
-    let identity = match image {
-        BackgroundImage::Url(url) => image_source::identity(url),
-        _ => String::new(),
+    // A picture is drawn at its own size, whatever the area: boxes of any size
+    // that share it share the one drawing.
+    let (identity, size) = match image {
+        BackgroundImage::Url(url) => (image_source::identity(url), (0, 0)),
+        _ => (String::new(), (area.0.to_bits(), area.1.to_bits())),
     };
     let key = format!(
         "{image:?}|{identity}|{}x{}|{}",
-        area.0.to_bits(),
-        area.1.to_bits(),
+        size.0,
+        size.1,
         scale.to_bits()
     );
+    // A hit moves to the end, so the entries in use are the last to go.
     if let Some(found) = DRAWN.with(|drawn| {
-        drawn
-            .borrow()
-            .iter()
-            .find(|(kept, _)| *kept == key)
-            .map(|(_, pixels)| std::rc::Rc::clone(pixels))
+        let mut drawn = drawn.borrow_mut();
+        let at = drawn.iter().position(|(kept, _)| *kept == key)?;
+        let entry = drawn.remove(at);
+        let pixels = std::rc::Rc::clone(&entry.1);
+        drawn.push(entry);
+        Some(pixels)
     }) {
         return Some(found);
     }
