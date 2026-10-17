@@ -1076,8 +1076,15 @@ impl FontMetricsProvider for NoFontMetrics {
         FontMetrics::default()
     }
 
-    fn base_size_for_generic(&self, _generic: GenericFontFamily) -> Length {
-        Length::new(16.0)
+    // Chromium's default sizes: 16px, and for a list that is exactly
+    // `monospace` 13px. Keyword sizes (and so every `em` that follows from one)
+    // are worked out from this base.
+    fn base_size_for_generic(&self, generic: GenericFontFamily) -> Length {
+        Length::new(if generic == GenericFontFamily::Monospace {
+            13.0
+        } else {
+            16.0
+        })
     }
 }
 
@@ -1786,7 +1793,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
     // `currentcolor` reference resolve against it, rather than an
     // arbitrary fallback.
     let color = to_absolute_rgba(&text.color);
-    let font_size_px = effective_font_size(font);
+    let font_size_px = font.font_size.computed_size.0.px();
     let font_size = style::values::computed::Length::new(font_size_px);
 
     ComputedStyle {
@@ -3495,37 +3502,6 @@ fn to_deferred(values: &ComputedValues) -> Vec<crate::cascade::Deferred> {
         }
     }
     out
-}
-
-/// The size of the font in pixels. The engine's default sizes are one for
-/// every family; Chromium's `monospace` (and only a list that is exactly that
-/// one generic) has its own, smaller: a size that comes from a keyword (the
-/// initial `medium` included) is that keyword's size in the monospace table.
-fn effective_font_size(font: &style::properties::style_structs::Font) -> f32 {
-    use style::values::computed::font::{GenericFontFamily, SingleFontFamily};
-    use style::values::specified::font::FontSizeKeyword as Keyword;
-
-    let own = font.font_size.computed_size.0.px();
-    let only_monospace = matches!(
-        font.font_family.families.list.as_ref(),
-        [SingleFontFamily::Generic(GenericFontFamily::Monospace)]
-    );
-    if !only_monospace {
-        return own;
-    }
-    let info = font.font_size.keyword_info;
-    let size = match info.kw {
-        Keyword::XXSmall => 9.0,
-        Keyword::XSmall => 10.0,
-        Keyword::Small => 12.0,
-        Keyword::Medium => 13.0,
-        Keyword::Large => 16.0,
-        Keyword::XLarge => 20.0,
-        Keyword::XXLarge => 26.0,
-        Keyword::XXXLarge => 39.0,
-        _ => return own,
-    };
-    size * info.factor + info.offset.px()
 }
 
 /// A length or a percentage as the mirrored properties carry them, text:

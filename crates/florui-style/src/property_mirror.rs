@@ -180,6 +180,18 @@ fn read_declaration(
                     break;
                 }
                 Token::WhiteSpace(_) | Token::Comment(_) => {}
+                // A function or a bracket ends only where its block does.
+                Token::Function(_)
+                | Token::ParenthesisBlock
+                | Token::SquareBracketBlock
+                | Token::CurlyBracketBlock => {
+                    p.parse_nested_block(|inner| {
+                        while inner.next_including_whitespace_and_comments().is_ok() {}
+                        Ok::<(), cssparser::ParseError<'_, ()>>(())
+                    })?;
+                    value_end = p.position().byte_index();
+                    span_end = value_end;
+                }
                 _ => {
                     value_end = p.position().byte_index();
                     span_end = value_end;
@@ -542,6 +554,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_value_that_ends_in_a_function_is_kept_whole() {
+        assert_eq!(
+            sheet(".a { text-decoration: underline rgb(1 2 3) }"),
+            ".a { text-decoration-line: underline; text-decoration-style: solid; \
+             text-decoration-color: rgb(1 2 3); --florui-text-decoration-thickness: auto }"
+        );
+        assert_eq!(
+            sheet(".a { text-underline-offset: calc(1px + 2px) !important }"),
+            ".a { --florui-text-underline-offset: calc(1px + 2px) !important }"
+        );
+        assert_eq!(
+            sheet(".a { font-feature-settings: \"liga\" 0, \"ss01\" }"),
+            ".a { --florui-font-feature-settings: \"liga\" 0, \"ss01\" }"
+        );
+    }
     #[test]
     fn a_word_that_is_no_part_of_the_value_leaves_the_whole_shorthand_to_the_engine() {
         for css in [
