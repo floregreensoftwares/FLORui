@@ -1,0 +1,79 @@
+{
+    "id":  "transform-3d-text",
+    "description":  "Text inside boxes under rotation, skew and perspective",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  540,
+                     "height_css_px":  200,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 540px; height: 200px; background-color: #ffffff; } .t { position: absolute; width: 110px; height: 60px; box-sizing: border-box; padding: 6px; font-size: 16px; line-height: 20px; background-color: #fff3c4; border: 2px solid #aa7700; color: #202020; white-space: nowrap; } .t0 { left: 15px; top: 15px; transform: perspective(250px) rotateY(35deg); } .t1 { left: 150px; top: 15px; transform: skewX(-15deg); } .t2 { left: 285px; top: 15px; rotate: 12deg; } .t3 { left: 420px; top: 15px; transform: perspective(200px) rotateX(35deg); } .t4 { left: 15px; top: 110px; transform: scale(1.3); transform-origin: 0 0; } .t5 { left: 150px; top: 110px; transform: perspective(300px) rotateY(-30deg) rotateZ(8deg); }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "t t0",
+                                        "css":  "",
+                                        "text":  "Hello world",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "t t1",
+                                        "css":  "",
+                                        "text":  "Hello world",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "t t2",
+                                        "css":  "",
+                                        "text":  "Hello world",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "t t3",
+                                        "css":  "",
+                                        "text":  "Hello world",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "t t4",
+                                        "css":  "",
+                                        "text":  "Hello world",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "t t5",
+                                        "css":  "",
+                                        "text":  "Hello world",
+                                        "children":  [
+
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  8.5,
+                           "reason":  "Measured against Chromium 153 on Windows: 6.98% of the pixels differ and every box has the same bounding box. Chromium rasterizes the glyphs under the transform where Florui samples a flat render of the text, so the difference sits on the glyph strokes. With the new functions and properties ignored the same fixture measures 14.3%, so it fails."
+                       }
+}

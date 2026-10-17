@@ -1,0 +1,77 @@
+{
+    "id":  "transform-3d-scaled",
+    "description":  "A cube and a perspective card at a device pixel ratio of 2",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  260,
+                     "height_css_px":  140,
+                     "device_pixel_ratio":  2
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 260px; height: 140px; background-color: #ffffff; } .stage { position: absolute; left: 0; top: 0; width: 130px; height: 140px; perspective: 160px; } .cube { position: absolute; left: 35px; top: 40px; width: 60px; height: 60px; transform-style: preserve-3d; transform: rotateX(-25deg) rotateY(35deg); } .face { position: absolute; width: 60px; height: 60px; box-sizing: border-box; border: 2px solid #222222; } .f-front { background-color: #e04040; transform: translateZ(30px); } .f-right { background-color: #4060e0; transform: rotateY(90deg) translateZ(30px); } .f-top { background-color: #a040c0; transform: rotateX(90deg) translateZ(30px); } .card { position: absolute; left: 160px; top: 40px; width: 70px; height: 50px; box-sizing: border-box; border: 3px solid #3366cc; background-color: #cfe0ff; transform: perspective(120px) rotateY(40deg); }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "stage",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "cube",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "face f-front",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "face f-right",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "face f-top",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "card",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  2.2,
+                           "reason":  "Measured against Chromium 153 on Windows at a device pixel ratio of 2: 1.49% of the pixels differ and every box has the same bounding box. What is left is antialiasing along the edges. With the 3D properties ignored the same fixture measures 17.7%, so it fails."
+                       }
+}

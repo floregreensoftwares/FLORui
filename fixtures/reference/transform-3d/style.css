@@ -1,0 +1,10 @@
+.wrap { position: relative; width: 540px; height: 280px; background-color: #ffffff; }
+.b { position: absolute; width: 100px; height: 50px; box-sizing: border-box; background-color: #cfe0ff; border: 6px solid #3366cc; border-left-color: #cc3333; border-bottom-color: #33aa55; }
+.p0 { left: 20px; top: 20px; transform: perspective(200px) rotateY(35deg); }
+.p1 { left: 150px; top: 20px; transform: perspective(150px) rotateX(40deg); }
+.p2 { left: 280px; top: 20px; transform: perspective(300px) rotateZ(20deg) rotateY(30deg); }
+.p3 { left: 410px; top: 20px; transform: perspective(250px) rotate3d(1, 1, 0, 40deg); }
+.p4 { left: 20px; top: 110px; transform: perspective(200px) translateZ(60px); }
+.p5 { left: 150px; top: 110px; transform: perspective(200px) translateZ(-80px) rotateY(20deg); }
+.p6 { left: 280px; top: 110px; transform: perspective(180px) rotateX(50deg); }
+.p7 { left: 410px; top: 110px; transform: perspective(160px) rotateY(60deg); transform-origin: 0 50%; }

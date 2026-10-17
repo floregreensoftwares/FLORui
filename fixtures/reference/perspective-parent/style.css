@@ -1,0 +1,15 @@
+.wrap { position: relative; width: 520px; height: 270px; background-color: #ffffff; }
+.stage { position: absolute; width: 150px; height: 110px; background-color: #f2f2f2; }
+.c { position: absolute; left: 25px; top: 30px; width: 100px; height: 50px; box-sizing: border-box; background-color: #cfe0ff; border: 6px solid #3366cc; border-left-color: #cc3333; border-bottom-color: #33aa55; }
+.s0 { left: 10px; top: 10px; perspective: 200px; }
+.s0 > .c { transform: rotateY(35deg); }
+.s1 { left: 180px; top: 10px; perspective: 200px; perspective-origin: 0 0; }
+.s1 > .c { transform: rotateY(35deg); }
+.s2 { left: 350px; top: 10px; perspective: 200px; perspective-origin: 100% 50%; }
+.s2 > .c { transform: rotateY(35deg); }
+.s3 { left: 10px; top: 140px; perspective: 120px; }
+.s3 > .c { transform: rotateX(45deg); }
+.s4 { left: 180px; top: 140px; perspective: 200px; padding: 10px; box-sizing: border-box; }
+.s4 > .c { transform: translateZ(60px); }
+.s5 { left: 350px; top: 140px; perspective: 300px; perspective-origin: 20px 80px; }
+.s5 > .c { transform: rotateX(30deg) rotateY(-25deg); }
