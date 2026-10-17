@@ -3717,6 +3717,21 @@ mod tests {
     }
 
     #[test]
+    fn em_lengths_under_monospace_are_ems_of_chromiums_smaller_size() {
+        let tree: Element = view! { <div class="code" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".code { font-family: monospace; padding: 1em; width: 10em; line-height: 1.5em; }",
+            &InteractionState::new(),
+        );
+        let style = &computed[&arena.roots()[0]];
+        assert_eq!(style.font_size, 13.0);
+        assert_eq!(style.padding.left, 13.0);
+        assert_eq!(style.width, Some(130.0));
+        assert_eq!(style.line_height, LineHeight::Length(19.5));
+    }
+
+    #[test]
     fn relative_sizes_follow_chromiums_keyword_table_of_each_family() {
         let tree: Element = view! {
             <div class="m">
