@@ -1,0 +1,8 @@
+.wrap { position: relative; width: 260px; height: 140px; background-color: #ffffff; }
+.stage { position: absolute; left: 0; top: 0; width: 130px; height: 140px; perspective: 160px; }
+.cube { position: absolute; left: 35px; top: 40px; width: 60px; height: 60px; transform-style: preserve-3d; transform: rotateX(-25deg) rotateY(35deg); }
+.face { position: absolute; width: 60px; height: 60px; box-sizing: border-box; border: 2px solid #222222; }
+.f-front { background-color: #e04040; transform: translateZ(30px); }
+.f-right { background-color: #4060e0; transform: rotateY(90deg) translateZ(30px); }
+.f-top { background-color: #a040c0; transform: rotateX(90deg) translateZ(30px); }
+.card { position: absolute; left: 160px; top: 40px; width: 70px; height: 50px; box-sizing: border-box; border: 3px solid #3366cc; background-color: #cfe0ff; transform: perspective(120px) rotateY(40deg); }

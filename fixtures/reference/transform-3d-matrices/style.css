@@ -1,0 +1,10 @@
+.wrap { position: relative; width: 540px; height: 200px; background-color: #ffffff; }
+.b { position: absolute; width: 100px; height: 50px; box-sizing: border-box; background-color: #cfe0ff; border: 6px solid #3366cc; border-left-color: #cc3333; border-bottom-color: #33aa55; }
+.p0 { left: 20px; top: 20px; transform: perspective(200px) matrix3d(0.9, 0, -0.3, 0.002, 0, 1, 0, 0, 0.3, 0, 0.9, -0.003, 0, 0, 0, 1); }
+.p1 { left: 150px; top: 20px; transform: perspective(250px) translate3d(20px, 10px, 40px) rotateY(25deg); }
+.p2 { left: 280px; top: 20px; transform: perspective(250px) scale3d(1.2, 0.8, 2) rotateX(30deg); }
+.p3 { left: 410px; top: 20px; transform: perspective(200px) rotateY(20deg) translateZ(50px) rotateX(15deg); }
+.p4 { left: 20px; top: 110px; transform: matrix3d(1, 0, 0, 0, 0.3, 1, 0, 0, 0, 0, 1, 0, 10, 5, 0, 1); }
+.p5 { left: 150px; top: 110px; transform: perspective(300px) rotate3d(0, 1, 1, 35deg) scale(0.9); }
+.p6 { left: 280px; top: 110px; translate: 10px 5px 30px; rotate: 1 0 0 30deg; scale: 1.1 1 1; transform: perspective(250px); }
+.p7 { left: 410px; top: 110px; transform: perspective(220px) rotateX(25deg) rotateY(-30deg) rotateZ(10deg); }

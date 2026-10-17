@@ -1,0 +1,11 @@
+.wrap { position: relative; width: 380px; height: 200px; background-color: #ffffff; }
+.card { position: absolute; width: 100px; height: 70px; transform-style: preserve-3d; }
+.fa { left: 20px; top: 20px; transform: rotateY(0deg); }
+.fb { left: 140px; top: 20px; transform: rotateY(180deg); }
+.fc { left: 260px; top: 20px; transform: perspective(300px) rotateY(60deg); }
+.side { position: absolute; width: 100px; height: 70px; box-sizing: border-box; border: 4px solid #222222; backface-visibility: hidden; }
+.front { background-color: #e04040; }
+.back { background-color: #4060e0; transform: rotateY(180deg); }
+.lone { position: absolute; left: 20px; top: 120px; width: 100px; height: 60px; background-color: #40a040; backface-visibility: hidden; transform: rotateY(180deg); }
+.lone2 { position: absolute; left: 140px; top: 120px; width: 100px; height: 60px; background-color: #40a040; backface-visibility: hidden; transform: rotateX(40deg); }
+.lone3 { position: absolute; left: 260px; top: 120px; width: 100px; height: 60px; background-color: #40a040; backface-visibility: visible; transform: rotateY(180deg); }

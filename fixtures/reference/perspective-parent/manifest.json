@@ -1,0 +1,127 @@
+{
+    "id":  "perspective-parent",
+    "description":  "The perspective property and perspective-origin on a parent",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  520,
+                     "height_css_px":  270,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 520px; height: 270px; background-color: #ffffff; } .stage { position: absolute; width: 150px; height: 110px; background-color: #f2f2f2; } .c { position: absolute; left: 25px; top: 30px; width: 100px; height: 50px; box-sizing: border-box; background-color: #cfe0ff; border: 6px solid #3366cc; border-left-color: #cc3333; border-bottom-color: #33aa55; } .s0 { left: 10px; top: 10px; perspective: 200px; } .s0 \u003e .c { transform: rotateY(35deg); } .s1 { left: 180px; top: 10px; perspective: 200px; perspective-origin: 0 0; } .s1 \u003e .c { transform: rotateY(35deg); } .s2 { left: 350px; top: 10px; perspective: 200px; perspective-origin: 100% 50%; } .s2 \u003e .c { transform: rotateY(35deg); } .s3 { left: 10px; top: 140px; perspective: 120px; } .s3 \u003e .c { transform: rotateX(45deg); } .s4 { left: 180px; top: 140px; perspective: 200px; padding: 10px; box-sizing: border-box; } .s4 \u003e .c { transform: translateZ(60px); } .s5 { left: 350px; top: 140px; perspective: 300px; perspective-origin: 20px 80px; } .s5 \u003e .c { transform: rotateX(30deg) rotateY(-25deg); }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "stage s0",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "stage s1",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "stage s2",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "stage s3",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "stage s4",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "stage s5",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  3.5,
+                           "reason":  "Measured against Chromium 153 on Windows: 2.63% of the pixels differ and every box has the same bounding box. What is left is antialiasing along the edges of the projected quadrilaterals. With perspective and perspective-origin ignored the same fixture measures 11.7%, so it fails."
+                       }
+}

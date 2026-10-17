@@ -1,0 +1,97 @@
+{
+    "id":  "transform-skew",
+    "description":  "skew(), skewX() and skewY(), alone and combined with other functions",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  540,
+                     "height_css_px":  280,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 540px; height: 280px; background-color: #ffffff; } .b { position: absolute; width: 100px; height: 50px; box-sizing: border-box; background-color: #cfe0ff; border: 6px solid #3366cc; border-left-color: #cc3333; border-bottom-color: #33aa55; } .p0 { left: 20px; top: 20px; transform: skewX(20deg); } .p1 { left: 150px; top: 20px; transform: skewY(-15deg); } .p2 { left: 280px; top: 20px; transform: skew(20deg, 10deg); } .p3 { left: 410px; top: 20px; transform: skewX(-30deg) scale(0.8); } .p4 { left: 20px; top: 110px; transform: rotate(20deg) skewX(25deg); } .p5 { left: 150px; top: 110px; transform: skewX(25deg) rotate(20deg); } .p6 { left: 280px; top: 110px; transform: skew(35deg); transform-origin: 0 0; } .p7 { left: 410px; top: 110px; transform: translate(10px, 5px) skewY(20deg); }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p0",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p1",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p2",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p3",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p4",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p5",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p6",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p7",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  3,
+                           "reason":  "Measured against Chromium 153 on Windows: 2.30% of the pixels differ and every box has the same bounding box. What is left is antialiasing along the sheared edges. With the skew functions ignored the same fixture measures 13.9%, so it fails."
+                       }
+}
