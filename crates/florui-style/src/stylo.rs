@@ -1933,7 +1933,21 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         ),
         box_shadow: to_box_shadows(&effects.box_shadow.0, color),
         transform: to_transform(&box_style.transform),
+        translate: to_translate(&box_style.translate),
+        rotate: to_rotate(&box_style.rotate),
+        scale: to_scale(&box_style.scale),
         transform_origin: to_transform_origin(&box_style.transform_origin),
+        transform_origin_z: box_style.transform_origin.depth.px(),
+        perspective: to_perspective(&box_style.perspective),
+        perspective_origin: to_object_position(&box_style.perspective_origin),
+        preserve_3d: matches!(
+            box_style.transform_style,
+            style::values::computed::TransformStyle::Preserve3d
+        ),
+        backface_hidden: matches!(
+            box_style.backface_visibility,
+            style::computed_values::backface_visibility::T::Hidden
+        ),
         filter: to_filter(&effects.filter.0),
         backdrop_filter: to_filter(&effects.backdrop_filter.0),
         container_type: to_container_type(box_style.clone_container_type()),
@@ -2370,16 +2384,111 @@ fn to_transform(
             TransformOperation::Rotate(angle) => {
                 Some(FlorTransformFunction::Rotate(angle.degrees()))
             }
-            // Documented unsupported subset: skew, every 3D function, and
-            // the animation-only interpolate/accumulate matrix
-            // intermediates — see `FlorTransformFunction`'s own doc.
+            TransformOperation::Skew(x, y) => {
+                Some(FlorTransformFunction::Skew(x.degrees(), y.degrees()))
+            }
+            TransformOperation::SkewX(x) => Some(FlorTransformFunction::Skew(x.degrees(), 0.0)),
+            TransformOperation::SkewY(y) => Some(FlorTransformFunction::Skew(0.0, y.degrees())),
+            TransformOperation::TranslateZ(z) => Some(FlorTransformFunction::Translate3d(
+                FlorLengthPercentage::default(),
+                FlorLengthPercentage::default(),
+                z.px(),
+            )),
+            TransformOperation::Translate3D(x, y, z) => Some(FlorTransformFunction::Translate3d(
+                to_length_percentage(x),
+                to_length_percentage(y),
+                z.px(),
+            )),
+            TransformOperation::ScaleZ(sz) => Some(FlorTransformFunction::Scale3d(1.0, 1.0, *sz)),
+            TransformOperation::Scale3D(sx, sy, sz) => {
+                Some(FlorTransformFunction::Scale3d(*sx, *sy, *sz))
+            }
+            TransformOperation::RotateX(angle) => Some(FlorTransformFunction::Rotate3d {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+                degrees: angle.degrees(),
+            }),
+            TransformOperation::RotateY(angle) => Some(FlorTransformFunction::Rotate3d {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+                degrees: angle.degrees(),
+            }),
+            TransformOperation::RotateZ(angle) => {
+                Some(FlorTransformFunction::Rotate(angle.degrees()))
+            }
+            TransformOperation::Rotate3D(x, y, z, angle) => Some(FlorTransformFunction::Rotate3d {
+                x: *x,
+                y: *y,
+                z: *z,
+                degrees: angle.degrees(),
+            }),
+            TransformOperation::Perspective(function) => {
+                use style::values::generics::transform::PerspectiveFunction;
+                Some(FlorTransformFunction::Perspective(match function {
+                    PerspectiveFunction::None => f32::INFINITY,
+                    PerspectiveFunction::Length(length) => length.px().max(1.0),
+                }))
+            }
+            TransformOperation::Matrix3D(m) => Some(FlorTransformFunction::Matrix3d([
+                m.m11, m.m12, m.m13, m.m14, m.m21, m.m22, m.m23, m.m24, m.m31, m.m32, m.m33, m.m34,
+                m.m41, m.m42, m.m43, m.m44,
+            ])),
+            // The animation-only interpolate/accumulate intermediates.
             _ => None,
         })
         .collect()
 }
 
-/// `transform-origin`'s `x`/`y` components; its `z` component is dropped
-/// (this crate's `transform` support is 2D-only).
+/// The individual `translate` property.
+fn to_translate(
+    value: &style::values::generics::transform::Translate<
+        style::values::computed::LengthPercentage,
+        style::values::computed::Length,
+    >,
+) -> Option<(FlorLengthPercentage, FlorLengthPercentage, f32)> {
+    use style::values::generics::transform::Translate;
+    match value {
+        Translate::None => None,
+        Translate::Translate(x, y, z) => {
+            Some((to_length_percentage(x), to_length_percentage(y), z.px()))
+        }
+    }
+}
+
+/// The individual `rotate` property: the axis and angle in degrees.
+fn to_rotate(
+    value: &style::values::generics::transform::Rotate<f32, style::values::computed::Angle>,
+) -> Option<(f32, f32, f32, f32)> {
+    use style::values::generics::transform::Rotate;
+    match value {
+        Rotate::None => None,
+        Rotate::Rotate(angle) => Some((0.0, 0.0, 1.0, angle.degrees())),
+        Rotate::Rotate3D(x, y, z, angle) => Some((*x, *y, *z, angle.degrees())),
+    }
+}
+
+/// The individual `scale` property.
+fn to_scale(value: &style::values::generics::transform::Scale<f32>) -> Option<(f32, f32, f32)> {
+    use style::values::generics::transform::Scale;
+    match value {
+        Scale::None => None,
+        Scale::Scale(x, y, z) => Some((*x, *y, *z)),
+    }
+}
+
+/// `perspective`, with the 1px floor CSS puts on a distance.
+fn to_perspective(value: &style::values::computed::Perspective) -> Option<f32> {
+    use style::values::generics::box_::Perspective;
+    match value {
+        Perspective::None => None,
+        Perspective::Length(length) => Some(length.0.px().max(1.0)),
+    }
+}
+
+/// `transform-origin`'s `x`/`y` components; its `z` component is
+/// [`ComputedStyle::transform_origin_z`].
 fn to_transform_origin(
     value: &style::values::generics::transform::TransformOrigin<
         style::values::computed::LengthPercentage,

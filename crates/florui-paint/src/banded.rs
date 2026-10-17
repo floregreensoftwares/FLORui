@@ -127,7 +127,7 @@ fn filtered_rows(
                 }
                 _ => 0.0,
             };
-            if !style.transform.is_empty() || !style.filter.is_empty() {
+            if style.has_transform() || style.preserve_3d || !style.filter.is_empty() {
                 return inks.get(&id).map(|ink| (ink.1, ink.3));
             }
             (!style.backdrop_filter.is_empty() || reach > 0.0).then(|| {

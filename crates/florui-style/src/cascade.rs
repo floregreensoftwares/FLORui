@@ -698,15 +698,9 @@ pub struct Deferred {
     pub value: DeferredValue,
 }
 
-/// One `transform` function, already reduced to this crate's documented
-/// initial (2D-only) subset. `skew()`/`skewX()`/`skewY()`, every 3D
-/// function (`translateZ`, `rotate3d`, `scale3d`, `matrix3d`,
-/// `perspective`), and the animation-only `interpolatematrix`/
-/// `accumulatematrix` intermediates all parse and cascade correctly
-/// through Stylo but drop out of this list entirely — silently treated
-/// as absent, the least-wrong approximation available without a partial
-/// 2D projection of a genuinely 3D effect. See `florui-paint`'s own doc
-/// for how the surviving functions fold into one 2D affine matrix.
+/// One `transform` function in the form layout composes into a matrix. The
+/// animation-only `interpolatematrix`/`accumulatematrix` intermediates never
+/// reach a computed value outside a running animation and are dropped.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TransformFunction {
     /// `translate()`/`translateX()`/`translateY()`, unified: a bare
@@ -731,6 +725,25 @@ pub enum TransformFunction {
         e: f32,
         f: f32,
     },
+    /// `skew()`/`skewX()`/`skewY()`, in degrees: the shear along x and y.
+    Skew(f32, f32),
+    /// `translate3d()`/`translateZ()`; the z length is in pixels.
+    Translate3d(LengthPercentage, LengthPercentage, f32),
+    /// `scale3d()`/`scaleZ()`.
+    Scale3d(f32, f32, f32),
+    /// `rotate3d()`/`rotateX()`/`rotateY()`/`rotateZ()`: an axis (not
+    /// necessarily unit length) and an angle in degrees.
+    Rotate3d {
+        x: f32,
+        y: f32,
+        z: f32,
+        degrees: f32,
+    },
+    /// `perspective()`, in pixels. `none` is an infinite distance, which
+    /// leaves the matrix at the identity.
+    Perspective(f32),
+    /// `matrix3d()`, in CSS's column-major order.
+    Matrix3d([f32; 16]),
 }
 
 /// `container-type` — whether, and on which axes, this node establishes a
@@ -1028,10 +1041,28 @@ pub struct ComputedStyle {
     /// this node's own box happens in `florui-paint`, the first place a
     /// node's final box size is known.
     pub transform: Vec<TransformFunction>,
-    /// `transform-origin`'s `x`/`y` components — its own `z` component is
-    /// dropped, matching [`TransformFunction`]'s 2D-only scope. `(50%,
-    /// 50%)` (the box's own center) is real CSS's initial value.
+    /// `translate`, the individual property, applied before `rotate`,
+    /// `scale` and `transform`. `None` is `none`. The z length is in pixels.
+    pub translate: Option<(LengthPercentage, LengthPercentage, f32)>,
+    /// `rotate`: an axis and an angle in degrees (`0 0 1` for the plain
+    /// angle form). `None` is `none`.
+    pub rotate: Option<(f32, f32, f32, f32)>,
+    /// `scale`: the three factors (z is `1` unless given). `None` is `none`.
+    pub scale: Option<(f32, f32, f32)>,
+    /// `transform-origin`'s `x`/`y` components. `(50%, 50%)` (the box's own
+    /// center) is real CSS's initial value.
     pub transform_origin: (LengthPercentage, LengthPercentage),
+    /// `transform-origin`'s `z` component, in pixels.
+    pub transform_origin_z: f32,
+    /// `perspective`, in pixels, at least 1px as CSS requires; `None` is
+    /// `none`. It applies to this node's children.
+    pub perspective: Option<f32>,
+    /// `perspective-origin`, against this node's own border box.
+    pub perspective_origin: (LengthPercentage, LengthPercentage),
+    /// `transform-style: preserve-3d`.
+    pub preserve_3d: bool,
+    /// `backface-visibility: hidden`.
+    pub backface_hidden: bool,
     /// `filter`'s own function list, in authored order — see
     /// [`FilterFunction`]'s own doc for the supported subset. An empty
     /// list is real CSS's own `none`, the initial value. Real CSS applies
@@ -1084,6 +1115,26 @@ pub struct ComputedStyle {
 }
 
 impl ComputedStyle {
+    /// Whether the node has a transform of its own: `transform`, or any of the
+    /// individual `translate`, `rotate` and `scale`.
+    pub fn has_transform(&self) -> bool {
+        !self.transform.is_empty()
+            || self.translate.is_some()
+            || self.rotate.is_some()
+            || self.scale.is_some()
+    }
+
+    /// Whether the node is the containing block of its `position: fixed`
+    /// descendants: it has a transform, a `perspective`, `transform-style:
+    /// preserve-3d` (even where that is flattened) or a filter.
+    pub fn holds_fixed_descendants(&self) -> bool {
+        self.has_transform()
+            || self.perspective.is_some()
+            || self.preserve_3d
+            || !self.filter.is_empty()
+            || !self.backdrop_filter.is_empty()
+    }
+
     /// Copies from `other` the fields that change only how a node is painted:
     /// its colors (background, text, each border side's color, placeholder),
     /// box shadows, opacity, text underline and the pointer cursor. Nothing
@@ -1172,7 +1223,15 @@ impl ComputedStyle {
             overflow_scrolls_x: _,
             overflow_scrolls_y: _,
             transform: _,
+            translate: _,
+            rotate: _,
+            scale: _,
             transform_origin: _,
+            transform_origin_z: _,
+            perspective: _,
+            perspective_origin: _,
+            preserve_3d: _,
+            backface_hidden: _,
             filter: _,
             backdrop_filter: _,
             container_type: _,
@@ -4357,16 +4416,220 @@ mod tests {
         );
     }
 
+    fn computed_of(css: &str) -> ComputedStyle {
+        let tree: Element = view! { <div class="t" /> };
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        computed[&arena.roots()[0]].clone()
+    }
+
     #[test]
-    fn a_skew_function_is_dropped_as_an_unsupported_2d_only_gap() {
-        let tree: Element = view! { <div class="skewed" /> };
+    fn skew_functions_keep_their_angles() {
+        assert_eq!(
+            computed_of(".t { transform: skewX(20deg); }").transform,
+            vec![TransformFunction::Skew(20.0, 0.0)]
+        );
+        assert_eq!(
+            computed_of(".t { transform: skewY(0.25turn); }").transform,
+            vec![TransformFunction::Skew(0.0, 90.0)]
+        );
+        assert_eq!(
+            computed_of(".t { transform: skew(10deg, 5deg); }").transform,
+            vec![TransformFunction::Skew(10.0, 5.0)]
+        );
+        assert_eq!(
+            computed_of(".t { transform: skew(10deg); }").transform,
+            vec![TransformFunction::Skew(10.0, 0.0)]
+        );
+    }
+
+    #[test]
+    fn three_d_functions_keep_their_arguments() {
+        let lp = |length, percentage| LengthPercentage { length, percentage };
+        assert_eq!(
+            computed_of(".t { transform: translateZ(30px); }").transform,
+            vec![TransformFunction::Translate3d(
+                lp(0.0, 0.0),
+                lp(0.0, 0.0),
+                30.0
+            )]
+        );
+        assert_eq!(
+            computed_of(".t { transform: translate3d(1px, 50%, 3px); }").transform,
+            vec![TransformFunction::Translate3d(
+                lp(1.0, 0.0),
+                lp(0.0, 0.5),
+                3.0
+            )]
+        );
+        assert_eq!(
+            computed_of(".t { transform: scaleZ(2); }").transform,
+            vec![TransformFunction::Scale3d(1.0, 1.0, 2.0)]
+        );
+        assert_eq!(
+            computed_of(".t { transform: scale3d(2, 3, 4); }").transform,
+            vec![TransformFunction::Scale3d(2.0, 3.0, 4.0)]
+        );
+        assert_eq!(
+            computed_of(".t { transform: rotateX(45deg); }").transform,
+            vec![TransformFunction::Rotate3d {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+                degrees: 45.0
+            }]
+        );
+        assert_eq!(
+            computed_of(".t { transform: rotateY(0.5turn); }").transform,
+            vec![TransformFunction::Rotate3d {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+                degrees: 180.0
+            }]
+        );
+        assert_eq!(
+            computed_of(".t { transform: rotateZ(30deg); }").transform,
+            vec![TransformFunction::Rotate(30.0)]
+        );
+        assert_eq!(
+            computed_of(".t { transform: rotate3d(1, 2, 3, 40deg); }").transform,
+            vec![TransformFunction::Rotate3d {
+                x: 1.0,
+                y: 2.0,
+                z: 3.0,
+                degrees: 40.0
+            }]
+        );
+        assert_eq!(
+            computed_of(".t { transform: perspective(200px); }").transform,
+            vec![TransformFunction::Perspective(200.0)]
+        );
+        assert_eq!(
+            computed_of(".t { transform: perspective(none); }").transform,
+            vec![TransformFunction::Perspective(f32::INFINITY)]
+        );
+        // A distance under 1px is 1px, as in the property.
+        assert_eq!(
+            computed_of(".t { transform: perspective(0); }").transform,
+            vec![TransformFunction::Perspective(1.0)]
+        );
+        assert_eq!(
+            computed_of(".t { transform: perspective(0.5px); }").transform,
+            vec![TransformFunction::Perspective(1.0)]
+        );
+        assert_eq!(
+            computed_of(".t { transform: perspective(-1px); }").transform,
+            vec![]
+        );
+        assert_eq!(
+            computed_of(".t { transform: matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 5,6,7,1); }")
+                .transform,
+            vec![TransformFunction::Matrix3d([
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 5.0, 6.0, 7.0, 1.0
+            ])]
+        );
+    }
+
+    #[test]
+    fn individual_transform_properties_are_read() {
+        let lp = |length, percentage| LengthPercentage { length, percentage };
+        let none = computed_of(".t { }");
+        assert_eq!(
+            (none.translate, none.rotate, none.scale),
+            (None, None, None)
+        );
+        assert!(!none.has_transform());
+
+        let s = computed_of(".t { translate: 30px 10%; }");
+        assert_eq!(s.translate, Some((lp(30.0, 0.0), lp(0.0, 0.1), 0.0)));
+        assert!(s.has_transform());
+        assert_eq!(
+            computed_of(".t { translate: 10px; }").translate,
+            Some((lp(10.0, 0.0), lp(0.0, 0.0), 0.0))
+        );
+        assert_eq!(
+            computed_of(".t { translate: 1px 2px 3px; }").translate,
+            Some((lp(1.0, 0.0), lp(2.0, 0.0), 3.0))
+        );
+        assert_eq!(
+            computed_of(".t { rotate: 15deg; }").rotate,
+            Some((0.0, 0.0, 1.0, 15.0))
+        );
+        assert_eq!(
+            computed_of(".t { rotate: x 20deg; }").rotate,
+            Some((1.0, 0.0, 0.0, 20.0))
+        );
+        assert_eq!(
+            computed_of(".t { rotate: 1 1 0 45deg; }").rotate,
+            Some((1.0, 1.0, 0.0, 45.0))
+        );
+        assert_eq!(
+            computed_of(".t { scale: 0.6; }").scale,
+            Some((0.6, 0.6, 1.0))
+        );
+        assert_eq!(
+            computed_of(".t { scale: 50%; }").scale,
+            Some((0.5, 0.5, 1.0))
+        );
+        assert_eq!(
+            computed_of(".t { scale: 1 2; }").scale,
+            Some((1.0, 2.0, 1.0))
+        );
+        assert_eq!(
+            computed_of(".t { scale: 2 3 4; }").scale,
+            Some((2.0, 3.0, 4.0))
+        );
+        assert_eq!(computed_of(".t { rotate: none; }").rotate, None);
+        // An invalid value leaves the property at its initial value.
+        assert_eq!(computed_of(".t { rotate: 1 2 deg; }").rotate, None);
+    }
+
+    #[test]
+    fn perspective_and_three_d_flags_are_read() {
+        let initial = computed_of(".t { }");
+        assert_eq!(initial.perspective, None);
+        assert!(!initial.preserve_3d && !initial.backface_hidden);
+        assert_eq!(initial.transform_origin_z, 0.0);
+        let half = LengthPercentage {
+            length: 0.0,
+            percentage: 0.5,
+        };
+        assert_eq!(initial.perspective_origin, (half, half));
+
+        let s = computed_of(
+            ".t { perspective: 200px; perspective-origin: 10px 25%; transform-style: preserve-3d; \
+             backface-visibility: hidden; transform-origin: 0 0 20px; }",
+        );
+        assert_eq!(s.perspective, Some(200.0));
+        assert_eq!(
+            s.perspective_origin,
+            (
+                LengthPercentage {
+                    length: 10.0,
+                    percentage: 0.0
+                },
+                LengthPercentage {
+                    length: 0.0,
+                    percentage: 0.25
+                }
+            )
+        );
+        assert!(s.preserve_3d && s.backface_hidden);
+        assert_eq!(s.transform_origin_z, 20.0);
+        assert_eq!(computed_of(".t { perspective: 0; }").perspective, Some(1.0));
+        assert_eq!(computed_of(".t { perspective: none; }").perspective, None);
+        // The individual properties and the perspective do not inherit.
+        let tree: Element = view! { <div class="p"><span class="c" /></div> };
         let (arena, computed) = styles(
             &tree,
-            ".skewed { transform: skewX(20deg); }",
+            ".p { translate: 5px; rotate: 5deg; scale: 2; perspective: 100px; \
+             transform-style: preserve-3d; backface-visibility: hidden; }",
             &InteractionState::new(),
         );
-        let node = arena.roots()[0];
-        assert!(computed[&node].transform.is_empty());
+        let child = &computed[&arena.children(arena.roots()[0])[0]];
+        assert!(!child.has_transform());
+        assert_eq!(child.perspective, None);
+        assert!(!child.preserve_3d && !child.backface_hidden);
     }
 
     #[test]
