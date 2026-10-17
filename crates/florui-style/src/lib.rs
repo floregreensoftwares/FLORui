@@ -60,15 +60,16 @@ pub use background::{
     RadialGradient, RadialSize,
 };
 pub use cascade::{
-    Appearance, AspectRatio, BackdropBlur, BorderSide, BoxShadow, BoxSizing, Calc, ComputedStyle,
-    ContainerType, ContentAlignment, Corners, DecorationLines, DecorationStyle,
+    Appearance, AspectRatio, BackdropBlur, BorderImage, BorderImageOutset, BorderImageRepeat,
+    BorderImageSlice, BorderImageWidth, BorderLineStyle, BorderSide, BoxShadow, BoxSizing, Calc,
+    ComputedStyle, ContainerType, ContentAlignment, Corners, DecorationLines, DecorationStyle,
     DecorationThickness, Deferred, DeferredSlot, DeferredValue, Display, Edges, FilterFunction,
     FlexDirection, FlexWrap, FontFamily, FontStyle, FontSynthesis, FontVariantCaps, GlassMaterial,
     GlassQuality, GlassSpec, GridPlacement, GridTrackSize, ItemAlignment, LengthPercentage,
-    LineHeight, ObjectFit, OverflowWrap, Position, Resize, SizeKeyword, SkipInk, TextAlign,
-    TextCase, TextDecoration, TextIndent, TextOverflow, TextShadow, TextTransform,
-    TransformFunction, UnderlineOffset, UnderlinePosition, VerticalAlign, Viewport, Visibility,
-    WhiteSpaceCollapse, WordBreak, compute, compute_with_container_query_signature,
+    LineHeight, ObjectFit, Outline, OutlineStyle, OverflowWrap, Position, Resize, SizeKeyword,
+    SkipInk, TextAlign, TextCase, TextDecoration, TextIndent, TextOverflow, TextShadow,
+    TextTransform, TransformFunction, UnderlineOffset, UnderlinePosition, VerticalAlign, Viewport,
+    Visibility, WhiteSpaceCollapse, WordBreak, compute, compute_with_container_query_signature,
 };
 pub use color::{ColorParseError, Rgba, parse_hex_color};
 pub use container_query_adapter::{ContentBoxSize, resolve_container_query_signatures};

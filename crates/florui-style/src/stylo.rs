@@ -56,12 +56,12 @@ use stylo_dom::ElementState;
 
 use crate::animation::AnimationTimeline;
 use crate::cascade::{
-    Appearance as FlorAppearance, AspectRatio as FlorAspectRatio, BorderSide as FlorBorderSide,
-    BoxShadow as FlorBoxShadow, ComputedStyle, ContainerType as FlorContainerType,
-    ContentAlignment, Corners, Display as FlorDisplay, Edges, FilterFunction as FlorFilterFunction,
-    FlexDirection, FlexWrap, FontFamily as FlorFontFamily, ItemAlignment,
-    LengthPercentage as FlorLengthPercentage, ObjectFit as FlorObjectFit, Resize as FlorResize,
-    TransformFunction as FlorTransformFunction, Viewport as FlorViewport,
+    Appearance as FlorAppearance, AspectRatio as FlorAspectRatio, BorderLineStyle,
+    BorderSide as FlorBorderSide, BoxShadow as FlorBoxShadow, ComputedStyle,
+    ContainerType as FlorContainerType, ContentAlignment, Corners, Display as FlorDisplay, Edges,
+    FilterFunction as FlorFilterFunction, FlexDirection, FlexWrap, FontFamily as FlorFontFamily,
+    ItemAlignment, LengthPercentage as FlorLengthPercentage, ObjectFit as FlorObjectFit,
+    Resize as FlorResize, TransformFunction as FlorTransformFunction, Viewport as FlorViewport,
 };
 use crate::color::Rgba;
 use crate::interaction::InteractionState;
@@ -1872,6 +1872,8 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         glass: to_glass(values),
         backdrop_blur: to_backdrop_blur(values),
         text_decoration: to_text_decoration(values, font_size_px),
+        outline: to_outline(values, color),
+        border_image: to_border_image(border, &text.color),
         cursor_pointer: matches!(
             values.get_inherited_ui().cursor.keyword,
             style::values::computed::ui::CursorKind::Pointer
@@ -2731,6 +2733,107 @@ fn to_corner_radius(
     )
 }
 
+/// `border-image`, when its source is a gradient or an image.
+fn to_border_image(
+    border: &style::properties::style_structs::Border,
+    current: &style::color::AbsoluteColor,
+) -> Option<Box<crate::BorderImage>> {
+    use crate::{BorderImageOutset, BorderImageRepeat, BorderImageSlice, BorderImageWidth};
+    use style::values::computed::border::BorderImageSideWidth as Side;
+    use style::values::generics::length::GenericLengthOrNumber as Outset;
+    use style::values::specified::border::BorderImageRepeatKeyword as Keyword;
+
+    let source = to_background_image(&border.border_image_source, current)?;
+    let slice = &border.border_image_slice;
+    let slice_of = |value: &style::values::computed::NonNegativeNumberOrPercentage| match value.0 {
+        style::values::computed::NumberOrPercentage::Number(n) => BorderImageSlice::Number(n),
+        style::values::computed::NumberOrPercentage::Percentage(p) => {
+            BorderImageSlice::Percent(p.0)
+        }
+    };
+    let width_of = |side: &Side| match side {
+        Side::Number(n) => BorderImageWidth::Number(n.0),
+        Side::LengthPercentage(lp) => BorderImageWidth::Length(to_length_percentage(&lp.0)),
+        Side::Auto => BorderImageWidth::Auto,
+    };
+    let outset_of = |side: &style::values::computed::NonNegativeLengthOrNumber| match side {
+        Outset::Number(n) => BorderImageOutset::Number(n.0),
+        Outset::Length(length) => BorderImageOutset::Length(length.0.px()),
+    };
+    let repeat_of = |keyword: &Keyword| match keyword {
+        Keyword::Stretch => BorderImageRepeat::Stretch,
+        Keyword::Repeat => BorderImageRepeat::Repeat,
+        Keyword::Round => BorderImageRepeat::Round,
+        Keyword::Space => BorderImageRepeat::Space,
+    };
+    let (s, w, o) = (
+        &slice.offsets,
+        &border.border_image_width,
+        &border.border_image_outset,
+    );
+    Some(Box::new(crate::BorderImage {
+        source,
+        slice: [
+            slice_of(&s.0),
+            slice_of(&s.1),
+            slice_of(&s.2),
+            slice_of(&s.3),
+        ],
+        fill: slice.fill,
+        width: [
+            width_of(&w.0),
+            width_of(&w.1),
+            width_of(&w.2),
+            width_of(&w.3),
+        ],
+        outset: [
+            outset_of(&o.0),
+            outset_of(&o.1),
+            outset_of(&o.2),
+            outset_of(&o.3),
+        ],
+        repeat: (
+            repeat_of(&border.border_image_repeat.0),
+            repeat_of(&border.border_image_repeat.1),
+        ),
+    }))
+}
+
+/// The `outline`: no width for `none`, `currentcolor` resolved against `color`.
+fn to_outline(values: &ComputedValues, color: Rgba) -> crate::Outline {
+    use style::values::computed::OutlineStyle as S;
+    let outline = values.get_outline();
+    let style = match outline.outline_style {
+        S::Auto => crate::OutlineStyle::Auto,
+        S::BorderStyle(border) if border.none_or_hidden() => return crate::Outline::default(),
+        S::BorderStyle(border) => crate::OutlineStyle::Line(to_border_line_style(border)),
+    };
+    crate::Outline {
+        width: outline.outline_width.to_f32_px(),
+        style,
+        color: outline
+            .outline_color
+            .as_absolute()
+            .map(to_absolute_rgba)
+            .unwrap_or(color),
+        offset: outline.outline_offset.px(),
+    }
+}
+
+fn to_border_line_style(style: style::values::computed::BorderStyle) -> BorderLineStyle {
+    use style::values::computed::BorderStyle as S;
+    match style {
+        S::Dashed => BorderLineStyle::Dashed,
+        S::Dotted => BorderLineStyle::Dotted,
+        S::Double => BorderLineStyle::Double,
+        S::Groove => BorderLineStyle::Groove,
+        S::Ridge => BorderLineStyle::Ridge,
+        S::Inset => BorderLineStyle::Inset,
+        S::Outset => BorderLineStyle::Outset,
+        _ => BorderLineStyle::Solid,
+    }
+}
+
 /// One border side: `0.0` width for `none`/`hidden` (real CSS's initial
 /// style, which makes a border invisible regardless of its width/color —
 /// see [`FlorBorderSide`]'s own doc), a solid-only rendering treatment for
@@ -2747,9 +2850,11 @@ fn to_border_side(
         return FlorBorderSide {
             width: 0.0,
             color: inherited_color,
+            style: Default::default(),
         };
     }
     FlorBorderSide {
+        style: to_border_line_style(style),
         width: width.to_f32_px(),
         color: color
             .as_absolute()
