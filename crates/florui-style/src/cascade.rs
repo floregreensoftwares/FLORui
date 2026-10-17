@@ -458,20 +458,105 @@ pub enum ItemAlignment {
     Baseline,
 }
 
-/// One side's resolved border — solid-only, the minimum needed for a
-/// visible default control outline (the scope set for this
-/// property). Real CSS's other border styles (`dashed`, `dotted`, `double`,
-/// …) still parse and cascade correctly through Stylo; this crate paints
-/// every non-`none`/`hidden` style as a plain solid line, the same
-/// "supported syntax, simplified rendering" tradeoff `stylesheet_parse`'s
-/// own doc already documents for other unrendered CSS. `width` is always
-/// `0.0` for `border-style: none`/`hidden` (real CSS's own initial style,
-/// which makes a border invisible regardless of its width/color) — a
-/// zero-width side needs no separate "is it visible" flag downstream.
+/// How a border side is drawn; `none` and `hidden` are a zero width instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BorderLineStyle {
+    #[default]
+    Solid,
+    Dashed,
+    Dotted,
+    Double,
+    Groove,
+    Ridge,
+    Inset,
+    Outset,
+}
+
+/// One `border-image-slice` offset: image pixels (a number) or a fraction of
+/// the image.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BorderImageSlice {
+    Number(f32),
+    Percent(f32),
+}
+
+/// One `border-image-width` side.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BorderImageWidth {
+    /// A multiple of the border width.
+    Number(f32),
+    Length(LengthPercentage),
+    Auto,
+}
+
+/// One `border-image-outset` side.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BorderImageOutset {
+    /// A multiple of the border width.
+    Number(f32),
+    Length(f32),
+}
+
+/// One axis of `border-image-repeat`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorderImageRepeat {
+    Stretch,
+    Repeat,
+    Round,
+    Space,
+}
+
+/// `border-image`, with its source an image: it replaces the border's own
+/// drawing and takes no room in layout. Sides are top, right, bottom, left.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BorderImage {
+    pub source: crate::background::BackgroundImage,
+    pub slice: [BorderImageSlice; 4],
+    pub fill: bool,
+    pub width: [BorderImageWidth; 4],
+    pub outset: [BorderImageOutset; 4],
+    pub repeat: (BorderImageRepeat, BorderImageRepeat),
+}
+
+/// How an `outline` is drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutlineStyle {
+    #[default]
+    None,
+    /// The platform's focus ring.
+    Auto,
+    Line(BorderLineStyle),
+}
+
+/// A resolved `outline`: it takes no room in layout and is drawn over the
+/// box and what is inside it. `width` is `0.0` when the style is `none`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Outline {
+    pub width: f32,
+    pub style: OutlineStyle,
+    pub color: Rgba,
+    pub offset: f32,
+}
+
+impl Default for Outline {
+    fn default() -> Self {
+        Self {
+            width: 0.0,
+            style: OutlineStyle::None,
+            color: Rgba::TRANSPARENT,
+            offset: 0.0,
+        }
+    }
+}
+
+/// One side's resolved border. `width` is always `0.0` for
+/// `border-style: none`/`hidden` (which make a border invisible whatever its
+/// width or color), so a zero-width side needs no separate flag.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BorderSide {
     pub width: f32,
     pub color: Rgba,
+    pub style: BorderLineStyle,
 }
 
 /// One layer of `box-shadow` — real CSS's `<length>{2,4}` offsets/blur/
@@ -899,6 +984,10 @@ pub struct ComputedStyle {
     /// `text-decoration` and its longhands, with the mirrored thickness,
     /// offset, skip-ink and position; see [`TextDecoration`].
     pub text_decoration: TextDecoration,
+    /// The outline, painted over the box and its content; paint only.
+    pub outline: Outline,
+    /// `border-image` when its source is an image; paint only.
+    pub border_image: Option<Box<BorderImage>>,
     /// Inherited; see [`TextAlign`].
     pub text_align: TextAlign,
     /// Inherited `text-shadow`, the first layer on top.
@@ -1016,6 +1105,8 @@ impl ComputedStyle {
             box_shadow,
             opacity,
             text_decoration,
+            outline,
+            border_image,
             text_align,
             text_shadow,
             glass,
@@ -1103,6 +1194,8 @@ impl ComputedStyle {
         self.box_shadow.clone_from(box_shadow);
         self.opacity = *opacity;
         self.text_decoration = *text_decoration;
+        self.outline = *outline;
+        self.border_image.clone_from(border_image);
         self.text_align = *text_align;
         self.text_shadow.clone_from(text_shadow);
         self.glass = *glass;
@@ -3515,6 +3608,68 @@ mod tests {
         for tag in ["liga", "clig", "dlig", "hlig", "calt"] {
             assert!(features.contains(&format!("\"{tag}\" 0")), "{features}");
         }
+    }
+
+    #[test]
+    fn border_styles_and_the_outline_are_read() {
+        let tree: Element = view! { <div class="a" /> };
+        let css = ".a { border: 4px dashed #112233; border-bottom-style: groove; \
+                   border-left-style: none; outline: 3px dotted red; outline-offset: -2px; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let style = &computed[&arena.roots()[0]];
+        assert_eq!(style.border.top.style, BorderLineStyle::Dashed);
+        assert_eq!(style.border.bottom.style, BorderLineStyle::Groove);
+        assert_eq!(style.border.left.width, 0.0, "none has no width");
+        let outline = style.outline;
+        assert_eq!(outline.width, 3.0);
+        assert_eq!(outline.style, OutlineStyle::Line(BorderLineStyle::Dotted));
+        assert_eq!(outline.color, Rgba::opaque(255, 0, 0));
+        assert_eq!(outline.offset, -2.0);
+        let (arena, computed) = styles(
+            &view! { <div class="b" /> },
+            ".b { outline: auto; color: #0000ff; } ",
+            &InteractionState::new(),
+        );
+        let auto = computed[&arena.roots()[0]].outline;
+        assert_eq!(auto.style, OutlineStyle::Auto);
+        assert_eq!(auto.color, Rgba::opaque(0, 0, 255), "currentcolor");
+        let (arena, computed) = styles(
+            &view! { <div class="c" /> },
+            ".c { outline-width: 5px; }",
+            &InteractionState::new(),
+        );
+        assert_eq!(computed[&arena.roots()[0]].outline, Outline::default());
+    }
+
+    #[test]
+    fn border_image_is_read_with_its_slice_width_outset_and_repeat() {
+        let tree: Element = view! { <div class="a" /> };
+        let css = ".a { border: 8px solid; border-image: linear-gradient(red, blue) 10 20% 30 40 fill \
+                   / 2 4px auto 1 / 3px 2 round space; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let image = computed[&arena.roots()[0]]
+            .border_image
+            .clone()
+            .expect("a gradient source");
+        assert!(matches!(image.source, crate::BackgroundImage::Linear(_)));
+        assert_eq!(image.slice[0], BorderImageSlice::Number(10.0));
+        assert_eq!(image.slice[1], BorderImageSlice::Percent(0.2));
+        assert!(image.fill);
+        assert_eq!(image.width[0], BorderImageWidth::Number(2.0));
+        assert_eq!(image.width[2], BorderImageWidth::Auto);
+        assert!(matches!(image.width[1], BorderImageWidth::Length(l) if l.length == 4.0));
+        assert_eq!(image.outset[0], BorderImageOutset::Length(3.0));
+        assert_eq!(image.outset[1], BorderImageOutset::Number(2.0));
+        assert_eq!(
+            image.repeat,
+            (BorderImageRepeat::Round, BorderImageRepeat::Space)
+        );
+        let (arena, computed) = styles(
+            &view! { <div class="b" /> },
+            ".b { border: 4px solid; }",
+            &InteractionState::new(),
+        );
+        assert!(computed[&arena.roots()[0]].border_image.is_none());
     }
 
     #[test]
