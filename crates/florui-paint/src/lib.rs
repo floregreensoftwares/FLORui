@@ -56,6 +56,8 @@
 mod background;
 mod banded;
 mod blur;
+mod border_image;
+mod border_style;
 mod decoration;
 mod glyph_cache;
 mod gradient;
@@ -682,6 +684,76 @@ pub fn paint_to_buffer_banded(
     }
 }
 
+/// A border in each side's own style, on a square or rounded box.
+fn paint_box_border(
+    buffer: &mut Surface,
+    outline: &RoundedRect,
+    border: florui_style::Edges<florui_style::BorderSide>,
+    clip: Option<&Mask>,
+) {
+    if !border_style::is_plain(&border) {
+        border_style::paint(buffer, outline, border, clip);
+    } else if outline.is_square() {
+        paint_border(
+            buffer,
+            outline.x,
+            outline.y,
+            outline.width,
+            outline.height,
+            border,
+            clip,
+        );
+    } else {
+        paint_rounded_border(buffer, outline, border, clip);
+    }
+}
+
+/// How far what a style draws outside its border box reaches: its outline, and
+/// a border image's outset.
+fn ink_reach(style: &ComputedStyle, scale: f32) -> f32 {
+    let image = style.border_image.as_deref().map_or(0.0, |image| {
+        border_image::reach(image, &scaled_border(style.border, scale), scale)
+    });
+    border_style::outline_reach(style, scale).max(image)
+}
+
+/// Draws `node`'s outline, over everything inside it.
+fn paint_outline_of(
+    buffer: &mut Surface,
+    arena: &Tree,
+    styles: &StyleMap,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    node: NodeId,
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
+    let (Some(style), Some(&layout)) = (styles.get(&node), layouts.get(&node)) else {
+        return;
+    };
+    if !border_style::has_outline(style) {
+        return;
+    }
+    let (x, y) = absolute_position(arena, layouts, node);
+    let border_box = RoundedRect::new(
+        x,
+        y,
+        layout.width,
+        layout.height,
+        &style.border_radius,
+        scale_factor,
+    );
+    border_style::paint_outline(buffer, &style.outline, &border_box, scale_factor, clip);
+}
+
+/// Why a node is on the paint stack: its first visit, its turn among the boxes
+/// fixed to the viewport, or the outline it draws over its subtree.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Turn {
+    First,
+    Fixed,
+    Outline,
+}
+
 /// Paints `nodes` (a set of siblings — document roots when
 /// `parent_display` is `None`, one node's own children otherwise) and
 /// their descendants onto `buffer`, in real paint order (see
@@ -728,11 +800,11 @@ fn paint_nodes(
     images: Option<&HashMap<NodeId, ImagePaint>>,
 ) {
     // The flag is set for a box fixed to the viewport once its turn has come.
-    let mut stack: Vec<(NodeId, Option<ClipRect>, bool)> =
+    let mut stack: Vec<(NodeId, Option<ClipRect>, Turn)> =
         paint_order(styles, parent_display, nodes)
             .into_iter()
             .rev()
-            .map(|id| (id, clip.clone(), false))
+            .map(|id| (id, clip.clone(), Turn::First))
             .collect();
     // Boxes fixed to the viewport go over everything else in their scope, in
     // `z-index` order, and nothing above them clips them.
@@ -747,17 +819,33 @@ fn paint_nodes(
     );
     let view = BAND_VIEW.with(|slot| slot.borrow().clone());
     loop {
-        let Some((node, node_clip, its_turn)) = stack.pop() else {
+        let Some((node, node_clip, turn)) = stack.pop() else {
             if fixed.is_empty() {
                 break;
             }
             // Node ids follow document order.
             fixed.sort_by_key(|id| (styles.get(id).and_then(|s| s.z_index).unwrap_or(0), *id));
-            stack.extend(fixed.drain(..).rev().map(|id| (id, None, true)));
+            stack.extend(fixed.drain(..).rev().map(|id| (id, None, Turn::Fixed)));
             continue;
         };
-        if !its_turn && florui_layout::is_viewport_fixed(arena, styles, node) {
+        if turn == Turn::First && florui_layout::is_viewport_fixed(arena, styles, node) {
             fixed.push(node);
+            continue;
+        }
+        if turn == Turn::Outline {
+            let in_view = view.as_ref().is_none_or(|view| view.own.contains(&node));
+            let mask = node_clip.as_ref().and_then(|clip| clip.to_mask(buffer));
+            if in_view && (node_clip.is_none() || mask.is_some()) {
+                paint_outline_of(
+                    buffer,
+                    arena,
+                    styles,
+                    layouts,
+                    node,
+                    scale_factor,
+                    mask.as_ref(),
+                );
+            }
             continue;
         }
         if view
@@ -780,7 +868,7 @@ fn paint_nodes(
                 paint_order(styles, Some(Display::Inline), arena.children(node))
                     .into_iter()
                     .rev()
-                    .map(|id| (id, node_clip.clone(), false)),
+                    .map(|id| (id, node_clip.clone(), Turn::First)),
             );
             continue;
         }
@@ -884,13 +972,16 @@ fn paint_nodes(
                 images,
             );
         }
+        if styles.get(&node).is_some_and(border_style::has_outline) {
+            stack.push((node, node_clip.clone(), Turn::Outline));
+        }
         let child_clip = clip_for_children(arena, styles, layouts, node, node_clip, scale_factor);
         let child_display = styles.get(&node).map(|s| s.display);
         stack.extend(
             paint_order(styles, child_display, arena.children(node))
                 .into_iter()
                 .rev()
-                .map(|id| (id, child_clip.clone(), false)),
+                .map(|id| (id, child_clip.clone(), Turn::First)),
         );
     }
     // The mask this described goes away with `mask_cache`.
@@ -952,6 +1043,7 @@ fn ink_is_outside_clip(
             })
             .fold(0.0, f32::max)
     }) * scale_factor.max(1.0);
+    let reach = reach.max(style.map_or(0.0, |s| ink_reach(s, scale_factor)));
     let ink = (
         x - reach,
         y - reach,
@@ -1176,6 +1268,7 @@ const NO_BORDER: florui_style::Edges<florui_style::BorderSide> = florui_style::E
 const NO_BORDER_SIDE: florui_style::BorderSide = florui_style::BorderSide {
     width: 0.0,
     color: Rgba::TRANSPARENT,
+    style: florui_style::BorderLineStyle::Solid,
 };
 
 /// A fixed selection-highlight color for an editable `<input>` — real
@@ -1586,6 +1679,11 @@ fn own_extent(
             max_x = max_x.max(sx + sw + pad);
             max_y = max_y.max(sy + sh + pad);
         }
+        let ring = ink_reach(style, scale_factor);
+        min_x -= ring;
+        min_y -= ring;
+        max_x += ring;
+        max_y += ring;
     }
 
     let border = scaled_border(style.map_or(NO_BORDER, |s| s.border), scale_factor);
@@ -2082,6 +2180,15 @@ fn paint_group(
         content_clip,
         text_inputs,
         images,
+    );
+    paint_outline_of(
+        &mut group,
+        arena,
+        styles,
+        layouts,
+        node,
+        scale_factor,
+        inner_mask.as_ref(),
     );
 
     let _composite_span = florui_profile::span(florui_profile::Phase::RasterComposite);
@@ -3072,11 +3179,14 @@ fn paint_node(
 
         if shown {
             let _span = florui_profile::span(florui_profile::Phase::RasterBorders);
-            if rounded {
-                paint_rounded_border(buffer, &outline, border, clip);
-            } else {
-                paint_border(buffer, x, y, layout.width, layout.height, border, clip);
-            };
+            let image_drawn = style
+                .and_then(|s| s.border_image.as_deref())
+                .is_some_and(|image| {
+                    border_image::paint(buffer, &outline, &border, image, scale_factor, clip)
+                });
+            if !image_drawn {
+                paint_box_border(buffer, &outline, border, clip);
+            }
         }
         if let Some(material) = glass {
             let _span = florui_profile::span(florui_profile::Phase::RasterBackdrop);
@@ -3426,6 +3536,15 @@ fn paint_node(
                         scale_factor,
                         clip,
                     );
+                    paint_inline_outlines(
+                        buffer,
+                        styles,
+                        &shaped,
+                        &cuts,
+                        origin,
+                        scale_factor,
+                        clip,
+                    );
                 }
             }
         } else if florui_layout::is_inline_formatting_context(arena, styles, node) {
@@ -3468,6 +3587,7 @@ fn paint_node(
                     scale_factor,
                     clip,
                 );
+                paint_inline_outlines(buffer, styles, &shaped, &cuts, origin, scale_factor, clip);
             }
         } else {
             let text = arena.text_content(node);
@@ -3766,6 +3886,36 @@ fn surface_transform(buffer: &Surface) -> Transform {
     Transform::from_translate(-(buffer.origin.0 as f32), -(buffer.origin.1 as f32))
 }
 
+/// The four sides of a border as quadrilaterals, top first: the diagonals
+/// run from each outer corner through the matching inner one.
+fn side_wedges(outer: &RoundedRect, inner: &RoundedRect) -> [[(f32, f32); 4]; 4] {
+    let (x0, y0) = (outer.x, outer.y);
+    let (x1, y1) = (outer.x + outer.width, outer.y + outer.height);
+    let (ix0, iy0) = (inner.x, inner.y);
+    let (ix1, iy1) = (inner.x + inner.width, inner.y + inner.height);
+    // The sides meet along the diagonal from each outer corner through its
+    // inner one, carried on as far in as the corner is round: a rounded
+    // corner's ring lies along that line, further in than the border is wide.
+    let reach = outer
+        .radii
+        .iter()
+        .fold(0.0f32, |most, &(h, v)| most.max(h).max(v));
+    let along = |from: (f32, f32), through: (f32, f32)| {
+        let (dx, dy) = (through.0 - from.0, through.1 - from.1);
+        let step = dx.abs().max(dy.abs()).max(1.0e-3);
+        let scale = 1.0 + reach / step;
+        (from.0 + dx * scale, from.1 + dy * scale)
+    };
+    let (top_left, top_right) = (along((x0, y0), (ix0, iy0)), along((x1, y0), (ix1, iy0)));
+    let (bottom_right, bottom_left) = (along((x1, y1), (ix1, iy1)), along((x0, y1), (ix0, iy1)));
+    [
+        [(x0, y0), (x1, y0), top_right, top_left],
+        [(x1, y0), (x1, y1), bottom_right, top_right],
+        [(x1, y1), (x0, y1), bottom_left, bottom_right],
+        [(x0, y1), (x0, y0), top_left, bottom_left],
+    ]
+}
+
 /// A rounded box's border: the ring between its outer outline and its
 /// padding box's (radii shrunk by the side widths). One flat color paints
 /// the ring in a single fill; differing side colors clip the same ring to
@@ -3816,31 +3966,7 @@ fn paint_rounded_border(
         return;
     }
 
-    let (x0, y0) = (outer.x, outer.y);
-    let (x1, y1) = (outer.x + outer.width, outer.y + outer.height);
-    let (ix0, iy0) = (inner.x, inner.y);
-    let (ix1, iy1) = (inner.x + inner.width, inner.y + inner.height);
-    // The sides meet along the diagonal from each outer corner through its
-    // inner one, carried on as far in as the corner is round: a rounded
-    // corner's ring lies along that line, further in than the border is wide.
-    let reach = outer
-        .radii
-        .iter()
-        .fold(0.0f32, |most, &(h, v)| most.max(h).max(v));
-    let along = |from: (f32, f32), through: (f32, f32)| {
-        let (dx, dy) = (through.0 - from.0, through.1 - from.1);
-        let step = dx.abs().max(dy.abs()).max(1.0e-3);
-        let scale = 1.0 + reach / step;
-        (from.0 + dx * scale, from.1 + dy * scale)
-    };
-    let (top_left, top_right) = (along((x0, y0), (ix0, iy0)), along((x1, y0), (ix1, iy0)));
-    let (bottom_right, bottom_left) = (along((x1, y1), (ix1, iy1)), along((x0, y1), (ix0, iy1)));
-    let wedges = [
-        [(x0, y0), (x1, y0), top_right, top_left],
-        [(x1, y0), (x1, y1), bottom_right, top_right],
-        [(x1, y1), (x0, y1), bottom_left, bottom_right],
-        [(x0, y1), (x0, y0), top_left, bottom_left],
-    ];
+    let wedges = side_wedges(outer, &inner);
     // Each side is the ring cut to its wedge. The cut is a mask the size of the
     // area the border covers, in a layer of that size, so a small box costs a
     // small mask and not four the size of the window; the layer is then put over
@@ -5019,11 +5145,57 @@ fn paint_inline_boxes(
             );
         }
         if has_border {
-            if outline.is_square() {
-                paint_border(buffer, x, y, width, height, border, clip);
-            } else {
-                paint_rounded_border(buffer, &outline, border, clip);
+            paint_box_border(buffer, &outline, border, clip);
+        }
+    }
+}
+
+/// The outlines of the inline elements of a context, over their text: one ring
+/// round the line boxes of each element.
+fn paint_inline_outlines(
+    buffer: &mut Surface,
+    styles: &StyleMap,
+    inline: &florui_layout::InlineShaped,
+    cuts: &[(u32, f32)],
+    (origin_x, origin_y): (f32, f32),
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
+    type Rects = Vec<(f32, f32, f32, f32)>;
+    let mut boxes: Vec<(usize, Rects)> = Vec::new();
+    for fragment in &inline.layout.fragments {
+        let Some(style) = styles.get(&inline.nodes[fragment.element]) else {
+            continue;
+        };
+        if !border_style::has_outline(style) {
+            continue;
+        }
+        let mut fragment = *fragment;
+        if let Some(&(_, end)) = cuts.iter().find(|(line, _)| *line == fragment.line) {
+            if fragment.x >= end {
+                continue;
             }
+            fragment.width = fragment.width.min(end - fragment.x);
+        }
+        let above = style.padding.top + style.border.top.width;
+        let below = style.padding.bottom + style.border.bottom.width;
+        let rect = (
+            origin_x + fragment.x * scale_factor,
+            origin_y + (fragment.y - above) * scale_factor,
+            fragment.width * scale_factor,
+            (fragment.ascent + fragment.descent + above + below) * scale_factor,
+        );
+        match boxes
+            .iter_mut()
+            .find(|(element, _)| *element == fragment.element)
+        {
+            Some((_, rects)) => rects.push(rect),
+            None => boxes.push((fragment.element, vec![rect])),
+        }
+    }
+    for (element, rects) in boxes {
+        if let Some(style) = styles.get(&inline.nodes[element]) {
+            border_style::paint_outline_rects(buffer, &style.outline, &rects, scale_factor, clip);
         }
     }
 }
@@ -8042,6 +8214,114 @@ mod tests {
         let (rows, _) = case("double");
         assert_eq!(rows.len(), 4, "two lines of two rows: {rows:?}");
         assert_eq!(rows[2] - rows[1], 2, "one row between them");
+    }
+
+    #[test]
+    fn a_dashed_border_leaves_gaps_and_a_solid_one_does_not() {
+        let tree: Element = view! { <div class="d" /> };
+        let paint = |style: &str| {
+            paint_text_css(
+                &tree,
+                &format!(".d {{ width: 88px; height: 8px; border: 4px {style} #ff0000; }}"),
+                (100, 20),
+            )
+        };
+        let row = |canvas: &Canvas| {
+            (0..96)
+                .filter(|&x| is_pure_red(pixel_rgb(canvas, x, 1)))
+                .count()
+        };
+        assert_eq!(row(&paint("solid")), 96);
+        let dashed = row(&paint("dashed"));
+        assert!(dashed > 40 && dashed < 90, "{dashed}");
+    }
+
+    #[test]
+    fn an_outline_is_drawn_over_the_content_and_takes_no_room() {
+        let tree: Element = view! { <div class="o"><div class="in" /></div> };
+        let css = ".o { width: 40px; height: 40px; margin: 10px; outline: 6px solid #ff0000; \
+                   outline-offset: -3px; } .in { width: 40px; height: 40px; background-color: #0000ff; }";
+        let canvas = paint_text_css(&tree, css, (80, 80));
+        // The ring lies over the child's blue along the box's edge, not outside it.
+        assert_eq!(pixel_rgb(&canvas, 11, 30), [255, 0, 0]);
+        assert_eq!(pixel_rgb(&canvas, 20, 30), [0, 0, 255]);
+        assert_eq!(pixel_rgb(&canvas, 5, 30), [255, 255, 255]);
+    }
+
+    #[test]
+    fn a_border_image_replaces_the_border_and_a_missing_one_leaves_it() {
+        let tree: Element = view! { <div class="a" /> };
+        let css = |source: &str| {
+            format!(
+                ".a {{ width: 20px; height: 20px; border: 6px solid #ff0000; \
+                 border-image: {source} 1; }}"
+            )
+        };
+        let green = paint_text_css(&tree, &css("linear-gradient(#00ff00, #00ff00)"), (40, 40));
+        assert_eq!(pixel_rgb(&green, 2, 20), [0, 255, 0]);
+        let missing = paint_text_css(&tree, &css("url(no/such/picture.png)"), (40, 40));
+        assert_eq!(
+            pixel_rgb(&missing, 2, 20),
+            [255, 0, 0],
+            "falls back to the border"
+        );
+    }
+
+    #[test]
+    fn an_inline_element_draws_its_border_style_and_its_outline() {
+        let tree: Element = view! {
+            <div class="p">"ab "<span class="d">"cdef"</span>" gh "<span class="o">"ijkl"</span></div>
+        };
+        let css = ".p { font-size: 20px; line-height: 40px; margin: 10px; } \
+                   .d { border: 4px dashed #ff0000; } \
+                   .o { outline: 3px solid #00ff00; }";
+        let canvas = paint_text_css(&tree, css, (260, 70));
+        let count = |color: [u8; 3]| {
+            (0..260)
+                .flat_map(|x| (0..70).map(move |y| (x, y)))
+                .filter(|&(x, y)| pixel_rgb(&canvas, x, y) == color)
+                .count()
+        };
+        assert!(count([255, 0, 0]) > 40, "the dashed border has red in it");
+        assert!(count([0, 255, 0]) > 100, "the outline has green in it");
+    }
+
+    #[test]
+    fn the_lines_of_a_wrapped_inline_share_one_outline_without_edges_between() {
+        let tree: Element = view! {
+            <div class="p"><span class="o">"aaaa bbbb cccc dddd"</span></div>
+        };
+        let css = ".p { width: 70px; font-size: 20px; line-height: 40px; margin: 10px; } \
+                   .o { outline: 3px solid #00ff00; }";
+        let canvas = paint_text_css(&tree, css, (110, 190));
+        // Between two lines the ring has no bar across the text: the pixel
+        // midway down the gap between the first two lines' text is not ring.
+        let ring_rows = (0..190)
+            .filter(|&y| pixel_rgb(&canvas, 40, y) == [0, 255, 0])
+            .count();
+        assert!(
+            ring_rows <= 12,
+            "only the top and bottom of the union: {ring_rows}"
+        );
+    }
+
+    #[test]
+    fn the_focus_ring_is_two_pixels_thick_and_sits_at_the_offset() {
+        let tree: Element = view! { <div class="o" /> };
+        let canvas = paint_text_css(
+            &tree,
+            ".o { margin: 20px; width: 40px; height: 20px; outline: 9px auto #ff0000; \
+             outline-offset: 5px; }",
+            (100, 70),
+        );
+        let reds: Vec<u32> = (0..100)
+            .filter(|&x| pixel_rgb(&canvas, x, 30) == [255, 0, 0])
+            .collect();
+        assert_eq!(
+            reds,
+            vec![15, 16, 63, 64],
+            "2px, its outer edge 5px outside the box"
+        );
     }
 
     #[test]
