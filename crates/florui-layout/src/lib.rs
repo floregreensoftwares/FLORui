@@ -5864,6 +5864,23 @@ mod tests {
             (9.0, 5.0, 60.0, 30.0)
         );
     }
+
+    #[test]
+    fn a_transparent_plane_in_a_3d_context_is_still_hit() {
+        let tree: Element = view! {
+            <div class="ctx">
+                <div class="base" />
+                <div class="overlay" />
+            </div>
+        };
+        let css = ".ctx { width: 100px; height: 100px; transform-style: preserve-3d; } \
+                   .base { position: absolute; width: 100px; height: 100px; } \
+                   .overlay { position: absolute; width: 100px; height: 100px; \
+                              opacity: 0; transform: translateZ(10px); }";
+        let (arena, hit) = hit_in(css, &tree, 50.0, 50.0);
+        let overlay = arena.children(arena.roots()[0])[1];
+        assert_eq!(hit, Some(overlay));
+    }
     #[test]
     fn screen_bounds_of_an_untransformed_tree_are_the_layout_boxes() {
         let tree: Element = view! { <div class="box" /> };
