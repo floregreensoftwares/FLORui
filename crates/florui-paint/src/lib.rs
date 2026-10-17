@@ -10977,6 +10977,25 @@ mod tests {
             "the child's own turn is judged on its own"
         );
     }
+
+    #[test]
+    fn a_transparent_plane_in_a_3d_context_paints_nothing() {
+        let tree: Element = view! {
+            <div class="ctx">
+                <div class="base" />
+                <div class="overlay" />
+            </div>
+        };
+        let canvas = paint_text_css(
+            &tree,
+            ".ctx { width: 60px; height: 60px; transform-style: preserve-3d; } \
+             .base, .overlay { position: absolute; width: 60px; height: 60px; } \
+             .base { background-color: #0000ff; } \
+             .overlay { background-color: #ff0000; opacity: 0; transform: translateZ(40px); }",
+            (70, 70),
+        );
+        assert_eq!(pixel_rgb(&canvas, 30, 30), BLUE);
+    }
     #[test]
     fn blur_spreads_a_solid_boxs_own_color_past_its_own_edge() {
         let filtered = single_box_buffer_at(

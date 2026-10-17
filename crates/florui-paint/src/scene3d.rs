@@ -165,7 +165,7 @@ fn visible_planes(
             else {
                 return false;
             };
-            !plane.is_hidden_back(style, layout)
+            style.opacity > 0.0 && !plane.is_hidden_back(style, layout)
         })
         .collect()
 }

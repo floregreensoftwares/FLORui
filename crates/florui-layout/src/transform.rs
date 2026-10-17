@@ -565,8 +565,9 @@ pub struct ContextPlane {
 }
 
 /// Every box of the 3D context rooted at `root` (a box that preserves 3D),
-/// in painting order, with the matrix that places it. Boxes that draw nothing
-/// (`display: none`, fully transparent) and their subtrees are left out.
+/// in painting order, with the matrix that places it. `display: none` boxes and
+/// their subtrees are left out; a fully transparent box stays, since it is still
+/// hit (a painter skips it itself).
 /// `order` arranges the children of a node that preserves 3D for painting.
 pub fn context_planes(
     arena: &Tree,
@@ -582,7 +583,7 @@ pub fn context_planes(
         let (Some(style), Some(_)) = (styles.get(&node), layouts.get(&node)) else {
             continue;
         };
-        if style.display == florui_style::Display::None || style.opacity <= 0.0 {
+        if style.display == florui_style::Display::None {
             continue;
         }
         if crate::is_flowed_inline(arena, styles, node) {
