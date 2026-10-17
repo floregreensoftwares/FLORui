@@ -66,7 +66,10 @@ mod deferred;
 mod transform;
 
 pub use cache::LayoutCache;
-pub use transform::{Affine, resolve_transform, screen_bounds};
+pub use transform::{
+    ContextPlane, Matrix4, NEAR_W, context_planes, hides_its_back, node_screen_bounds,
+    perspective_matrix, preserves_3d, resolve_node_transform, resolve_transform, screen_bounds,
+};
 
 /// Checked before Taffy's own recursive layout algorithms run — if less
 /// than this much stack remains, `stacker` allocates a fresh
@@ -709,9 +712,10 @@ pub fn is_viewport_fixed(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool 
     }
     let mut current = arena.parent(node);
     while let Some(ancestor) = current {
-        if styles.get(&ancestor).is_some_and(|s| {
-            !s.transform.is_empty() || !s.filter.is_empty() || !s.backdrop_filter.is_empty()
-        }) {
+        if styles
+            .get(&ancestor)
+            .is_some_and(ComputedStyle::holds_fixed_descendants)
+        {
             return false;
         }
         current = arena.parent(ancestor);
@@ -3126,43 +3130,67 @@ pub fn hit_test(
     x: f32,
     y: f32,
 ) -> Option<NodeId> {
-    /// A node still to visit, with what its parent worked out for it.
-    struct Visit {
-        node: NodeId,
-        /// The pointer in the parent's frame.
-        parent_point: (f32, f32),
-        /// Whether every clipping ancestor admits the pointer here.
-        admitted: bool,
-        /// The parent's absolute origin, carried down so no node walks its
-        /// ancestors to find its own.
-        parent_origin: (f32, f32),
-        /// A box fixed to the viewport, now that its turn has come.
-        its_turn: bool,
-    }
-
-    let mut hit = None;
-    let mut stack: Vec<Visit> = arena
+    let stack: Vec<HitVisit> = arena
         .roots()
         .iter()
         .rev()
-        .map(|&root| Visit {
+        .map(|&root| HitVisit {
             node: root,
             parent_point: (x, y),
             admitted: true,
             parent_origin: (0.0, 0.0),
             its_turn: false,
+            preset: None,
+            leaf: false,
         })
         .collect();
+    hit_walk(arena, layouts, styles, stack, (x, y))
+}
+
+/// A node still to visit by [`hit_walk`], with what its parent worked out for it.
+struct HitVisit {
+    node: NodeId,
+    /// The pointer in the parent's frame.
+    parent_point: (f32, f32),
+    /// Whether every clipping ancestor admits the pointer here.
+    admitted: bool,
+    /// The parent's absolute origin, carried down so no node walks its
+    /// ancestors to find its own.
+    parent_origin: (f32, f32),
+    /// A box fixed to the viewport, now that its turn has come.
+    its_turn: bool,
+    /// The pointer in the node's own frame when a 3D context has already worked
+    /// it out: the node is then a plane of that context, and a plane that
+    /// preserves 3D leaves its children to the context.
+    preset: Option<(f32, f32)>,
+    /// Whether the node's children are left to a 3D context (they are planes of
+    /// it, or atomic boxes inside an inline element of one).
+    leaf: bool,
+}
+
+/// The topmost hit among the nodes `stack` starts from and everything under
+/// them; `pointer` is the pointer on screen, where boxes fixed to the viewport
+/// are hit.
+fn hit_walk(
+    arena: &Arena,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    styles: &StyleMap,
+    mut stack: Vec<HitVisit>,
+    pointer: (f32, f32),
+) -> Option<NodeId> {
+    let mut hit = None;
     // Fixed boxes are drawn above the rest of their scope, so they are
     // looked at after it.
-    let mut fixed: Vec<Visit> = Vec::new();
+    let mut fixed: Vec<HitVisit> = Vec::new();
     loop {
-        let Some(Visit {
+        let Some(HitVisit {
             node,
             parent_point,
             admitted,
             parent_origin,
             its_turn,
+            preset,
+            leaf,
         }) = stack.pop()
         else {
             if fixed.is_empty() {
@@ -3174,7 +3202,7 @@ pub fn hit_test(
                     visit.node,
                 )
             });
-            stack.extend(fixed.drain(..).rev().map(|visit| Visit {
+            stack.extend(fixed.drain(..).rev().map(|visit| HitVisit {
                 admitted: true,
                 its_turn: true,
                 ..visit
@@ -3182,29 +3210,48 @@ pub fn hit_test(
             continue;
         };
         if !its_turn && is_viewport_fixed(arena, styles, node) {
-            fixed.push(Visit {
+            fixed.push(HitVisit {
                 node,
                 parent_point,
                 admitted,
                 parent_origin,
                 its_turn,
+                preset,
+                leaf,
             });
             continue;
         }
         let mut point = parent_point;
         let mut admits_children = admitted;
         let mut origin = parent_origin;
+        let mut children_are_planes = leaf;
         if let Some(&layout) = layouts.get(&node) {
             origin = (parent_origin.0 + layout.x, parent_origin.1 + layout.y);
             let (ax, ay) = origin;
             let style = styles.get(&node);
-            if let Some(style) = style {
-                let transform = resolve_transform(style, &layout, ax, ay, 1.0);
-                if !transform.is_identity() {
-                    let Some(inverse) = transform.invert() else {
+            if let Some(local) = preset {
+                point = local;
+                children_are_planes |= style.is_some_and(preserves_3d);
+            } else if let Some(style) = style {
+                let transform = resolve_node_transform(arena, styles, layouts, node, ax, ay, 1.0);
+                if hides_its_back(style, &layout, &transform, origin) {
+                    continue;
+                }
+                if preserves_3d(style) {
+                    // The root of a 3D context: it and the boxes under it are
+                    // planes of one space, and the nearest at the pointer wins.
+                    if admitted
+                        && let Some(found) = scene_hit(arena, layouts, styles, node, parent_point)
+                    {
+                        hit = Some(found);
+                    }
+                    continue;
+                }
+                if !transform.is_plane_identity() {
+                    let Some(local) = transform.unmap_point(point) else {
                         continue;
                     };
-                    point = inverse.map_point(point);
+                    point = local;
                 }
             }
             let outline = border_box_outline(styles, node, ax, ay, layout);
@@ -3236,6 +3283,27 @@ pub fn hit_test(
                 admits_children = admitted && padding_box.contains(point.0, point.1);
             }
         }
+        if children_are_planes {
+            // The planes under it are the context's own; only the inline
+            // elements flowing in its lines belong to it.
+            if leaf || preset.is_none() {
+                continue;
+            }
+            for &child in arena.children(node).iter().rev() {
+                if is_flowed_inline(arena, styles, child) {
+                    stack.push(HitVisit {
+                        node: child,
+                        parent_point: point,
+                        admitted: admits_children,
+                        parent_origin: origin,
+                        its_turn: false,
+                        preset: Some(point),
+                        leaf: true,
+                    });
+                }
+            }
+            continue;
+        }
         // Nothing under a node a clipping ancestor rejects can be hit, so its
         // subtree is not visited -- but for the boxes fixed to the viewport,
         // which no ancestor clips.
@@ -3246,12 +3314,14 @@ pub fn hit_test(
                     let parent_origin = arena
                         .parent(descendant)
                         .map_or((0.0, 0.0), |p| absolute_position(arena, layouts, p));
-                    fixed.push(Visit {
+                    fixed.push(HitVisit {
                         node: descendant,
-                        parent_point: (x, y),
+                        parent_point: pointer,
                         admitted: true,
                         parent_origin,
                         its_turn: false,
+                        preset: None,
+                        leaf: false,
                     });
                 } else {
                     below.extend_from_slice(arena.children(descendant));
@@ -3260,16 +3330,68 @@ pub fn hit_test(
             continue;
         }
         for &child in arena.children(node).iter().rev() {
-            stack.push(Visit {
+            stack.push(HitVisit {
                 node: child,
                 parent_point: point,
                 admitted: admits_children,
                 parent_origin: origin,
                 its_turn: false,
+                preset: None,
+                leaf: false,
             });
         }
     }
     hit
+}
+
+/// The node hit at `parent_point` (in the frame the context's root is placed
+/// in) among the planes of the 3D context rooted at `root`: each plane is hit
+/// where the pointer's line of sight crosses it, and of the planes it crosses
+/// the nearest to the viewer is on top, with the later one winning a tie.
+fn scene_hit(
+    arena: &Arena,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    styles: &StyleMap,
+    root: NodeId,
+    parent_point: (f32, f32),
+) -> Option<NodeId> {
+    let document_order = |_: &ComputedStyle, children: &[NodeId]| children.to_vec();
+    let mut best: Option<(f64, NodeId)> = None;
+    for plane in context_planes(arena, styles, layouts, root, 1.0, &document_order) {
+        let (Some(style), Some(layout)) = (styles.get(&plane.node), layouts.get(&plane.node))
+        else {
+            continue;
+        };
+        if plane.is_hidden_back(style, layout) {
+            continue;
+        }
+        let Some(local) = plane.matrix.flatten().unmap_point(parent_point) else {
+            continue;
+        };
+        let [_, _, z, w] =
+            plane
+                .matrix
+                .map_homogeneous((f64::from(local.0), f64::from(local.1), 0.0));
+        let depth = z / w;
+        let parent_origin = arena
+            .parent(plane.node)
+            .map_or((0.0, 0.0), |p| absolute_position(arena, layouts, p));
+        let visit = HitVisit {
+            node: plane.node,
+            parent_point: local,
+            admitted: true,
+            parent_origin,
+            its_turn: false,
+            preset: Some(local),
+            leaf: false,
+        };
+        if let Some(found) = hit_walk(arena, layouts, styles, vec![visit], parent_point)
+            && best.is_none_or(|(nearest, _)| depth >= nearest - 1.0e-9)
+        {
+            best = Some((depth, found));
+        }
+    }
+    best.map(|(_, node)| node)
 }
 
 /// `node`'s border box with its `border-radius` applied. Layout runs in
@@ -3568,13 +3690,14 @@ mod tests {
             if let Some(&layout) = layouts.get(&node) {
                 let (ax, ay) = absolute_position(arena, layouts, node);
                 let style = styles.get(&node);
-                if let Some(style) = style {
-                    let transform = resolve_transform(style, &layout, ax, ay, 1.0);
-                    if !transform.is_identity() {
-                        let Some(inverse) = transform.invert() else {
+                if style.is_some() {
+                    let transform =
+                        resolve_node_transform(arena, styles, layouts, node, ax, ay, 1.0);
+                    if !transform.is_plane_identity() {
+                        let Some(local) = transform.unmap_point(point) else {
                             continue;
                         };
-                        point = inverse.map_point(point);
+                        point = local;
                     }
                 }
                 let outline = border_box_outline(styles, node, ax, ay, layout);
@@ -5375,6 +5498,372 @@ mod tests {
         }
     }
 
+    /// Each row is a parent style, a child style and the child's bounding box
+    /// Chrome 153 reports (`getBoundingClientRect`) for a 100x50 child inside
+    /// a 100x50 parent placed at (100, 100); the same tree is laid out at the
+    /// origin here, so the expected box is shifted by (-100, -100).
+    #[test]
+    fn screen_bounds_match_chromes_transformed_bounding_boxes() {
+        let rows: &[(&str, &str, [f32; 4])] = &[
+            ("", "translate: 30px 10px", [130.0, 110.0, 100.0, 50.0]),
+            ("", "rotate: 15deg", [95.23, 87.91, 109.53, 74.18]),
+            ("", "scale: 0.6", [120.0, 110.0, 60.0, 30.0]),
+            ("", "transform: skewX(20deg)", [90.9, 100.0, 118.2, 50.0]),
+            (
+                "",
+                "transform: skew(20deg, 10deg)",
+                [90.9, 91.18, 118.2, 67.63],
+            ),
+            (
+                "",
+                "translate: 10px; rotate: 30deg; scale: 2; transform: translate(5px, 0)",
+                [57.06, 36.7, 223.21, 186.6],
+            ),
+            (
+                "",
+                "transform: translate(5px, 0) rotate(30deg); rotate: 10deg",
+                [100.55, 74.58, 108.74, 102.58],
+            ),
+            ("", "rotate: x 45deg", [100.0, 107.32, 100.0, 35.36]),
+            ("", "rotate: z 45deg", [96.97, 71.97, 106.07, 106.07]),
+            ("", "rotate: 1 1 0 45deg", [103.66, 96.34, 92.68, 57.32]),
+            ("", "scale: 2 3 4", [50.0, 50.0, 200.0, 150.0]),
+            ("", "translate: 10px 20px 30px", [110.0, 120.0, 100.0, 50.0]),
+            ("", "translate: 10%", [110.0, 100.0, 100.0, 50.0]),
+            ("", "scale: 50%", [125.0, 112.5, 50.0, 25.0]),
+            ("", "scale: 1 2", [100.0, 75.0, 100.0, 100.0]),
+            ("", "rotate: none", [100.0, 100.0, 100.0, 50.0]),
+            (
+                "",
+                "transform: perspective(200px) rotateY(35deg)",
+                [102.19, 95.82, 83.63, 58.37],
+            ),
+            (
+                "",
+                "transform: rotateX(45deg)",
+                [100.0, 107.32, 100.0, 35.36],
+            ),
+            (
+                "",
+                "transform: rotateY(180deg)",
+                [100.0, 100.0, 100.0, 50.0],
+            ),
+            (
+                "",
+                "transform: translateZ(50px)",
+                [100.0, 100.0, 100.0, 50.0],
+            ),
+            (
+                "",
+                "transform: perspective(200px) translateZ(50px)",
+                [83.33, 91.67, 133.33, 66.67],
+            ),
+            (
+                "",
+                "transform: rotate3d(1, 1, 0, 30deg)",
+                [101.67, 98.33, 96.65, 53.35],
+            ),
+            (
+                "",
+                "transform: scale3d(2, 1, 0.5)",
+                [50.0, 100.0, 200.0, 50.0],
+            ),
+            (
+                "",
+                "transform-origin: 0 0 20px; transform: rotateY(40deg)",
+                [87.14, 100.0, 76.6, 50.0],
+            ),
+            (
+                "perspective: 200px",
+                "transform: rotateY(35deg)",
+                [102.19, 95.82, 83.63, 58.37],
+            ),
+            (
+                "perspective: 200px; perspective-origin: 0 0",
+                "transform: rotateY(35deg)",
+                [110.56, 100.0, 68.99, 58.37],
+            ),
+            (
+                "perspective: 200px; perspective-origin: 100% 50%",
+                "transform: rotateY(35deg)",
+                [93.82, 95.82, 98.28, 58.37],
+            ),
+            (
+                "perspective: 200px",
+                "transform: translateZ(100px)",
+                [50.0, 75.0, 200.0, 100.0],
+            ),
+            (
+                "perspective: 200px",
+                "transform: translateZ(150px)",
+                [-50.0, 25.0, 400.0, 200.0],
+            ),
+            (
+                "perspective: 200px",
+                "transform-origin: 0 0 50px; transform: rotateY(35deg)",
+                [67.6, 98.82, 85.01, 52.37],
+            ),
+            (
+                "perspective: 200px; transform: rotate(90deg)",
+                "transform: rotateY(35deg)",
+                [120.82, 77.19, 58.37, 83.63],
+            ),
+            (
+                "transform-style: preserve-3d; transform: rotateY(45deg)",
+                "transform: translateZ(60px)",
+                [157.07, 100.0, 70.71, 50.0],
+            ),
+            (
+                "transform-style: flat; transform: rotateY(45deg)",
+                "transform: translateZ(60px)",
+                [114.64, 100.0, 70.71, 50.0],
+            ),
+            (
+                "transform-style: preserve-3d; transform: rotateY(45deg); overflow: hidden",
+                "transform: translateZ(60px)",
+                [114.64, 100.0, 70.71, 50.0],
+            ),
+            (
+                "transform-style: preserve-3d; transform: rotateY(45deg); opacity: 0.5",
+                "transform: translateZ(60px)",
+                [114.64, 100.0, 70.71, 50.0],
+            ),
+            (
+                "transform-style: preserve-3d; transform: rotateY(45deg); filter: blur(1px)",
+                "transform: translateZ(60px)",
+                [114.64, 100.0, 70.71, 50.0],
+            ),
+            (
+                "perspective: 200px; transform-style: preserve-3d; transform: rotateY(45deg)",
+                "transform: translateZ(60px)",
+                [160.1, 89.29, 101.02, 71.43],
+            ),
+        ];
+        for (parent_css, child_css, [x, y, w, h]) in rows {
+            let tree: Element = view! { <div class="parent"><div class="child" /></div> };
+            let (arena, styles, layouts) = layout_with_styles(
+                &tree,
+                &format!(
+                    ".parent {{ width: 100px; height: 50px; {parent_css} }} \
+                     .child {{ width: 100px; height: 50px; {child_css} }}"
+                ),
+            );
+            let bounds = screen_bounds(&arena, &layouts, &styles, 1.0);
+            let child = arena.children(arena.roots()[0])[0];
+            let got = bounds[&child];
+            let want = (x - 100.0, y - 100.0, *w, *h);
+            let near = |a: f32, b: f32| (a - b).abs() < 0.02;
+            assert!(
+                near(got.0, want.0)
+                    && near(got.1, want.1)
+                    && near(got.2, want.2)
+                    && near(got.3, want.3),
+                "[{parent_css}] [{child_css}]: got {got:?}, Chrome says {want:?}"
+            );
+        }
+    }
+
+    fn hit_in(css: &str, tree: &Element, x: f32, y: f32) -> (Arena, Option<NodeId>) {
+        let (arena, styles, layouts) = layout_with_styles(tree, css);
+        let found = super::hit_test(&arena, &layouts, &styles, x, y);
+        (arena, found)
+    }
+
+    #[test]
+    fn a_perspective_turned_box_is_hit_only_where_it_is_drawn() {
+        let tree: Element = view! { <div class="stage"><div class="card" /></div> };
+        let css = ".stage { width: 200px; height: 100px; perspective: 100px; } \
+                   .card { width: 100px; height: 100px; transform: rotateY(60deg); }";
+        // Turned about its centre (50, 50) under a perspective from (100, 50),
+        // the left half comes toward the viewer and grows past the layout box,
+        // while the right half goes away and shrinks to a screen edge near x = 83.
+        let (arena, inside) = hit_in(css, &tree, 60.0, 50.0);
+        let card = arena.children(arena.roots()[0])[0];
+        assert_eq!(inside, Some(card));
+        // Near x = 70 the card is only about 81px tall, so the top is not covered.
+        let (_, above) = hit_in(css, &tree, 70.0, 5.0);
+        assert_ne!(above, Some(card));
+        // Beyond the foreshortened right edge, though inside the layout box.
+        let (_, past_edge) = hit_in(css, &tree, 99.0, 50.0);
+        assert_ne!(past_edge, Some(card));
+    }
+
+    #[test]
+    fn a_box_showing_its_hidden_back_is_not_hit() {
+        let tree: Element = view! { <div class="box" /> };
+        let turned = ".box { width: 50px; height: 50px; transform: rotateY(180deg); \
+                       backface-visibility: hidden; }";
+        let (_, hit) = hit_in(turned, &tree, 25.0, 25.0);
+        assert_eq!(hit, None);
+        let shown = ".box { width: 50px; height: 50px; transform: rotateY(180deg); }";
+        let (arena, hit) = hit_in(shown, &tree, 25.0, 25.0);
+        assert_eq!(hit, Some(arena.roots()[0]));
+        let front = ".box { width: 50px; height: 50px; backface-visibility: hidden; }";
+        let (arena, hit) = hit_in(front, &tree, 25.0, 25.0);
+        assert_eq!(hit, Some(arena.roots()[0]));
+    }
+
+    #[test]
+    fn the_plane_nearest_the_viewer_in_a_3d_context_is_hit() {
+        let tree: Element = view! {
+            <div class="ctx">
+                <div class="near" />
+                <div class="far" />
+            </div>
+        };
+        let css = ".ctx { width: 100px; height: 100px; transform-style: preserve-3d; } \
+                   .near { position: absolute; width: 100px; height: 100px; \
+                           transform: translateZ(40px); } \
+                   .far { position: absolute; width: 100px; height: 100px; }";
+        let (arena, hit) = hit_in(css, &tree, 50.0, 50.0);
+        let [near, far] = [
+            arena.children(arena.roots()[0])[0],
+            arena.children(arena.roots()[0])[1],
+        ];
+        // `far` comes later in the tree but lies behind `near`.
+        assert_eq!(hit, Some(near));
+        assert_ne!(hit, Some(far));
+        // Flat, the later box simply wins.
+        let flat = css.replace("preserve-3d", "flat");
+        let (_, hit) = hit_in(&flat, &tree, 50.0, 50.0);
+        assert_eq!(hit, Some(far));
+    }
+
+    #[test]
+    fn planes_that_cross_are_hit_by_which_is_nearer_at_the_pointer() {
+        let tree: Element = view! {
+            <div class="ctx">
+                <div class="flat" />
+                <div class="upright" />
+            </div>
+        };
+        // `upright` is turned about the centre of `flat`: its left half comes
+        // toward the viewer, its right half goes away behind `flat`.
+        let css = ".ctx { width: 100px; height: 100px; perspective: 300px; \
+                          transform-style: preserve-3d; } \
+                   .flat { position: absolute; width: 100px; height: 100px; } \
+                   .upright { position: absolute; width: 100px; height: 100px; \
+                              transform-origin: 50% 50%; transform: rotateY(60deg); }";
+        let (arena, left) = hit_in(css, &tree, 50.0 - 20.0, 50.0);
+        let [flat, upright] = [
+            arena.children(arena.roots()[0])[0],
+            arena.children(arena.roots()[0])[1],
+        ];
+        assert_eq!(
+            left,
+            Some(upright),
+            "the near half of the turned plane is on top"
+        );
+        let (_, right) = hit_in(css, &tree, 50.0 + 20.0, 50.0);
+        assert_eq!(right, Some(flat), "the far half is behind the flat plane");
+    }
+
+    #[test]
+    fn screen_bounds_scale_with_the_device_pixel_ratio() {
+        let tree: Element = view! {
+            <div class="outer"><div class="stage"><div class="card" /></div></div>
+        };
+        let (arena, styles, layouts) = layout_with_styles(
+            &tree,
+            ".outer { padding: 10px; } \
+             .stage { width: 100px; height: 50px; perspective: 200px; } \
+             .card { width: 100px; height: 50px; margin: 7px 0 0 15px; \
+                     transform: translateZ(20px) rotateY(35deg); transform-origin: 0 0 30px; }",
+        );
+        let at_one = screen_bounds(&arena, &layouts, &styles, 1.0);
+        let doubled: HashMap<NodeId, BoxLayout> = layouts
+            .iter()
+            .map(|(&id, l)| {
+                (
+                    id,
+                    BoxLayout {
+                        x: l.x * 2.0,
+                        y: l.y * 2.0,
+                        width: l.width * 2.0,
+                        height: l.height * 2.0,
+                    },
+                )
+            })
+            .collect();
+        let at_two = screen_bounds(&arena, &doubled, &styles, 2.0);
+        for (id, (x, y, w, h)) in at_one {
+            let (x2, y2, w2, h2) = at_two[&id];
+            for (one, two) in [(x, x2), (y, y2), (w, w2), (h, h2)] {
+                assert!((one * 2.0 - two).abs() < 0.01, "{id:?}: {one} vs {two}");
+            }
+        }
+    }
+
+    #[test]
+    fn matrix3d_keeps_its_meaning_at_any_device_pixel_ratio() {
+        // A matrix whose w grows with x and y: per CSS pixel, so its terms shrink as
+        // the device pixel ratio grows.
+        let tree: Element = view! { <div class="card" /> };
+        let (arena, styles, layouts) = layout_with_styles(
+            &tree,
+            ".card { width: 100px; height: 50px; margin: 7px 0 0 15px; \
+                    transform: matrix3d(1, 0, 0, 0.002, 0, 1, 0, 0.001, 0, 0, 1, 0, 0, 0, 0, 1); }",
+        );
+        let doubled: HashMap<NodeId, BoxLayout> = layouts
+            .iter()
+            .map(|(&id, l)| {
+                (
+                    id,
+                    BoxLayout {
+                        x: l.x * 2.0,
+                        y: l.y * 2.0,
+                        width: l.width * 2.0,
+                        height: l.height * 2.0,
+                    },
+                )
+            })
+            .collect();
+        let node = arena.roots()[0];
+        let (x, y, w, h) = screen_bounds(&arena, &layouts, &styles, 1.0)[&node];
+        let (x2, y2, w2, h2) = screen_bounds(&arena, &doubled, &styles, 2.0)[&node];
+        for (one, two) in [(x, x2), (y, y2), (w, w2), (h, h2)] {
+            assert!((one * 2.0 - two).abs() < 0.01, "{one} vs {two}");
+        }
+        // The x and y perspective terms really bend the box (w moves off 100).
+        assert!((w - 100.0).abs() > 1.0, "{w}");
+    }
+
+    #[test]
+    fn an_inline_element_in_a_3d_box_is_hit_as_part_of_that_box() {
+        let tree: Element = view! {
+            <div class="ctx">"Hello "<span class="word">"flowing words"</span></div>
+        };
+        let css = ".ctx { width: 200px; height: 40px; font-size: 16px; \
+                          transform-style: preserve-3d; transform: translateZ(20px); } \
+                   .word { background-color: #ffd0d0; }";
+        let (arena, styles, layouts) = layout_with_styles(&tree, css);
+        let ctx = arena.roots()[0];
+        let span = arena.children(ctx)[0];
+        let piece = layouts.get(&span).copied().expect("the span has a box");
+        let (x, y) = (piece.x + piece.width / 2.0, piece.y + piece.height / 2.0);
+        assert_eq!(super::hit_test(&arena, &layouts, &styles, x, y), Some(span));
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 190.0, 30.0),
+            Some(ctx)
+        );
+    }
+
+    #[test]
+    fn a_box_without_a_transform_stays_put_under_a_perspective_parent() {
+        let tree: Element = view! { <div class="stage"><div class="plain" /></div> };
+        let (arena, styles, layouts) = layout_with_styles(
+            &tree,
+            ".stage { width: 100px; height: 50px; perspective: 80px; perspective-origin: 0 0; } \
+             .plain { width: 60px; height: 30px; margin: 5px 0 0 9px; }",
+        );
+        let plain = arena.children(arena.roots()[0])[0];
+        let matrix = resolve_node_transform(&arena, &styles, &layouts, plain, 9.0, 5.0, 1.0);
+        assert!(matrix.is_identity());
+        assert_eq!(
+            screen_bounds(&arena, &layouts, &styles, 1.0)[&plain],
+            (9.0, 5.0, 60.0, 30.0)
+        );
+    }
     #[test]
     fn screen_bounds_of_an_untransformed_tree_are_the_layout_boxes() {
         let tree: Element = view! { <div class="box" /> };

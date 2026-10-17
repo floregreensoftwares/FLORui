@@ -20,8 +20,8 @@ use florui_text::Font;
 
 use super::material::Params;
 use super::{
-    Canvas, ImagePaint, Surface, TextInputPaint, absolute_position, filter_inflation,
-    map_rect_aabb, own_extent, paint_nodes, resolve_transform, subtree_extent, to_tiny_skia_color,
+    Canvas, ImagePaint, Surface, TextInputPaint, absolute_position, filter_inflation, own_extent,
+    paint_nodes, resolve_projection, subtree_extent, to_tiny_skia_color,
 };
 
 /// A rectangle `(x0, y0, x1, y1)` in painted pixels.
@@ -471,17 +471,22 @@ fn group_extent(
     scale_factor: f32,
 ) -> Area {
     let (x, y) = absolute_position(arena, layouts, top);
+    if styles.get(&top).is_some_and(florui_layout::preserves_3d) {
+        return super::scene3d::scene_extent(arena, styles, layouts, font, top, scale_factor)
+            .unwrap_or((x, y, x, y));
+    }
     let Some((x0, y0, x1, y1)) =
         subtree_extent(arena, styles, layouts, font, top, x, y, scale_factor)
     else {
         return (x, y, x, y);
     };
-    let (Some(style), Some(layout)) = (styles.get(&top), layouts.get(&top)) else {
+    let Some(style) = styles.get(&top) else {
         return (x0, y0, x1, y1);
     };
     let pad = filter_inflation(&style.filter, scale_factor);
-    let transform = resolve_transform(style, layout, x, y, scale_factor);
-    map_rect_aabb(x0 - pad, y0 - pad, x1 + pad, y1 + pad, transform)
+    resolve_projection(arena, styles, layouts, top, (x, y), scale_factor)
+        .map_rect_aabb(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
+        .unwrap_or((x, y, x, y))
 }
 
 /// The room each box can ink, with the boxes it moves or filters: everything
@@ -504,7 +509,7 @@ pub(crate) fn node_inks(
             .and_then(|parent| top_group.get(&parent).copied().flatten());
         let own = styles
             .get(&id)
-            .is_some_and(|s| !s.transform.is_empty() || !s.filter.is_empty());
+            .is_some_and(|s| s.has_transform() || s.preserve_3d || !s.filter.is_empty());
         top_group.insert(id, above.or(own.then_some(id)));
     }
     let mut inks = HashMap::with_capacity(ids.len());

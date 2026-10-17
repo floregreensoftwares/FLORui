@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use florui::Element;
-use florui_layout::{BoxLayout, LayoutError, absolute_position};
+use florui_layout::{BoxLayout, LayoutError};
 use florui_paint::paint_to_buffer;
 use florui_style::{Arena, InteractionState, NodeId, Rgba, parse_stylesheet};
 use image::RgbaImage;
@@ -240,13 +240,8 @@ pub(crate) fn box_geometry_of(
     layouts: &HashMap<NodeId, BoxLayout>,
     node: NodeId,
 ) -> Option<BoxGeometryPx> {
-    let layout = *layouts.get(&node)?;
-    let (x, y) = absolute_position(arena, layouts, node);
-    let style = styles.get(&node);
-    let (x, y, width, height) = match style {
-        Some(style) => florui_paint::transformed_bounding_box(style, &layout, x, y, 1.0),
-        None => (x, y, layout.width, layout.height),
-    };
+    let (x, y, width, height) =
+        florui_layout::node_screen_bounds(arena, layouts, styles, node, 1.0)?;
     Some(BoxGeometryPx {
         x: f64::from(x),
         y: f64::from(y),
