@@ -470,32 +470,40 @@ fn cut(from: f32, to: f32, gaps: &[(f32, f32)]) -> Vec<(f32, f32)> {
     pieces
 }
 
-/// Dashes of `dash` with a gap between, the gap stretched or shrunk so the
-/// line begins and ends with a dash (as Chromium picks it).
-fn dashes(x: (f32, f32), dash: f32, gap: f32) -> Vec<(f32, f32)> {
-    let length = x.1 - x.0;
-    if length <= 0.0 || dash <= 0.0 {
-        return Vec::new();
-    }
-    let available = length + gap;
-    let fewest = (available / (dash + gap)).floor();
-    if fewest < 1.0 {
-        return vec![x];
-    }
+/// The gap that makes dashes of `dash` fit `length` whole, as close to `gap` as
+/// the choice between one dash more or fewer allows (Chromium's
+/// `SelectBestDashGap`). A closed path has as many gaps as dashes.
+pub(super) fn fitted_gap(length: f32, dash: f32, gap: f32, closed: bool) -> f32 {
+    let available = if closed { length } else { length + gap };
+    let fewest = (available / (dash + gap)).floor().max(1.0);
     let most = fewest + 1.0;
     let gap_with = |count: f32| {
-        if count > 1.0 {
-            (length - count * dash) / (count - 1.0)
+        let gaps = if closed { count } else { count - 1.0 };
+        if gaps > 0.0 {
+            (length - count * dash) / gaps
         } else {
             gap
         }
     };
     let (min_gap, max_gap) = (gap_with(fewest), gap_with(most));
-    let gap = if max_gap <= 0.0 || (min_gap - gap).abs() < (max_gap - gap).abs() {
+    if max_gap <= 0.0 || (min_gap - gap).abs() < (max_gap - gap).abs() {
         min_gap
     } else {
         max_gap
-    };
+    }
+}
+
+/// Dashes of `dash` with a gap between, the gap stretched or shrunk so the
+/// line begins and ends with a dash (as Chromium picks it).
+pub(super) fn dashes(x: (f32, f32), dash: f32, gap: f32) -> Vec<(f32, f32)> {
+    let length = x.1 - x.0;
+    if length <= 0.0 || dash <= 0.0 {
+        return Vec::new();
+    }
+    if length < dash {
+        return vec![x];
+    }
+    let gap = fitted_gap(length, dash, gap, false);
     let mut pieces = Vec::new();
     let mut at = x.0;
     while at < x.1 - 0.001 {
