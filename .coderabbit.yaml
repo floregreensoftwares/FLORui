@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# The default branch is not where work is merged: pull requests target
+# `grow/main`, and a stack of them targets the branch below it. Review all of
+# them, drafts excluded.
+reviews:
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - ".*"
