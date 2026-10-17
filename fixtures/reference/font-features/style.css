@@ -5,3 +5,5 @@
 .kern { font-kerning: none; }
 .var { font-variation-settings: "wght" 700; }
 .var-w { font-variation-settings: "wdth" 75; }
+.sup { font-variant-position: super; }
+.sub { font-variant-position: sub; }

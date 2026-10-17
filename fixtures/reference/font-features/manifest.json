@@ -6,14 +6,14 @@
     "element_id":  "el",
     "viewport":  {
                      "width_css_px":  300,
-                     "height_css_px":  220,
+                     "height_css_px":  280,
                      "device_pixel_ratio":  1
                  },
     "canvas_color":  "#ffffff",
     "florui":  {
                    "tag":  "div",
                    "class":  "wrap",
-                   "css":  ".wrap { display: inline-block; background-color: #e8ecff; color: #112233; font-size: 20px; } .tnum { font-variant-numeric: tabular-nums; } .noliga { font-variant-ligatures: none; } .feat { font-feature-settings: \"tnum\" 1, \"case\" 1; } .kern { font-kerning: none; } .var { font-variation-settings: \"wght\" 700; } .var-w { font-variation-settings: \"wdth\" 75; }",
+                   "css":  ".wrap { display: inline-block; background-color: #e8ecff; color: #112233; font-size: 20px; } .tnum { font-variant-numeric: tabular-nums; } .noliga { font-variant-ligatures: none; } .feat { font-feature-settings: \"tnum\" 1, \"case\" 1; } .kern { font-kerning: none; } .var { font-variation-settings: \"wght\" 700; } .var-w { font-variation-settings: \"wdth\" 75; } .sup { font-variant-position: super; } .sub { font-variant-position: sub; }",
                    "children":  [
                                     {
                                         "tag":  "div",
@@ -53,6 +53,18 @@
                                     },
                                     {
                                         "tag":  "div",
+                                        "class":  "sup",
+                                        "css":  "",
+                                        "text":  "x1234 H2O"
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "sub",
+                                        "css":  "",
+                                        "text":  "x1234 H2O"
+                                    },
+                                    {
+                                        "tag":  "div",
                                         "css":  "",
                                         "text":  "1111 0000 1.1.1 fi ffl AVAVA To"
                                     }
@@ -60,8 +72,8 @@
                },
     "classification":  {
                            "kind":  "tolerant",
-                           "threshold_percent":  10.9,
+                           "threshold_percent":  9.7,
                            "geometry_tolerance_px":  1.5,
-                           "reason":  "Measured against Chromium 153 on Windows: 10.22% of the pixels differ and the box is the same size; what is left is the two engines\u0027 glyph rasterization, as in the other text fixtures. Without the properties the same fixture measures 11.75%, so it fails."
+                           "reason":  "Measured against Chromium 153 on Windows: 9.18% of the pixels differ and the box is the same size; what is left is the two engines\u0027 glyph rasterization, as in the other text fixtures. Without the properties the same fixture measures 10.24%, so it fails. Chromium does not synthesize super/subscript for a font that lacks the feature, and neither does this engine."
                        }
 }
