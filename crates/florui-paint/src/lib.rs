@@ -3230,6 +3230,27 @@ fn paint_node(
                         clip,
                     );
                 }
+                let declared = [style
+                    .filter(|s| s.text_decoration.lines.any() && s.visibility.is_visible())
+                    .map(|s| decoration::Declared {
+                        decoration: s.text_decoration,
+                        color: s.color,
+                        font_size: s.font_size,
+                    })];
+                let effective = [vec![0]];
+                let decorate = |buffer: &mut Surface, phase| {
+                    decoration::paint(
+                        buffer,
+                        &paint.runs,
+                        &declared,
+                        &effective,
+                        (content_x, content_y),
+                        scale_factor,
+                        clip,
+                        phase,
+                    );
+                };
+                decorate(buffer, decoration::Phase::UnderAndOver);
                 text_shadow::paint(
                     buffer,
                     &paint.runs,
@@ -3247,6 +3268,7 @@ fn paint_node(
                     scale_factor,
                     clip,
                 );
+                decorate(buffer, decoration::Phase::LineThrough);
                 if let Some(placeholder) = &paint.placeholder {
                     paint_shaped_runs(
                         buffer,
@@ -5108,46 +5130,50 @@ fn paint_shaped_runs(
     let mut paint = Paint::default();
     paint.set_color_rgba8(color.r, color.g, color.b, color.a);
     paint.anti_alias = true;
-    // Runs a font has no bold for are drawn thickened, apart from the rest.
+    // Runs a font has no bold for are drawn thickened, apart from the rest, each
+    // at the stroke its own size gives.
     let split = runs.iter().any(|run| run.embolden);
-    for bold in [false, true] {
+    let fill = |buffer: &mut Surface, path: &tiny_skia::Path| {
+        buffer
+            .pixmap
+            .fill_path(path, &paint, FillRule::Winding, Transform::identity(), clip);
+    };
+    let mut builder = PathBuilder::new();
+    append_glyphs(
+        &mut builder,
+        runs,
+        x,
+        y,
+        scale_factor,
+        split.then_some(false),
+    );
+    if let Some(path) = builder.finish() {
+        fill(buffer, &path);
+    }
+    for run in runs.iter().filter(|run| run.embolden) {
         let mut builder = PathBuilder::new();
         append_glyphs(
             &mut builder,
-            runs,
+            std::slice::from_ref(run),
             x,
             y,
             scale_factor,
-            split.then_some(bold),
+            Some(true),
         );
-        if let Some(path) = builder.finish() {
-            buffer.pixmap.fill_path(
-                &path,
-                &paint,
-                FillRule::Winding,
-                Transform::identity(),
-                clip,
-            );
-            if bold {
-                // As Skia thickens: the outline stroked as wide as a fraction of the size.
-                let size = runs
-                    .iter()
-                    .find(|run| run.embolden)
-                    .map_or(0.0, |run| run.font_size * scale_factor);
-                let ratio =
-                    1.0 / 24.0 + (1.0 / 32.0 - 1.0 / 24.0) * ((size - 9.0) / 27.0).clamp(0.0, 1.0);
-                let stroke = tiny_skia::Stroke {
-                    width: size * ratio,
-                    ..tiny_skia::Stroke::default()
-                };
-                buffer
-                    .pixmap
-                    .stroke_path(&path, &paint, &stroke, Transform::identity(), clip);
-            }
-        }
-        if !split {
-            break;
-        }
+        let Some(path) = builder.finish() else {
+            continue;
+        };
+        fill(buffer, &path);
+        // As Skia thickens: the outline stroked as wide as a fraction of the size.
+        let size = run.font_size * scale_factor;
+        let ratio = 1.0 / 24.0 + (1.0 / 32.0 - 1.0 / 24.0) * ((size - 9.0) / 27.0).clamp(0.0, 1.0);
+        let stroke = tiny_skia::Stroke {
+            width: size * ratio,
+            ..tiny_skia::Stroke::default()
+        };
+        buffer
+            .pixmap
+            .stroke_path(&path, &paint, &stroke, Transform::identity(), clip);
     }
 }
 
@@ -8004,10 +8030,8 @@ mod tests {
         };
         let (rows, on) = case("dotted");
         assert_eq!(rows.len(), 2);
-        assert_eq!(
-            &on[..8],
-            &[true, true, false, false, true, true, false, false]
-        );
+        // The gap is fitted to the line, so later dots sit between pixels.
+        assert_eq!(&on[..5], &[true, true, false, false, true]);
         let (rows, on) = case("dashed");
         assert_eq!(rows.len(), 2);
         assert!(
@@ -8199,6 +8223,82 @@ mod tests {
             .expect("some red glyph pixel");
         assert_eq!(reddest, (255, 0, 0));
     }
+    #[test]
+    fn the_text_of_an_input_is_decorated_like_any_other_text() {
+        let mut font = Font::load_embedded();
+        let runs = font
+            .shape(
+                florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 16.0, 400.0),
+                "Hi",
+            )
+            .runs;
+        let plain = paint_text_field_styled(runs.clone(), None, "");
+        let underlined = paint_text_field_styled(
+            runs,
+            None,
+            "font-size: 16px; text-decoration: underline #ff0000;",
+        );
+        let reds = |buffer: &Canvas| {
+            (0..60)
+                .flat_map(|x| (0..20).map(move |y| (x, y)))
+                .filter(|&(x, y)| pixel_rgb(buffer, x, y) == [255, 0, 0])
+                .count()
+        };
+        assert_eq!(reds(&plain), 0);
+        assert!(reds(&underlined) >= 10, "{}", reds(&underlined));
+    }
+
+    #[test]
+    fn each_emboldened_run_is_thickened_by_its_own_size() {
+        let mut font = Font::load_embedded();
+        let style = |size: f32| {
+            florui_text::TextStyle::new(florui_text::FontFamily::Monospace, size, 700.0)
+        };
+        let small = font.shape(style(12.0), "H").runs;
+        let large = font.shape(style(40.0), "H").runs;
+        assert!(small[0].embolden && large[0].embolden);
+        let paint = |groups: &[&[florui_text::ShapedRun]]| {
+            let mut surface = Surface::new(80, 60, (0, 0)).unwrap();
+            for group in groups {
+                paint_shaped_runs(
+                    &mut surface,
+                    group,
+                    2.0,
+                    2.0,
+                    Rgba::opaque(0, 0, 0),
+                    1.0,
+                    None,
+                );
+            }
+            surface.pixmap.data().to_vec()
+        };
+        let together: Vec<_> = small.iter().chain(&large).cloned().collect();
+        let (a, b) = (paint(&[&together]), paint(&[&small, &large]));
+        let differing = a.iter().zip(&b).filter(|(p, q)| p != q).count();
+        assert_eq!(differing, 0, "of {} bytes", a.len());
+    }
+
+    #[test]
+    fn a_hidden_input_draws_no_decoration() {
+        let mut font = Font::load_embedded();
+        let runs = font
+            .shape(
+                florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 16.0, 400.0),
+                "Hi",
+            )
+            .runs;
+        let hidden = paint_text_field_styled(
+            runs,
+            None,
+            "visibility: hidden; text-decoration: underline #ff0000;",
+        );
+        let reds = (0..60)
+            .flat_map(|x| (0..20).map(move |y| (x, y)))
+            .filter(|&(x, y)| pixel_rgb(&hidden, x, y) == [255, 0, 0])
+            .count();
+        assert_eq!(reds, 0);
+    }
+
     #[test]
     fn typed_text_longer_than_its_input_is_cut_at_the_edge() {
         let mut font = Font::load_embedded();
