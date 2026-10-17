@@ -1,0 +1,56 @@
+{
+    "id":  "border-image",
+    "description":  "border-image from a picture: slice, repeat modes, fill and width",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  520,
+                     "height_css_px":  200,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 500px; height: 180px; background-color: #ffffff; } .b { position: absolute; width: 110px; height: 70px; box-sizing: border-box; background-color: #eef2ff; border: 8px solid #222222; } .png-round { border-image: url(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAAUUlEQVR4nGP4////gmdRAf9hWMOmAgUjy4EwA4hA1kSUBmRNRGuAaSKoAV0BIT9haCDkJ6wa8PkJpwZcfmJA9xQhPxHUgO4nojQgayJaA0wTALpXUCi3BUCiAAAAAElFTkSuQmCC\") 4 / 12px round; border-width: 12px; } .png-repeat { border-image: url(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAAUUlEQVR4nGP4////gmdRAf9hWMOmAgUjy4EwA4hA1kSUBmRNRGuAaSKoAV0BIT9haCDkJ6wa8PkJpwZcfmJA9xQhPxHUgO4nojQgayJaA0wTALpXUCi3BUCiAAAAAElFTkSuQmCC\") 4 / 12px repeat; border-width: 12px; } .png-space { border-image: url(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAAUUlEQVR4nGP4////gmdRAf9hWMOmAgUjy4EwA4hA1kSUBmRNRGuAaSKoAV0BIT9haCDkJ6wa8PkJpwZcfmJA9xQhPxHUgO4nojQgayJaA0wTALpXUCi3BUCiAAAAAElFTkSuQmCC\") 4 / 12px space; border-width: 12px; } .png-stretch { border-image: url(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAAUUlEQVR4nGP4////gmdRAf9hWMOmAgUjy4EwA4hA1kSUBmRNRGuAaSKoAV0BIT9haCDkJ6wa8PkJpwZcfmJA9xQhPxHUgO4nojQgayJaA0wTALpXUCi3BUCiAAAAAElFTkSuQmCC\") 4 / 12px stretch; border-width: 12px; } .png-fill { border-image: url(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAAUUlEQVR4nGP4////gmdRAf9hWMOmAgUjy4EwA4hA1kSUBmRNRGuAaSKoAV0BIT9haCDkJ6wa8PkJpwZcfmJA9xQhPxHUgO4nojQgayJaA0wTALpXUCi3BUCiAAAAAElFTkSuQmCC\") 4 fill / 8px stretch; } .pos-png-round { left: 20px; top: 20px; } .pos-png-repeat { left: 145px; top: 20px; } .pos-png-space { left: 270px; top: 20px; } .pos-png-stretch { left: 395px; top: 20px; } .pos-png-fill { left: 20px; top: 110px; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b png-round pos-png-round",
+                                        "css":  "",
+                                        "text":  ""
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b png-repeat pos-png-repeat",
+                                        "css":  "",
+                                        "text":  ""
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b png-space pos-png-space",
+                                        "css":  "",
+                                        "text":  ""
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b png-stretch pos-png-stretch",
+                                        "css":  "",
+                                        "text":  ""
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b png-fill pos-png-fill",
+                                        "css":  "",
+                                        "text":  ""
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  3.4,
+                           "geometry_tolerance_px":  1.5,
+                           "reason":  "Measured against Chromium 153 on Windows: 3.11% of the pixels differ and the box is the same size. The slices, widths and the stretch, repeat, round and space layouts land on Chromium\u0027s rectangles; what is left is the picture\u0027s resampling in the filled middle (a 4px slice stretched over the box) and the seams where tiles meet. Without the border images the same fixture measures 38%, so it fails."
+                       }
+}

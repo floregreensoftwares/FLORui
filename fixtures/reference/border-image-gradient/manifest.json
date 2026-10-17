@@ -1,0 +1,50 @@
+{
+    "id":  "border-image-gradient",
+    "description":  "border-image from gradients: slice, width, outset",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  520,
+                     "height_css_px":  200,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 500px; height: 180px; background-color: #ffffff; } .b { position: absolute; width: 110px; height: 70px; box-sizing: border-box; background-color: #eef2ff; border: 8px solid #222222; } .grad1 { border-image: linear-gradient(to right, #ff0000, #0000ff) 1; } .grad-slice { border-image: repeating-linear-gradient(45deg, #333333 0px, #333333 6px, #ffcc00 6px, #ffcc00 12px) 30 / 12px / 0 stretch; border-width: 12px; } .grad-outset { border-image: linear-gradient(135deg, #00aa44, #aa00aa) 1 / 8px / 6px; } .grad-width { border-image: linear-gradient(to bottom, #ff6600, #0066ff) 1; border-image-width: 2; border-width: 6px; } .pos-grad1 { left: 20px; top: 20px; } .pos-grad-slice { left: 145px; top: 20px; } .pos-grad-outset { left: 270px; top: 20px; } .pos-grad-width { left: 395px; top: 20px; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b grad1 pos-grad1",
+                                        "css":  "",
+                                        "text":  ""
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b grad-slice pos-grad-slice",
+                                        "css":  "",
+                                        "text":  ""
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b grad-outset pos-grad-outset",
+                                        "css":  "",
+                                        "text":  ""
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b grad-width pos-grad-width",
+                                        "css":  "",
+                                        "text":  ""
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  7.6,
+                           "geometry_tolerance_px":  1.5,
+                           "reason":  "Measured against Chromium 153 on Windows: 7.26% of the pixels differ and the box is the same size. The gradients, slices, widths and outset land on Chromium\u0027s rectangles; every pixel of a gradient differs by a level or two because Chromium draws the gradient as an image and resamples it where this engine samples the gradient where it is drawn. Without the border images the same fixture measures 14.5%, so it fails."
+                       }
+}
