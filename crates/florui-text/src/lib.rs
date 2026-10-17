@@ -1089,6 +1089,13 @@ impl Font {
                     .and_then(|rest| rest.strip_suffix('"'))
                 {
                     names.push(quoted.replace("\\\"", "\"").replace("\\\\", "\\"));
+                } else if !item.is_empty()
+                    && !matches!(
+                        item,
+                        "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" | "system-ui"
+                    )
+                {
+                    names.push(item.to_owned());
                 }
             }
         } else {
@@ -2762,6 +2769,15 @@ mod tests {
         let b = tiny.shape_inline_memoized(&mixed(14.0, 400.0, " tail"), strut(), Some(100.0));
         assert_eq!(tiny.inline_memo.entries(), 0);
         assert!(same_layout(&a, &b));
+    }
+
+    #[test]
+    fn a_stack_names_its_unquoted_families_but_not_the_generic_ones() {
+        let font = Font::load_embedded();
+        let stack = settings::intern_family_stack("Arial, \"Open Sans\", serif, Georgia");
+        let style = TextStyle::new(FontFamily::Stack(stack), 16.0, 400.0);
+        let names = font.family_candidates(&style);
+        assert_eq!(&names[..3], ["Arial", "Open Sans", "Georgia"]);
     }
 
     #[test]

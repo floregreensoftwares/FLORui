@@ -8,15 +8,20 @@ use std::sync::{Arc, Mutex, OnceLock};
 #[derive(Default)]
 struct Table {
     sources: Vec<Arc<str>>,
+    /// The number of each list, so one already known is found without a scan.
+    index: std::collections::HashMap<Arc<str>, u32>,
 }
 
 impl Table {
     fn intern(&mut self, css: &str) -> u32 {
-        if let Some(at) = self.sources.iter().position(|known| &**known == css) {
-            return at as u32 + 1;
+        if let Some(&id) = self.index.get(css) {
+            return id;
         }
-        self.sources.push(Arc::from(css));
-        self.sources.len() as u32
+        let source: Arc<str> = Arc::from(css);
+        self.sources.push(Arc::clone(&source));
+        let id = self.sources.len() as u32;
+        self.index.insert(source, id);
+        id
     }
 
     fn get(&self, id: u32) -> Option<Arc<str>> {
