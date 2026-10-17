@@ -7,6 +7,9 @@
 .dot { text-decoration: underline dotted; }
 .dash { text-decoration: underline dashed; }
 .wavy { text-decoration: underline wavy; }
+.wavy6 { text-decoration: underline wavy 6px #c0392b; }
+.wavy-o { text-decoration: overline wavy #2980b9; }
+.wavy-l { text-decoration: line-through wavy 3px #27ae60; }
 .red { text-decoration: underline #c0392b; }
 .thick { text-decoration: underline 4px; }
 .offset { text-decoration: underline; text-underline-offset: 6px; }
