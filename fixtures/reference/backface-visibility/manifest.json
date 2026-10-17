@@ -1,0 +1,130 @@
+{
+    "id":  "backface-visibility",
+    "description":  "backface-visibility hidden: two-faced cards in a preserve-3d context and a lone turned box",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  380,
+                     "height_css_px":  200,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 380px; height: 200px; background-color: #ffffff; } .card { position: absolute; width: 100px; height: 70px; transform-style: preserve-3d; } .fa { left: 20px; top: 20px; transform: rotateY(0deg); } .fb { left: 140px; top: 20px; transform: rotateY(180deg); } .fc { left: 260px; top: 20px; transform: perspective(300px) rotateY(60deg); } .side { position: absolute; width: 100px; height: 70px; box-sizing: border-box; border: 4px solid #222222; backface-visibility: hidden; } .front { background-color: #e04040; } .back { background-color: #4060e0; transform: rotateY(180deg); } .lone { position: absolute; left: 20px; top: 120px; width: 100px; height: 60px; background-color: #40a040; backface-visibility: hidden; transform: rotateY(180deg); } .lone2 { position: absolute; left: 140px; top: 120px; width: 100px; height: 60px; background-color: #40a040; backface-visibility: hidden; transform: rotateX(40deg); } .lone3 { position: absolute; left: 260px; top: 120px; width: 100px; height: 60px; background-color: #40a040; backface-visibility: visible; transform: rotateY(180deg); }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "card fa",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "side front",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "side back",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "card fb",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "side front",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "side back",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "card fc",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "side front",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "side back",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "lone",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "lone2",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "lone3",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  1.2,
+                           "reason":  "Measured against Chromium 153 on Windows: 0.70% of the pixels differ and every box has the same bounding box. What is left is antialiasing along the edges of the cards. With backface-visibility ignored (both faces of every card drawn) the same fixture measures 20.0%, so it fails."
+                       }
+}

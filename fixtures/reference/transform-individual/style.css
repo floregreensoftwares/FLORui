@@ -1,0 +1,10 @@
+.wrap { position: relative; width: 540px; height: 280px; background-color: #ffffff; }
+.b { position: absolute; width: 100px; height: 50px; box-sizing: border-box; background-color: #cfe0ff; border: 6px solid #3366cc; border-left-color: #cc3333; border-bottom-color: #33aa55; }
+.p0 { left: 20px; top: 20px; translate: 30px 10px; }
+.p1 { left: 150px; top: 20px; rotate: 15deg; }
+.p2 { left: 280px; top: 20px; scale: 0.6; }
+.p3 { left: 410px; top: 20px; scale: 1.3 0.7; }
+.p4 { left: 20px; top: 110px; translate: 10px 5px; rotate: 20deg; scale: 1.2; }
+.p5 { left: 150px; top: 110px; translate: 10px; rotate: 30deg; scale: 0.8; transform: translate(5px, 0) rotate(10deg); }
+.p6 { left: 280px; top: 110px; rotate: 0.25turn; transform-origin: 0 0; }
+.p7 { left: 410px; top: 110px; translate: 50% 20%; rotate: -12deg; }
