@@ -10,10 +10,10 @@
 //! `text-decoration` into line, style and color (which it has) and the
 //! mirrored thickness.
 //!
-//! A custom property inherits, and a few of the properties it stands for do
-//! not (`text-decoration-thickness`): a `text-decoration` shorthand therefore
-//! always sets the thickness, to `auto` when it names none, as a browser's own
-//! shorthand resets it.
+//! A custom property inherits, and `text-decoration-thickness` does not: a
+//! `text-decoration` shorthand always sets it, to `auto` when it names none, as a
+//! browser's own shorthand resets it, and the style reader takes it only from
+//! the rules of the element itself.
 //!
 //! Uses `cssparser`, so comments, strings and selectors that merely contain a
 //! name are never touched.

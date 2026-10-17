@@ -2007,6 +2007,10 @@ fn florui_property(values: &ComputedValues, name: impl Fn(&FlorNames) -> &Atom) 
 /// The value of a property of [`crate::property_mirror::MIRRORED`], as written
 /// (and inherited like the custom property carrying it).
 fn mirrored(values: &ComputedValues, name: &str) -> Option<String> {
+    // Almost no element has a custom property: nothing to look for then.
+    if values.custom_properties().is_empty() {
+        return None;
+    }
     let index = crate::property_mirror::MIRRORED
         .iter()
         .position(|mirrored| *mirrored == name)?;
@@ -3001,6 +3005,17 @@ fn to_gap(
 /// [`FlorFontFamily::SansSerif`], this crate's stand-in default.
 fn to_font_family(value: &style::values::computed::font::FontFamily) -> FlorFontFamily {
     use style::values::computed::font::{GenericFontFamily, SingleFontFamily};
+    // The two embedded families, alone, are all but every element's: found
+    // without building a list.
+    match value.families.list.as_ref() {
+        [] | [SingleFontFamily::Generic(GenericFontFamily::SansSerif)] => {
+            return FlorFontFamily::SansSerif;
+        }
+        [SingleFontFamily::Generic(GenericFontFamily::Monospace)] => {
+            return FlorFontFamily::Monospace;
+        }
+        _ => {}
+    }
     let mut names: Vec<String> = Vec::new();
     for family in value.families.list.iter() {
         match family {
@@ -3469,7 +3484,17 @@ fn to_text_decoration(values: &ComputedValues, font_size: f32) -> crate::TextDec
             .text_decoration_color
             .as_absolute()
             .map(to_absolute_rgba),
-        thickness: match word("text-decoration-thickness").as_str() {
+        thickness: match {
+            // The rules are only searched for a thickness that is there to read.
+            let read = word("text-decoration-thickness");
+            if read.is_empty() || !declares_mirrored(values, "text-decoration-thickness") {
+                String::new()
+            } else {
+                read
+            }
+        }
+        .as_str()
+        {
             "from-font" => DecorationThickness::FromFont,
             css => match parse_css_size(css, font_size) {
                 Some(CssSize::Px(px)) => DecorationThickness::Length(px),
@@ -3494,6 +3519,34 @@ fn to_text_decoration(values: &ComputedValues, font_size: f32) -> crate::TextDec
             _ => UnderlinePosition::Auto,
         },
     }
+}
+
+/// Whether the rules applying to this very element (not an ancestor's) declare the
+/// mirrored `name`: it is a custom property and so inherits, while the property
+/// it stands for does not.
+fn declares_mirrored(values: &ComputedValues, name: &str) -> bool {
+    use style::properties::PropertyDeclaration;
+    let Some(index) = crate::property_mirror::MIRRORED
+        .iter()
+        .position(|mirrored| *mirrored == name)
+    else {
+        return false;
+    };
+    let guard = shared_lock().read();
+    FLOR_NAMES.with(|names| {
+        values.rules().self_and_ancestors().any(|node| {
+            node.style_source().is_some_and(|source| {
+                source
+                    .read(&guard)
+                    .declarations()
+                    .iter()
+                    .any(|declaration| {
+                        matches!(declaration, PropertyDeclaration::Custom(custom)
+                        if custom.name == names.mirrors[index])
+                    })
+            })
+        })
+    })
 }
 
 /// `font-synthesis` and its longhands: the shorthand says which forms are
@@ -3600,6 +3653,9 @@ fn to_font_features(values: &ComputedValues) -> Option<std::sync::Arc<str>> {
             "none" => {
                 add("liga", 0);
                 add("clig", 0);
+                add("dlig", 0);
+                add("hlig", 0);
+                add("calt", 0);
             }
             "common-ligatures" => {
                 add("liga", 1);
