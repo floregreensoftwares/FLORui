@@ -101,6 +101,11 @@ fn capitalize(text: &str, in_word: &mut bool) -> String {
     out
 }
 
+/// `c` moved down by `by` code points (the half-width Hangul to its jamo).
+fn shifted(c: char, by: u32) -> char {
+    char::from_u32(c as u32 - by).unwrap_or(c)
+}
+
 fn to_full_width(c: char) -> char {
     match c {
         ' ' => '\u{3000}',
@@ -116,7 +121,14 @@ fn to_full_width(c: char) -> char {
             .get(c as usize - 0xff61)
             .copied()
             .unwrap_or(c),
-        '\u{ffa0}'..='\u{ffdc}' => c,
+        '\u{ffa0}' => '\u{3164}',
+        '\u{ffa1}'..='\u{ffbe}' => shifted(c, 0xce70),
+        '\u{ffc2}'..='\u{ffc7}' => shifted(c, 0xce73),
+        '\u{ffca}'..='\u{ffcf}' => shifted(c, 0xce75),
+        '\u{ffd2}'..='\u{ffd7}' => shifted(c, 0xce77),
+        '\u{ffda}'..='\u{ffdc}' => shifted(c, 0xce79),
+        '\u{2985}' => '\u{ff5f}',
+        '\u{2986}' => '\u{ff60}',
         '\u{ffe8}' => '\u{2502}',
         '\u{ffe9}' => '\u{2190}',
         '\u{ffea}' => '\u{2191}',
@@ -298,6 +310,14 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(run(width, "Ab 1!"), "Ａｂ　１！");
+        assert_eq!(
+            run(width, "\u{ff8a}\u{ff9d}\u{2985}"),
+            "\u{30cf}\u{30f3}\u{ff5f}"
+        );
+        assert_eq!(
+            run(width, "\u{ffa0}\u{ffa1}\u{ffbe}\u{ffdc}"),
+            "\u{3164}\u{3131}\u{314e}\u{3163}"
+        );
         let kana = TextTransform {
             full_size_kana: true,
             ..Default::default()
