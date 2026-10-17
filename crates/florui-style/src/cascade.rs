@@ -3504,6 +3504,36 @@ mod tests {
     }
 
     #[test]
+    fn no_ligatures_turns_off_every_ligature_and_the_contextual_alternates() {
+        let tree: Element = view! { <div class="a" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".a { font-variant-ligatures: none; }",
+            &InteractionState::new(),
+        );
+        let features = computed[&arena.roots()[0]].font_features.clone().unwrap();
+        for tag in ["liga", "clig", "dlig", "hlig", "calt"] {
+            assert!(features.contains(&format!("\"{tag}\" 0")), "{features}");
+        }
+    }
+
+    #[test]
+    fn a_longhand_only_decoration_does_not_inherit_the_thickness() {
+        let tree: Element = view! { <div class="a"><span class="b" /><span class="c" /></div> };
+        let css = ".a { text-decoration: underline 3px; } .b { text-decoration-line: line-through; } \n                   .c { text-decoration-line: overline; text-decoration-thickness: 5px; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let kids = arena.children(arena.roots()[0]);
+        assert_eq!(
+            computed[&kids[0]].text_decoration.thickness,
+            DecorationThickness::Auto
+        );
+        assert_eq!(
+            computed[&kids[1]].text_decoration.thickness,
+            DecorationThickness::Length(5.0)
+        );
+    }
+
+    #[test]
     fn monospace_alone_has_chromiums_smaller_default_sizes() {
         let tree: Element = view! {
             <div>
@@ -3529,6 +3559,24 @@ mod tests {
         assert_eq!(size(4), 16.0, "only a list that is exactly monospace");
         let inherited = arena.children(kids[5])[0];
         assert_eq!(computed[&inherited].font_size, 13.0);
+    }
+
+    #[test]
+    fn relative_sizes_follow_chromiums_keyword_table_of_each_family() {
+        let tree: Element = view! {
+            <div class="m">
+                <span class="s2" /><span class="a2" /><span class="a3" />
+                <span class="larger" /><span class="pct" /><span class="alarger" />
+            </div>
+        };
+        let css = ".m { font-family: monospace; } .s2 { font-size: 2em; } \n                   .a2 { font-family: Arial; font-size: 2em; } .a3 { font-family: Arial; } \n                   .larger { font-size: larger; } .pct { font-size: 150%; } \n                   .alarger { font-family: Arial; font-size: larger; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let kids = arena.children(arena.roots()[0]);
+        let sizes: Vec<f32> = kids.iter().map(|k| computed[k].font_size).collect();
+        let expected = [26.0, 32.0, 16.0, 15.6, 19.5, 19.2];
+        for (got, want) in sizes.iter().zip(expected) {
+            assert!((got - want).abs() < 0.01, "{sizes:?}");
+        }
     }
 
     #[test]
