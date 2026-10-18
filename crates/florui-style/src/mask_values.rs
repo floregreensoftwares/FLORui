@@ -9,7 +9,7 @@ use cssparser::{Parser, ParserInput};
 
 use crate::background::{BackgroundBox, BackgroundRepeat, BackgroundSize, MaskComposite, MaskMode};
 use crate::cascade::LengthPercentage;
-use crate::shape_function::parse_length;
+use crate::shape_function::{Units, parse_length};
 
 type Fail<'i> = cssparser::ParseError<'i, ()>;
 
@@ -92,34 +92,34 @@ pub(crate) fn parse_repeats(css: &str) -> Option<Vec<(BackgroundRepeat, Backgrou
     })
 }
 
-pub(crate) fn parse_sizes(css: &str, font_size: f32) -> Option<Vec<BackgroundSize>> {
+pub(crate) fn parse_sizes(css: &str, units: Units) -> Option<Vec<BackgroundSize>> {
     list(css, |p| {
         if let Ok(word) = p.try_parse(keyword) {
             return match &*word {
                 "cover" => Ok(BackgroundSize::Cover),
                 "contain" => Ok(BackgroundSize::Contain),
                 "auto" => {
-                    let height = axis(p, font_size)?;
+                    let height = axis(p, units)?;
                     Ok(BackgroundSize::Explicit(None, height))
                 }
                 _ => Err(p.new_custom_error(())),
             };
         }
-        let width = parse_length(p, font_size)?;
-        let height = axis(p, font_size)?;
+        let width = parse_length(p, units)?;
+        let height = axis(p, units)?;
         Ok(BackgroundSize::Explicit(Some(width), height))
     })
 }
 
 /// The optional second axis of a size: `auto` (or nothing) is `None`.
-fn axis<'i>(p: &mut Parser<'i, '_>, font_size: f32) -> Result<Option<LengthPercentage>, Fail<'i>> {
+fn axis<'i>(p: &mut Parser<'i, '_>, units: Units) -> Result<Option<LengthPercentage>, Fail<'i>> {
     if p.is_exhausted() {
         return Ok(None);
     }
     if p.try_parse(|p| p.expect_ident_matching("auto")).is_ok() {
         return Ok(None);
     }
-    parse_length(p, font_size).map(Some)
+    parse_length(p, units).map(Some)
 }
 
 /// One item of a position: a keyword or a length.
@@ -139,7 +139,7 @@ fn percent(fraction: f32) -> LengthPercentage {
 /// offset from their edge (`right 10px` is `100% - 10px`), as `background-position`.
 pub(crate) fn parse_positions(
     css: &str,
-    font_size: f32,
+    units: Units,
 ) -> Option<Vec<(LengthPercentage, LengthPercentage)>> {
     list(css, |p| {
         let mut items: Vec<Item> = Vec::new();
@@ -147,7 +147,7 @@ pub(crate) fn parse_positions(
             if let Ok(word) = p.try_parse(keyword) {
                 items.push(Item::Keyword(word));
             } else {
-                items.push(Item::Length(parse_length(p, font_size)?));
+                items.push(Item::Length(parse_length(p, units)?));
             }
         }
         position_of(items).ok_or_else(|| p.new_custom_error(()))

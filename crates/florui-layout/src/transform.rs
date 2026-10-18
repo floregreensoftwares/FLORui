@@ -307,7 +307,33 @@ pub fn resolve_transform(
         return Matrix4::IDENTITY;
     }
     let sf = f64::from(scale_factor);
-    let (width, height) = (f64::from(layout.width), f64::from(layout.height));
+    // The box `transform-origin` and the percentages of `translate` are of.
+    let (x, y, width, height) = match style.transform_box {
+        florui_style::TransformBox::Border => (
+            f64::from(x),
+            f64::from(y),
+            f64::from(layout.width),
+            f64::from(layout.height),
+        ),
+        florui_style::TransformBox::Content => {
+            let inset = |border: f32, padding: f32| (f64::from(border) + f64::from(padding)) * sf;
+            let (top, left) = (
+                inset(style.border.top.width, style.padding.top),
+                inset(style.border.left.width, style.padding.left),
+            );
+            let (bottom, right) = (
+                inset(style.border.bottom.width, style.padding.bottom),
+                inset(style.border.right.width, style.padding.right),
+            );
+            let (w, h) = (f64::from(layout.width), f64::from(layout.height));
+            (
+                f64::from(x) + left,
+                f64::from(y) + top,
+                (w - left - right).max(0.0),
+                (h - top - bottom).max(0.0),
+            )
+        }
+    };
     let length = |lp: florui_style::LengthPercentage, basis: f64| {
         f64::from(lp.length) * sf + f64::from(lp.percentage) * basis
     };
@@ -376,8 +402,8 @@ pub fn resolve_transform(
     }
 
     let (origin_x_lp, origin_y_lp) = style.transform_origin;
-    let origin_x = f64::from(x) + length(origin_x_lp, width);
-    let origin_y = f64::from(y) + length(origin_y_lp, height);
+    let origin_x = x + length(origin_x_lp, width);
+    let origin_y = y + length(origin_y_lp, height);
     let origin_z = f64::from(style.transform_origin_z) * sf;
     Matrix4::translate(origin_x, origin_y, origin_z)
         .after(list)

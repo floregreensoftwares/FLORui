@@ -116,13 +116,13 @@ fn reference_box(
             bl + style.padding.left * scale_factor,
         ),
         ReferenceBox::Margin => {
-            // An `auto` margin has no used value to read here and counts as zero.
-            let margin = |side: Option<f32>| side.unwrap_or(0.0) * scale_factor;
+            // What layout made of `margin`, `auto` and percentages included.
+            let used = layout.margin;
             let (mt, mr, mb, ml) = (
-                margin(style.margin.top),
-                margin(style.margin.right),
-                margin(style.margin.bottom),
-                margin(style.margin.left),
+                used.top * scale_factor,
+                used.right * scale_factor,
+                used.bottom * scale_factor,
+                used.left * scale_factor,
             );
             let grow = |(h, v): (f32, f32), dh: f32, dv: f32| {
                 if h <= 0.0 || v <= 0.0 {

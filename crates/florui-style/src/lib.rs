@@ -71,8 +71,9 @@ pub use cascade::{
     GlassQuality, GlassSpec, GridPlacement, GridTrackSize, ItemAlignment, LengthPercentage,
     LineHeight, ObjectFit, Outline, OutlineStyle, OverflowWrap, Position, Resize, SizeKeyword,
     SkipInk, TextAlign, TextCase, TextDecoration, TextIndent, TextOverflow, TextShadow,
-    TextTransform, TransformFunction, UnderlineOffset, UnderlinePosition, VerticalAlign, Viewport,
-    Visibility, WhiteSpaceCollapse, WordBreak, compute, compute_with_container_query_signature,
+    TextTransform, TransformBox, TransformFunction, UnderlineOffset, UnderlinePosition,
+    VerticalAlign, Viewport, Visibility, WhiteSpaceCollapse, WordBreak, compute,
+    compute_with_container_query_signature,
 };
 pub use clip::{ClipPath, ClipShape, PathSegment, ReferenceBox, ShapeRadius};
 pub use color::{ColorParseError, Rgba, parse_hex_color};
