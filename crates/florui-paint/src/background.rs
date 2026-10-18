@@ -6,7 +6,7 @@ use florui_style::{
     BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BackgroundSize, BorderSide,
     Edges, LengthPercentage, RoundedRect,
 };
-use tiny_skia::{FillRule, Mask, Pixmap, PixmapPaint, Transform};
+use tiny_skia::{FillRule, Mask, Pixmap, PixmapPaint, PremultipliedColorU8, Transform};
 
 use crate::gradient::{self, Shader};
 use crate::image_source;
@@ -47,7 +47,7 @@ impl Boxes {
             BackgroundBox::Padding => &self.padding,
             BackgroundBox::Content => &self.content,
             // Never an origin; a clip of it is handled where the layer is cut.
-            BackgroundBox::NoClip => &self.border,
+            BackgroundBox::NoClip | BackgroundBox::Text => &self.border,
         }
     }
 }
@@ -155,9 +155,16 @@ fn axis_tiles(
     }
 }
 
+/// Whether any of `layers` is clipped to the text of its box.
+pub(crate) fn clips_to_text(layers: &[BackgroundLayer]) -> bool {
+    layers.iter().any(|layer| layer.clip == BackgroundBox::Text)
+}
+
 /// Paints `layers` of one box, the first on top, over what is already there.
 /// Lengths in the layers are CSS pixels and are multiplied by `scale`; the
-/// boxes are already in painted pixels.
+/// boxes are already in painted pixels. `text` is how much of each pixel the
+/// glyphs of the box cover (its alpha), for the layers clipped to the text.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn paint_layers(
     buffer: &mut Surface,
     outline: &RoundedRect,
@@ -166,10 +173,23 @@ pub(crate) fn paint_layers(
     layers: &[BackgroundLayer],
     scale: f32,
     clip: Option<&Mask>,
+    text: Option<&Pixmap>,
 ) {
     let boxes = Boxes::new(outline, border, padding);
     for layer in layers.iter().rev() {
-        paint_layer(buffer, &boxes, layer, scale, clip);
+        if layer.clip != BackgroundBox::Text {
+            paint_layer(buffer, &boxes, layer, scale, clip);
+            continue;
+        }
+        if let Some(alone) = painted_alone(buffer, &boxes, layer, scale, text) {
+            draw_shifted(
+                &mut buffer.pixmap,
+                &alone.pixmap,
+                (0, 0),
+                &PixmapPaint::default(),
+                clip,
+            );
+        }
     }
 }
 
@@ -178,6 +198,23 @@ pub(crate) fn blends(layers: &[BackgroundLayer]) -> bool {
     layers
         .iter()
         .any(|layer| layer.blend != florui_style::BlendMode::Normal)
+}
+
+/// `layer` painted on a clear surface like `buffer`, cut to the glyphs when it
+/// is clipped to the text. `None` when it is and there is no text to cut it to.
+fn painted_alone(
+    buffer: &Surface,
+    boxes: &Boxes,
+    layer: &BackgroundLayer,
+    scale: f32,
+    text: Option<&Pixmap>,
+) -> Option<Surface> {
+    let mut alone = Surface::new(buffer.pixmap.width(), buffer.pixmap.height(), buffer.origin)?;
+    paint_layer(&mut alone, boxes, layer, scale, None);
+    if layer.clip == BackgroundBox::Text {
+        cut_to_text(&mut alone.pixmap, text?);
+    }
+    Some(alone)
 }
 
 /// Paints a box's background, the colour from `fill_color` and the `layers`
@@ -193,6 +230,7 @@ pub(crate) fn paint_blended(
     layers: &[BackgroundLayer],
     scale: f32,
     clip: Option<&Mask>,
+    text: Option<&Pixmap>,
     fill_color: &dyn Fn(&mut Surface),
 ) {
     let (width, height) = (buffer.pixmap.width(), buffer.pixmap.height());
@@ -201,20 +239,27 @@ pub(crate) fn paint_blended(
     };
     fill_color(&mut group);
     let boxes = Boxes::new(outline, border, padding);
-    for layer in layers.iter().rev() {
-        if layer.blend == florui_style::BlendMode::Normal {
+    let bottom = layers.len().saturating_sub(1);
+    for (index, layer) in layers.iter().enumerate().rev() {
+        // Chrome does not blend the bottom layer of a background clipped to the
+        // text with the colour under it: the layer is laid over it.
+        let blend = if layer.clip == BackgroundBox::Text && index == bottom {
+            florui_style::BlendMode::Normal
+        } else {
+            layer.blend
+        };
+        if blend == florui_style::BlendMode::Normal && layer.clip != BackgroundBox::Text {
             paint_layer(&mut group, &boxes, layer, scale, None);
             continue;
         }
-        let Some(mut single) = Surface::new(width, height, buffer.origin) else {
-            return;
+        let Some(alone) = painted_alone(buffer, &boxes, layer, scale, text) else {
+            continue;
         };
-        paint_layer(&mut single, &boxes, layer, scale, None);
         let paint = PixmapPaint {
-            blend_mode: crate::blend::to_tiny_skia(layer.blend),
+            blend_mode: crate::blend::to_tiny_skia(blend),
             ..Default::default()
         };
-        draw_shifted(&mut group.pixmap, &single.pixmap, (0, 0), &paint, None);
+        draw_shifted(&mut group.pixmap, &alone.pixmap, (0, 0), &paint, None);
     }
     draw_shifted(
         &mut buffer.pixmap,
@@ -734,6 +779,64 @@ fn corner_coverage(
     );
     mask.fill_path(&path, FillRule::Winding, true, to_area);
     Some(mask.data().to_vec())
+}
+/// Fills `color` into the box a `background-clip` other than `border-box` cuts
+/// the colour to: the padding or content box, or the glyphs (`text`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fill_clipped(
+    buffer: &mut Surface,
+    outline: &RoundedRect,
+    border: Edges<BorderSide>,
+    padding: Edges<f32>,
+    to: BackgroundBox,
+    color: florui_style::Rgba,
+    clip: Option<&Mask>,
+    text: Option<&Pixmap>,
+) {
+    let boxes = Boxes::new(outline, border, padding);
+    if to != BackgroundBox::Text {
+        crate::fill_rounded_rect(buffer, boxes.get(to), color, clip);
+        return;
+    }
+    let Some(text) = text else {
+        return;
+    };
+    let Some(mut alone) =
+        Surface::new(buffer.pixmap.width(), buffer.pixmap.height(), buffer.origin)
+    else {
+        return;
+    };
+    crate::fill_rounded_rect(&mut alone, outline, color, None);
+    cut_to_text(&mut alone.pixmap, text);
+    draw_shifted(
+        &mut buffer.pixmap,
+        &alone.pixmap,
+        (0, 0),
+        &PixmapPaint::default(),
+        clip,
+    );
+}
+
+/// Scales every pixel of `pixmap` by how much of it the glyphs in `text` cover.
+fn cut_to_text(pixmap: &mut Pixmap, text: &Pixmap) {
+    if (text.width(), text.height()) != (pixmap.width(), pixmap.height()) {
+        pixmap.fill(tiny_skia::Color::TRANSPARENT);
+        return;
+    }
+    for (pixel, glyph) in pixmap.pixels_mut().iter_mut().zip(text.pixels()) {
+        let cover = glyph.alpha();
+        if cover == 255 {
+            continue;
+        }
+        let scaled = |channel: u8| mul_div_255(channel, cover);
+        *pixel = PremultipliedColorU8::from_rgba(
+            scaled(pixel.red()),
+            scaled(pixel.green()),
+            scaled(pixel.blue()),
+            scaled(pixel.alpha()),
+        )
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
 }
 
 #[cfg(test)]
