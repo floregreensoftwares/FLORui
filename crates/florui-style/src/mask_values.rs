@@ -217,3 +217,31 @@ fn position_of(items: Vec<Item>) -> Option<(LengthPercentage, LengthPercentage)>
         _ => None,
     }
 }
+
+/// `background-blend-mode`: a blend mode per layer, which the engine's servo
+/// build does not know either.
+pub(crate) fn parse_blend_modes(css: &str) -> Option<Vec<crate::background::BlendMode>> {
+    use crate::background::BlendMode;
+    list(css, |p| {
+        Ok(match &*keyword(p)? {
+            "normal" => BlendMode::Normal,
+            "multiply" => BlendMode::Multiply,
+            "screen" => BlendMode::Screen,
+            "overlay" => BlendMode::Overlay,
+            "darken" => BlendMode::Darken,
+            "lighten" => BlendMode::Lighten,
+            "color-dodge" => BlendMode::ColorDodge,
+            "color-burn" => BlendMode::ColorBurn,
+            "hard-light" => BlendMode::HardLight,
+            "soft-light" => BlendMode::SoftLight,
+            "difference" => BlendMode::Difference,
+            "exclusion" => BlendMode::Exclusion,
+            "hue" => BlendMode::Hue,
+            "saturation" => BlendMode::Saturation,
+            "color" => BlendMode::Color,
+            "luminosity" => BlendMode::Luminosity,
+            "plus-lighter" => BlendMode::PlusLighter,
+            _ => return Err(p.new_custom_error(())),
+        })
+    })
+}

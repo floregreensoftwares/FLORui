@@ -49,6 +49,7 @@ pub(crate) const MIRRORED: &[&str] = &[
     "mask-origin",
     "mask-clip",
     "mask-composite",
+    "background-blend-mode",
 ];
 
 const GLOBAL_KEYWORDS: [&str; 5] = ["inherit", "initial", "unset", "revert", "revert-layer"];
@@ -140,7 +141,6 @@ fn scan<'i>(
     }
 }
 
-/// `mask` (a shorthand the engine's servo build lacks) and the `-webkit-` forms/// of the mask properties, which Chrome still accepts.fn is_mask_name(name: &str) -> bool {    [        "mask",        "-webkit-mask",        "-webkit-mask-image",        "-webkit-mask-size",        "-webkit-mask-position",        "-webkit-mask-repeat",        "-webkit-mask-origin",        "-webkit-mask-clip",        "-webkit-mask-composite",    ]    .iter()    .any(|mask| name.eq_ignore_ascii_case(mask))}
 /// `mask` (a shorthand the engine's servo build lacks) and the `-webkit-` forms
 /// of the mask properties, which Chrome still accepts.
 fn is_mask_name(name: &str) -> bool {
