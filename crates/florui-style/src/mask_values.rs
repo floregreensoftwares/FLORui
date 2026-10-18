@@ -245,3 +245,11 @@ pub(crate) fn parse_blend_modes(css: &str) -> Option<Vec<crate::background::Blen
         })
     })
 }
+
+/// `background-clip` as mirrored, which the engine's servo build cannot hold
+/// because of `text`: for each layer, whether it is clipped to the text.
+pub(crate) fn parse_text_clips(css: &str) -> Vec<bool> {
+    css.split(',')
+        .map(|layer| layer.trim().eq_ignore_ascii_case("text"))
+        .collect()
+}

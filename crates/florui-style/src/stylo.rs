@@ -1803,7 +1803,13 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
             .as_absolute()
             .map(to_absolute_rgba)
             .unwrap_or(color),
-        background_layers: to_background_layers(background, &text.color, background_blends(values)),
+        background_color_clip: to_background_color_clip(background, background_text_clips(values)),
+        background_layers: to_background_layers(
+            background,
+            &text.color,
+            background_blends(values),
+            background_text_clips(values),
+        ),
         color,
         width: to_optional_length(&position.width),
         height: to_optional_length(&position.height),
@@ -2871,6 +2877,35 @@ fn to_blend_mode(value: style::computed_values::mix_blend_mode::T) -> crate::Ble
     }
 }
 
+fn clip_box_of(
+    value: &style::properties::longhands::background_clip::computed_value::single_value::T,
+) -> crate::BackgroundBox {
+    use crate::BackgroundBox;
+    use style::properties::longhands::background_clip::computed_value::single_value::T;
+    match value {
+        T::BorderBox => BackgroundBox::Border,
+        T::PaddingBox => BackgroundBox::Padding,
+        T::ContentBox => BackgroundBox::Content,
+    }
+}
+
+/// The box `background-color` is cut to, which is the clip of the bottom layer
+/// (the last of the images, or the only one when there are none).
+fn to_background_color_clip(
+    background: &style::properties::style_structs::Background,
+    text_clips: Vec<bool>,
+) -> crate::BackgroundBox {
+    let clips = &background.background_clip.0;
+    let bottom = background.background_image.0.len().max(1) - 1;
+    let cycle = |len: usize| if len == 0 { 0 } else { bottom % len };
+    if text_clips.get(cycle(text_clips.len())).copied() == Some(true) {
+        return crate::BackgroundBox::Text;
+    }
+    clips
+        .get(cycle(clips.len()))
+        .map_or(crate::BackgroundBox::Border, clip_box_of)
+}
+
 /// The layers of `background-image`. The list is as long as the images are
 /// many; `background-size`, `-position`, `-repeat`, `-origin` and `-clip` are
 /// read cyclically against it, as CSS says. A `none` or `url()` image makes
@@ -2879,9 +2914,10 @@ fn to_background_layers(
     background: &style::properties::style_structs::Background,
     current: &style::color::AbsoluteColor,
     blends: Vec<crate::BlendMode>,
+    text_clips: Vec<bool>,
 ) -> Vec<crate::BackgroundLayer> {
     use crate::{BackgroundBox, BackgroundLayer};
-    use style::properties::longhands::{background_clip, background_origin};
+    use style::properties::longhands::background_origin;
 
     let images = &background.background_image.0;
     let sizes = &background.background_size.0;
@@ -2897,11 +2933,7 @@ fn to_background_layers(
         background_origin::computed_value::single_value::T::PaddingBox => BackgroundBox::Padding,
         background_origin::computed_value::single_value::T::ContentBox => BackgroundBox::Content,
     };
-    let clip_box = |value: &background_clip::computed_value::single_value::T| match value {
-        background_clip::computed_value::single_value::T::BorderBox => BackgroundBox::Border,
-        background_clip::computed_value::single_value::T::PaddingBox => BackgroundBox::Padding,
-        background_clip::computed_value::single_value::T::ContentBox => BackgroundBox::Content,
-    };
+    let clip_box = clip_box_of;
 
     images
         .iter()
@@ -2920,7 +2952,15 @@ fn to_background_layers(
                 position: (to_length_percentage(x), to_length_percentage(y)),
                 repeat: (to_repeat(repeat.0), to_repeat(repeat.1)),
                 origin: origin_box(origin),
-                clip: clip_box(clip),
+                clip: if text_clips
+                    .get(cycle(text_clips.len(), index))
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    BackgroundBox::Text
+                } else {
+                    clip_box(clip)
+                },
                 blend: blends
                     .get(cycle(blends.len(), index))
                     .copied()
@@ -2928,6 +2968,18 @@ fn to_background_layers(
             })
         })
         .collect()
+}
+
+/// Which layers `background-clip` cuts to the text, which the engine's servo
+/// build cannot hold, read back from the custom property that carries it when
+/// this element's own rules declare it.
+fn background_text_clips(values: &ComputedValues) -> Vec<bool> {
+    if !declares_mirrored(values, "background-clip") {
+        return Vec::new();
+    }
+    mirrored(values, "background-clip")
+        .map(|css| crate::mask_values::parse_text_clips(&css))
+        .unwrap_or_default()
 }
 
 /// `background-blend-mode`, which the engine's servo build lacks, read back from

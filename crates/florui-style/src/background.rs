@@ -115,6 +115,9 @@ pub enum BackgroundBox {
     Content,
     /// Only for `mask-clip`: the layer is not cut to any box.
     NoClip,
+    /// Only for `background-clip`: the layer shows through the glyphs of the
+    /// box's text and nowhere else.
+    Text,
 }
 
 /// A blend mode: how a color is mixed with what is behind it, for `mix-blend-mode`
