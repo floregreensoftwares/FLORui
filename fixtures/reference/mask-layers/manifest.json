@@ -1,0 +1,170 @@
+{
+    "id":  "mask-layers",
+    "description":  "mask-image layers: alpha and luminance, tiles with space and round, radial and conic, composite operators, the shorthand, and svg masks",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  540,
+                     "height_css_px":  370,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 540px; height: 370px; background-color: #ffffff; } .b { position: absolute; width: 100px; height: 50px; box-sizing: border-box; } .p0 { left: 20px; top: 20px; background-color: #d05040; mask-image: linear-gradient(to right, #000, transparent); } .p1 { left: 150px; top: 20px; background-color: #40a060; mask-image: linear-gradient(to right, #000, #fff); mask-mode: luminance; } .p2 { left: 280px; top: 20px; background-color: #4070d0; mask-image: linear-gradient(#000, transparent); mask-size: 20px 25px; } .p3 { left: 410px; top: 20px; background-color: #e0b030; mask-image: radial-gradient(circle at 50% 50%, #000 10px, transparent 30px); } .p4 { left: 20px; top: 110px; background-color: #a050c0; mask-image: conic-gradient(#000 25%, transparent 25% 50%, #000 50% 75%, transparent 75%); } .p5 { left: 150px; top: 110px; background-color: #30a0b0; mask-image: linear-gradient(#000, #000); mask-size: 30px 50px; mask-repeat: space no-repeat; } .p6 { left: 280px; top: 110px; background-color: #d05040; mask-image: linear-gradient(#000, #000); mask-size: 28px 50px; mask-repeat: round no-repeat; } .p7 { left: 410px; top: 110px; background-color: #40a060; mask-image: linear-gradient(#000, #000), radial-gradient(circle at 50% 50%, #000 20px, transparent 20px); mask-composite: subtract, add; } .p8 { left: 20px; top: 200px; background-color: #4070d0; mask-image: linear-gradient(to right, #000 60%, transparent 60%), radial-gradient(circle at 50% 50%, #000 22px, transparent 22px); mask-composite: intersect, add; } .p9 { left: 150px; top: 200px; background-color: #e0b030; mask-image: linear-gradient(to right, #000 60%, transparent 60%), radial-gradient(circle at 50% 50%, #000 22px, transparent 22px); mask-composite: exclude, add; } .p10 { left: 280px; top: 200px; background-color: #a050c0; mask: linear-gradient(#000, transparent) 0 0 / 50% 100% no-repeat, linear-gradient(#000, #000) 100% 0 / 20px 100% no-repeat; } .p11 { left: 410px; top: 200px; background-color: #30a0b0; mask-image: url(\"data:image/svg+xml;utf8,\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 width=\u002740\u0027 height=\u002720\u0027\u003e\u003crect width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23fff\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003c/svg\u003e\"); mask-size: 100% 100%; } .p12 { left: 20px; top: 290px; background-color: #d05040; mask-image: url(\"data:image/svg+xml;utf8,\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 width=\u002740\u0027 height=\u002720\u0027\u003e\u003crect width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23fff\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003c/svg\u003e\"); mask-size: 100% 100%; mask-mode: luminance; } .p13 { left: 150px; top: 290px; background-color: #40a060; mask-image: linear-gradient(#000, #000); mask-position: right 10px bottom 5px; mask-size: 30px 20px; mask-repeat: no-repeat; } .p14 { left: 280px; top: 290px; background-color: #4070d0; -webkit-mask-image: linear-gradient(to bottom, #000, transparent); -webkit-mask-size: 100% 100%; } .p15 { left: 410px; top: 290px; background-color: #e0b030; mask-image: none, linear-gradient(#000, transparent) ; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p0",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p1",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p2",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p3",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p4",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p5",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p6",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p7",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p8",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p9",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p10",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p11",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p12",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p13",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p14",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p15",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  0.3,
+                           "reason":  "Measured against Chromium 153 on Windows: 0.00% of the pixels differ by more than 3 levels of a channel and every box has the same bounding box (flat fills, because Chromium dithers gradients). It covers alpha and luminance masks, tiles with space and round, radial and conic masks, the four composite operators, the mask shorthand and its -webkit- forms and svg masks. With the masks ignored the same fixture measures 26.8%, so it fails.",
+                           "channel_tolerance":  3
+                       }
+}
