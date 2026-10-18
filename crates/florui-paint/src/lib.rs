@@ -3584,6 +3584,32 @@ fn paint_node(
 
         let background = style.map_or(Rgba::TRANSPARENT, |s| s.background_color);
         let blended_layers = style.filter(|s| shown && background::blends(&s.background_layers));
+        // Where the glyphs of the box and what is in it are, for a layer that
+        // is clipped to the text.
+        let text_cover = style
+            .filter(|s| {
+                shown
+                    && (background::clips_to_text(&s.background_layers)
+                        || s.background_color_clip == florui_style::BackgroundBox::Text)
+            })
+            .and_then(|_| text_coverage(buffer, arena, styles, layouts, font, node, scale_factor));
+        // `background-color` is cut to the clip of the bottom layer.
+        let color_clip = style.map_or(florui_style::BackgroundBox::Border, |s| {
+            s.background_color_clip
+        });
+        let color_padding = scaled_padding(
+            style.map_or(
+                florui_style::Edges {
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                },
+                |s| s.padding,
+            ),
+            scale_factor,
+        );
+        let color_cover = text_cover.as_ref().map(|cover| &cover.pixmap);
         if let Some(style) = blended_layers {
             let _span = florui_profile::span(florui_profile::Phase::RasterLayers);
             background::paint_blended(
@@ -3594,11 +3620,23 @@ fn paint_node(
                 &style.background_layers,
                 scale_factor,
                 clip,
+                text_cover.as_ref().map(|cover| &cover.pixmap),
                 &|group| {
                     if background.a == 0 {
                         return;
                     }
-                    if rounded {
+                    if color_clip != florui_style::BackgroundBox::Border {
+                        background::fill_clipped(
+                            group,
+                            &outline,
+                            border,
+                            color_padding,
+                            color_clip,
+                            background,
+                            None,
+                            color_cover,
+                        );
+                    } else if rounded {
                         fill_rounded_rect(group, &outline, background, None);
                     } else {
                         fill_rect(group, x, y, layout.width, layout.height, background, None);
@@ -3607,7 +3645,18 @@ fn paint_node(
             );
         } else if shown && background.a != 0 {
             let _span = florui_profile::span(florui_profile::Phase::RasterFill);
-            if rounded {
+            if color_clip != florui_style::BackgroundBox::Border {
+                background::fill_clipped(
+                    buffer,
+                    &outline,
+                    border,
+                    color_padding,
+                    color_clip,
+                    background,
+                    clip,
+                    color_cover,
+                );
+            } else if rounded {
                 fill_rounded_rect(buffer, &outline, background, clip);
             } else {
                 fill_rect(buffer, x, y, layout.width, layout.height, background, clip);
@@ -3628,6 +3677,7 @@ fn paint_node(
                 &style.background_layers,
                 scale_factor,
                 clip,
+                text_cover.as_ref().map(|cover| &cover.pixmap),
             );
         }
 
@@ -3984,7 +4034,16 @@ fn paint_node(
                     let origin = (x + at.x, y + at.y);
                     let (runs, cuts) =
                         inline_runs_for(font, style, &shaped, at.width / scale_factor);
-                    paint_inline_boxes(buffer, styles, &shaped, &cuts, origin, scale_factor, clip);
+                    paint_inline_boxes(
+                        buffer,
+                        styles,
+                        &shaped,
+                        &runs,
+                        &cuts,
+                        origin,
+                        scale_factor,
+                        clip,
+                    );
                     paint_inline_runs(
                         buffer,
                         styles,
@@ -4035,7 +4094,16 @@ fn paint_node(
                 let origin = (content_x + dx, content_y + dy);
                 let (runs, cuts) =
                     inline_runs_for(font, style, &shaped, content_width / scale_factor);
-                paint_inline_boxes(buffer, styles, &shaped, &cuts, origin, scale_factor, clip);
+                paint_inline_boxes(
+                    buffer,
+                    styles,
+                    &shaped,
+                    &runs,
+                    &cuts,
+                    origin,
+                    scale_factor,
+                    clip,
+                );
                 paint_inline_runs(
                     buffer,
                     styles,
@@ -5523,14 +5591,146 @@ fn paint_text(buffer: &mut Surface, font: &mut Font, params: TextPaint<'_>) {
     decorate(buffer, decoration::Phase::LineThrough);
 }
 
+/// Where the glyphs of `node` and of what is in it land, as the alpha of a clear
+/// surface like `buffer`: the box is painted again with nothing but its text,
+/// in opaque black whatever its colour, which is what `background-clip: text`
+/// cuts a background to.
+fn text_coverage(
+    buffer: &Surface,
+    arena: &Tree,
+    styles: &StyleMap,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    font: &mut Font,
+    node: NodeId,
+    scale_factor: f32,
+) -> Option<Surface> {
+    let mut cover = Surface::new(buffer.pixmap.width(), buffer.pixmap.height(), buffer.origin)?;
+    let mut text_styles = styles.clone();
+    let mut below = vec![node];
+    while let Some(id) = below.pop() {
+        if let Some(style) = text_styles.get_mut(&id) {
+            style.background_color = Rgba::TRANSPARENT;
+            style.background_layers.clear();
+            style.background_color_clip = florui_style::BackgroundBox::Border;
+            style.box_shadow.clear();
+            style.border_image = None;
+            for side in [
+                &mut style.border.top,
+                &mut style.border.right,
+                &mut style.border.bottom,
+                &mut style.border.left,
+            ] {
+                side.color = Rgba::TRANSPARENT;
+            }
+            style.outline.color = Rgba::TRANSPARENT;
+            style.text_shadow.clear();
+            style.text_decoration = Default::default();
+            style.color = Rgba::opaque(0, 0, 0);
+            style.backdrop_filter.clear();
+            style.glass = Default::default();
+            style.opacity = 1.0;
+            style.filter.clear();
+            style.mix_blend_mode = BlendMode::Normal;
+        }
+        below.extend_from_slice(arena.children(id));
+    }
+    paint_node(
+        &mut cover,
+        arena,
+        &text_styles,
+        layouts,
+        font,
+        node,
+        scale_factor,
+        None,
+        None,
+        None,
+    );
+    let content_clip = clip_for_children(arena, &text_styles, layouts, node, None, scale_factor);
+    let child_display = text_styles.get(&node).map(|s| s.display);
+    paint_nodes(
+        &mut cover,
+        arena,
+        &text_styles,
+        layouts,
+        font,
+        child_display,
+        arena.children(node),
+        scale_factor,
+        content_clip,
+        None,
+        None,
+    );
+    Some(cover)
+}
+
+/// The same for the glyphs of an inline element and the elements in it, in the
+/// lines of the context they flow in.
+fn inline_text_coverage(
+    buffer: &Surface,
+    inline: &florui_layout::InlineShaped,
+    runs: &[florui_text::ShapedRun],
+    element: usize,
+    (origin_x, origin_y): (f32, f32),
+    scale_factor: f32,
+) -> Option<Surface> {
+    let mut cover = Surface::new(buffer.pixmap.width(), buffer.pixmap.height(), buffer.origin)?;
+    let within = |mut run_element: usize| {
+        // Element `0` is the container, its own parent.
+        while run_element != element && run_element != 0 {
+            run_element = inline.parents[run_element];
+        }
+        run_element == element
+    };
+    let owned: Vec<florui_text::ShapedRun> = runs
+        .iter()
+        .filter(|run| within(run.element))
+        .cloned()
+        .collect();
+    paint_shaped_runs(
+        &mut cover,
+        &owned,
+        origin_x,
+        origin_y,
+        Rgba::opaque(0, 0, 0),
+        scale_factor,
+        None,
+    );
+    Some(cover)
+}
+
+/// The colour of an inline element's box, cut to the box its `background-clip` names.
+fn paint_inline_color(
+    buffer: &mut Surface,
+    (x, y, width, height): (f32, f32, f32, f32),
+    outline: &RoundedRect,
+    (border, padding): (
+        florui_style::Edges<florui_style::BorderSide>,
+        florui_style::Edges<f32>,
+    ),
+    (color, to): (Rgba, florui_style::BackgroundBox),
+    clip: Option<&Mask>,
+    text: Option<&Pixmap>,
+) {
+    if to != florui_style::BackgroundBox::Border {
+        background::fill_clipped(buffer, outline, border, padding, to, color, clip, text);
+    } else if outline.is_square() {
+        fill_rect(buffer, x, y, width, height, color, clip);
+    } else {
+        fill_rounded_rect(buffer, outline, color, clip);
+    }
+}
+
 /// What each inline element of `inline` draws behind its text: its background
 /// and border, one box for each line it appears on. A box that continues on
 /// the next line has no border, padding or rounded corners at that end, as CSS
 /// slices a box across lines.
+#[allow(clippy::too_many_arguments)]
 fn paint_inline_boxes(
     buffer: &mut Surface,
     styles: &StyleMap,
     inline: &florui_layout::InlineShaped,
+    runs: &[florui_text::ShapedRun],
     cuts: &[(u32, f32)],
     (origin_x, origin_y): (f32, f32),
     scale_factor: f32,
@@ -5585,6 +5785,20 @@ fn paint_inline_boxes(
         let height = (fragment.ascent + fragment.descent + above + below) * scale_factor;
         let outline = RoundedRect::new(x, y, width, height, &radius, scale_factor);
         let border = scaled_border(border, scale_factor);
+        let color_clip = style.background_color_clip;
+        let text_cover = (background::clips_to_text(&style.background_layers)
+            || color_clip == florui_style::BackgroundBox::Text)
+            .then(|| {
+                inline_text_coverage(
+                    buffer,
+                    inline,
+                    runs,
+                    fragment.element,
+                    (origin_x, origin_y),
+                    scale_factor,
+                )
+            })
+            .flatten();
         if background::blends(&style.background_layers) {
             let color = style.background_color;
             background::paint_blended(
@@ -5595,24 +5809,33 @@ fn paint_inline_boxes(
                 &style.background_layers,
                 scale_factor,
                 clip,
+                text_cover.as_ref().map(|cover| &cover.pixmap),
                 &|group| {
                     if color.a == 0 {
                         return;
                     }
-                    if outline.is_square() {
-                        fill_rect(group, x, y, width, height, color, None);
-                    } else {
-                        fill_rounded_rect(group, &outline, color, None);
-                    }
+                    paint_inline_color(
+                        group,
+                        (x, y, width, height),
+                        &outline,
+                        (border, scaled_padding(padding, scale_factor)),
+                        (color, color_clip),
+                        None,
+                        text_cover.as_ref().map(|cover| &cover.pixmap),
+                    );
                 },
             );
         } else {
             if style.background_color.a != 0 {
-                if outline.is_square() {
-                    fill_rect(buffer, x, y, width, height, style.background_color, clip);
-                } else {
-                    fill_rounded_rect(buffer, &outline, style.background_color, clip);
-                }
+                paint_inline_color(
+                    buffer,
+                    (x, y, width, height),
+                    &outline,
+                    (border, scaled_padding(padding, scale_factor)),
+                    (style.background_color, color_clip),
+                    clip,
+                    text_cover.as_ref().map(|cover| &cover.pixmap),
+                );
             }
             if !style.background_layers.is_empty() {
                 background::paint_layers(
@@ -5623,6 +5846,7 @@ fn paint_inline_boxes(
                     &style.background_layers,
                     scale_factor,
                     clip,
+                    text_cover.as_ref().map(|cover| &cover.pixmap),
                 );
             }
         }
@@ -12144,6 +12368,200 @@ mod tests {
         // blend does not reach the white page behind the box.
         assert_eq!(pixel_rgb(&canvas, 2, 2), WHITE);
         assert_eq!(pixel_rgb(&canvas, 35, 35), WHITE);
+    }
+
+    /// `inner` in a box with `declarations`, on a white page.
+    fn text_clipped(tree: &Element, css: &str) -> Canvas {
+        paint_text_css(tree, css, (260, 110))
+    }
+
+    fn assert_same_canvas(a: &Canvas, b: &Canvas, what: &str) {
+        let mut worst = 0u8;
+        for (x, y) in (0..110).flat_map(|y| (0..260).map(move |x| (x, y))) {
+            let (p, q) = (pixel_rgb(a, x, y), pixel_rgb(b, x, y));
+            for channel in 0..3 {
+                worst = worst.max(p[channel].abs_diff(q[channel]));
+            }
+        }
+        assert!(worst <= 2, "{what}: differs by {worst}");
+    }
+
+    #[test]
+    fn background_clip_text_shows_the_layer_where_the_glyphs_are() {
+        let flat = "linear-gradient(#ff0000, #ff0000)";
+        let font = "font-size: 64px; font-weight: 700; line-height: 80px; padding: 10px;";
+        // A block with text of its own: the same pixels as that text in the layer's colour.
+        let tree: Element = view! { <div class="t">"Mg"</div> };
+        let clipped = text_clipped(
+            &tree,
+            &format!(
+                ".t {{ {font} background-image: {flat}; -webkit-background-clip: text; color: transparent; }}"
+            ),
+        );
+        let plain = text_clipped(&tree, &format!(".t {{ {font} color: #ff0000; }}"));
+        assert_same_canvas(&clipped, &plain, "block");
+        let inked = (0..110)
+            .flat_map(|y| (0..260).map(move |x| (x, y)))
+            .filter(|&(x, y)| pixel_rgb(&clipped, x, y) != WHITE)
+            .count();
+        assert!(inked > 300, "the glyphs show: {inked} pixels");
+        // Without the clip the layer fills the whole box and the text is invisible.
+        let filled = text_clipped(
+            &tree,
+            &format!(".t {{ {font} background-image: {flat}; color: transparent; }}"),
+        );
+        assert_eq!(pixel_rgb(&filled, 100, 20), [255, 0, 0]);
+        assert_eq!(pixel_rgb(&clipped, 100, 20), pixel_rgb(&plain, 100, 20));
+        // Children's text counts, and what is not text does not.
+        let nested: Element = view! { <div class="t"><span class="s">"Mg"</span></div> };
+        let through = text_clipped(
+            &nested,
+            &format!(
+                ".t {{ {font} background-image: {flat}; background-clip: text; color: transparent; }}"
+            ),
+        );
+        assert_same_canvas(&through, &plain, "children");
+    }
+
+    #[test]
+    fn background_clip_text_on_an_inline_element_cuts_to_its_own_glyphs() {
+        let flat = "linear-gradient(#ff0000, #ff0000)";
+        let font = "font-size: 48px; font-weight: 700; line-height: 70px;";
+        let tree: Element = view! { <p class="p">"ab "<span class="s">"Mg"</span>" cd"</p> };
+        let clipped = text_clipped(
+            &tree,
+            &format!(
+                ".p {{ margin: 0; padding: 10px; {font} color: #0000ff; }} \
+                 .s {{ background-image: {flat}; -webkit-background-clip: text; color: transparent; }}"
+            ),
+        );
+        // The same line with the span's text just in red.
+        let plain = text_clipped(
+            &tree,
+            &format!(
+                ".p {{ margin: 0; padding: 10px; {font} color: #0000ff; }} .s {{ color: #ff0000; }}"
+            ),
+        );
+        assert_same_canvas(&clipped, &plain, "inline");
+    }
+
+    #[test]
+    fn background_clip_text_on_an_inline_element_reaches_the_elements_in_it() {
+        let flat = "linear-gradient(#ff0000, #ff0000)";
+        let font = "font-size: 48px; font-weight: 700; line-height: 70px;";
+        let tree: Element =
+            view! { <p class="p">"ab "<span class="s"><span class="n">"Mg"</span></span>" cd"</p> };
+        let clipped = text_clipped(
+            &tree,
+            &format!(
+                ".p {{ margin: 0; padding: 10px; {font} color: #0000ff; }} \
+                 .s {{ background-image: {flat}; background-clip: text; color: transparent; }} \
+                 .n {{ font-style: normal; }}"
+            ),
+        );
+        let plain = text_clipped(
+            &tree,
+            &format!(
+                ".p {{ margin: 0; padding: 10px; {font} color: #0000ff; }} .s {{ color: #ff0000; }} \
+                 .n {{ font-style: normal; }}"
+            ),
+        );
+        assert_same_canvas(&clipped, &plain, "nested inline");
+    }
+
+    #[test]
+    fn background_clip_text_ignores_the_opacity_of_what_is_in_the_box() {
+        let flat = "linear-gradient(#ff0000, #ff0000)";
+        let font = "font-size: 64px; font-weight: 700; line-height: 80px; padding: 10px;";
+        let tree: Element = view! { <div class="t"><span class="s">"Mg"</span></div> };
+        let faded = text_clipped(
+            &tree,
+            &format!(
+                ".t {{ {font} background-image: {flat}; background-clip: text; color: transparent; }} \
+                 .s {{ opacity: 0.3; filter: blur(0px); }}"
+            ),
+        );
+        let plain = text_clipped(&tree, &format!(".t {{ {font} color: #ff0000; }}"));
+        let inside = (0..110)
+            .flat_map(|y| (0..260).map(move |x| (x, y)))
+            .find(|&(x, y)| pixel_rgb(&plain, x, y) == [255, 0, 0])
+            .unwrap();
+        assert_eq!(pixel_rgb(&faded, inside.0, inside.1), [255, 0, 0]);
+    }
+    #[test]
+    fn background_clip_text_follows_the_shorthand_and_blend_modes() {
+        let flat = "linear-gradient(#ff0000, #ff0000)";
+        let font = "font-size: 64px; font-weight: 700; line-height: 80px; padding: 10px;";
+        let tree: Element = view! { <div class="t">"Mg"</div> };
+        let plain = text_clipped(&tree, &format!(".t {{ {font} color: #ff0000; }}"));
+        let shorthand = text_clipped(
+            &tree,
+            &format!(".t {{ {font} background: {flat} text; color: transparent; }}"),
+        );
+        assert_same_canvas(&shorthand, &plain, "shorthand");
+        // A text layer blends with what is under it, which is the layer below and
+        // the colour (Chrome 153: the colour, the 50% green over it, then the red
+        // multiplied is rgb(52, 60, 32)).
+        let multiplied = text_clipped(
+            &tree,
+            &format!(
+                ".t {{ {font} color: transparent; background-color: #8080ff; \
+                 background-image: linear-gradient(rgb(208, 80, 64), rgb(208, 80, 64)), \
+                 linear-gradient(rgba(0, 255, 0, 0.5), rgba(0, 255, 0, 0.5)); \
+                 background-clip: text; background-blend-mode: multiply, normal; }}"
+            ),
+        );
+        let inside = (0..110)
+            .flat_map(|y| (0..260).map(move |x| (x, y)))
+            .find(|&(x, y)| pixel_rgb(&plain, x, y) == [255, 0, 0])
+            .unwrap();
+        let got = pixel_rgb(&multiplied, inside.0, inside.1);
+        for (channel, chrome) in [52u8, 60, 32].into_iter().enumerate() {
+            assert!(got[channel].abs_diff(chrome) <= 2, "got {got:?}");
+        }
+        assert_eq!(pixel_rgb(&multiplied, 2, 2), WHITE);
+        // The bottom layer is laid over the colour, not blended with it.
+        let bottom = text_clipped(
+            &tree,
+            &format!(
+                ".t {{ {font} color: transparent; background-color: #8080ff; \
+                 background-image: linear-gradient(rgba(208, 80, 64, 0.5), rgba(208, 80, 64, 0.5)); \
+                 background-clip: text; background-blend-mode: multiply; }}"
+            ),
+        );
+        let got = pixel_rgb(&bottom, inside.0, inside.1);
+        for (channel, chrome) in [168u8, 104, 159].into_iter().enumerate() {
+            assert!(got[channel].abs_diff(chrome) <= 2, "got {got:?}");
+        }
+    }
+
+    #[test]
+    fn the_colour_follows_the_clip_of_the_bottom_layer() {
+        let tree: Element = view! { <div class="t" /> };
+        let paint = |declarations: &str| {
+            text_clipped(
+                &tree,
+                &format!(
+                    ".t {{ width: 40px; height: 20px; border: 10px solid transparent; padding: 10px; \
+                     background-color: #ff0000; {declarations} }}"
+                ),
+            )
+        };
+        let border = paint("");
+        assert_eq!(pixel_rgb(&border, 5, 30), [255, 0, 0]);
+        let padding = paint("background-clip: padding-box;");
+        assert_eq!(pixel_rgb(&padding, 5, 30), WHITE);
+        assert_eq!(pixel_rgb(&padding, 15, 30), [255, 0, 0]);
+        let content = paint("background-clip: content-box;");
+        assert_eq!(pixel_rgb(&content, 15, 30), WHITE);
+        assert_eq!(pixel_rgb(&content, 25, 30), [255, 0, 0]);
+        // The bottom layer's clip decides, not the top one's.
+        let layered = paint(
+            "background-image: linear-gradient(#00ff00, #00ff00), linear-gradient(#0000ff, #0000ff); \
+             background-clip: border-box, padding-box;",
+        );
+        assert_eq!(pixel_rgb(&layered, 5, 30), [0, 255, 0]);
+        assert_eq!(pixel_rgb(&layered, 15, 30), [0, 255, 0]);
     }
     #[test]
     fn layers_combine_by_their_composite_operator() {

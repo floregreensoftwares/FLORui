@@ -50,6 +50,7 @@ pub(crate) fn apply_mask(
             std::slice::from_ref(&layer.layer),
             scale_factor,
             None,
+            None,
         );
         let source = coverage(&surface.pixmap, layer.mode);
         // The bottom layer has nothing to combine with: its operator is not used.
