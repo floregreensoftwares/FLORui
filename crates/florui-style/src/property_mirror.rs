@@ -42,6 +42,13 @@ pub(crate) const MIRRORED: &[&str] = &[
     "text-underline-position",
     "text-decoration-skip-ink",
     "clip-path",
+    "mask-mode",
+    "mask-repeat",
+    "mask-position",
+    "mask-size",
+    "mask-origin",
+    "mask-clip",
+    "mask-composite",
 ];
 
 const GLOBAL_KEYWORDS: [&str; 5] = ["inherit", "initial", "unset", "revert", "revert-layer"];
@@ -71,6 +78,7 @@ fn mentions(css: &str) -> bool {
     let lower = css.to_ascii_lowercase();
     lower.contains("font-variant")
         || lower.contains("text-decoration")
+        || lower.contains("mask")
         || MIRRORED.iter().any(|name| lower.contains(name))
 }
 
@@ -132,9 +140,29 @@ fn scan<'i>(
     }
 }
 
+/// `mask` (a shorthand the engine's servo build lacks) and the `-webkit-` forms/// of the mask properties, which Chrome still accepts.fn is_mask_name(name: &str) -> bool {    [        "mask",        "-webkit-mask",        "-webkit-mask-image",        "-webkit-mask-size",        "-webkit-mask-position",        "-webkit-mask-repeat",        "-webkit-mask-origin",        "-webkit-mask-clip",        "-webkit-mask-composite",    ]    .iter()    .any(|mask| name.eq_ignore_ascii_case(mask))}
+/// `mask` (a shorthand the engine's servo build lacks) and the `-webkit-` forms
+/// of the mask properties, which Chrome still accepts.
+fn is_mask_name(name: &str) -> bool {
+    [
+        "mask",
+        "-webkit-mask",
+        "-webkit-mask-image",
+        "-webkit-mask-size",
+        "-webkit-mask-position",
+        "-webkit-mask-repeat",
+        "-webkit-mask-origin",
+        "-webkit-mask-clip",
+        "-webkit-mask-composite",
+    ]
+    .iter()
+    .any(|mask| name.eq_ignore_ascii_case(mask))
+}
+
 fn is_handled(name: &str) -> bool {
     name.eq_ignore_ascii_case("font-variant")
         || name.eq_ignore_ascii_case("text-decoration")
+        || is_mask_name(name)
         || MIRRORED
             .iter()
             .any(|mirrored| name.eq_ignore_ascii_case(mirrored))
@@ -229,6 +257,7 @@ fn expand(name: &str, value: &str, important: &str) -> Option<String> {
         "font-variant" => expand_font_variant(value, important),
         "text-decoration" => expand_text_decoration(value, important),
         "clip-path" => Some(expand_clip_path(value, important)),
+        _ if is_mask_name(name) => expand_mask(name, value, important),
         _ => Some(format!("{}: {value}{important}", mirror_name(name))),
     }
 }
@@ -490,6 +519,248 @@ fn expand_clip_path(value: &str, important: &str) -> String {
     } else {
         format!("clip-path: {value}{important}; {mirror}: initial{important}")
     }
+}
+
+/// `mask` and its `-webkit-` forms: the engine's servo build knows `mask-image`
+/// only, so the others are written as the mirrored custom properties
+/// [`crate::mask_values`] reads. The shorthand is split into its layers here,
+/// each longhand getting the whole list (an omitted part is its initial value),
+/// as a browser's own shorthand resets what it does not name.
+fn expand_mask(name: &str, value: &str, important: &str) -> Option<String> {
+    let longhand = name.strip_prefix("-webkit-").unwrap_or(name);
+    let mirror = |what: &str, text: &str| format!("{}: {text}{important}", mirror_name(what));
+    match longhand {
+        "mask" => expand_mask_shorthand(value, important),
+        "mask-image" => Some(format!("mask-image: {value}{important}")),
+        "mask-composite" => {
+            // The prefixed form names the operators the way canvas does.
+            let text = value
+                .split(',')
+                .map(|word| match word.trim().to_ascii_lowercase().as_str() {
+                    "source-over" => "add".to_owned(),
+                    "source-out" => "subtract".to_owned(),
+                    "source-in" => "intersect".to_owned(),
+                    "xor" => "exclude".to_owned(),
+                    other => other.to_owned(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(mirror("mask-composite", &text))
+        }
+        "mask-origin" | "mask-clip" => {
+            // The prefixed form also takes `border`, `padding` and `content`.
+            let text = value
+                .split(',')
+                .map(|word| match word.trim().to_ascii_lowercase().as_str() {
+                    "border" => "border-box".to_owned(),
+                    "padding" => "padding-box".to_owned(),
+                    "content" => "content-box".to_owned(),
+                    other => other.to_owned(),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(mirror(longhand, &text))
+        }
+        _ => Some(mirror(longhand, value)),
+    }
+}
+
+/// Puts a space around every top-level `/`, so it is a word of its own.
+fn space_slashes(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 8);
+    let (mut depth, mut quote) = (0usize, None::<char>);
+    for c in value.chars() {
+        match (c, quote) {
+            ('"' | '\'', None) => quote = Some(c),
+            (q, Some(open)) if q == open => quote = None,
+            ('(', None) => depth += 1,
+            (')', None) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        if c == '/' && depth == 0 && quote.is_none() {
+            out.push_str(" / ");
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Splits at the top-level commas.
+fn split_commas(value: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let (mut depth, mut quote, mut start) = (0usize, None::<char>, 0usize);
+    for (index, c) in value.char_indices() {
+        match (c, quote) {
+            ('"' | '\'', None) => quote = Some(c),
+            (q, Some(open)) if q == open => quote = None,
+            ('(', None) => depth += 1,
+            (')', None) => depth = depth.saturating_sub(1),
+            (',', None) if depth == 0 => {
+                out.push(&value[start..index]);
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&value[start..]);
+    out
+}
+
+fn expand_mask_shorthand(value: &str, important: &str) -> Option<String> {
+    let value = value.trim();
+    if is_global(value) {
+        // A custom property that is `unset` inherits, which the property does not.
+        let mirrored = if value.eq_ignore_ascii_case("unset") {
+            "initial"
+        } else {
+            value
+        };
+        let mut out = format!("mask-image: {value}{important}");
+        for what in [
+            "mask-mode",
+            "mask-repeat",
+            "mask-position",
+            "mask-size",
+            "mask-origin",
+            "mask-clip",
+            "mask-composite",
+        ] {
+            out.push_str(&format!("; {}: {mirrored}{important}", mirror_name(what)));
+        }
+        return Some(out);
+    }
+    #[derive(Default)]
+    struct Layer {
+        image: Option<String>,
+        position: Vec<String>,
+        size: Vec<String>,
+        repeat: Vec<String>,
+        boxes: Vec<String>,
+        composite: Option<String>,
+        mode: Option<String>,
+    }
+    let mut layers = Vec::new();
+    for text in split_commas(value) {
+        let spaced = space_slashes(text);
+        let mut layer = Layer::default();
+        let mut in_size = false;
+        for word in words(&spaced) {
+            let lower = word.to_ascii_lowercase();
+            let numeric = word
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | '+' | '-'))
+                || ["calc(", "min(", "max(", "clamp("]
+                    .iter()
+                    .any(|f| lower.starts_with(f));
+            let is_function = lower.contains('(') && lower.ends_with(')');
+            match lower.as_str() {
+                "/" if !in_size && !layer.position.is_empty() => in_size = true,
+                "none" => {
+                    if layer.image.replace("none".to_owned()).is_some() {
+                        return None;
+                    }
+                }
+                "left" | "right" | "top" | "bottom" | "center" if !in_size => {
+                    layer.position.push(lower)
+                }
+                "auto" | "cover" | "contain" if in_size => layer.size.push(lower),
+                _ if numeric && in_size => layer.size.push(word.to_owned()),
+                _ if numeric => layer.position.push(word.to_owned()),
+                "repeat-x" | "repeat-y" | "repeat" | "space" | "round" | "no-repeat" => {
+                    in_size = false;
+                    layer.repeat.push(lower)
+                }
+                "border-box" | "padding-box" | "content-box" | "margin-box" | "fill-box"
+                | "stroke-box" | "view-box" | "no-clip" => {
+                    in_size = false;
+                    layer.boxes.push(lower)
+                }
+                "add" | "subtract" | "intersect" | "exclude" => {
+                    if layer.composite.replace(lower).is_some() {
+                        return None;
+                    }
+                }
+                "alpha" | "luminance" | "match-source" => {
+                    if layer.mode.replace(lower).is_some() {
+                        return None;
+                    }
+                }
+                _ if is_function => {
+                    in_size = false;
+                    if layer.image.replace(word.to_owned()).is_some() {
+                        return None;
+                    }
+                }
+                _ => return None,
+            }
+        }
+        if layer.size.len() > 2 || layer.repeat.len() > 2 || layer.boxes.len() > 2 {
+            return None;
+        }
+        layers.push(layer);
+    }
+    let join =
+        |each: &dyn Fn(&Layer) -> String| layers.iter().map(each).collect::<Vec<_>>().join(", ");
+    let or = |words: &[String], initial: &str| {
+        if words.is_empty() {
+            initial.to_owned()
+        } else {
+            words.join(" ")
+        }
+    };
+    let origin = |l: &Layer| {
+        l.boxes
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "border-box".into())
+    };
+    let clip = |l: &Layer| match l.boxes.as_slice() {
+        [] => "border-box".into(),
+        [one] if one != "no-clip" => one.clone(),
+        [one] => one.clone(),
+        [_, second] => second.clone(),
+        _ => unreachable!("at most two boxes"),
+    };
+    // `no-clip` alone is a clip; as the first of two it is not valid.
+    if layers
+        .iter()
+        .any(|l| l.boxes.len() == 2 && l.boxes[0] == "no-clip")
+    {
+        return None;
+    }
+    let mut out = format!(
+        "mask-image: {}{important}",
+        join(&|l| l.image.clone().unwrap_or_else(|| "none".into()))
+    );
+    let mut push = |what: &str, text: String| {
+        out.push_str(&format!("; {}: {text}{important}", mirror_name(what)));
+    };
+    push(
+        "mask-mode",
+        join(&|l| l.mode.clone().unwrap_or_else(|| "match-source".into())),
+    );
+    push("mask-repeat", join(&|l| or(&l.repeat, "repeat")));
+    push("mask-position", join(&|l| or(&l.position, "0% 0%")));
+    push("mask-size", join(&|l| or(&l.size, "auto")));
+    push(
+        "mask-origin",
+        join(&|l| {
+            let origin = origin(l);
+            if origin == "no-clip" {
+                "border-box".into()
+            } else {
+                origin
+            }
+        }),
+    );
+    push("mask-clip", join(&clip));
+    push(
+        "mask-composite",
+        join(&|l| l.composite.clone().unwrap_or_else(|| "add".into())),
+    );
+    Some(out)
 }
 
 #[cfg(test)]

@@ -199,7 +199,10 @@ fn parse_angle<'i>(p: &mut Parser<'i, '_>) -> Result<f32, Fail<'i>> {
 }
 
 /// One `<length-percentage>`.
-fn parse_length<'i>(p: &mut Parser<'i, '_>, font_size: f32) -> Result<LengthPercentage, Fail<'i>> {
+pub(crate) fn parse_length<'i>(
+    p: &mut Parser<'i, '_>,
+    font_size: f32,
+) -> Result<LengthPercentage, Fail<'i>> {
     let token = p.next()?.clone();
     match token {
         Token::Function(name) if name.eq_ignore_ascii_case("calc") => {

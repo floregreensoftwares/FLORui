@@ -113,6 +113,8 @@ pub enum BackgroundBox {
     Border,
     Padding,
     Content,
+    /// Only for `mask-clip`: the layer is not cut to any box.
+    NoClip,
 }
 
 /// One layer of `background-image`, with the properties that go with it.
@@ -126,4 +128,39 @@ pub struct BackgroundLayer {
     pub repeat: (BackgroundRepeat, BackgroundRepeat),
     pub origin: BackgroundBox,
     pub clip: BackgroundBox,
+}
+
+/// How a mask layer combines with the layers below it (`mask-composite`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskComposite {
+    /// Over the layers below.
+    #[default]
+    Add,
+    /// Where the layers below are not.
+    Subtract,
+    /// Only where the layers below are as well.
+    Intersect,
+    /// Where one of the two is, not both.
+    Exclude,
+}
+
+/// What of a mask layer's pixels is the mask (`mask-mode`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskMode {
+    /// The alpha of an image or a gradient.
+    #[default]
+    MatchSource,
+    Alpha,
+    /// The luminance of the color, times its alpha.
+    Luminance,
+}
+
+/// One layer of `mask-image` with the properties that go with it: placed,
+/// sized, repeated and cut as a background layer is. The box of `mask-clip:
+/// margin-box` (like `mask-origin`'s) is the border box, as it is in Chrome.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MaskLayer {
+    pub layer: BackgroundLayer,
+    pub composite: MaskComposite,
+    pub mode: MaskMode,
 }
