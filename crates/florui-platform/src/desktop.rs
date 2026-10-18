@@ -627,6 +627,7 @@ pub(crate) fn scale_layouts(
                     y: layout.y * factor,
                     width: layout.width * factor,
                     height: layout.height * factor,
+                    margin: florui_layout::BoxMargin::ZERO,
                 },
             )
         })
@@ -2859,6 +2860,7 @@ mod tests {
                 y: 20.0,
                 width: 100.0,
                 height: 50.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         let scaled = scale_layouts(&layouts, 1.0);
@@ -2875,6 +2877,7 @@ mod tests {
                 y: 20.0,
                 width: 100.0,
                 height: 50.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         let scaled = scale_layouts(&layouts, 2.0);
@@ -2885,6 +2888,7 @@ mod tests {
                 y: 40.0,
                 width: 200.0,
                 height: 100.0,
+                margin: florui_layout::BoxMargin::ZERO,
             }
         );
     }
@@ -2899,6 +2903,7 @@ mod tests {
                 y: 0.0,
                 width: 1.0,
                 height: 1.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         layouts.insert(
@@ -2908,6 +2913,7 @@ mod tests {
                 y: 0.0,
                 width: 1.0,
                 height: 1.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         let scaled = scale_layouts(&layouts, 1.5);

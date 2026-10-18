@@ -13,6 +13,7 @@
 //! once every slot has a stable address, so the handle never needs a
 //! second reference back to any shared context.
 
+use crate::shape_function::Units;
 use crate::style_map::StyleMap;
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -1448,6 +1449,8 @@ fn style_node<'t>(
         thread_local,
     };
     let styles = resolve_sharing_styles(&mut context, target);
+    let viewport = shared.stylist.device().au_viewport_size();
+    let viewport_px = (viewport.width.to_f32_px(), viewport.height.to_f32_px());
 
     // Nothing here starts or samples a transition/animation; real Servo
     // does that in a step its traversal driver runs after cascading
@@ -1476,12 +1479,14 @@ fn style_node<'t>(
     };
 
     let style = if has_active_animation && !timeline.should_suppress_animations() {
-        std::sync::Arc::new(to_computed_style(&final_values))
+        std::sync::Arc::new(to_computed_style(&final_values, viewport_px))
     } else {
         std::sync::Arc::clone(
             converted
                 .entry(&*primary as *const ComputedValues)
-                .or_insert_with(|| std::sync::Arc::new(to_computed_style(&final_values))),
+                .or_insert_with(|| {
+                    std::sync::Arc::new(to_computed_style(&final_values, viewport_px))
+                }),
         )
     };
     // `primary` (the raw cascade result), not `final_values` (already
@@ -1777,7 +1782,7 @@ fn splice_animation_declarations<'n>(
     .0
 }
 
-fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
+fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> ComputedStyle {
     let background = values.get_background();
     let text = values.get_inherited_text();
     let position = values.get_position();
@@ -1947,6 +1952,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         transform_origin_z: box_style.transform_origin.depth.px(),
         perspective: to_perspective(&box_style.perspective),
         perspective_origin: to_object_position(&box_style.perspective_origin),
+        transform_box: to_transform_box(values),
         preserve_3d: matches!(
             box_style.transform_style,
             style::values::computed::TransformStyle::Preserve3d
@@ -1955,8 +1961,8 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
             box_style.backface_visibility,
             style::computed_values::backface_visibility::T::Hidden
         ),
-        clip_path: to_clip_path_with_shape(values, font_size_px),
-        mask: to_mask_layers(values, &text.color, font_size_px),
+        clip_path: to_clip_path_with_shape(values, Units::new(font_size_px, viewport_px)),
+        mask: to_mask_layers(values, &text.color, Units::new(font_size_px, viewport_px)),
         mix_blend_mode: to_blend_mode(effects.mix_blend_mode),
         isolate: matches!(
             box_style.isolation,
@@ -2375,7 +2381,7 @@ fn to_filter(
 fn to_mask_layers(
     values: &ComputedValues,
     current: &style::color::AbsoluteColor,
-    font_size_px: f32,
+    units: Units,
 ) -> Vec<crate::MaskLayer> {
     use crate::mask_values::{
         parse_boxes, parse_composites, parse_modes, parse_positions, parse_repeats, parse_sizes,
@@ -2401,8 +2407,8 @@ fn to_mask_layers(
     };
     let modes = read("mask-mode").and_then(|css| parse_modes(&css));
     let repeats = read("mask-repeat").and_then(|css| parse_repeats(&css));
-    let positions = read("mask-position").and_then(|css| parse_positions(&css, font_size_px));
-    let sizes = read("mask-size").and_then(|css| parse_sizes(&css, font_size_px));
+    let positions = read("mask-position").and_then(|css| parse_positions(&css, units));
+    let sizes = read("mask-size").and_then(|css| parse_sizes(&css, units));
     let origins = read("mask-origin").and_then(|css| parse_boxes(&css, false));
     let clips = read("mask-clip").and_then(|css| parse_boxes(&css, true));
     let composites = read("mask-composite").and_then(|css| parse_composites(&css));
@@ -2441,12 +2447,12 @@ fn to_mask_layers(
 /// `clip-path`, with the `shape()` function the engine does not accept read back
 /// from the custom property that carries it (only when this very element's rules
 /// declare it, since a custom property inherits and `clip-path` does not).
-fn to_clip_path_with_shape(values: &ComputedValues, font_size_px: f32) -> ClipPath {
+fn to_clip_path_with_shape(values: &ComputedValues, units: Units) -> ClipPath {
     let clip_path = to_clip_path(&values.get_svg().clip_path);
     if clip_path == ClipPath::None
         && declares_mirrored(values, "clip-path")
         && let Some(css) = mirrored(values, "clip-path")
-        && let Some(shape) = crate::shape_function::parse_clip_path(&css, font_size_px)
+        && let Some(shape) = crate::shape_function::parse_clip_path(&css, units)
     {
         return shape;
     }
@@ -2968,6 +2974,21 @@ fn to_background_layers(
             })
         })
         .collect()
+}
+
+/// `transform-box`, which the engine's servo build lacks, read back from the
+/// custom property that carries it when this element's own rules declare it.
+fn to_transform_box(values: &ComputedValues) -> crate::TransformBox {
+    if !declares_mirrored(values, "transform-box") {
+        return crate::TransformBox::Border;
+    }
+    match mirrored(values, "transform-box")
+        .map(|css| css.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("content-box" | "fill-box") => crate::TransformBox::Content,
+        _ => crate::TransformBox::Border,
+    }
 }
 
 /// Which layers `background-clip` cuts to the text, which the engine's servo

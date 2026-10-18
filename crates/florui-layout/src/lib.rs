@@ -88,6 +88,25 @@ const RECURSION_RED_ZONE: usize = 8 * 1024 * 1024;
 /// picked arbitrarily.
 const RECURSION_STACK_SIZE: usize = 64 * 1024 * 1024;
 
+/// The used margins of a box, in CSS pixels: what `margin` came to once layout
+/// resolved `auto` and percentages.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct BoxMargin {
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub left: f32,
+}
+
+impl BoxMargin {
+    pub const ZERO: Self = Self {
+        top: 0.0,
+        right: 0.0,
+        bottom: 0.0,
+        left: 0.0,
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoxLayout {
     /// Relative to the parent's content box (`(0, 0)` for a root).
@@ -95,6 +114,8 @@ pub struct BoxLayout {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+    /// The margins the box ended up with; `auto` is resolved here.
+    pub margin: BoxMargin,
 }
 
 /// A node's real scrollable content extent — its reachable size along each
@@ -1494,6 +1515,12 @@ fn collect_layouts(
                 y: layout.location.y,
                 width: layout.size.width,
                 height: layout.size.height,
+                margin: BoxMargin {
+                    top: layout.margin.top,
+                    right: layout.margin.right,
+                    bottom: layout.margin.bottom,
+                    left: layout.margin.left,
+                },
             },
         );
         content_extents.insert(
@@ -1524,6 +1551,7 @@ fn collect_layouts(
                     y: 0.0,
                     width: 0.0,
                     height: 0.0,
+                    margin: BoxMargin::ZERO,
                 });
                 content_extents.entry(node).or_insert(ContentExtent {
                     width: 0.0,
@@ -1609,6 +1637,7 @@ fn collect_layouts(
                     y: ry,
                     width: x1 - x0,
                     height: y1 - y0,
+                    margin: BoxMargin::ZERO,
                 },
             );
             // An element on several lines is hit only inside its piece of each.
@@ -1621,6 +1650,7 @@ fn collect_layouts(
                             y: piece.1 - y0,
                             width: piece.2 - piece.0,
                             height: piece.3 - piece.1,
+                            margin: BoxMargin::ZERO,
                         },
                     );
                 }
@@ -1670,6 +1700,7 @@ fn collect_layouts(
                             y: baseline,
                             width: 0.0,
                             height: 0.0,
+                            margin: BoxMargin::ZERO,
                         },
                     );
                     result.extend(nested.layouts.iter().map(|(&node, &layout)| (node, layout)));
@@ -1689,6 +1720,7 @@ fn collect_layouts(
                         y,
                         width,
                         height,
+                        margin: BoxMargin::ZERO,
                     },
                 );
                 // Not an independent Taffy node, so it has no
@@ -2327,6 +2359,7 @@ pub fn resolve_object_fit_content_rect(
             y: 0.0,
             width: 0.0,
             height: 0.0,
+            margin: BoxMargin::ZERO,
         };
     }
 
@@ -2383,6 +2416,7 @@ pub fn resolve_object_fit_content_rect(
         y: object_position.1.resolve(extra_y),
         width: content_size.width,
         height: content_size.height,
+        margin: BoxMargin::ZERO,
     }
 }
 
@@ -5515,6 +5549,37 @@ mod tests {
     #[test]
     fn screen_bounds_match_chromes_transformed_bounding_boxes() {
         let rows: &[(&str, &str, [f32; 4])] = &[
+            // `transform-box` picks the box `transform-origin` is of (Chrome 153).
+            (
+                "",
+                "padding: 10px; border: 10px solid; transform: scale(2); transform-origin: 0 0; transform-box: border-box",
+                [100.0, 100.0, 280.0, 180.0],
+            ),
+            (
+                "",
+                "padding: 10px; border: 10px solid; transform: scale(2); transform-origin: 0 0; transform-box: content-box",
+                [80.0, 80.0, 280.0, 180.0],
+            ),
+            (
+                "",
+                "padding: 10px; border: 10px solid; transform: scale(2); transform-origin: 0 0; transform-box: fill-box",
+                [80.0, 80.0, 280.0, 180.0],
+            ),
+            (
+                "",
+                "padding: 10px; border: 10px solid; transform: scale(2); transform-origin: 0 0; transform-box: view-box",
+                [100.0, 100.0, 280.0, 180.0],
+            ),
+            (
+                "",
+                "padding: 10px; border: 10px solid; transform: scale(2); transform-origin: 100% 100%; transform-box: content-box",
+                [-20.0, 30.0, 280.0, 180.0],
+            ),
+            (
+                "",
+                "padding: 10px; border: 10px solid; transform: scale(2); transform-origin: 100% 100%; transform-box: stroke-box",
+                [-40.0, 10.0, 280.0, 180.0],
+            ),
             ("", "translate: 30px 10px", [130.0, 110.0, 100.0, 50.0]),
             ("", "rotate: 15deg", [95.23, 87.91, 109.53, 74.18]),
             ("", "scale: 0.6", [120.0, 110.0, 60.0, 30.0]),
@@ -5801,6 +5866,7 @@ mod tests {
                         y: l.y * 2.0,
                         width: l.width * 2.0,
                         height: l.height * 2.0,
+                        margin: BoxMargin::ZERO,
                     },
                 )
             })
@@ -5834,6 +5900,7 @@ mod tests {
                         y: l.y * 2.0,
                         width: l.width * 2.0,
                         height: l.height * 2.0,
+                        margin: BoxMargin::ZERO,
                     },
                 )
             })
@@ -6039,6 +6106,36 @@ mod tests {
     }
 
     #[test]
+    fn the_margin_box_uses_the_margins_layout_resolved() {
+        let margin_box = |wrapper: &str, own: &str| {
+            let tree: Element = view! { <div class="w"><div class="t" /></div> };
+            let (arena, styles, layouts) = layout_with_styles(
+                &tree,
+                &format!(
+                    ".w {{ width: 300px; height: 100px; {wrapper} }} \
+                     .t {{ width: 100px; height: 60px; {own} clip-path: margin-box; }}"
+                ),
+            );
+            let node = arena.children(arena.roots()[0])[0];
+            let (x, y) = absolute_position(&arena, &layouts, node);
+            let clip =
+                resolve_clip_path(&styles[&node], &layouts[&node], x, y, 1.0).expect("a clip");
+            bounds_of(&clip)
+        };
+        // Chrome 153: `margin: 20px auto` in a block spans the container's width.
+        assert_eq!(
+            margin_box("", "margin: 20px auto;"),
+            (0.0, 0.0, 300.0, 100.0)
+        );
+        // `margin: auto` in a flex container spans all of it.
+        assert_eq!(
+            margin_box("display: flex;", "margin: auto;"),
+            (0.0, 0.0, 300.0, 100.0)
+        );
+        // A percentage is of the container's width.
+        assert_eq!(margin_box("", "margin: 0 10%;"), (0.0, 0.0, 160.0, 60.0));
+    }
+    #[test]
     fn the_reference_box_moves_a_shape_and_its_percentages() {
         // A 100x50 content box inside 10px padding, a 5px border and a 20px margin.
         let base = "width: 100px; height: 50px; padding: 10px; border: 5px solid; margin: 20px;";
@@ -6158,6 +6255,7 @@ mod tests {
             y: layout.y * 2.0,
             width: layout.width * 2.0,
             height: layout.height * 2.0,
+            margin: BoxMargin::ZERO,
         };
         let one = resolve_clip_path(&styles[&node], &layout, 0.0, 0.0, 1.0).expect("a clip");
         let two = resolve_clip_path(&styles[&node], &doubled, 0.0, 0.0, 2.0).expect("a clip");

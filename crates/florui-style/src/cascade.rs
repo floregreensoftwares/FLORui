@@ -368,6 +368,16 @@ pub enum Display {
     None,
 }
 
+/// `transform-box` for an element with a layout box: what `transform-origin` and
+/// the percentages of `translate` are of. `fill-box` is the content box;
+/// `view-box` and `stroke-box` are the border box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransformBox {
+    #[default]
+    Border,
+    Content,
+}
+
 /// `position`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Position {
@@ -1076,6 +1086,8 @@ pub struct ComputedStyle {
     pub perspective: Option<f32>,
     /// `perspective-origin`, against this node's own border box.
     pub perspective_origin: (LengthPercentage, LengthPercentage),
+    /// `transform-box`.
+    pub transform_box: TransformBox,
     /// `transform-style: preserve-3d`.
     pub preserve_3d: bool,
     /// `backface-visibility: hidden`.
@@ -1269,6 +1281,7 @@ impl ComputedStyle {
             transform_origin_z: _,
             perspective: _,
             perspective_origin: _,
+            transform_box: _,
             preserve_3d: _,
             backface_hidden: _,
             clip_path: _,
@@ -5077,6 +5090,52 @@ mod tests {
     }
 
     #[test]
+    fn viewport_units_in_a_shape_and_a_mask_follow_the_viewport() {
+        let tree: Element = view! { <div class="t" /> };
+        let arena = Arena::build(&tree);
+        let rules = parse_stylesheet(
+            ".t { clip-path: shape(from 0 0, line to 10vw 10vh, line to 5vmin 5vmax, close); \
+             mask-image: linear-gradient(#000, #000); mask-size: 50vw 20svh; }",
+        )
+        .unwrap();
+        let node = arena.roots()[0];
+        let at = |width: f32, height: f32| {
+            compute(
+                &arena,
+                &rules,
+                &InteractionState::new(),
+                Viewport { width, height },
+                &mut crate::AnimationTimeline::default(),
+            )
+        };
+        let style = at(800.0, 600.0);
+        let ClipPath::Shape(shape, _) = &style[&node].clip_path else {
+            panic!("a shape");
+        };
+        let ClipShape::Path { segments, .. } = &**shape else {
+            panic!("a path");
+        };
+        let lp = |length: f32| LengthPercentage {
+            length,
+            percentage: 0.0,
+        };
+        assert_eq!(segments[1], PathSegment::Line((lp(80.0), lp(60.0))));
+        assert_eq!(segments[2], PathSegment::Line((lp(30.0), lp(40.0))));
+        let crate::BackgroundSize::Explicit(w, h) = style[&node].mask[0].layer.size else {
+            panic!("a size");
+        };
+        assert_eq!((w, h), (Some(lp(400.0)), Some(lp(120.0))));
+        // Another viewport gives other lengths.
+        let wide = at(1000.0, 500.0);
+        let ClipPath::Shape(shape, _) = &wide[&node].clip_path else {
+            panic!("a shape");
+        };
+        let ClipShape::Path { segments, .. } = &**shape else {
+            panic!("a path");
+        };
+        assert_eq!(segments[1], PathSegment::Line((lp(100.0), lp(50.0))));
+    }
+    #[test]
     fn an_invalid_shape_function_is_dropped_and_the_last_declaration_wins() {
         // A command it does not know, a missing `to` or `by`, a missing comma.
         for invalid in [
@@ -5084,7 +5143,7 @@ mod tests {
             "shape(from 0 0, line 1px 1px)",
             "shape(from 0 0 line to 1px 1px)",
             "shape(0 0, line to 1px 1px)",
-            "shape(from 0 0, line to 1vw 1px)",
+            "shape(from 0 0, line to 1foo 1px)",
         ] {
             assert_eq!(clip_of(invalid), ClipPath::None, "{invalid}");
         }
@@ -5541,6 +5600,40 @@ mod tests {
             )),
             B::Padding
         );
+    }
+
+    #[test]
+    fn transform_box_names_the_content_or_the_border_box() {
+        use crate::TransformBox as T;
+        let of = |css: &str| computed_of(css).transform_box;
+        assert_eq!(of(".t { }"), T::Border);
+        for (keyword, expected) in [
+            ("content-box", T::Content),
+            ("fill-box", T::Content),
+            ("border-box", T::Border),
+            ("stroke-box", T::Border),
+            ("view-box", T::Border),
+        ] {
+            assert_eq!(of(&format!(".t {{ transform-box: {keyword}; }}")), expected);
+        }
+        // An invalid value is dropped and a later one wins.
+        assert_eq!(
+            of(".t { transform-box: content-box; transform-box: bogus; }"),
+            T::Content
+        );
+        assert_eq!(
+            of(".t { transform-box: content-box; } .t { transform-box: view-box; }"),
+            T::Border
+        );
+        // It is not inherited.
+        let tree: Element = view! { <div class="p"><span class="c" /></div> };
+        let (arena, computed) = styles(
+            &tree,
+            ".p { transform-box: content-box; }",
+            &InteractionState::new(),
+        );
+        let child = &computed[&arena.children(arena.roots()[0])[0]];
+        assert_eq!(child.transform_box, T::Border);
     }
     #[test]
     fn background_blend_mode_goes_to_each_layer_and_cycles() {

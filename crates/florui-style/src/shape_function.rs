@@ -22,6 +22,23 @@ use cssparser::{Parser, ParserInput, Token};
 use crate::cascade::LengthPercentage;
 use crate::clip::{ClipPath, ClipShape, Point, RawCommand, ReferenceBox, absolutize};
 
+/// What a length can be relative to: the element's font size and the viewport.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Units {
+    pub font_size: f32,
+    /// The viewport's width and height in pixels.
+    pub viewport: (f32, f32),
+}
+
+impl Units {
+    pub(crate) fn new(font_size: f32, viewport: (f32, f32)) -> Self {
+        Self {
+            font_size,
+            viewport,
+        }
+    }
+}
+
 /// Where the root font size would come from if it were at hand.
 const ROOT_FONT_SIZE: f32 = 16.0;
 
@@ -29,7 +46,7 @@ type Fail<'i> = cssparser::ParseError<'i, ()>;
 
 /// The `clip-path` value `css` holds, when it is a `shape()` (alone or with a
 /// reference box on either side); `None` for anything else, invalid ones too.
-pub(crate) fn parse_clip_path(css: &str, font_size: f32) -> Option<ClipPath> {
+pub(crate) fn parse_clip_path(css: &str, units: Units) -> Option<ClipPath> {
     let mut input = ParserInput::new(css);
     let mut parser = Parser::new(&mut input);
     let mut shape: Option<ClipShape> = None;
@@ -40,7 +57,7 @@ pub(crate) fn parse_clip_path(css: &str, font_size: f32) -> Option<ClipPath> {
             Token::Function(name) if name.eq_ignore_ascii_case("shape") && shape.is_none() => {
                 shape = Some(
                     parser
-                        .parse_nested_block(|inner| parse_shape(inner, font_size))
+                        .parse_nested_block(|inner| parse_shape(inner, units))
                         .ok()?,
                 );
             }
@@ -62,7 +79,7 @@ pub(crate) fn parse_clip_path(css: &str, font_size: f32) -> Option<ClipPath> {
     ))
 }
 
-fn parse_shape<'i>(p: &mut Parser<'i, '_>, font_size: f32) -> Result<ClipShape, Fail<'i>> {
+fn parse_shape<'i>(p: &mut Parser<'i, '_>, units: Units) -> Result<ClipShape, Fail<'i>> {
     let mut even_odd = false;
     if let Ok(rule) = p.try_parse(|p| -> Result<bool, Fail<'i>> {
         let ident = p.expect_ident()?.clone();
@@ -77,11 +94,11 @@ fn parse_shape<'i>(p: &mut Parser<'i, '_>, font_size: f32) -> Result<ClipShape, 
     p.expect_ident_matching("from")?;
     let mut commands = vec![RawCommand::Move {
         abs: true,
-        to: parse_pair(p, font_size)?,
+        to: parse_pair(p, units)?,
     }];
     while !p.is_exhausted() {
         p.expect_comma()?;
-        commands.push(parse_command(p, font_size)?);
+        commands.push(parse_command(p, units)?);
     }
     Ok(ClipShape::Path {
         even_odd,
@@ -89,7 +106,7 @@ fn parse_shape<'i>(p: &mut Parser<'i, '_>, font_size: f32) -> Result<ClipShape, 
     })
 }
 
-fn parse_command<'i>(p: &mut Parser<'i, '_>, font_size: f32) -> Result<RawCommand, Fail<'i>> {
+fn parse_command<'i>(p: &mut Parser<'i, '_>, units: Units) -> Result<RawCommand, Fail<'i>> {
     let name = p.expect_ident()?.to_ascii_lowercase();
     if name == "close" {
         return Ok(RawCommand::Close);
@@ -105,45 +122,45 @@ fn parse_command<'i>(p: &mut Parser<'i, '_>, font_size: f32) -> Result<RawComman
     match &*name {
         "move" => Ok(RawCommand::Move {
             abs,
-            to: parse_pair(p, font_size)?,
+            to: parse_pair(p, units)?,
         }),
         "line" => Ok(RawCommand::Line {
             abs,
-            to: parse_pair(p, font_size)?,
+            to: parse_pair(p, units)?,
         }),
         "hline" => Ok(RawCommand::HLine {
             abs,
-            x: parse_length(p, font_size)?,
+            x: parse_length(p, units)?,
         }),
         "vline" => Ok(RawCommand::VLine {
             abs,
-            y: parse_length(p, font_size)?,
+            y: parse_length(p, units)?,
         }),
         "curve" => {
-            let to = parse_pair(p, font_size)?;
+            let to = parse_pair(p, units)?;
             p.expect_ident_matching("with")?;
-            let c1 = parse_pair(p, font_size)?;
+            let c1 = parse_pair(p, units)?;
             if p.try_parse(|p| p.expect_delim('/')).is_ok() {
-                let c2 = parse_pair(p, font_size)?;
+                let c2 = parse_pair(p, units)?;
                 Ok(RawCommand::Cubic { abs, to, c1, c2 })
             } else {
                 Ok(RawCommand::Quad { abs, to, c1 })
             }
         }
         "smooth" => {
-            let to = parse_pair(p, font_size)?;
+            let to = parse_pair(p, units)?;
             if p.try_parse(|p| p.expect_ident_matching("with")).is_ok() {
-                let c2 = parse_pair(p, font_size)?;
+                let c2 = parse_pair(p, units)?;
                 Ok(RawCommand::SmoothCubic { abs, to, c2 })
             } else {
                 Ok(RawCommand::SmoothQuad { abs, to })
             }
         }
         "arc" => {
-            let to = parse_pair(p, font_size)?;
+            let to = parse_pair(p, units)?;
             p.expect_ident_matching("of")?;
-            let rx = parse_length(p, font_size)?;
-            let ry = p.try_parse(|p| parse_length(p, font_size)).unwrap_or(rx);
+            let rx = parse_length(p, units)?;
+            let ry = p.try_parse(|p| parse_length(p, units)).unwrap_or(rx);
             let (mut clockwise, mut large, mut rotation) = (false, false, 0.0);
             // The three options may come in any order, each once.
             let (mut sweep_seen, mut size_seen, mut rotate_seen) = (false, false, false);
@@ -179,8 +196,8 @@ fn parse_command<'i>(p: &mut Parser<'i, '_>, font_size: f32) -> Result<RawComman
     }
 }
 
-fn parse_pair<'i>(p: &mut Parser<'i, '_>, font_size: f32) -> Result<Point, Fail<'i>> {
-    Ok((parse_length(p, font_size)?, parse_length(p, font_size)?))
+fn parse_pair<'i>(p: &mut Parser<'i, '_>, units: Units) -> Result<Point, Fail<'i>> {
+    Ok((parse_length(p, units)?, parse_length(p, units)?))
 }
 
 fn parse_angle<'i>(p: &mut Parser<'i, '_>) -> Result<f32, Fail<'i>> {
@@ -201,24 +218,24 @@ fn parse_angle<'i>(p: &mut Parser<'i, '_>) -> Result<f32, Fail<'i>> {
 /// One `<length-percentage>`.
 pub(crate) fn parse_length<'i>(
     p: &mut Parser<'i, '_>,
-    font_size: f32,
+    units: Units,
 ) -> Result<LengthPercentage, Fail<'i>> {
     let token = p.next()?.clone();
     match token {
         Token::Function(name) if name.eq_ignore_ascii_case("calc") => {
-            let sum = p.parse_nested_block(|inner| parse_sum(inner, font_size))?;
+            let sum = p.parse_nested_block(|inner| parse_sum(inner, units))?;
             // A bare number is not a length.
             if sum.percentage.is_nan() {
                 return Err(p.new_custom_error(()));
             }
             Ok(sum)
         }
-        other => leaf(&other, font_size).ok_or_else(|| p.new_custom_error(())),
+        other => leaf(&other, units).ok_or_else(|| p.new_custom_error(())),
     }
 }
 
 /// A length, a percentage or a bare zero.
-fn leaf(token: &Token<'_>, font_size: f32) -> Option<LengthPercentage> {
+fn leaf(token: &Token<'_>, units: Units) -> Option<LengthPercentage> {
     let px = |length: f32| LengthPercentage {
         length,
         percentage: 0.0,
@@ -232,7 +249,7 @@ fn leaf(token: &Token<'_>, font_size: f32) -> Option<LengthPercentage> {
         Token::Dimension { value, unit, .. } => {
             let per_unit = match &*unit.to_ascii_lowercase() {
                 "px" => 1.0,
-                "em" => font_size,
+                "em" => units.font_size,
                 "rem" => ROOT_FONT_SIZE,
                 "in" => 96.0,
                 "cm" => 96.0 / 2.54,
@@ -240,6 +257,19 @@ fn leaf(token: &Token<'_>, font_size: f32) -> Option<LengthPercentage> {
                 "q" => 96.0 / 101.6,
                 "pt" => 96.0 / 72.0,
                 "pc" => 16.0,
+                // Small, large and dynamic viewports are all the one viewport here.
+                "vw" | "svw" | "lvw" | "dvw" | "vi" | "svi" | "lvi" | "dvi" => {
+                    units.viewport.0 / 100.0
+                }
+                "vh" | "svh" | "lvh" | "dvh" | "vb" | "svb" | "lvb" | "dvb" => {
+                    units.viewport.1 / 100.0
+                }
+                "vmin" | "svmin" | "lvmin" | "dvmin" => {
+                    units.viewport.0.min(units.viewport.1) / 100.0
+                }
+                "vmax" | "svmax" | "lvmax" | "dvmax" => {
+                    units.viewport.0.max(units.viewport.1) / 100.0
+                }
                 _ => return None,
             };
             Some(px(value * per_unit))
@@ -250,32 +280,32 @@ fn leaf(token: &Token<'_>, font_size: f32) -> Option<LengthPercentage> {
 
 /// The inside of a `calc()`: terms added and subtracted, each a length or a
 /// percentage times and divided by plain numbers, or a parenthesized sum.
-fn parse_sum<'i>(p: &mut Parser<'i, '_>, font_size: f32) -> Result<LengthPercentage, Fail<'i>> {
-    let mut total = parse_product(p, font_size)?;
+fn parse_sum<'i>(p: &mut Parser<'i, '_>, units: Units) -> Result<LengthPercentage, Fail<'i>> {
+    let mut total = parse_product(p, units)?;
     while !p.is_exhausted() {
         let sign = match p.next()?.clone() {
             Token::Delim('+') => 1.0,
             Token::Delim('-') => -1.0,
             _ => return Err(p.new_custom_error(())),
         };
-        let term = parse_product(p, font_size)?;
+        let term = parse_product(p, units)?;
         total.length += sign * term.length;
         total.percentage += sign * term.percentage;
     }
     Ok(total)
 }
 
-fn parse_product<'i>(p: &mut Parser<'i, '_>, font_size: f32) -> Result<LengthPercentage, Fail<'i>> {
-    let mut value = parse_factor(p, font_size)?;
+fn parse_product<'i>(p: &mut Parser<'i, '_>, units: Units) -> Result<LengthPercentage, Fail<'i>> {
+    let mut value = parse_factor(p, units)?;
     loop {
         let state = p.state();
         match p.next() {
             Ok(Token::Delim('*')) => {
-                let factor = parse_factor(p, font_size)?;
+                let factor = parse_factor(p, units)?;
                 value = scale(value, factor, true, p)?;
             }
             Ok(Token::Delim('/')) => {
-                let factor = parse_factor(p, font_size)?;
+                let factor = parse_factor(p, units)?;
                 value = scale(value, factor, false, p)?;
             }
             _ => {
@@ -316,14 +346,14 @@ fn scale<'i>(
     }
 }
 
-fn parse_factor<'i>(p: &mut Parser<'i, '_>, font_size: f32) -> Result<LengthPercentage, Fail<'i>> {
+fn parse_factor<'i>(p: &mut Parser<'i, '_>, units: Units) -> Result<LengthPercentage, Fail<'i>> {
     let token = p.next()?.clone();
     match token {
         Token::Number { value, .. } => Ok(LengthPercentage {
             length: value,
             percentage: f32::NAN,
         }),
-        Token::ParenthesisBlock => p.parse_nested_block(|inner| parse_sum(inner, font_size)),
-        other => leaf(&other, font_size).ok_or_else(|| p.new_custom_error(())),
+        Token::ParenthesisBlock => p.parse_nested_block(|inner| parse_sum(inner, units)),
+        other => leaf(&other, units).ok_or_else(|| p.new_custom_error(())),
     }
 }

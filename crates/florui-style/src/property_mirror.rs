@@ -51,6 +51,7 @@ pub(crate) const MIRRORED: &[&str] = &[
     "mask-composite",
     "background-blend-mode",
     "background-clip",
+    "transform-box",
 ];
 
 const GLOBAL_KEYWORDS: [&str; 5] = ["inherit", "initial", "unset", "revert", "revert-layer"];
@@ -262,6 +263,19 @@ fn expand(name: &str, value: &str, important: &str) -> Option<String> {
         "text-decoration" => expand_text_decoration(value, important),
         "clip-path" => Some(expand_clip_path(value, important)),
         "background" => Some(expand_background(value, important)),
+        "transform-box" => {
+            let valid = is_global(value)
+                || [
+                    "content-box",
+                    "border-box",
+                    "fill-box",
+                    "stroke-box",
+                    "view-box",
+                ]
+                .iter()
+                .any(|keyword| value.eq_ignore_ascii_case(keyword));
+            valid.then(|| format!("{}: {value}{important}", mirror_name(name)))
+        }
         "background-clip" | "-webkit-background-clip" => expand_background_clip(value, important),
         _ if is_mask_name(name) => expand_mask(name, value, important),
         _ => Some(format!("{}: {value}{important}", mirror_name(name))),

@@ -172,6 +172,7 @@ fn control_icon_rect(
         y,
         width: size,
         height: size,
+        margin: florui_layout::BoxMargin::ZERO,
     }
 }
 
@@ -6797,6 +6798,7 @@ mod tests {
                         y: l.y * scale_factor,
                         width: l.width * scale_factor,
                         height: l.height * scale_factor,
+                        margin: florui_layout::BoxMargin::ZERO,
                     },
                 )
             })
@@ -7387,6 +7389,7 @@ mod tests {
                 y: 0.0,
                 width: 20.0,
                 height: 20.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         layouts.insert(
@@ -7396,6 +7399,7 @@ mod tests {
                 y: 0.0,
                 width: 20.0,
                 height: 20.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
 
@@ -7455,6 +7459,7 @@ mod tests {
                 y: 0.0,
                 width: 20.0,
                 height: 20.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         for child in [front, back] {
@@ -7465,6 +7470,7 @@ mod tests {
                     y: 0.0,
                     width: 20.0,
                     height: 20.0,
+                    margin: florui_layout::BoxMargin::ZERO,
                 },
             );
         }
@@ -7524,6 +7530,7 @@ mod tests {
                 y: 0.0,
                 width: 20.0,
                 height: 20.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         for child in [front, back] {
@@ -7534,6 +7541,7 @@ mod tests {
                     y: 0.0,
                     width: 20.0,
                     height: 20.0,
+                    margin: florui_layout::BoxMargin::ZERO,
                 },
             );
         }
@@ -7593,6 +7601,7 @@ mod tests {
                 y: 0.0,
                 width: 20.0,
                 height: 20.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         for child in [front, back] {
@@ -7603,6 +7612,7 @@ mod tests {
                     y: 0.0,
                     width: 20.0,
                     height: 20.0,
+                    margin: florui_layout::BoxMargin::ZERO,
                 },
             );
         }
@@ -7718,6 +7728,7 @@ mod tests {
                 y: 0.0,
                 width: 20.0,
                 height: 20.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
 
@@ -8021,6 +8032,7 @@ mod tests {
                 y: 0.0,
                 width: 40.0,
                 height: 40.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         layouts.insert(
@@ -8030,6 +8042,7 @@ mod tests {
                 y: 0.0,
                 width: 30.0,
                 height: 30.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         layouts.insert(
@@ -8039,6 +8052,7 @@ mod tests {
                 y: 10.0,
                 width: 30.0,
                 height: 30.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
 
@@ -8105,6 +8119,7 @@ mod tests {
                 y: 0.0,
                 width: 20.0,
                 height: 20.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         // Deliberately much larger than, and positioned to spill past,
@@ -8116,6 +8131,7 @@ mod tests {
                 y: 0.0,
                 width: 40.0,
                 height: 40.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
 
@@ -8174,6 +8190,7 @@ mod tests {
                     y: 0.0,
                     width: size,
                     height: size,
+                    margin: florui_layout::BoxMargin::ZERO,
                 },
             );
         }
@@ -8251,6 +8268,7 @@ mod tests {
                 y: 0.0,
                 width: 20.0,
                 height: 20.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         layouts.insert(
@@ -8260,6 +8278,7 @@ mod tests {
                 y: 0.0,
                 width: 40.0,
                 height: 40.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
 
@@ -8321,6 +8340,7 @@ mod tests {
                 y: 0.0,
                 width: 30.0,
                 height: 30.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         layouts.insert(
@@ -8330,6 +8350,7 @@ mod tests {
                 y: 0.0,
                 width: 15.0,
                 height: 15.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         layouts.insert(
@@ -8339,6 +8360,7 @@ mod tests {
                 y: 0.0,
                 width: 40.0,
                 height: 40.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
 
@@ -8407,6 +8429,7 @@ mod tests {
                 y: 0.0,
                 width: 20.0,
                 height: 20.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
 
@@ -10258,6 +10281,7 @@ mod tests {
                         y: l.y * scale_factor,
                         width: l.width * scale_factor,
                         height: l.height * scale_factor,
+                        margin: florui_layout::BoxMargin::ZERO,
                     },
                 )
             })
@@ -10335,6 +10359,7 @@ mod tests {
                             y: l.y * scale_factor,
                             width: l.width * scale_factor,
                             height: l.height * scale_factor,
+                            margin: florui_layout::BoxMargin::ZERO,
                         },
                     )
                 })
@@ -10401,6 +10426,7 @@ mod tests {
                 y,
                 width: 10.0 * scale_factor,
                 height: 10.0 * scale_factor,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         let mut font = Font::load_embedded();
@@ -10726,6 +10752,7 @@ mod tests {
                 y: 0.0,
                 width: 60.0,
                 height: 40.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         layouts.insert(
@@ -10735,6 +10762,7 @@ mod tests {
                 y: 0.0,
                 width: 60.0,
                 height: 200.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         let mut font = Font::load_embedded();
@@ -13017,6 +13045,7 @@ mod tests {
                 y: 0.0,
                 width: 200.0,
                 height: 120.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         for (&card, &(x, y)) in arena.children(page).iter().zip(positions) {
@@ -13027,6 +13056,7 @@ mod tests {
                     y,
                     width: 20.0,
                     height: 20.0,
+                    margin: florui_layout::BoxMargin::ZERO,
                 },
             );
         }
@@ -13125,6 +13155,7 @@ mod tests {
                 y: 0.0,
                 width: width * scale,
                 height: height * scale,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         let mut font = Font::load_embedded();
@@ -13574,6 +13605,7 @@ mod tests {
                 y: 20.0,
                 width: 40.0,
                 height: 20.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         layouts.insert(
@@ -13583,6 +13615,7 @@ mod tests {
                 y: inner_top,
                 width: 40.0,
                 height: 60.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         let mut font = Font::load_embedded();
@@ -13751,6 +13784,7 @@ mod tests {
                 y: 0.0,
                 width: 40.0,
                 height: 40.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         layouts.insert(
@@ -13760,6 +13794,7 @@ mod tests {
                 y: 0.0,
                 width: 20.0,
                 height: 20.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         let mut font = Font::load_embedded();
@@ -13838,6 +13873,7 @@ mod tests {
                     y: 0.0,
                     width: w,
                     height,
+                    margin: florui_layout::BoxMargin::ZERO,
                 },
             );
         };
@@ -13921,6 +13957,7 @@ mod tests {
                     y: y * scale,
                     width: w * scale,
                     height: h * scale,
+                    margin: florui_layout::BoxMargin::ZERO,
                 },
             );
         };
@@ -14644,6 +14681,7 @@ mod tests {
                 y: 5.0,
                 width: 0.0,
                 height: 0.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         let mut font = Font::load_embedded();
@@ -14696,6 +14734,7 @@ mod tests {
                 y: 0.0,
                 width: 10.0,
                 height: 10.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         layouts.insert(
@@ -14705,6 +14744,7 @@ mod tests {
                 y: 0.0,
                 width: 10.0,
                 height: 10.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         let mut font = Font::load_embedded();
@@ -14769,6 +14809,7 @@ mod tests {
                 y: 10.0,
                 width: 20.0,
                 height: 20.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         // Spills past the frame on every side, same as the existing
@@ -14782,6 +14823,7 @@ mod tests {
                 y: -10.0,
                 width: 40.0,
                 height: 40.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         let mut font = Font::load_embedded();
@@ -14839,6 +14881,7 @@ mod tests {
                 y: 0.0,
                 width: 40.0,
                 height: 40.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         layouts.insert(
@@ -14848,6 +14891,7 @@ mod tests {
                 y: 0.0,
                 width: 40.0,
                 height: 40.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         layouts.insert(
@@ -14857,6 +14901,7 @@ mod tests {
                 y: 0.0,
                 width: 20.0,
                 height: 20.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         let mut font = Font::load_embedded();
@@ -15093,6 +15138,7 @@ mod tests {
                         y: l.y * scale_factor,
                         width: l.width * scale_factor,
                         height: l.height * scale_factor,
+                        margin: florui_layout::BoxMargin::ZERO,
                     },
                 )
             })

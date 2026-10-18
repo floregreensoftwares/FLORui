@@ -1036,6 +1036,7 @@ mod tests {
                 y: 0.0,
                 width: 400.0,
                 height: 400.0,
+                margin: florui_layout::BoxMargin::ZERO,
             },
         );
         let mut font = florui_text::Font::load_embedded();
