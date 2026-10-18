@@ -1,0 +1,374 @@
+{
+    "id":  "blend-modes",
+    "description":  "mix-blend-mode over a backdrop for several modes, with opacity, alpha, a radius and a transform, isolated by a stacking context, and background-blend-mode on a colour and on layers",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  540,
+                     "height_css_px":  380,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 540px; height: 380px; background-color: #ffffff; } .bk { position: absolute; width: 100px; height: 60px; background-color: rgb(64, 128, 192); } .w { position: absolute; width: 130px; height: 90px; } .s { position: absolute; left: 30px; top: 15px; width: 90px; height: 50px; background-color: rgb(192, 96, 32); } .bb { position: absolute; width: 100px; height: 50px; background-color: rgb(64, 128, 192); } .k0 { left: 20px; top: 20px; } .w0 { left: 20px; top: 20px;  } .s0 { mix-blend-mode: multiply; } .k1 { left: 150px; top: 20px; } .w1 { left: 150px; top: 20px;  } .s1 { mix-blend-mode: screen; } .k2 { left: 280px; top: 20px; } .w2 { left: 280px; top: 20px;  } .s2 { mix-blend-mode: overlay; } .k3 { left: 410px; top: 20px; } .w3 { left: 410px; top: 20px;  } .s3 { mix-blend-mode: difference; } .k4 { left: 20px; top: 110px; } .w4 { left: 20px; top: 110px;  } .s4 { mix-blend-mode: hue; } .k5 { left: 150px; top: 110px; } .w5 { left: 150px; top: 110px;  } .s5 { mix-blend-mode: luminosity; } .k6 { left: 280px; top: 110px; } .w6 { left: 280px; top: 110px;  } .s6 { mix-blend-mode: plus-lighter; } .k7 { left: 410px; top: 110px; } .w7 { left: 410px; top: 110px;  } .s7 { mix-blend-mode: multiply; opacity: 0.6; } .k8 { left: 20px; top: 200px; } .w8 { left: 20px; top: 200px;  } .s8 { mix-blend-mode: multiply; background-color: rgba(192, 96, 32, 0.5); } .k9 { left: 150px; top: 200px; } .w9 { left: 150px; top: 200px; z-index: 1; } .s9 { mix-blend-mode: multiply; } .k10 { left: 280px; top: 200px; } .w10 { left: 280px; top: 200px; isolation: isolate; } .s10 { mix-blend-mode: color-dodge; } .k11 { left: 410px; top: 200px; } .w11 { left: 410px; top: 200px;  } .s11 { mix-blend-mode: multiply; border-radius: 20px; transform: rotate(8deg); } .p12 { left: 20px; top: 290px; background-image: linear-gradient(rgb(192, 96, 32), rgb(192, 96, 32)); background-blend-mode: multiply; } .p13 { left: 150px; top: 290px; background-image: linear-gradient(rgb(192, 96, 32), rgb(192, 96, 32)); background-blend-mode: hue; } .p14 { left: 280px; top: 290px; background-color: transparent; background-image: linear-gradient(rgb(192, 96, 32), rgb(192, 96, 32)), linear-gradient(rgb(64, 128, 192), rgb(64, 128, 192)); background-blend-mode: difference, normal; } .p15 { left: 410px; top: 290px; background-image: linear-gradient(rgba(192, 96, 32, 0.5), rgba(192, 96, 32, 0.5)); background-blend-mode: multiply; border-radius: 16px; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bk k0",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "w w0",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "s s0",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bk k1",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "w w1",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "s s1",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bk k2",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "w w2",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "s s2",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bk k3",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "w w3",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "s s3",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bk k4",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "w w4",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "s s4",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bk k5",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "w w5",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "s s5",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bk k6",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "w w6",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "s s6",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bk k7",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "w w7",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "s s7",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bk k8",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "w w8",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "s s8",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bk k9",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "w w9",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "s s9",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bk k10",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "w w10",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "s s10",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bk k11",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "w w11",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "s s11",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bb p12",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bb p13",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bb p14",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "bb p15",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  0.3,
+                           "reason":  "Measured against Chromium 153 on Windows: 0.14% of the pixels differ by more than 3 levels of a channel and every box has the same bounding box (flat fills, because Chromium dithers gradients). What is left is the antialiasing along the edge of the turned, rounded box. It covers mix-blend-mode for several modes, with opacity, a translucent source, a radius and a transform, a stacking context that keeps what blends inside it to itself, and background-blend-mode on a colour and on layers. With the blend modes ignored the same fixture measures 29.01%, so it fails.",
+                           "channel_tolerance":  3
+                       }
+}
