@@ -63,6 +63,7 @@ use crate::cascade::{
     ItemAlignment, LengthPercentage as FlorLengthPercentage, ObjectFit as FlorObjectFit,
     Resize as FlorResize, TransformFunction as FlorTransformFunction, Viewport as FlorViewport,
 };
+use crate::clip::{ClipPath, ClipShape, PathSegment, ReferenceBox, ShapeRadius};
 use crate::color::Rgba;
 use crate::interaction::InteractionState;
 use crate::stylesheet_parse::Rule;
@@ -1948,6 +1949,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
             box_style.backface_visibility,
             style::computed_values::backface_visibility::T::Hidden
         ),
+        clip_path: to_clip_path_with_shape(values, font_size_px),
         filter: to_filter(&effects.filter.0, color),
         backdrop_filter: to_filter(&effects.backdrop_filter.0, color),
         container_type: to_container_type(box_style.clone_container_type()),
@@ -2352,6 +2354,233 @@ fn to_filter(
         .collect()
 }
 
+/// `clip-path`, with the `shape()` function the engine does not accept read back
+/// from the custom property that carries it (only when this very element's rules
+/// declare it, since a custom property inherits and `clip-path` does not).
+fn to_clip_path_with_shape(values: &ComputedValues, font_size_px: f32) -> ClipPath {
+    let clip_path = to_clip_path(&values.get_svg().clip_path);
+    if clip_path == ClipPath::None
+        && declares_mirrored(values, "clip-path")
+        && let Some(css) = mirrored(values, "clip-path")
+        && let Some(shape) = crate::shape_function::parse_clip_path(&css, font_size_px)
+    {
+        return shape;
+    }
+    clip_path
+}
+
+/// `clip-path`: a basic shape against a reference box, a box alone, or `none`.
+/// A `url()` to an SVG `<clipPath>` is `none`: there is no way to define one.
+fn to_clip_path(value: &style::values::computed::basic_shape::ClipPath) -> ClipPath {
+    use style::values::generics::basic_shape::GenericClipPath;
+    match value {
+        GenericClipPath::None | GenericClipPath::Url(_) => ClipPath::None,
+        GenericClipPath::Box(reference) => ClipPath::Box(to_reference_box(*reference)),
+        GenericClipPath::Shape(shape, reference) => {
+            ClipPath::Shape(Box::new(to_clip_shape(shape)), to_reference_box(*reference))
+        }
+    }
+}
+
+fn to_reference_box(value: style::values::generics::basic_shape::ShapeGeometryBox) -> ReferenceBox {
+    use style::values::generics::basic_shape::{ShapeBox, ShapeGeometryBox};
+    match value {
+        ShapeGeometryBox::ShapeBox(ShapeBox::MarginBox) => ReferenceBox::Margin,
+        ShapeGeometryBox::ShapeBox(ShapeBox::PaddingBox) => ReferenceBox::Padding,
+        // `fill-box` is the content box of an element with a CSS layout box.
+        ShapeGeometryBox::ShapeBox(ShapeBox::ContentBox) | ShapeGeometryBox::FillBox => {
+            ReferenceBox::Content
+        }
+        // `stroke-box` and `view-box` are the border box, as is the default.
+        ShapeGeometryBox::ShapeBox(ShapeBox::BorderBox)
+        | ShapeGeometryBox::StrokeBox
+        | ShapeGeometryBox::ViewBox
+        | ShapeGeometryBox::ElementDependent => ReferenceBox::Border,
+    }
+}
+
+fn to_clip_shape(shape: &style::values::computed::basic_shape::BasicShape) -> ClipShape {
+    use style::values::generics::basic_shape::{BasicShape, FillRule, GenericPathOrShapeFunction};
+    match shape {
+        BasicShape::Rect(inset) => {
+            let corner = |c: &style::values::computed::BorderCornerRadius| {
+                (
+                    to_length_percentage(&c.0.width.0),
+                    to_length_percentage(&c.0.height.0),
+                )
+            };
+            ClipShape::Inset {
+                top: to_length_percentage(&inset.rect.0),
+                right: to_length_percentage(&inset.rect.1),
+                bottom: to_length_percentage(&inset.rect.2),
+                left: to_length_percentage(&inset.rect.3),
+                radii: [
+                    corner(&inset.round.top_left),
+                    corner(&inset.round.top_right),
+                    corner(&inset.round.bottom_right),
+                    corner(&inset.round.bottom_left),
+                ],
+            }
+        }
+        BasicShape::Circle(circle) => ClipShape::Circle {
+            center: to_shape_center(&circle.position),
+            radius: to_shape_radius(&circle.radius),
+        },
+        BasicShape::Ellipse(ellipse) => ClipShape::Ellipse {
+            center: to_shape_center(&ellipse.position),
+            radius_x: to_shape_radius(&ellipse.semiaxis_x),
+            radius_y: to_shape_radius(&ellipse.semiaxis_y),
+        },
+        BasicShape::Polygon(polygon) => ClipShape::Polygon {
+            even_odd: matches!(polygon.fill, FillRule::Evenodd),
+            points: polygon
+                .coordinates
+                .iter()
+                .map(|c| (to_length_percentage(&c.0), to_length_percentage(&c.1)))
+                .collect(),
+        },
+        BasicShape::PathOrShape(GenericPathOrShapeFunction::Path(path)) => ClipShape::Path {
+            even_odd: matches!(path.fill, FillRule::Evenodd),
+            // A `path()`'s numbers are pixels, not percentages.
+            segments: to_path_segments(
+                path.commands(),
+                |v: &f32| FlorLengthPercentage {
+                    length: *v,
+                    percentage: 0.0,
+                },
+                |degrees: &f32| *degrees,
+            ),
+        },
+        BasicShape::PathOrShape(GenericPathOrShapeFunction::Shape(shape)) => ClipShape::Path {
+            even_odd: matches!(shape.fill, FillRule::Evenodd),
+            segments: to_path_segments(shape.commands(), to_length_percentage, |angle| {
+                angle.degrees()
+            }),
+        },
+    }
+}
+
+fn to_shape_center(
+    position: &style::values::generics::position::GenericPositionOrAuto<
+        style::values::computed::Position,
+    >,
+) -> (FlorLengthPercentage, FlorLengthPercentage) {
+    use style::values::generics::position::GenericPositionOrAuto;
+    match position {
+        GenericPositionOrAuto::Position(p) => (
+            to_length_percentage(&p.horizontal),
+            to_length_percentage(&p.vertical),
+        ),
+        GenericPositionOrAuto::Auto => (
+            FlorLengthPercentage {
+                length: 0.0,
+                percentage: 0.5,
+            },
+            FlorLengthPercentage {
+                length: 0.0,
+                percentage: 0.5,
+            },
+        ),
+    }
+}
+
+fn to_shape_radius(
+    radius: &style::values::generics::basic_shape::GenericShapeRadius<
+        style::values::generics::NonNegative<style::values::computed::LengthPercentage>,
+    >,
+) -> ShapeRadius {
+    use style::values::generics::basic_shape::GenericShapeRadius;
+    match radius {
+        GenericShapeRadius::Length(length) => ShapeRadius::Length(to_length_percentage(&length.0)),
+        GenericShapeRadius::ClosestSide => ShapeRadius::ClosestSide,
+        GenericShapeRadius::FarthestSide => ShapeRadius::FarthestSide,
+    }
+}
+
+/// The commands of a `path()` or a `shape()`, which share one type, as absolute
+/// segments. `length` reads a coordinate and `degrees` an angle.
+fn to_path_segments<L, A>(
+    commands: &[style::values::generics::basic_shape::GenericShapeCommand<A, L>],
+    length: impl Fn(&L) -> FlorLengthPercentage,
+    degrees: impl Fn(&A) -> f32,
+) -> Vec<PathSegment> {
+    use crate::clip::{RawCommand, absolutize};
+    use style::values::generics::basic_shape::{ArcSize, ArcSweep, GenericShapeCommand as Cmd};
+    let pair =
+        |p: &style::values::generics::basic_shape::CoordinatePair<L>| (length(&p.x), length(&p.y));
+    let raw: Vec<RawCommand> = commands
+        .iter()
+        .map(|command| match command {
+            Cmd::Move { by_to, point } => RawCommand::Move {
+                abs: by_to.is_abs(),
+                to: pair(point),
+            },
+            Cmd::Line { by_to, point } => RawCommand::Line {
+                abs: by_to.is_abs(),
+                to: pair(point),
+            },
+            Cmd::HLine { by_to, x } => RawCommand::HLine {
+                abs: by_to.is_abs(),
+                x: length(x),
+            },
+            Cmd::VLine { by_to, y } => RawCommand::VLine {
+                abs: by_to.is_abs(),
+                y: length(y),
+            },
+            Cmd::CubicCurve {
+                by_to,
+                point,
+                control1,
+                control2,
+            } => RawCommand::Cubic {
+                abs: by_to.is_abs(),
+                to: pair(point),
+                c1: pair(control1),
+                c2: pair(control2),
+            },
+            Cmd::QuadCurve {
+                by_to,
+                point,
+                control1,
+            } => RawCommand::Quad {
+                abs: by_to.is_abs(),
+                to: pair(point),
+                c1: pair(control1),
+            },
+            Cmd::SmoothCubic {
+                by_to,
+                point,
+                control2,
+            } => RawCommand::SmoothCubic {
+                abs: by_to.is_abs(),
+                to: pair(point),
+                c2: pair(control2),
+            },
+            Cmd::SmoothQuad { by_to, point } => RawCommand::SmoothQuad {
+                abs: by_to.is_abs(),
+                to: pair(point),
+            },
+            Cmd::Arc {
+                by_to,
+                point,
+                radii,
+                arc_sweep,
+                arc_size,
+                rotate,
+            } => RawCommand::Arc {
+                abs: by_to.is_abs(),
+                to: pair(point),
+                radii: pair(radii),
+                rotation: degrees(rotate),
+                large: matches!(arc_size, ArcSize::Large),
+                clockwise: matches!(arc_sweep, ArcSweep::Cw),
+            },
+            Cmd::Close => RawCommand::Close,
+        })
+        .collect();
+    absolutize(&raw)
+}
+
 /// `transform`'s own function list — see
 /// [`crate::cascade::TransformFunction`]'s own doc for exactly which
 /// functions survive and why the rest are dropped.
@@ -2530,11 +2759,13 @@ fn to_transform_origin(
 /// type probes, applied to a value instead of a type.
 fn to_length_percentage(value: &style::values::computed::LengthPercentage) -> FlorLengthPercentage {
     use style::values::computed::Length;
+    // A basis of 100 keeps the percentage exact to the last digit of an `f32`
+    // (a basis of 1 loses two).
     let at_zero = value.resolve(Length::new(0.0)).px();
-    let at_one = value.resolve(Length::new(1.0)).px();
+    let at_hundred = value.resolve(Length::new(100.0)).px();
     FlorLengthPercentage {
         length: at_zero,
-        percentage: at_one - at_zero,
+        percentage: (at_hundred - at_zero) / 100.0,
     }
 }
 

@@ -921,8 +921,10 @@ fn paint_nodes(
         if backface_is_hidden(styles, layouts, node, node_abs, &transform) {
             continue;
         }
-        let has_filter = styles.get(&node).is_some_and(|s| !s.filter.is_empty());
-        if opacity < 1.0 || !transform.is_identity() || has_filter {
+        let has_effect = styles
+            .get(&node)
+            .is_some_and(ComputedStyle::has_group_effect);
+        if opacity < 1.0 || !transform.is_identity() || has_effect {
             paint_group(
                 buffer,
                 arena,
@@ -1896,9 +1898,9 @@ fn subtree_extent(
             ) {
                 continue;
             }
-            let child_has_filter = child_style.is_some_and(|s| !s.filter.is_empty());
+            let child_has_effect = child_style.is_some_and(ComputedStyle::has_group_effect);
             let child_is_group =
-                child_opacity < 1.0 || !child_transform.is_identity() || child_has_filter;
+                child_opacity < 1.0 || !child_transform.is_identity() || child_has_effect;
 
             let (cx0, cy0, cx1, cy1) = if child_is_group {
                 let filter_pad =
@@ -2311,7 +2313,69 @@ fn render_group(
 
     let filter = styles.get(&node).map_or(&[][..], |s| &s.filter[..]);
     apply_filters(&mut group.pixmap, &scaled_filters(filter, scale_factor));
+    if let (Some(style), Some(layout)) = (styles.get(&node), layouts.get(&node)) {
+        apply_clip_path(&mut group, style, layout, node_abs, scale_factor);
+    }
     Some(group)
+}
+
+/// Cuts `group` to `style`'s `clip-path`: every pixel is scaled by how much of it
+/// the shape covers (antialiased at the edge), and a shape with nothing inside
+/// it clears the group. Runs after the filter and before opacity and the
+/// transform, which is the order of the specification; the shape is in the
+/// box's own space, so it moves with the box.
+fn apply_clip_path(
+    group: &mut Surface,
+    style: &ComputedStyle,
+    layout: &BoxLayout,
+    node_abs: (f32, f32),
+    scale_factor: f32,
+) {
+    let Some(geometry) =
+        florui_layout::resolve_clip_path(style, layout, node_abs.0, node_abs.1, scale_factor)
+    else {
+        return;
+    };
+    let mut builder = tiny_skia::PathBuilder::new();
+    for contour in &geometry.contours {
+        let mut points = contour.iter();
+        let Some(&(x, y)) = points.next() else {
+            continue;
+        };
+        builder.move_to(x, y);
+        for &(x, y) in points {
+            builder.line_to(x, y);
+        }
+        builder.close();
+    }
+    let (width, height) = (group.pixmap.width(), group.pixmap.height());
+    let Some(path) = builder.finish() else {
+        // Nothing is inside the shape.
+        group.pixmap.fill(tiny_skia::Color::TRANSPARENT);
+        return;
+    };
+    let Some(mut mask) = Mask::new(width, height) else {
+        return;
+    };
+    let rule = if geometry.even_odd {
+        FillRule::EvenOdd
+    } else {
+        FillRule::Winding
+    };
+    mask.fill_path(&path, rule, true, surface_transform(group));
+    for (pixel, &coverage) in group.pixmap.pixels_mut().iter_mut().zip(mask.data()) {
+        if coverage == 255 {
+            continue;
+        }
+        let scale = |channel: u8| mul_div_255(channel, coverage);
+        *pixel = PremultipliedColorU8::from_rgba(
+            scale(pixel.red()),
+            scale(pixel.green()),
+            scale(pixel.blue()),
+            scale(pixel.alpha()),
+        )
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
 }
 
 /// Places a rendered group on `buffer` through `transform`, at `opacity` and
@@ -11398,6 +11462,164 @@ mod tests {
             });
         }
     }
+
+    fn clipped(clip: &str, size: (u32, u32)) -> Canvas {
+        let tree: Element = view! { <div class="b" /> };
+        paint_text_css(
+            &tree,
+            &format!(
+                ".b {{ width: 100px; height: 50px; background-color: #ff0000; clip-path: {clip}; }}"
+            ),
+            size,
+        )
+    }
+
+    #[test]
+    fn a_circle_clip_is_antialiased_as_chromes_is() {
+        let canvas = clipped("circle(25px at 50% 50%)", (110, 60));
+        // Chrome 153 (green channel, so 255 is white and 0 is red), along the
+        // middle row of a box placed at 20 and down its middle column.
+        for &((x, y), chrome) in &[
+            ((24u32, 25u32), 255u8),
+            ((25, 25), 15),
+            ((26, 25), 0),
+            ((73, 25), 0),
+            ((74, 25), 15),
+            ((75, 25), 255),
+            ((50, 0), 12),
+            ((50, 1), 0),
+        ] {
+            let got = pixel_rgb(&canvas, x, y)[1];
+            assert!(
+                got.abs_diff(chrome) <= 16,
+                "({x}, {y}): got {got}, Chrome gives {chrome}"
+            );
+        }
+        // Outside it the box does not paint, inside it does.
+        assert_eq!(pixel_rgb(&canvas, 2, 2), WHITE);
+        assert_eq!(pixel_rgb(&canvas, 97, 47), WHITE);
+        assert_eq!(pixel_rgb(&canvas, 50, 25), RED);
+    }
+
+    #[test]
+    fn a_polygon_clip_is_half_covered_on_a_diagonal_pixel() {
+        let canvas = clipped("polygon(0 0, 100% 0, 50% 100%)", (110, 60));
+        // Chrome 153: the left edge of the triangle crosses the middle row at
+        // x = 25 exactly, so that pixel is covered by half (G = 127). The mask is
+        // filled by tiny-skia, whose supersampling rounds that tie to 6/16 (G =
+        // 159) where Chrome's analytic edge gives 8/16: an edge pixel differs by
+        // about an eighth of coverage, nothing more.
+        let g = pixel_rgb(&canvas, 25, 25)[1];
+        assert!(g.abs_diff(127) <= 40, "{g}");
+        assert_eq!(pixel_rgb(&canvas, 20, 25), WHITE);
+        assert_eq!(pixel_rgb(&canvas, 30, 25), RED);
+        assert_eq!(pixel_rgb(&canvas, 5, 40), WHITE);
+        assert_eq!(pixel_rgb(&canvas, 50, 45), RED);
+        let g = pixel_rgb(&canvas, 74, 25)[1];
+        assert!(g.abs_diff(127) <= 40, "{g}");
+    }
+
+    #[test]
+    fn an_inset_clip_rounds_its_corners_as_chromes_does() {
+        let canvas = clipped("inset(10px 20px round 8px)", (110, 60));
+        // Chrome 153 (green channel) around the top left corner of the rect at
+        // x 20, y 10, with a radius of 8.
+        for &((x, y), chrome) in &[
+            ((24u32, 10u32), 199u8),
+            ((26, 10), 61),
+            ((28, 10), 0),
+            ((22, 11), 247),
+            ((23, 11), 118),
+            ((24, 11), 3),
+            ((20, 14), 197),
+            ((20, 16), 55),
+            ((20, 18), 0),
+        ] {
+            let got = pixel_rgb(&canvas, x, y)[1];
+            assert!(
+                got.abs_diff(chrome) <= 40,
+                "({x}, {y}): got {got}, Chrome gives {chrome}"
+            );
+        }
+        assert_eq!(pixel_rgb(&canvas, 50, 25), RED);
+        assert_eq!(pixel_rgb(&canvas, 10, 25), WHITE);
+        assert_eq!(pixel_rgb(&canvas, 50, 5), WHITE);
+    }
+
+    #[test]
+    fn a_clip_cuts_the_children_the_borders_and_the_shadow_of_a_box() {
+        let tree: Element = view! { <div class="b"><div class="kid" /></div> };
+        let canvas = paint_text_css(
+            &tree,
+            ".b { width: 100px; height: 50px; background-color: #ff0000; border: 6px solid #0000ff; \
+                 box-shadow: 8px 8px 0 #00aa00; box-sizing: border-box; clip-path: inset(0 50% 0 0); } \
+             .kid { width: 120px; height: 20px; background-color: #ffff00; }",
+            (130, 70),
+        );
+        // The left half is drawn (the border, the child), the right half is gone,
+        // and so is the shadow that fell outside the box.
+        assert_eq!(pixel_rgb(&canvas, 2, 25), [0, 0, 255]);
+        assert_eq!(pixel_rgb(&canvas, 20, 10), [255, 255, 0]);
+        assert_eq!(pixel_rgb(&canvas, 70, 10), WHITE);
+        assert_eq!(pixel_rgb(&canvas, 70, 56), WHITE);
+        assert_eq!(pixel_rgb(&canvas, 20, 56), WHITE);
+    }
+
+    #[test]
+    fn an_empty_clip_clears_the_box_and_a_box_clip_keeps_a_rounded_outline() {
+        let none = clipped("inset(30px 0 30px 0)", (110, 60));
+        assert_eq!(pixel_rgb(&none, 50, 25), WHITE);
+        let tree: Element = view! { <div class="b" /> };
+        let rounded = paint_text_css(
+            &tree,
+            ".b { width: 100px; height: 50px; background-color: #ff0000; border-radius: 30px; \
+                 clip-path: content-box; padding: 10px; box-sizing: border-box; }",
+            (110, 60),
+        );
+        // The content box (80x30) is inset by 10px and rounded by the 20px left of
+        // a 30px radius, so the corner of the box is empty and the middle is not.
+        assert_eq!(pixel_rgb(&rounded, 50, 25), RED);
+        assert_eq!(pixel_rgb(&rounded, 11, 11), WHITE);
+        assert_eq!(pixel_rgb(&rounded, 5, 25), WHITE);
+    }
+
+    #[test]
+    fn a_clip_follows_the_transform_of_its_box_and_comes_before_its_opacity() {
+        let tree: Element = view! { <div class="b" /> };
+        let canvas = paint_text_css(
+            &tree,
+            ".b { width: 100px; height: 50px; background-color: #ff0000; \
+                 clip-path: inset(0 50% 0 0); transform: translate(30px, 0); opacity: 0.5; }",
+            (160, 60),
+        );
+        // The left half of the box, moved 30px right and half faded.
+        assert_eq!(pixel_rgb(&canvas, 20, 25), WHITE);
+        let [r, g, b] = pixel_rgb(&canvas, 50, 25);
+        assert!(
+            r == 255 && (126..=129).contains(&g) && g == b,
+            "{r} {g} {b}"
+        );
+        assert_eq!(pixel_rgb(&canvas, 100, 25), WHITE);
+    }
+
+    #[test]
+    fn a_clipped_group_paints_the_same_on_a_bounded_and_a_full_surface() {
+        let tree: Element = view! { <div class="b"><div class="kid" /></div> };
+        for clip in [
+            "circle(30px at 40% 50%)",
+            "polygon(evenodd, 0 0, 100% 0, 0 100%, 100% 100%)",
+            "inset(5px round 12px)",
+        ] {
+            let css = format!(
+                ".b {{ margin: 90px; width: 100px; height: 60px; background: #3366cc; \
+                      clip-path: {clip}; }} .kid {{ width: 40px; height: 40px; background: #ff0000; }}"
+            );
+            assert_bounded_and_full_target_paint_within(1, || {
+                paint_text_css(&tree, &css, (300, 300))
+            });
+        }
+    }
+
     #[test]
     fn blur_spreads_a_solid_boxs_own_color_past_its_own_edge() {
         let filtered = single_box_buffer_at(
