@@ -1,0 +1,19 @@
+.wrap { position: relative; width: 540px; height: 440px; background-color: #ffffff; }
+.b { position: absolute; width: 100px; height: 50px; box-sizing: border-box; }
+.p0 { left: 20px; top: 20px; background-color: #d05040; clip-path: circle(25px at 50% 50%); }
+.p1 { left: 150px; top: 20px; background-color: #40a060; clip-path: ellipse(40px 18px at 30% 60%); }
+.p2 { left: 280px; top: 20px; background-color: #4070d0; clip-path: polygon(0 0, 100% 0, 50% 100%); }
+.p3 { left: 410px; top: 20px; background-color: #e0b030; clip-path: polygon(evenodd, 50% 0, 20% 100%, 95% 30%, 5% 30%, 80% 100%); }
+.p4 { left: 20px; top: 110px; background-color: #a050c0; clip-path: inset(10px 20px round 8px); }
+.p5 { left: 150px; top: 110px; background-color: #30a0b0; clip-path: inset(4px round 30px 4px 20px 10px / 20px 4px 10px 25px); }
+.p6 { left: 280px; top: 110px; background-color: #d05040; clip-path: rect(5px 80px 40px 10px round 6px); }
+.p7 { left: 410px; top: 110px; background-color: #40a060; clip-path: xywh(10px 5px 60% 70% round 10px); }
+.p8 { left: 20px; top: 200px; background-color: #4070d0; clip-path: circle(farthest-side at 20% 30%); }
+.p9 { left: 150px; top: 200px; background-color: #e0b030; clip-path: path("M 10 40 C 10 0 60 0 60 40 Q 35 30 10 40 Z"); }
+.p10 { left: 280px; top: 200px; background-color: #a050c0; clip-path: path(evenodd, "M 0 0 H 100 V 50 H 0 Z M 30 10 H 70 V 40 H 30 Z"); }
+.p11 { left: 410px; top: 200px; background-color: #30a0b0; clip-path: path("M 50 5 A 30 20 20 1 1 51 5 Z"); }
+.p12 { left: 20px; top: 290px; background-color: #d05040; clip-path: shape(from 0 0, line to 100% 0, line to 50% 100%, close); }
+.p13 { left: 150px; top: 290px; background-color: #40a060; clip-path: shape(evenodd from 50% 0, line to 20% 100%, line to 95% 30%, line to 5% 30%, line to 80% 100%, close); }
+.p14 { left: 280px; top: 290px; background-color: #4070d0; clip-path: shape(from 10px 40px, curve to 60px 40px with 10px 0px / 60px 0px, curve to 10px 40px with 35px 30px, close); }
+.p15 { left: 410px; top: 290px; background-color: #e0b030; clip-path: shape(from 10px 25px, arc to 90px 25px of 40px 22px cw, arc to 10px 25px of 40px 22px cw, close); }
+.p16 { left: 20px; top: 380px; background-color: #a050c0; clip-path: shape(from 5px 5px, hline by 90px, vline by 30px, smooth by -20px 10px with -10px 0px, line to 5px 45px, close); }
