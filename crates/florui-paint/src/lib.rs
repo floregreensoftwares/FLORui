@@ -1626,20 +1626,27 @@ fn paint_spinner(
 /// `functions` with each blur radius in the canvas's own pixels. A filter's
 /// lengths are CSS pixels; the canvas of a HiDPI window is physical, so a
 /// `blur(8px)` is 16 canvas pixels at a scale factor of 2. Brightness,
-/// contrast and saturate are unitless and unchanged.
+/// contrast and saturate are unitless and unchanged; a drop shadow's offset and
+/// blur are lengths.
 fn scaled_filters(functions: &[FilterFunction], scale_factor: f32) -> Vec<FilterFunction> {
     functions
         .iter()
         .map(|function| match *function {
             FilterFunction::Blur(radius) => FilterFunction::Blur(radius * scale_factor),
+            FilterFunction::DropShadow { x, y, blur, color } => FilterFunction::DropShadow {
+                x: x * scale_factor,
+                y: y * scale_factor,
+                blur: blur * scale_factor,
+                color,
+            },
             other => other,
         })
         .collect()
 }
 
 /// Total padding `filters`' own combined blur reach needs on every side
-/// — zero for `brightness`/`contrast`/`saturate`, which are pointwise
-/// and never read a neighboring pixel. Matched exhaustively (no wildcard
+/// — zero for the functions that are pointwise and never read a neighboring
+/// pixel, and the offset plus the blur for a drop shadow. Matched exhaustively (no wildcard
 /// arm) so a future [`FilterFunction`] variant fails to compile here
 /// until someone classifies its own extent, rather than silently
 /// contributing zero padding for a filter that actually needs some.
@@ -1648,9 +1655,18 @@ fn filter_inflation(filters: &[FilterFunction], scale_factor: f32) -> f32 {
         .iter()
         .map(|function| match function {
             FilterFunction::Blur(radius) => blur::kernel_radius(*radius * scale_factor) as f32,
+            FilterFunction::DropShadow { x, y, blur, .. } => {
+                x.abs().max(y.abs()) * scale_factor
+                    + blur::kernel_radius(*blur * scale_factor) as f32
+            }
             FilterFunction::Brightness(_)
             | FilterFunction::Contrast(_)
-            | FilterFunction::Saturate(_) => 0.0,
+            | FilterFunction::Saturate(_)
+            | FilterFunction::Grayscale(_)
+            | FilterFunction::HueRotate(_)
+            | FilterFunction::Invert(_)
+            | FilterFunction::Opacity(_)
+            | FilterFunction::Sepia(_) => 0.0,
         })
         .sum()
 }
@@ -2918,6 +2934,20 @@ fn apply_filters_with(pixmap: &mut Pixmap, functions: &[FilterFunction], fast: b
                     *pixel = saturate_premultiplied(*pixel, factor);
                 }
             }
+            FilterFunction::Grayscale(amount) => {
+                color_matrix_in_place(pixmap, grayscale_matrix(amount), 0.0)
+            }
+            FilterFunction::Sepia(amount) => {
+                color_matrix_in_place(pixmap, sepia_matrix(amount), 0.0)
+            }
+            FilterFunction::HueRotate(degrees) => {
+                color_matrix_in_place(pixmap, hue_rotate_matrix(degrees), 0.0)
+            }
+            FilterFunction::Invert(amount) => invert_in_place(pixmap, amount),
+            FilterFunction::Opacity(amount) => opacity_in_place(pixmap, amount),
+            FilterFunction::DropShadow { x, y, blur, color } => {
+                drop_shadow_in_place(pixmap, x, y, blur, color)
+            }
         }
     }
 }
@@ -3070,6 +3100,178 @@ fn map_unpremultiplied(
         alpha,
     )
     .unwrap_or(PremultipliedColorU8::TRANSPARENT)
+}
+
+/// `grayscale(amount)` as the 3x3 matrix of the Filter Effects spec; `amount`
+/// is cut to `0..=1`.
+fn grayscale_matrix(amount: f32) -> [[f32; 3]; 3] {
+    let s = 1.0 - amount.clamp(0.0, 1.0);
+    [
+        [
+            0.2126 + 0.7874 * s,
+            0.7152 - 0.7152 * s,
+            0.0722 - 0.0722 * s,
+        ],
+        [
+            0.2126 - 0.2126 * s,
+            0.7152 + 0.2848 * s,
+            0.0722 - 0.0722 * s,
+        ],
+        [
+            0.2126 - 0.2126 * s,
+            0.7152 - 0.7152 * s,
+            0.0722 + 0.9278 * s,
+        ],
+    ]
+}
+
+/// `sepia(amount)`, likewise.
+fn sepia_matrix(amount: f32) -> [[f32; 3]; 3] {
+    let s = 1.0 - amount.clamp(0.0, 1.0);
+    [
+        [0.393 + 0.607 * s, 0.769 - 0.769 * s, 0.189 - 0.189 * s],
+        [0.349 - 0.349 * s, 0.686 + 0.314 * s, 0.168 - 0.168 * s],
+        [0.272 - 0.272 * s, 0.534 - 0.534 * s, 0.131 + 0.869 * s],
+    ]
+}
+
+/// `hue-rotate(degrees)`, likewise.
+fn hue_rotate_matrix(degrees: f32) -> [[f32; 3]; 3] {
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    [
+        [
+            0.213 + cos * 0.787 - sin * 0.213,
+            0.715 - cos * 0.715 - sin * 0.715,
+            0.072 - cos * 0.072 + sin * 0.928,
+        ],
+        [
+            0.213 - cos * 0.213 + sin * 0.143,
+            0.715 + cos * 0.285 + sin * 0.140,
+            0.072 - cos * 0.072 - sin * 0.283,
+        ],
+        [
+            0.213 - cos * 0.213 - sin * 0.787,
+            0.715 - cos * 0.715 + sin * 0.715,
+            0.072 + cos * 0.928 + sin * 0.072,
+        ],
+    ]
+}
+
+/// Replaces each pixel's straight color `c` by `matrix * c + bias` (the bias in
+/// `0..=1` of full scale) and keeps its alpha. Linear in the color, so it is
+/// done on the premultiplied values as they are, with no division by alpha:
+/// the alpha scales both sides, the bias becomes `bias * alpha`, and the cut to
+/// `0..=255` on the straight color is a cut to `0..=alpha` on the product.
+fn color_matrix_in_place(pixmap: &mut Pixmap, matrix: [[f32; 3]; 3], bias: f32) {
+    for pixel in pixmap.pixels_mut() {
+        let alpha = pixel.alpha();
+        if alpha == 0 {
+            continue;
+        }
+        let (r, g, b) = (
+            pixel.red() as f32,
+            pixel.green() as f32,
+            pixel.blue() as f32,
+        );
+        let ceiling = alpha as f32;
+        let offset = bias * ceiling;
+        let channel = |row: [f32; 3]| {
+            ((row[0] * r + row[1] * g + row[2] * b + offset).clamp(0.0, ceiling) + 0.5) as u8
+        };
+        *pixel = PremultipliedColorU8::from_rgba(
+            channel(matrix[0]),
+            channel(matrix[1]),
+            channel(matrix[2]),
+            alpha,
+        )
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+}
+
+/// `invert(amount)`: each color channel `c` becomes `amount + c * (1 - 2 *
+/// amount)`; `amount` is cut to `0..=1`.
+fn invert_in_place(pixmap: &mut Pixmap, amount: f32) {
+    let amount = amount.clamp(0.0, 1.0);
+    let k = 1.0 - 2.0 * amount;
+    color_matrix_in_place(
+        pixmap,
+        [[k, 0.0, 0.0], [0.0, k, 0.0], [0.0, 0.0, k]],
+        amount,
+    );
+}
+
+/// The filter list's `opacity(amount)`: every channel, alpha included, scaled
+/// by `amount` (cut to `0..=1`).
+fn opacity_in_place(pixmap: &mut Pixmap, amount: f32) {
+    let amount = amount.clamp(0.0, 1.0);
+    for pixel in pixmap.pixels_mut() {
+        let scale = |channel: u8| ((channel as f32) * amount + 0.5) as u8;
+        let alpha = scale(pixel.alpha());
+        *pixel = PremultipliedColorU8::from_rgba(
+            scale(pixel.red()).min(alpha),
+            scale(pixel.green()).min(alpha),
+            scale(pixel.blue()).min(alpha),
+            alpha,
+        )
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+}
+
+/// `drop-shadow(x y blur color)` on `pixmap`'s own pixels: the shape of what
+/// is painted (its alpha) in `color`, blurred by a standard deviation of
+/// `blur`, moved by `(x, y)` and put behind the content. The pixmap must have
+/// room for the shadow around the content ([`filter_inflation`] sizes it).
+fn drop_shadow_in_place(pixmap: &mut Pixmap, x: f32, y: f32, blur: f32, color: Rgba) {
+    let (width, height) = (pixmap.width(), pixmap.height());
+    let Some(mut shadow) = Pixmap::new(width, height) else {
+        return;
+    };
+    let tint = f32::from(color.a) / 255.0;
+    for (source, target) in pixmap.pixels().iter().zip(shadow.pixels_mut()) {
+        let coverage = f32::from(source.alpha()) / 255.0 * tint;
+        if coverage <= 0.0 {
+            continue;
+        }
+        let scaled = |channel: u8| (f32::from(channel) * coverage + 0.5) as u8;
+        let alpha = (coverage * 255.0 + 0.5) as u8;
+        *target = PremultipliedColorU8::from_rgba(
+            scaled(color.r).min(alpha),
+            scaled(color.g).min(alpha),
+            scaled(color.b).min(alpha),
+            alpha,
+        )
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+    blur_pixmap_in_place(&mut shadow, width, height, blur);
+
+    let Some(mut moved) = Pixmap::new(width, height) else {
+        return;
+    };
+    let whole = x.fract() == 0.0 && y.fract() == 0.0;
+    moved.draw_pixmap(
+        0,
+        0,
+        shadow.as_ref(),
+        &PixmapPaint {
+            quality: if whole {
+                FilterQuality::Nearest
+            } else {
+                FilterQuality::Bilinear
+            },
+            ..Default::default()
+        },
+        Transform::from_translate(x, y),
+        None,
+    );
+    moved.draw_pixmap(
+        0,
+        0,
+        pixmap.as_ref(),
+        &PixmapPaint::default(),
+        Transform::identity(),
+        None,
+    );
+    pixmap.data_mut().copy_from_slice(moved.data());
 }
 
 /// `saturate()`'s own luminance-preserving mix: real CSS's own saturate
@@ -10996,6 +11198,206 @@ mod tests {
         );
         assert_eq!(pixel_rgb(&canvas, 30, 30), BLUE);
     }
+
+    /// The color Chrome 153 paints at the middle of a 30x30 box over white for
+    /// each source and `filter`; the rows were read off a screenshot.
+    #[test]
+    fn the_color_filters_give_the_colors_chrome_gives() {
+        let rows: &[(&str, &str, [u8; 3])] = &[
+            ("#3366cc", "grayscale(1)", [99, 99, 99]),
+            ("#3366cc", "grayscale(0.5)", [75, 100, 151]),
+            ("#3366cc", "grayscale(0.25)", [63, 101, 178]),
+            ("#3366cc", "sepia(1)", [137, 122, 95]),
+            ("#3366cc", "sepia(0.4)", [85, 110, 160]),
+            ("#3366cc", "hue-rotate(30deg)", [110, 83, 214]),
+            ("#3366cc", "hue-rotate(90deg)", [204, 62, 146]),
+            ("#3366cc", "hue-rotate(180deg)", [146, 95, 0]),
+            ("#3366cc", "hue-rotate(-60deg)", [0, 132, 110]),
+            ("#3366cc", "invert(1)", [204, 153, 51]),
+            ("#3366cc", "invert(0.3)", [97, 117, 158]),
+            ("#3366cc", "opacity(0.5)", [153, 179, 230]),
+            ("#3366cc", "opacity(0.2)", [214, 224, 245]),
+            ("#3366cc", "grayscale(0.5) invert(0.5)", [128, 128, 128]),
+            ("#3366cc", "sepia(0.5) hue-rotate(40deg)", [123, 103, 151]),
+            ("rgba(204,102,51,0.6)", "grayscale(1)", [174, 174, 174]),
+            ("rgba(204,102,51,0.6)", "grayscale(0.5)", [199, 168, 153]),
+            ("rgba(204,102,51,0.6)", "sepia(1)", [203, 192, 172]),
+            ("rgba(204,102,51,0.6)", "hue-rotate(90deg)", [133, 191, 124]),
+            (
+                "rgba(204,102,51,0.6)",
+                "hue-rotate(180deg)",
+                [124, 185, 215],
+            ),
+            ("rgba(204,102,51,0.6)", "invert(1)", [133, 194, 224]),
+            ("rgba(204,102,51,0.6)", "invert(0.3)", [197, 172, 160]),
+            ("rgba(204,102,51,0.6)", "opacity(0.5)", [240, 209, 194]),
+            ("rgba(204,102,51,0.6)", "opacity(0.2)", [249, 237, 231]),
+            (
+                "rgba(204,102,51,0.6)",
+                "grayscale(0.5) invert(0.5)",
+                [178, 178, 178],
+            ),
+            (
+                "rgba(204,102,51,0.6)",
+                "sepia(0.5) hue-rotate(40deg)",
+                [187, 187, 140],
+            ),
+            ("#ffffff", "sepia(1)", [255, 255, 239]),
+            ("#ffffff", "sepia(0.4)", [255, 255, 249]),
+            ("#ffffff", "invert(1)", [0, 0, 0]),
+            ("#ffffff", "invert(0.3)", [178, 178, 178]),
+            ("#ffffff", "sepia(0.5) hue-rotate(40deg)", [250, 255, 248]),
+            ("#000000", "invert(1)", [255, 255, 255]),
+            ("#000000", "invert(0.3)", [76, 76, 76]),
+            ("#000000", "opacity(0.5)", [128, 128, 128]),
+            ("#000000", "opacity(0.2)", [204, 204, 204]),
+        ];
+        let tree: Element = view! { <div class="b" /> };
+        for (source, filter, [r, g, b]) in rows {
+            let canvas = paint_text_css(
+                &tree,
+                &format!(
+                    ".b {{ width: 30px; height: 30px; background: {source}; filter: {filter}; }}"
+                ),
+                (40, 40),
+            );
+            let got = pixel_rgb(&canvas, 15, 15);
+            let near = |a: u8, e: u8| a.abs_diff(e) <= 1;
+            assert!(
+                near(got[0], *r) && near(got[1], *g) && near(got[2], *b),
+                "{source} {filter}: got {got:?}, Chrome gives {:?}",
+                [r, g, b]
+            );
+        }
+    }
+
+    #[test]
+    fn a_drop_shadow_falls_off_as_chromes_does() {
+        let tree: Element = view! { <div class="b" /> };
+        let canvas = paint_text_css(
+            &tree,
+            ".b { width: 100px; height: 50px; background: #ff0000; \
+                 filter: drop-shadow(6px 6px 4px #000000); }",
+            (140, 90),
+        );
+        // Chrome 153, along a row through the middle of the box and past its
+        // right edge at x = 100 (the shadow's own edge is at 106).
+        let chrome: &[(u32, u8)] = &[
+            (100, 25),
+            (101, 37),
+            (102, 53),
+            (103, 72),
+            (104, 93),
+            (106, 139),
+            (108, 183),
+            (110, 218),
+            (112, 240),
+            (114, 251),
+        ];
+        for &(x, expected) in chrome {
+            let [r, g, b] = pixel_rgb(&canvas, x, 25);
+            assert!(
+                r == g && g == b,
+                "a black shadow is gray at {x}: {r} {g} {b}"
+            );
+            assert!(
+                r.abs_diff(expected) <= 6,
+                "x = {x}: got {r}, Chrome gives {expected}"
+            );
+        }
+        // And the same down the bottom edge.
+        for &(offset, expected) in chrome {
+            let y = offset - 100 + 50;
+            let got = pixel_rgb(&canvas, 50, y)[0];
+            assert!(
+                got.abs_diff(expected) <= 6,
+                "y = {y}: got {got}, Chrome gives {expected}"
+            );
+        }
+        // The box itself is untouched and stays in front.
+        assert_eq!(pixel_rgb(&canvas, 50, 25), RED);
+        // Nothing above or to the left of the box: the shadow only falls
+        // down and to the right.
+        assert_eq!(pixel_rgb(&canvas, 50, 0)[0], 255);
+    }
+
+    #[test]
+    fn a_drop_shadow_of_a_translucent_color_and_a_second_function_compose_in_order() {
+        let tree: Element = view! { <div class="b" /> };
+        let half = paint_text_css(
+            &tree,
+            ".b { width: 20px; height: 20px; background: #ff0000; \
+                 filter: drop-shadow(10px 0 0 rgba(0, 0, 255, 0.5)); }",
+            (50, 30),
+        );
+        // A half-transparent blue shadow over white, with no blur (Chrome 153
+        // gives 127, 127, 255; 25% gives 191 and 80% gives 51).
+        assert_eq!(pixel_rgb(&half, 25, 10), [127, 127, 255]);
+        // `invert()` after it also inverts the shadow; before it, only the box.
+        let after = paint_text_css(
+            &tree,
+            ".b { width: 20px; height: 20px; background: #ff0000; \
+                 filter: drop-shadow(10px 0 0 #0000ff) invert(1); }",
+            (50, 30),
+        );
+        assert_eq!(pixel_rgb(&after, 5, 10), [0, 255, 255]);
+        assert_eq!(pixel_rgb(&after, 25, 10), [255, 255, 0]);
+        let before = paint_text_css(
+            &tree,
+            ".b { width: 20px; height: 20px; background: #ff0000; \
+                 filter: invert(1) drop-shadow(10px 0 0 #0000ff); }",
+            (50, 30),
+        );
+        assert_eq!(pixel_rgb(&before, 5, 10), [0, 255, 255]);
+        assert_eq!(pixel_rgb(&before, 25, 10), [0, 0, 255]);
+    }
+
+    #[test]
+    fn a_drop_shadow_scales_with_the_device_pixel_ratio() {
+        let css = ".box { background-color: #ff0000; filter: drop-shadow(4px 0 0 #0000ff); }";
+        let one = single_box_buffer(css, 40, 1.0);
+        let two = single_box_buffer(css, 80, 2.0);
+        // The box is 10px wide (20 device pixels at 2x) on a black canvas; its
+        // blue shadow reaches 4px (8 device pixels) past it.
+        assert_eq!(pixel_rgb(&one, 12, 5), [0, 0, 255]);
+        assert_eq!(pixel_rgb(&one, 15, 5), [0, 0, 0]);
+        assert_eq!(pixel_rgb(&two, 26, 10), [0, 0, 255]);
+        assert_eq!(pixel_rgb(&two, 29, 10), [0, 0, 0]);
+    }
+
+    #[test]
+    fn the_surface_of_a_filtered_group_has_room_for_its_drop_shadow() {
+        let tree: Element = view! { <div class="b" /> };
+        // Far from the canvas edge, so the shadow must come from the group's
+        // own surface, which has to be sized for it.
+        let canvas = paint_text_css(
+            &tree,
+            ".b { margin: 30px; width: 20px; height: 20px; background: #ff0000; \
+                 filter: drop-shadow(0 0 6px #000000); }",
+            (80, 80),
+        );
+        let [r, ..] = pixel_rgb(&canvas, 28, 40);
+        assert!(r < 250, "the shadow reaches past the box: {r}");
+        let [r, ..] = pixel_rgb(&canvas, 14, 40);
+        assert!(r >= 250, "but not as far as 16px: {r}");
+    }
+
+    #[test]
+    fn a_filtered_group_paints_the_same_on_a_bounded_and_a_full_surface() {
+        let tree: Element = view! { <div class="b" /> };
+        for filter in [
+            "drop-shadow(8px 8px 6px #000000)",
+            "drop-shadow(-12px 4px 0 #0000ff) grayscale(0.5)",
+            "sepia(0.7) drop-shadow(0 0 10px #ff0000)",
+        ] {
+            let css = format!(
+                ".b {{ margin: 120px; width: 30px; height: 20px; background: #3366cc; filter: {filter}; }}"
+            );
+            assert_bounded_and_full_target_paint_within(1, || {
+                paint_text_css(&tree, &css, (300, 300))
+            });
+        }
+    }
     #[test]
     fn blur_spreads_a_solid_boxs_own_color_past_its_own_edge() {
         let filtered = single_box_buffer_at(
@@ -11107,17 +11509,16 @@ mod tests {
     }
 
     #[test]
-    fn an_unsupported_grayscale_function_is_dropped_from_the_filter_chain() {
-        let with_grayscale = single_box_buffer(
+    fn grayscale_turns_a_box_gray_on_the_canvas() {
+        let gray = single_box_buffer(
             ".box { background-color: #ff0000; filter: grayscale(1); }",
             20,
             1.0,
         );
-        let without_filter = single_box_buffer(".box { background-color: #ff0000; }", 20, 1.0);
-        assert_eq!(
-            pixel_rgb(&with_grayscale, 5, 5),
-            pixel_rgb(&without_filter, 5, 5)
-        );
+        // Red's luminance, 0.2126 * 255, in every channel.
+        assert_eq!(pixel_rgb(&gray, 5, 5), [54, 54, 54]);
+        let plain = single_box_buffer(".box { background-color: #ff0000; }", 20, 1.0);
+        assert_eq!(pixel_rgb(&plain, 5, 5), [255, 0, 0]);
     }
 
     #[test]

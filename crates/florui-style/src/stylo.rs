@@ -1948,8 +1948,8 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
             box_style.backface_visibility,
             style::computed_values::backface_visibility::T::Hidden
         ),
-        filter: to_filter(&effects.filter.0),
-        backdrop_filter: to_filter(&effects.backdrop_filter.0),
+        filter: to_filter(&effects.filter.0, color),
+        backdrop_filter: to_filter(&effects.backdrop_filter.0, color),
         container_type: to_container_type(box_style.clone_container_type()),
         container_name: to_container_name(&box_style.clone_container_name()),
         object_fit: to_object_fit(position.object_fit),
@@ -2321,6 +2321,7 @@ fn to_filter(
             style::values::Impossible,
         >,
     >,
+    inherited_color: Rgba,
 ) -> Vec<FlorFilterFunction> {
     use style::values::generics::effects::GenericFilter;
     value
@@ -2330,11 +2331,23 @@ fn to_filter(
             GenericFilter::Brightness(factor) => Some(FlorFilterFunction::Brightness(factor.0)),
             GenericFilter::Contrast(factor) => Some(FlorFilterFunction::Contrast(factor.0)),
             GenericFilter::Saturate(factor) => Some(FlorFilterFunction::Saturate(factor.0)),
-            // Documented unsupported subset: grayscale, hue-rotate,
-            // invert, the filter list's own opacity(), sepia,
-            // drop-shadow, and url() — see `FlorFilterFunction`'s own
-            // doc.
-            _ => None,
+            GenericFilter::Grayscale(amount) => Some(FlorFilterFunction::Grayscale(amount.0)),
+            GenericFilter::HueRotate(angle) => Some(FlorFilterFunction::HueRotate(angle.degrees())),
+            GenericFilter::Invert(amount) => Some(FlorFilterFunction::Invert(amount.0)),
+            GenericFilter::Opacity(amount) => Some(FlorFilterFunction::Opacity(amount.0)),
+            GenericFilter::Sepia(amount) => Some(FlorFilterFunction::Sepia(amount.0)),
+            GenericFilter::DropShadow(shadow) => Some(FlorFilterFunction::DropShadow {
+                x: shadow.horizontal.px(),
+                y: shadow.vertical.px(),
+                blur: shadow.blur.0.px(),
+                color: shadow
+                    .color
+                    .as_absolute()
+                    .map(to_absolute_rgba)
+                    .unwrap_or(inherited_color),
+            }),
+            // `url()` names an SVG filter, which cannot be defined here.
+            GenericFilter::Url(_) => None,
         })
         .collect()
 }
