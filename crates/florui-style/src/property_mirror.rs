@@ -50,6 +50,7 @@ pub(crate) const MIRRORED: &[&str] = &[
     "mask-clip",
     "mask-composite",
     "background-blend-mode",
+    "background-clip",
 ];
 
 const GLOBAL_KEYWORDS: [&str; 5] = ["inherit", "initial", "unset", "revert", "revert-layer"];
@@ -80,6 +81,7 @@ fn mentions(css: &str) -> bool {
     lower.contains("font-variant")
         || lower.contains("text-decoration")
         || lower.contains("mask")
+        || lower.contains("background")
         || MIRRORED.iter().any(|name| lower.contains(name))
 }
 
@@ -160,7 +162,9 @@ fn is_mask_name(name: &str) -> bool {
 }
 
 fn is_handled(name: &str) -> bool {
-    name.eq_ignore_ascii_case("font-variant")
+    name.eq_ignore_ascii_case("background")
+        || name.eq_ignore_ascii_case("-webkit-background-clip")
+        || name.eq_ignore_ascii_case("font-variant")
         || name.eq_ignore_ascii_case("text-decoration")
         || is_mask_name(name)
         || MIRRORED
@@ -257,9 +261,91 @@ fn expand(name: &str, value: &str, important: &str) -> Option<String> {
         "font-variant" => expand_font_variant(value, important),
         "text-decoration" => expand_text_decoration(value, important),
         "clip-path" => Some(expand_clip_path(value, important)),
+        "background" => Some(expand_background(value, important)),
+        "background-clip" | "-webkit-background-clip" => expand_background_clip(value, important),
         _ if is_mask_name(name) => expand_mask(name, value, important),
         _ => Some(format!("{}: {value}{important}", mirror_name(name))),
     }
+}
+
+fn is_box_keyword(word: &str) -> bool {
+    ["border-box", "padding-box", "content-box"]
+        .iter()
+        .any(|keyword| word.eq_ignore_ascii_case(keyword))
+}
+
+/// `background-clip`, whose `text` the engine's servo build does not know: the
+/// engine gets a box in its place and the list as written goes to the custom
+/// property. Written for every value, so that a later rule without `text` takes
+/// the clip back. `-webkit-background-clip` is the same property.
+fn expand_background_clip(value: &str, important: &str) -> Option<String> {
+    let value = value.trim();
+    let mirror = mirror_name("background-clip");
+    if is_global(value) {
+        return Some(format!(
+            "background-clip: {value}{important}; {mirror}: {value}{important}"
+        ));
+    }
+    let mut native = Vec::new();
+    for layer in split_commas(value) {
+        let word = layer.trim();
+        if word.eq_ignore_ascii_case("text") {
+            native.push("border-box");
+        } else if is_box_keyword(word) {
+            native.push(word);
+        } else {
+            return None;
+        }
+    }
+    Some(format!(
+        "background-clip: {}{important}; {mirror}: {value}{important}",
+        native.join(", ")
+    ))
+}
+
+/// The `background` shorthand, which takes `text` as a clip: the engine gets a
+/// box in its place, and the custom property says which layers were clipped to
+/// the text (`text`) and which were not (`x`), so that a shorthand without
+/// `text` takes the clip back too.
+fn expand_background(value: &str, important: &str) -> String {
+    let value = value.trim();
+    let mirror = mirror_name("background-clip");
+    if is_global(value) {
+        return format!("background: {value}{important}; {mirror}: {value}{important}");
+    }
+    let mut native = Vec::new();
+    let mut marks = Vec::new();
+    for layer in split_commas(value) {
+        let layer_words = words(layer);
+        if layer_words.iter().any(|w| w.eq_ignore_ascii_case("text")) {
+            // The one box that is left stands for the other box the text took.
+            let boxed = layer_words
+                .iter()
+                .copied()
+                .find(|w| is_box_keyword(w))
+                .unwrap_or("border-box");
+            let replaced: Vec<&str> = layer_words
+                .iter()
+                .map(|&w| {
+                    if w.eq_ignore_ascii_case("text") {
+                        boxed
+                    } else {
+                        w
+                    }
+                })
+                .collect();
+            native.push(replaced.join(" "));
+            marks.push("text");
+        } else {
+            native.push(layer.trim().to_owned());
+            marks.push("x");
+        }
+    }
+    format!(
+        "background: {}{important}; {mirror}: {}{important}",
+        native.join(", "),
+        marks.join(", ")
+    )
 }
 
 const CAPS: [&str; 6] = [
@@ -795,6 +881,54 @@ mod tests {
         );
     }
 
+    #[test]
+    fn background_clip_gives_the_engine_a_box_for_text_and_keeps_the_list() {
+        assert_eq!(
+            sheet(".a { background-clip: text }"),
+            ".a { background-clip: border-box; --florui-background-clip: text }"
+        );
+        assert_eq!(
+            sheet(".a { -webkit-background-clip: text, padding-box !important }"),
+            ".a { background-clip: border-box, padding-box !important; \
+             --florui-background-clip: text, padding-box !important }"
+        );
+        // Every value is mirrored, so a later one without `text` takes the clip back.
+        assert_eq!(
+            sheet(".a { background-clip: content-box }"),
+            ".a { background-clip: content-box; --florui-background-clip: content-box }"
+        );
+        // An invalid value is left for the engine to drop.
+        assert_eq!(
+            sheet(".a { background-clip: sideways }"),
+            ".a { background-clip: sideways }"
+        );
+    }
+
+    #[test]
+    fn the_background_shorthand_says_which_layers_are_clipped_to_text() {
+        assert_eq!(
+            sheet(".a { background: linear-gradient(red, blue) text }"),
+            ".a { background: linear-gradient(red, blue) border-box; --florui-background-clip: text }"
+        );
+        assert_eq!(
+            sheet(".a { background: url(a.png) padding-box text, red }"),
+            ".a { background: url(a.png) padding-box padding-box, red; \
+             --florui-background-clip: text, x }"
+        );
+        assert_eq!(
+            sheet(".a { background: red }"),
+            ".a { background: red; --florui-background-clip: x }"
+        );
+        assert_eq!(
+            sheet(".a { background: inherit }"),
+            ".a { background: inherit; --florui-background-clip: inherit }"
+        );
+        // Longhands of the shorthand are not touched.
+        assert_eq!(
+            sheet(".a { background-color: red }"),
+            ".a { background-color: red }"
+        );
+    }
     #[test]
     fn font_variant_is_split_into_the_one_property_the_engine_has_and_the_rest() {
         assert_eq!(

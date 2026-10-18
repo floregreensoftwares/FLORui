@@ -823,6 +823,8 @@ pub enum BoxSizing {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     pub background_color: Rgba,
+    /// The box `background-color` is cut to: the clip of the bottom layer.
+    pub background_color_clip: crate::background::BackgroundBox,
     /// `background-image` and the properties that go with it, one entry per
     /// layer, the first drawn on top.
     pub background_layers: Vec<crate::background::BackgroundLayer>,
@@ -1186,6 +1188,7 @@ impl ComputedStyle {
         let ComputedStyle {
             // Paint only.
             background_color,
+            background_color_clip,
             background_layers,
             color,
             border,
@@ -1284,6 +1287,7 @@ impl ComputedStyle {
             scroll_behavior_smooth: _,
         } = other;
         self.background_color = *background_color;
+        self.background_color_clip = *background_color_clip;
         self.background_layers.clone_from(background_layers);
         self.color = *color;
         self.border.top.color = border.top.color;
@@ -5431,6 +5435,113 @@ mod tests {
         assert!(!computed_of(".t { isolation: auto; }").isolate);
     }
 
+    #[test]
+    fn background_clip_text_is_kept_per_layer_from_every_spelling() {
+        use crate::BackgroundBox as B;
+        let grad = "linear-gradient(#f00, #00f)";
+        let clips = |css: &str| -> Vec<B> {
+            computed_of(css)
+                .background_layers
+                .iter()
+                .map(|l| l.clip)
+                .collect()
+        };
+        assert_eq!(
+            clips(&format!(
+                ".t {{ background-image: {grad}; background-clip: text; }}"
+            )),
+            [B::Text]
+        );
+        assert_eq!(
+            clips(&format!(
+                ".t {{ background-image: {grad}; -webkit-background-clip: text; }}"
+            )),
+            [B::Text]
+        );
+        // A list cycles over the layers, and a box stays a box.
+        assert_eq!(
+            clips(&format!(
+                ".t {{ background-image: {grad}, {grad}, {grad}; background-clip: text, padding-box; }}"
+            )),
+            [B::Text, B::Padding, B::Text]
+        );
+        // The shorthand takes it as the clip, with a box before it as the origin.
+        let shorthand = computed_of(&format!(".t {{ background: {grad} padding-box text; }}"));
+        assert_eq!(shorthand.background_layers[0].clip, B::Text);
+        assert_eq!(shorthand.background_layers[0].origin, B::Padding);
+        assert_eq!(
+            clips(&format!(
+                ".t {{ background: {grad} text, {grad} content-box; }}"
+            )),
+            [B::Text, B::Content]
+        );
+        // A later declaration without `text` takes the clip back, in either form.
+        for later in [
+            "background-clip: border-box",
+            "background: red",
+            "background-clip: inherit",
+        ] {
+            assert_eq!(
+                clips(&format!(
+                    ".t {{ background-image: {grad}; background-clip: text; }} .t {{ {later}; background-image: {grad}; }}"
+                )),
+                [B::Border],
+                "{later}"
+            );
+        }
+        // And a later `text` wins over an earlier box.
+        assert_eq!(
+            clips(&format!(
+                ".t {{ background-image: {grad}; background-clip: content-box; }} .t {{ -webkit-background-clip: text; }}"
+            )),
+            [B::Text]
+        );
+        // It is not inherited.
+        let tree: Element = view! { <div class="p"><span class="c" /></div> };
+        let (arena, computed) = styles(
+            &tree,
+            &format!(".p {{ background-clip: text; }} .c {{ background-image: {grad}; }}"),
+            &InteractionState::new(),
+        );
+        let child = &computed[&arena.children(arena.roots()[0])[0]];
+        assert_eq!(child.background_layers[0].clip, B::Border);
+        // An invalid list is dropped whole and leaves what was there.
+        assert_eq!(
+            clips(&format!(
+                ".t {{ background-image: {grad}; background-clip: text; background-clip: sideways; }}"
+            )),
+            [B::Text]
+        );
+    }
+
+    #[test]
+    fn the_colour_is_cut_to_the_clip_of_the_bottom_layer() {
+        use crate::BackgroundBox as B;
+        let clip = |css: &str| computed_of(css).background_color_clip;
+        assert_eq!(clip(".t { }"), B::Border);
+        assert_eq!(clip(".t { background-clip: content-box; }"), B::Content);
+        assert_eq!(clip(".t { background-clip: text; }"), B::Text);
+        let grad = "linear-gradient(#f00, #00f)";
+        assert_eq!(
+            clip(&format!(
+                ".t {{ background-image: {grad}, {grad}; background-clip: border-box, padding-box; }}"
+            )),
+            B::Padding
+        );
+        assert_eq!(
+            clip(&format!(
+                ".t {{ background-image: {grad}, {grad}; background-clip: padding-box, text; }}"
+            )),
+            B::Text
+        );
+        // A list that is shorter than the layers cycles.
+        assert_eq!(
+            clip(&format!(
+                ".t {{ background-image: {grad}, {grad}, {grad}; background-clip: padding-box, text; }}"
+            )),
+            B::Padding
+        );
+    }
     #[test]
     fn background_blend_mode_goes_to_each_layer_and_cycles() {
         use crate::BlendMode as B;
