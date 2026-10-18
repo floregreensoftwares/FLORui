@@ -254,8 +254,8 @@ and `background-clip` (`border-box`, `padding-box`, `content-box`). A layer is c
 the box it is clipped to, and painted under the inset shadows and the border.
 
 Limits: a color interpolation method other than the default (`in oklab`, `in hsl longer hue`) is read but
-the colors are interpolated in sRGB; `background-clip: text`, `background-attachment`, `background-blend-mode`
-and the `-webkit-` gradient syntax are not supported. A tile that does
+the colors are interpolated in sRGB; `background-attachment` and the `-webkit-` gradient syntax are not
+supported. A tile that does
 not start on a whole pixel (`space` and `round` give them) has soft edges that differ from Chromium's along
 the seams. Chromium dithers gradients, so a smooth gradient differs from this engine by one level of 255 on
 a third of its pixels; the reference fixtures allow two levels. A gradient is rendered once and reused while
@@ -288,6 +288,31 @@ nothing and is reported once on standard error. Only PNG and SVG are supported (
 no `image-set()`, no `http` addresses), and a relative path is read against the working directory, which a
 packaged application does not share with a development checkout, so ship textures as `data:` URLs or as
 files the application places itself.
+
+## Filters, clipping, masks and blending
+
+A node with a `filter`, `clip-path`, `mask` or `mix-blend-mode` is painted on a surface of its own and put on
+the page after it, in that order: filter, clip, mask, then opacity, transform and the blend mode.
+
+- `filter` takes a list: `blur()`, `brightness()`, `contrast()`, `saturate()`, `grayscale()`, `sepia()`,
+  `hue-rotate()`, `invert()`, `opacity()` and `drop-shadow()`. As in Chromium a `drop-shadow()` blur is a
+  standard deviation, unlike `box-shadow`'s. A `url(#id)` filter is not supported.
+- `clip-path` takes `inset()` (with `round`), `circle()`, `ellipse()`, `polygon()`, `path()`, `rect()`,
+  `xywh()` and `shape()`, with a reference box (`border-box`, `padding-box`, `content-box`, `margin-box`,
+  `fill-box`, `stroke-box`, `view-box`), or a box alone. What the shape cuts is also what a pointer can hit.
+  `url(#id)` is not supported.
+- `mask-image` takes gradients and `url()` images (a PNG, or an SVG), several layers, with `mask-mode`,
+  `mask-size`, `mask-position`, `mask-repeat`, `mask-origin`, `mask-clip` (including `no-clip`),
+  `mask-composite`, the `mask` shorthand and the `-webkit-mask` forms. Not supported: `mask-border`,
+  `-webkit-mask-box-image`, `mask-type` and a mask that is an SVG `<mask>` element.
+- `mix-blend-mode` takes every blend mode, `plus-lighter` included. A stacking context that holds a blended
+  box is painted as a group, so what blends inside it meets only its own content, and `isolation: isolate`
+  makes one. `background-blend-mode` blends each layer with the layers and the colour below it.
+- `background-clip: text` (and `-webkit-background-clip: text`, and `text` in the `background` shorthand)
+  shows a layer through the glyphs of the box and of what is in it, including the text of inline elements.
+  `background-color` is cut to the clip of the bottom layer, whatever it is.
+
+The fixtures that compare these with Chromium use flat fills, because Chromium dithers gradients.
 
 ## Text shadows
 
