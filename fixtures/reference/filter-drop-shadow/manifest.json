@@ -1,0 +1,134 @@
+{
+    "id":  "filter-drop-shadow",
+    "description":  "drop-shadow(): offset, blur, translucent and current colors, on boxes, borders and text, chained",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  540,
+                     "height_css_px":  280,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 540px; height: 280px; background-color: #ffffff; } .b { position: absolute; width: 100px; height: 50px; box-sizing: border-box; border-radius: 8px; color: #cc0000; font-size: 22px; line-height: 50px; text-align: center; font-weight: 700; } .p0 { left: 20px; top: 20px; background-color: #d05040; filter: drop-shadow(6px 6px 4px #000000); } .p1 { left: 150px; top: 20px; background-color: #40a060; filter: drop-shadow(0 0 8px #0000ff); } .p2 { left: 280px; top: 20px; background-color: #4070d0; filter: drop-shadow(-8px 4px 0 rgba(0, 0, 0, 0.5)); } .p3 { left: 410px; top: 20px; background-color: #e0b030; filter: drop-shadow(4px 4px 2px #00aa00); } .p4 { left: 20px; top: 110px; background-color: #a050c0; background: transparent; border: 4px solid #3366cc; filter: drop-shadow(5px 5px 3px #000000); } .p5 { left: 150px; top: 110px; background-color: #30a0b0; background: transparent; color: #202020; filter: drop-shadow(3px 3px 2px #ff0000); } .p6 { left: 280px; top: 110px; background-color: #d05040; filter: drop-shadow(4px 4px 0 #0000ff) drop-shadow(8px 8px 0 #00aa00); } .p7 { left: 410px; top: 110px; background-color: #40a060; filter: drop-shadow(5px 5px 3px); } .p8 { left: 20px; top: 200px; background-color: #4070d0; filter: drop-shadow(6px 6px 4px #000000) grayscale(1); } .p9 { left: 150px; top: 200px; background-color: #e0b030; filter: grayscale(1) drop-shadow(6px 6px 4px #0000ff); } .p10 { left: 280px; top: 200px; background-color: #a050c0; border-radius: 50px 4px 30px 4px; filter: drop-shadow(0 6px 5px rgba(0, 0, 0, 0.7)); } .p11 { left: 410px; top: 200px; background-color: #30a0b0; opacity: 0.6; filter: drop-shadow(6px 6px 3px #000000); }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p0",
+                                        "css":  "",
+                                        "text":  "Hg",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p1",
+                                        "css":  "",
+                                        "text":  "Hg",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p2",
+                                        "css":  "",
+                                        "text":  "Hg",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p3",
+                                        "css":  "",
+                                        "text":  "Hg",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p4",
+                                        "css":  "",
+                                        "text":  "Hg",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p5",
+                                        "css":  "",
+                                        "text":  "Hg",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p6",
+                                        "css":  "",
+                                        "text":  "Hg",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p7",
+                                        "css":  "",
+                                        "text":  "Hg",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p8",
+                                        "css":  "",
+                                        "text":  "Hg",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p9",
+                                        "css":  "",
+                                        "text":  "Hg",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p10",
+                                        "css":  "",
+                                        "text":  "Hg",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p11",
+                                        "css":  "",
+                                        "text":  "Hg",
+                                        "children":  [
+
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  3.2,
+                           "reason":  "Measured against Chromium 153 on Windows: 2.39% of the pixels differ by more than 3 levels of a channel and every box has the same bounding box. What is left is the edge of the glyphs, the corner arcs of the rounded boxes and a few pixels of the blurred halos. The blur of drop-shadow() is a standard deviation, not half a blur radius as in box-shadow. With drop-shadow() ignored the same fixture measures 27.3%, so it fails.",
+                           "channel_tolerance":  3
+                       }
+}
