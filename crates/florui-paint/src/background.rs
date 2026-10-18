@@ -173,6 +173,58 @@ pub(crate) fn paint_layers(
     }
 }
 
+/// Whether any of `layers` blends with the ones below it.
+pub(crate) fn blends(layers: &[BackgroundLayer]) -> bool {
+    layers
+        .iter()
+        .any(|layer| layer.blend != florui_style::BlendMode::Normal)
+}
+
+/// Paints a box's background, the colour from `fill_color` and the `layers`
+/// over it, where a layer with a `background-blend-mode` is blended with what is
+/// below it in the background alone, and the result is laid over what is on the
+/// surface as one piece.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn paint_blended(
+    buffer: &mut Surface,
+    outline: &RoundedRect,
+    border: Edges<BorderSide>,
+    padding: Edges<f32>,
+    layers: &[BackgroundLayer],
+    scale: f32,
+    clip: Option<&Mask>,
+    fill_color: &dyn Fn(&mut Surface),
+) {
+    let (width, height) = (buffer.pixmap.width(), buffer.pixmap.height());
+    let Some(mut group) = Surface::new(width, height, buffer.origin) else {
+        return;
+    };
+    fill_color(&mut group);
+    let boxes = Boxes::new(outline, border, padding);
+    for layer in layers.iter().rev() {
+        if layer.blend == florui_style::BlendMode::Normal {
+            paint_layer(&mut group, &boxes, layer, scale, None);
+            continue;
+        }
+        let Some(mut single) = Surface::new(width, height, buffer.origin) else {
+            return;
+        };
+        paint_layer(&mut single, &boxes, layer, scale, None);
+        let paint = PixmapPaint {
+            blend_mode: crate::blend::to_tiny_skia(layer.blend),
+            ..Default::default()
+        };
+        draw_shifted(&mut group.pixmap, &single.pixmap, (0, 0), &paint, None);
+    }
+    draw_shifted(
+        &mut buffer.pixmap,
+        &group.pixmap,
+        (0, 0),
+        &PixmapPaint::default(),
+        clip,
+    );
+}
+
 fn paint_layer(
     buffer: &mut Surface,
     boxes: &Boxes,

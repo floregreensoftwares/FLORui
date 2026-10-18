@@ -55,6 +55,7 @@
 
 mod background;
 mod banded;
+mod blend;
 mod blur;
 mod border_image;
 mod border_style;
@@ -99,9 +100,9 @@ use florui_layout::{BoxLayout, absolute_position};
 #[cfg(test)]
 use florui_style::Arena;
 use florui_style::{
-    ComputedStyle, ContentAlignment, Display, FilterFunction, FlexDirection, GlassMaterial,
-    GlassSpec, ItemAlignment, LengthPercentage, NodeId, ObjectFit, Position, Rgba, RoundedRect,
-    Tree,
+    BlendMode, ComputedStyle, ContentAlignment, Display, FilterFunction, FlexDirection,
+    GlassMaterial, GlassSpec, ItemAlignment, LengthPercentage, NodeId, ObjectFit, Position, Rgba,
+    RoundedRect, Tree,
 };
 use florui_text::Font;
 use projection::Projection;
@@ -922,9 +923,10 @@ fn paint_nodes(
         if backface_is_hidden(styles, layouts, node, node_abs, &transform) {
             continue;
         }
-        let has_effect = styles
-            .get(&node)
-            .is_some_and(ComputedStyle::has_group_effect);
+        let has_effect = blend::isolates(arena, styles, node)
+            || styles
+                .get(&node)
+                .is_some_and(ComputedStyle::has_group_effect);
         if opacity < 1.0 || !transform.is_identity() || has_effect {
             paint_group(
                 buffer,
@@ -1899,7 +1901,8 @@ fn subtree_extent(
             ) {
                 continue;
             }
-            let child_has_effect = child_style.is_some_and(ComputedStyle::has_group_effect);
+            let child_has_effect = child_style.is_some_and(ComputedStyle::has_group_effect)
+                || blend::isolates(arena, styles, child);
             let child_is_group =
                 child_opacity < 1.0 || !child_transform.is_identity() || child_has_effect;
 
@@ -2202,7 +2205,10 @@ fn paint_group(
         return;
     };
     let _composite_span = florui_profile::span(florui_profile::Phase::RasterComposite);
-    composite_group(buffer, &group, clip, opacity, transform);
+    let blend = styles
+        .get(&node)
+        .map_or(BlendMode::Normal, |style| style.mix_blend_mode);
+    composite_group(buffer, &group, clip, opacity, transform, blend);
 }
 
 /// Renders `node`'s box and, unless `own_only`, its whole subtree into a fresh
@@ -2380,25 +2386,56 @@ fn apply_clip_path(
     }
 }
 
-/// Places a rendered group on `buffer` through `transform`, at `opacity` and
-/// within `clip`.
+/// Places a rendered group on `buffer` through `transform`, at `opacity`,
+/// blended with what is there by `blend`, and within `clip`.
 fn composite_group(
     buffer: &mut Surface,
     group: &Surface,
     clip: Option<ClipRect>,
     opacity: f32,
     transform: Projection,
+    blend: BlendMode,
 ) {
     let Some(affine) = transform.affine() else {
         let composite_mask = clip.and_then(|c| c.to_mask(buffer));
+        if blend == BlendMode::Normal {
+            projection::draw_projected(
+                &mut buffer.pixmap,
+                buffer.origin,
+                &group.pixmap,
+                group.origin,
+                &transform.0,
+                None,
+                opacity,
+                composite_mask.as_ref(),
+            );
+            return;
+        }
+        // The projection only knows how to lay one surface over another, so a
+        // blended one is projected on its own first and that is what is blended.
+        let Some(mut projected) = Pixmap::new(buffer.pixmap.width(), buffer.pixmap.height()) else {
+            return;
+        };
         projection::draw_projected(
-            &mut buffer.pixmap,
+            &mut projected,
             buffer.origin,
             &group.pixmap,
             group.origin,
             &transform.0,
             None,
+            1.0,
+            None,
+        );
+        let paint = PixmapPaint {
             opacity,
+            blend_mode: blend::to_tiny_skia(blend),
+            ..Default::default()
+        };
+        draw_shifted(
+            &mut buffer.pixmap,
+            &projected,
+            (0, 0),
+            &paint,
             composite_mask.as_ref(),
         );
         return;
@@ -2407,12 +2444,12 @@ fn composite_group(
     // sampling leaves the edge of a rotated disc in steps.
     let paint = PixmapPaint {
         opacity,
+        blend_mode: blend::to_tiny_skia(blend),
         quality: if affine.is_translate() {
             FilterQuality::Nearest
         } else {
             FilterQuality::Bilinear
         },
-        ..Default::default()
     };
     // `draw_pixmap`'s own `(x, y)` places the group's local `(0, 0)` at
     // that *absolute* position before `transform` (its own `transform`
@@ -2475,7 +2512,10 @@ fn draw_shifted(
     // A clip that covers the whole drawn area (the usual rectangular one) is
     // the same as no clip.
     let mask = mask.filter(|mask| !mask_is_full(mask, target.width(), (x0, y0, x1, y1)));
-    if paint.opacity == 1.0 && mask.is_none() {
+    if paint.opacity == 1.0
+        && mask.is_none()
+        && paint.blend_mode == tiny_skia::BlendMode::SourceOver
+    {
         blit_over(target, source, (x, y), (x0, y0, x1, y1));
         return;
     }
@@ -3543,7 +3583,29 @@ fn paint_node(
         }
 
         let background = style.map_or(Rgba::TRANSPARENT, |s| s.background_color);
-        if shown && background.a != 0 {
+        let blended_layers = style.filter(|s| shown && background::blends(&s.background_layers));
+        if let Some(style) = blended_layers {
+            let _span = florui_profile::span(florui_profile::Phase::RasterLayers);
+            background::paint_blended(
+                buffer,
+                &outline,
+                border,
+                scaled_padding(style.padding, scale_factor),
+                &style.background_layers,
+                scale_factor,
+                clip,
+                &|group| {
+                    if background.a == 0 {
+                        return;
+                    }
+                    if rounded {
+                        fill_rounded_rect(group, &outline, background, None);
+                    } else {
+                        fill_rect(group, x, y, layout.width, layout.height, background, None);
+                    }
+                },
+            );
+        } else if shown && background.a != 0 {
             let _span = florui_profile::span(florui_profile::Phase::RasterFill);
             if rounded {
                 fill_rounded_rect(buffer, &outline, background, clip);
@@ -3554,6 +3616,7 @@ fn paint_node(
 
         if let Some(style) = style
             && shown
+            && blended_layers.is_none()
             && !style.background_layers.is_empty()
         {
             let _span = florui_profile::span(florui_profile::Phase::RasterLayers);
@@ -5522,15 +5585,9 @@ fn paint_inline_boxes(
         let height = (fragment.ascent + fragment.descent + above + below) * scale_factor;
         let outline = RoundedRect::new(x, y, width, height, &radius, scale_factor);
         let border = scaled_border(border, scale_factor);
-        if style.background_color.a != 0 {
-            if outline.is_square() {
-                fill_rect(buffer, x, y, width, height, style.background_color, clip);
-            } else {
-                fill_rounded_rect(buffer, &outline, style.background_color, clip);
-            }
-        }
-        if !style.background_layers.is_empty() {
-            background::paint_layers(
+        if background::blends(&style.background_layers) {
+            let color = style.background_color;
+            background::paint_blended(
                 buffer,
                 &outline,
                 border,
@@ -5538,7 +5595,36 @@ fn paint_inline_boxes(
                 &style.background_layers,
                 scale_factor,
                 clip,
+                &|group| {
+                    if color.a == 0 {
+                        return;
+                    }
+                    if outline.is_square() {
+                        fill_rect(group, x, y, width, height, color, None);
+                    } else {
+                        fill_rounded_rect(group, &outline, color, None);
+                    }
+                },
             );
+        } else {
+            if style.background_color.a != 0 {
+                if outline.is_square() {
+                    fill_rect(buffer, x, y, width, height, style.background_color, clip);
+                } else {
+                    fill_rounded_rect(buffer, &outline, style.background_color, clip);
+                }
+            }
+            if !style.background_layers.is_empty() {
+                background::paint_layers(
+                    buffer,
+                    &outline,
+                    border,
+                    scaled_padding(padding, scale_factor),
+                    &style.background_layers,
+                    scale_factor,
+                    clip,
+                );
+            }
         }
         if has_border {
             paint_box_border(buffer, &outline, border, clip);
@@ -11851,6 +11937,214 @@ mod tests {
         assert_eq!(pixel_rgb(&free, 113, 25), WHITE);
     }
 
+    /// A backdrop box and a box with `declarations` over its right half; the
+    /// pixel where they overlap.
+    fn blended(source: &str, declarations: &str) -> [u8; 3] {
+        let tree: Element = view! { <div class="r"><div class="a" /><div class="b" /></div> };
+        let canvas = paint_text_css(
+            &tree,
+            &format!(
+                ".r {{ position: relative; width: 90px; height: 40px; }} \
+                 .a {{ position: absolute; left: 0; top: 0; width: 60px; height: 40px; \
+                 background-color: rgb(64, 128, 192); }} \
+                 .b {{ position: absolute; left: 30px; top: 0; width: 60px; height: 40px; \
+                 background-color: {source}; {declarations} }}"
+            ),
+            (100, 50),
+        );
+        pixel_rgb(&canvas, 45, 20)
+    }
+
+    #[test]
+    fn mix_blend_mode_matches_chrome_for_every_mode() {
+        // Chrome 153: backdrop rgb(64, 128, 192) under rgb(192, 96, 32).
+        let source = "rgb(192, 96, 32)";
+        for (mode, chrome) in [
+            ("normal", [192, 96, 32]),
+            ("multiply", [48, 48, 24]),
+            ("screen", [208, 176, 200]),
+            ("overlay", [96, 97, 145]),
+            ("darken", [64, 96, 32]),
+            ("lighten", [192, 128, 192]),
+            ("color-dodge", [255, 205, 220]),
+            ("color-burn", [1, 0, 0]),
+            ("hard-light", [160, 96, 48]),
+            ("soft-light", [96, 112, 156]),
+            ("difference", [128, 32, 160]),
+            ("exclusion", [160, 128, 176]),
+            ("hue", [175, 98, 47]),
+            ("saturation", [51, 131, 211]),
+            ("color", [190, 94, 30]),
+            ("luminosity", [66, 130, 194]),
+            ("plus-lighter", [255, 224, 224]),
+        ] {
+            let got = blended(source, &format!("mix-blend-mode: {mode};"));
+            for channel in 0..3 {
+                assert!(
+                    got[channel].abs_diff(chrome[channel]) <= 2,
+                    "{mode}: got {got:?}, Chrome gives {chrome:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_translucent_blended_box_mixes_by_its_alpha() {
+        // Chrome 153: the same colours with the source at half alpha.
+        let source = "rgba(192, 96, 32, 0.5)";
+        for (mode, chrome) in [
+            ("normal", [128, 112, 112]),
+            ("multiply", [56, 88, 108]),
+            ("screen", [136, 152, 196]),
+        ] {
+            let got = blended(source, &format!("mix-blend-mode: {mode};"));
+            for channel in 0..3 {
+                assert!(
+                    got[channel].abs_diff(chrome[channel]) <= 2,
+                    "{mode}: got {got:?}, Chrome gives {chrome:?}"
+                );
+            }
+        }
+    }
+
+    /// The backdrop box under a wrapper (with `wrapper`) holding a multiplied box.
+    fn blended_in_wrapper(wrapper: &str) -> [u8; 3] {
+        let tree: Element =
+            view! { <div class="r"><div class="a" /><div class="w"><div class="b" /></div></div> };
+        let canvas = paint_text_css(
+            &tree,
+            &format!(
+                ".r {{ position: relative; width: 90px; height: 40px; }} \
+                 .a {{ position: absolute; left: 0; top: 0; width: 60px; height: 40px; \
+                 background-color: rgb(64, 128, 192); }} \
+                 .w {{ position: absolute; left: 0; top: 0; width: 90px; height: 40px; {wrapper} }} \
+                 .b {{ position: absolute; left: 30px; top: 0; width: 60px; height: 40px; \
+                 background-color: rgb(192, 96, 32); mix-blend-mode: multiply; }}"
+            ),
+            (100, 50),
+        );
+        pixel_rgb(&canvas, 45, 20)
+    }
+
+    #[test]
+    fn a_stacking_context_keeps_what_blends_inside_it_to_itself() {
+        let multiplied = [48, 48, 24];
+        // Nothing isolates the box: it multiplies with the backdrop.
+        assert_eq!(blended_in_wrapper(""), multiplied);
+        // Each of these makes the wrapper a stacking context, which blends
+        // against its own (empty) content instead: the box keeps its colour.
+        for wrapper in [
+            "z-index: 1;",
+            "isolation: isolate;",
+            "opacity: 0.99;",
+            "transform: translateX(0.5px);",
+        ] {
+            let got = blended_in_wrapper(wrapper);
+            for channel in 0..3 {
+                let kept = [192u8, 96, 32][channel];
+                assert!(
+                    got[channel].abs_diff(kept) <= 3,
+                    "{wrapper}: got {got:?}, expected the box's own colour"
+                );
+            }
+        }
+    }
+
+    /// The colour at the middle of a 30x30 box with `declarations`.
+    fn background_blended(declarations: &str) -> [u8; 3] {
+        let tree: Element = view! { <div class="b" /> };
+        let canvas = paint_text_css(
+            &tree,
+            &format!(".b {{ width: 30px; height: 30px; {declarations} }}"),
+            (40, 40),
+        );
+        pixel_rgb(&canvas, 15, 15)
+    }
+
+    #[test]
+    fn background_blend_mode_matches_chrome() {
+        let flat = |color: &str| format!("linear-gradient({color}, {color})");
+        let (orange, blue) = ("rgb(192, 96, 32)", "rgb(64, 128, 192)");
+        let cases = [
+            // A layer is blended with the colour under it.
+            (
+                format!(
+                    "background-color: {blue}; background-image: {}; background-blend-mode: multiply;",
+                    flat(orange)
+                ),
+                [48, 48, 24],
+            ),
+            (
+                format!(
+                    "background-color: {blue}; background-image: {}; background-blend-mode: hue;",
+                    flat(orange)
+                ),
+                [175, 98, 47],
+            ),
+            // And with the layer below it.
+            (
+                format!(
+                    "background-image: {}, {}; background-blend-mode: difference, normal;",
+                    flat(orange),
+                    flat(blue)
+                ),
+                [128, 32, 160],
+            ),
+            (
+                format!(
+                    "background-color: rgb(255, 0, 0); background-image: {}, {}; \
+                     background-blend-mode: multiply, normal;",
+                    flat(orange),
+                    flat(blue)
+                ),
+                [48, 48, 24],
+            ),
+            // The bottom layer's mode blends it with the colour, and the layer above covers it.
+            (
+                format!(
+                    "background-color: rgb(255, 0, 0); background-image: {}, {}; \
+                     background-blend-mode: normal, multiply;",
+                    flat(orange),
+                    flat(blue)
+                ),
+                [192, 96, 32],
+            ),
+            (
+                format!(
+                    "background-color: {blue}; background-image: {}; background-blend-mode: multiply;",
+                    flat("rgba(192, 96, 32, 0.5)")
+                ),
+                [56, 88, 108],
+            ),
+        ];
+        for (declarations, chrome) in cases {
+            let got = background_blended(&declarations);
+            for channel in 0..3 {
+                assert!(
+                    got[channel].abs_diff(chrome[channel]) <= 2,
+                    "{declarations}: got {got:?}, Chrome gives {chrome:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn background_blend_mode_stays_inside_the_box_and_its_rounding() {
+        let tree: Element = view! { <div class="b" /> };
+        let canvas = paint_text_css(
+            &tree,
+            ".b { width: 30px; height: 30px; border-radius: 15px; \
+             background-color: rgb(64, 128, 192); \
+             background-image: linear-gradient(rgb(192, 96, 32), rgb(192, 96, 32)); \
+             background-blend-mode: multiply; }",
+            (40, 40),
+        );
+        assert_eq!(pixel_rgb(&canvas, 15, 15), [48, 48, 24]);
+        // The corner is outside the rounding and the page shows through; the
+        // blend does not reach the white page behind the box.
+        assert_eq!(pixel_rgb(&canvas, 2, 2), WHITE);
+        assert_eq!(pixel_rgb(&canvas, 35, 35), WHITE);
+    }
     #[test]
     fn layers_combine_by_their_composite_operator() {
         let box_layer = "linear-gradient(#000, #000)";

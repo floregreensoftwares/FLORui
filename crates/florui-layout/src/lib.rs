@@ -5644,6 +5644,16 @@ mod tests {
                 [114.64, 100.0, 70.71, 50.0],
             ),
             (
+                "transform-style: preserve-3d; transform: rotateY(45deg); isolation: isolate",
+                "transform: translateZ(60px)",
+                [114.64, 100.0, 70.71, 50.0],
+            ),
+            (
+                "transform-style: preserve-3d; transform: rotateY(45deg); mix-blend-mode: multiply",
+                "transform: translateZ(60px)",
+                [114.64, 100.0, 70.71, 50.0],
+            ),
+            (
                 "perspective: 200px; transform-style: preserve-3d; transform: rotateY(45deg)",
                 "transform: translateZ(60px)",
                 [160.1, 89.29, 101.02, 71.43],

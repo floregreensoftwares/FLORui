@@ -509,7 +509,8 @@ pub(crate) fn node_inks(
             .and_then(|parent| top_group.get(&parent).copied().flatten());
         let own = styles
             .get(&id)
-            .is_some_and(|s| s.has_transform() || s.preserve_3d || s.has_group_effect());
+            .is_some_and(|s| s.has_transform() || s.preserve_3d || s.has_group_effect())
+            || crate::blend::isolates(arena, styles, id);
         top_group.insert(id, above.or(own.then_some(id)));
     }
     let mut inks = HashMap::with_capacity(ids.len());
