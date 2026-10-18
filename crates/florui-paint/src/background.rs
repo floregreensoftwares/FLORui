@@ -46,6 +46,8 @@ impl Boxes {
             BackgroundBox::Border => &self.border,
             BackgroundBox::Padding => &self.padding,
             BackgroundBox::Content => &self.content,
+            // Never an origin; a clip of it is handled where the layer is cut.
+            BackgroundBox::NoClip => &self.border,
         }
     }
 }
@@ -179,7 +181,18 @@ fn paint_layer(
     clip: Option<&Mask>,
 ) {
     let origin = boxes.get(layer.origin);
-    let cut = boxes.get(layer.clip);
+    // `mask-clip: no-clip` cuts nothing: the whole surface is where it may paint.
+    let everywhere = RoundedRect::square(
+        buffer.origin.0 as f32,
+        buffer.origin.1 as f32,
+        buffer.pixmap.width() as f32,
+        buffer.pixmap.height() as f32,
+    );
+    let cut = if layer.clip == BackgroundBox::NoClip {
+        &everywhere
+    } else {
+        boxes.get(layer.clip)
+    };
     if cut.width <= 0.0 || cut.height <= 0.0 || origin.width <= 0.0 || origin.height <= 0.0 {
         return;
     }

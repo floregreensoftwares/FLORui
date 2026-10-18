@@ -1950,6 +1950,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
             style::computed_values::backface_visibility::T::Hidden
         ),
         clip_path: to_clip_path_with_shape(values, font_size_px),
+        mask: to_mask_layers(values, &text.color, font_size_px),
         filter: to_filter(&effects.filter.0, color),
         backdrop_filter: to_filter(&effects.backdrop_filter.0, color),
         container_type: to_container_type(box_style.clone_container_type()),
@@ -2350,6 +2351,77 @@ fn to_filter(
             }),
             // `url()` names an SVG filter, which cannot be defined here.
             GenericFilter::Url(_) => None,
+        })
+        .collect()
+}
+
+/// The layers of `mask-image` with what goes with each. The images are the
+/// engine's; the other properties come from the custom properties that carry
+/// them (see [`crate::mask_values`]) when this element's own rules declare them,
+/// since a custom property inherits and these do not. Each list is read
+/// cyclically against the images, as the background's are; a layer with `none`
+/// or an image that is not a gradient or a `url()` masks nothing and has no entry.
+fn to_mask_layers(
+    values: &ComputedValues,
+    current: &style::color::AbsoluteColor,
+    font_size_px: f32,
+) -> Vec<crate::MaskLayer> {
+    use crate::mask_values::{
+        parse_boxes, parse_composites, parse_modes, parse_positions, parse_repeats, parse_sizes,
+    };
+    use crate::{
+        BackgroundBox, BackgroundLayer, BackgroundRepeat, BackgroundSize, MaskComposite, MaskLayer,
+        MaskMode,
+    };
+    let images: Vec<Option<crate::BackgroundImage>> = values
+        .get_svg()
+        .mask_image
+        .0
+        .iter()
+        .map(|image| to_background_image(image, current))
+        .collect();
+    if images.iter().all(Option::is_none) {
+        return Vec::new();
+    }
+    let read = |name: &str| {
+        declares_mirrored(values, name)
+            .then(|| mirrored(values, name))
+            .flatten()
+    };
+    let modes = read("mask-mode").and_then(|css| parse_modes(&css));
+    let repeats = read("mask-repeat").and_then(|css| parse_repeats(&css));
+    let positions = read("mask-position").and_then(|css| parse_positions(&css, font_size_px));
+    let sizes = read("mask-size").and_then(|css| parse_sizes(&css, font_size_px));
+    let origins = read("mask-origin").and_then(|css| parse_boxes(&css, false));
+    let clips = read("mask-clip").and_then(|css| parse_boxes(&css, true));
+    let composites = read("mask-composite").and_then(|css| parse_composites(&css));
+    fn pick<T: Copy>(list: &Option<Vec<T>>, index: usize, initial: T) -> T {
+        match list {
+            Some(list) if !list.is_empty() => list[index % list.len()],
+            _ => initial,
+        }
+    }
+    let start = FlorLengthPercentage::default();
+    images
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, image)| {
+            Some(MaskLayer {
+                layer: BackgroundLayer {
+                    image: image?,
+                    size: pick(&sizes, index, BackgroundSize::Explicit(None, None)),
+                    position: pick(&positions, index, (start, start)),
+                    repeat: pick(
+                        &repeats,
+                        index,
+                        (BackgroundRepeat::Repeat, BackgroundRepeat::Repeat),
+                    ),
+                    origin: pick(&origins, index, BackgroundBox::Border),
+                    clip: pick(&clips, index, BackgroundBox::Border),
+                },
+                composite: pick(&composites, index, MaskComposite::Add),
+                mode: pick(&modes, index, MaskMode::MatchSource),
+            })
         })
         .collect()
 }

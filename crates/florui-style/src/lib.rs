@@ -41,6 +41,7 @@ mod error;
 mod focus;
 mod height_media_adapter;
 mod interaction;
+mod mask_values;
 mod property_mirror;
 mod reduced_motion_adapter;
 mod rounded;
@@ -58,8 +59,8 @@ mod tree;
 pub use animation::AnimationTimeline;
 pub use background::{
     BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BackgroundSize,
-    ConicGradient, ConicItem, GradientItem, LinearDirection, LinearGradient, RadialExtent,
-    RadialGradient, RadialSize,
+    ConicGradient, ConicItem, GradientItem, LinearDirection, LinearGradient, MaskComposite,
+    MaskLayer, MaskMode, RadialExtent, RadialGradient, RadialSize,
 };
 pub use cascade::{
     Appearance, AspectRatio, BackdropBlur, BorderImage, BorderImageOutset, BorderImageRepeat,

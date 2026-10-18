@@ -64,6 +64,7 @@ mod gradient;
 mod image_source;
 mod incremental;
 mod layer_cache;
+mod mask;
 mod material;
 mod projection;
 mod rounded;
@@ -2315,6 +2316,7 @@ fn render_group(
     apply_filters(&mut group.pixmap, &scaled_filters(filter, scale_factor));
     if let (Some(style), Some(layout)) = (styles.get(&node), layouts.get(&node)) {
         apply_clip_path(&mut group, style, layout, node_abs, scale_factor);
+        mask::apply_mask(&mut group, style, layout, node_abs, scale_factor);
     }
     Some(group)
 }
@@ -11613,6 +11615,447 @@ mod tests {
             let css = format!(
                 ".b {{ margin: 90px; width: 100px; height: 60px; background: #3366cc; \
                       clip-path: {clip}; }} .kid {{ width: 40px; height: 40px; background: #ff0000; }}"
+            );
+            assert_bounded_and_full_target_paint_within(1, || {
+                paint_text_css(&tree, &css, (300, 300))
+            });
+        }
+    }
+
+    /// A 100x50 red box at the origin with `declarations` on it.
+    fn masked(declarations: &str, size: (u32, u32)) -> Canvas {
+        let tree: Element = view! { <div class="b" /> };
+        paint_text_css(
+            &tree,
+            &format!(
+                ".b {{ width: 100px; height: 50px; background-color: #ff0000; {declarations} }}"
+            ),
+            size,
+        )
+    }
+
+    /// The green channel at `(x, y)`: 255 where the red box is not and 0 where it is.
+    fn g(canvas: &Canvas, x: u32, y: u32) -> u8 {
+        pixel_rgb(canvas, x, y)[1]
+    }
+
+    fn assert_g(canvas: &Canvas, points: &[(u32, u32, u8)], tolerance: u8) {
+        for &(x, y, chrome) in points {
+            let got = g(canvas, x, y);
+            assert!(
+                got.abs_diff(chrome) <= tolerance,
+                "({x}, {y}): got {got}, Chrome gives {chrome}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_alpha_mask_fades_the_box_as_chrome_does() {
+        let canvas = masked(
+            "mask-image: linear-gradient(to right, #000, transparent);",
+            (110, 60),
+        );
+        // Chrome 153, along the middle row.
+        assert_g(
+            &canvas,
+            &[
+                (0, 25, 1),
+                (10, 25, 27),
+                (25, 25, 65),
+                (50, 25, 129),
+                (75, 25, 193),
+                (90, 25, 231),
+                (99, 25, 254),
+            ],
+            4,
+        );
+    }
+
+    #[test]
+    fn luminance_masks_by_the_srgb_luminance_times_the_alpha() {
+        let ramp = "mask-image: linear-gradient(to right, #000, #fff);";
+        let luminance = masked(&format!("{ramp} mask-mode: luminance;"), (110, 60));
+        assert_g(
+            &luminance,
+            &[
+                (0, 25, 254),
+                (10, 25, 228),
+                (25, 25, 190),
+                (50, 25, 126),
+                (75, 25, 63),
+                (90, 25, 24),
+                (99, 25, 1),
+            ],
+            4,
+        );
+        // The same ramp by its alpha is opaque everywhere, with or without `alpha`.
+        for mode in ["mask-mode: alpha;", ""] {
+            let alpha = masked(&format!("{ramp} {mode}"), (110, 60));
+            assert_g(&alpha, &[(0, 25, 0), (50, 25, 0), (99, 25, 0)], 0);
+        }
+        // Pure red is 0.2126 of the way: G = 255 * (1 - 0.2126).
+        let red = masked(
+            "mask-image: linear-gradient(#f00, #f00); mask-mode: luminance;",
+            (110, 60),
+        );
+        assert_g(&red, &[(10, 25, 201), (50, 25, 201)], 1);
+    }
+
+    #[test]
+    fn a_mask_tile_is_sized_placed_and_repeated_as_a_background_is() {
+        let tiled = masked(
+            "mask-image: linear-gradient(#000, transparent); mask-size: 20px 25px; mask-repeat: repeat;",
+            (110, 60),
+        );
+        assert_g(
+            &tiled,
+            &[
+                (20, 0, 5),
+                (20, 5, 56),
+                (20, 10, 107),
+                (20, 20, 209),
+                (20, 24, 250),
+                (20, 25, 5),
+                (20, 30, 56),
+            ],
+            4,
+        );
+        let corner = masked(
+            "mask-image: linear-gradient(#000, #000); mask-size: 40px 20px; mask-repeat: no-repeat; \
+             mask-position: 100% 100%;",
+            (110, 60),
+        );
+        assert_g(
+            &corner,
+            &[
+                (10, 40, 255),
+                (59, 40, 255),
+                (60, 40, 0),
+                (99, 40, 0),
+                (80, 29, 255),
+            ],
+            0,
+        );
+        let space = masked(
+            "mask-image: linear-gradient(#000, #000); mask-size: 30px 50px; mask-repeat: space no-repeat;",
+            (110, 60),
+        );
+        assert_g(
+            &space,
+            &[
+                (0, 25, 0),
+                (29, 25, 0),
+                (30, 25, 255),
+                (35, 25, 0),
+                (64, 25, 0),
+                (65, 25, 255),
+                (70, 25, 0),
+            ],
+            0,
+        );
+        let round = masked(
+            "mask-image: linear-gradient(#000, #000); mask-size: 30px 50px; mask-repeat: round no-repeat;",
+            (110, 60),
+        );
+        assert_g(
+            &round,
+            &[(0, 25, 0), (30, 25, 0), (60, 25, 0), (99, 25, 0)],
+            0,
+        );
+        let edge = masked(
+            "mask-image: linear-gradient(#000, #000); mask-position: right 10px bottom 5px; \
+             mask-size: 30px 20px; mask-repeat: no-repeat;",
+            (110, 60),
+        );
+        assert_g(
+            &edge,
+            &[
+                (59, 30, 255),
+                (60, 30, 0),
+                (89, 30, 0),
+                (90, 30, 255),
+                (70, 24, 255),
+                (70, 25, 0),
+                (70, 44, 0),
+                (70, 45, 255),
+            ],
+            0,
+        );
+    }
+
+    #[test]
+    fn mask_clip_and_origin_pick_the_boxes() {
+        let padding = masked(
+            "border: 8px solid #0000ff; box-sizing: border-box; \
+             mask-image: linear-gradient(#000, #000); mask-clip: padding-box;",
+            (110, 60),
+        );
+        // The border (8px) is cut away and the padding box shows.
+        assert_g(
+            &padding,
+            &[
+                (0, 25, 255),
+                (7, 25, 255),
+                (8, 25, 0),
+                (91, 25, 0),
+                (92, 25, 255),
+                (99, 25, 255),
+            ],
+            0,
+        );
+        let content = masked(
+            "padding: 10px; box-sizing: border-box; mask-image: linear-gradient(#000, #000); \
+             mask-origin: content-box; mask-clip: border-box; mask-repeat: no-repeat; mask-size: 50% 50%;",
+            (110, 60),
+        );
+        // A 40x15 tile at the content box's corner, (10, 10).
+        assert_g(
+            &content,
+            &[
+                (9, 20, 255),
+                (10, 20, 0),
+                (49, 20, 0),
+                (50, 20, 255),
+                (20, 9, 255),
+                (20, 24, 0),
+                (20, 25, 255),
+            ],
+            0,
+        );
+        // A shadow outside the border box is cut by the default `border-box`
+        // clip, and `margin-box` is the border box too (Chrome 153); `no-clip`
+        // lets a mask that covers it show it.
+        let shadow = "box-shadow: 12px 12px 0 #00aa00;";
+        let cut = masked(
+            &format!("{shadow} mask-image: linear-gradient(#000, #000);"),
+            (130, 80),
+        );
+        assert_eq!(pixel_rgb(&cut, 105, 25), WHITE);
+        assert_eq!(pixel_rgb(&cut, 50, 55), WHITE);
+        let margin = masked(
+            &format!(
+                "{shadow} mask-image: linear-gradient(#000, #000); mask-clip: margin-box; mask-origin: margin-box;"
+            ),
+            (130, 80),
+        );
+        assert_eq!(pixel_rgb(&margin, 105, 25), WHITE);
+        let free = masked(
+            &format!(
+                "{shadow} mask-image: linear-gradient(#000, #000); mask-size: 200px 100px; \
+                 mask-repeat: no-repeat; mask-position: -20px -10px; mask-clip: no-clip;"
+            ),
+            (130, 80),
+        );
+        assert_eq!(pixel_rgb(&free, 105, 25), [0, 170, 0]);
+        assert_eq!(pixel_rgb(&free, 111, 25), [0, 170, 0]);
+        assert_eq!(pixel_rgb(&free, 113, 25), WHITE);
+    }
+
+    #[test]
+    fn layers_combine_by_their_composite_operator() {
+        let box_layer = "linear-gradient(#000, #000)";
+        let circle = "radial-gradient(circle at 50% 50%, #000 20px, transparent 20px)";
+        let by = |operator: &str| {
+            masked(
+                &format!("mask-image: {box_layer}, {circle}; mask-composite: {operator}, add;"),
+                (110, 60),
+            )
+        };
+        // Chrome 153: subtract leaves the box with the disc cut out.
+        let subtract = by("subtract");
+        assert_g(
+            &subtract,
+            &[(5, 25, 0), (50, 25, 255), (70, 25, 0), (95, 25, 0)],
+            0,
+        );
+        let band = "linear-gradient(to right, #000 60%, transparent 60%)";
+        let disc = "radial-gradient(circle at 50% 50%, #000 22px, transparent 22px)";
+        let with = |operator: &str| {
+            masked(
+                &format!("mask-image: {band}, {disc}; mask-composite: {operator}, add;"),
+                (110, 60),
+            )
+        };
+        let intersect = with("intersect");
+        assert_g(
+            &intersect,
+            &[
+                (5, 25, 255),
+                (40, 25, 0),
+                (50, 25, 0),
+                (59, 25, 0),
+                (60, 25, 255),
+                (70, 25, 255),
+            ],
+            0,
+        );
+        let exclude = with("exclude");
+        assert_g(
+            &exclude,
+            &[
+                (5, 25, 0),
+                (40, 25, 255),
+                (50, 25, 255),
+                (59, 25, 255),
+                (60, 25, 0),
+                (70, 25, 0),
+            ],
+            0,
+        );
+        let add = with("add");
+        assert_g(
+            &add,
+            &[
+                (5, 25, 0),
+                (40, 25, 0),
+                (60, 25, 0),
+                (70, 25, 0),
+                (95, 25, 255),
+            ],
+            0,
+        );
+        // A layer that subtracts from one that is somewhere else removes nothing,
+        // and the layer below it is removed from the picture entirely.
+        let apart = masked(
+            "mask-image: linear-gradient(#000, #000), linear-gradient(#000, #000); \
+             mask-size: 60px 30px, 60px 30px; mask-position: 0 0, 100% 100%; \
+             mask-repeat: no-repeat; mask-composite: subtract, add;",
+            (110, 60),
+        );
+        assert_g(
+            &apart,
+            &[
+                (5, 15, 0),
+                (59, 15, 0),
+                (60, 15, 255),
+                (70, 40, 255),
+                (95, 40, 255),
+            ],
+            0,
+        );
+    }
+
+    #[test]
+    fn a_mask_whose_image_cannot_be_read_hides_the_box_and_a_none_layer_masks_nothing() {
+        let missing = masked("mask-image: url(does-not-exist.png);", (110, 60));
+        assert_eq!(pixel_rgb(&missing, 50, 25), WHITE);
+        // An unreadable layer under a readable one masks nothing by itself.
+        let with_gradient = masked(
+            "mask-image: url(does-not-exist.png), linear-gradient(#000, #000);",
+            (110, 60),
+        );
+        assert_eq!(pixel_rgb(&with_gradient, 50, 25), RED);
+        let none_then_fade = masked(
+            "mask-image: none, linear-gradient(#000, transparent);",
+            (110, 60),
+        );
+        assert_g(
+            &none_then_fade,
+            &[(50, 0, 3), (50, 25, 130), (50, 49, 252)],
+            4,
+        );
+        let none = masked("mask-image: none;", (110, 60));
+        assert_eq!(pixel_rgb(&none, 50, 25), RED);
+    }
+
+    #[test]
+    fn a_mask_cuts_the_children_with_the_box() {
+        let tree: Element = view! { <div class="b"><div class="kid" /></div> };
+        let canvas = paint_text_css(
+            &tree,
+            ".b { width: 100px; height: 50px; background-color: #ff0000; \
+                 mask-image: linear-gradient(#000, #000); mask-size: 50px 50px; \
+                 mask-repeat: no-repeat; mask-position: center; } \
+             .kid { margin: 10px; width: 30px; height: 20px; background-color: #0000ff; }",
+            (110, 60),
+        );
+        // The child is blue inside the tile (x 25..75) and gone outside it.
+        assert_eq!(pixel_rgb(&canvas, 30, 20), [0, 0, 255]);
+        assert_eq!(pixel_rgb(&canvas, 20, 20), WHITE);
+        assert_eq!(pixel_rgb(&canvas, 5, 5), WHITE);
+        assert_eq!(pixel_rgb(&canvas, 50, 45), RED);
+    }
+
+    #[test]
+    fn an_svg_mask_is_read_by_alpha_or_by_luminance() {
+        let half = "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='20'>\
+                    <rect width='20' height='20' fill='%23000'/>\
+                    <rect x='20' width='20' height='20' fill='%23fff' fill-opacity='0.5'/></svg>\")";
+        let by = |mode: &str| {
+            masked(
+                &format!("mask-image: {half}; mask-size: 100% 100%; {mode}"),
+                (110, 60),
+            )
+        };
+        // Chrome 153: by alpha the black half is opaque and the white one half so.
+        let alpha = by("mask-mode: alpha;");
+        assert_g(
+            &alpha,
+            &[(5, 25, 0), (45, 25, 0), (55, 25, 127), (95, 25, 127)],
+            3,
+        );
+        // By luminance the black half is nothing and the white one half.
+        let luminance = by("mask-mode: luminance;");
+        assert_g(
+            &luminance,
+            &[(5, 25, 255), (45, 25, 255), (55, 25, 127), (95, 25, 127)],
+            3,
+        );
+    }
+
+    #[test]
+    fn the_mask_shorthand_paints_what_its_longhands_do() {
+        let short = masked(
+            "mask: linear-gradient(#000, transparent) 0 0 / 50% 100% no-repeat, \
+                   linear-gradient(#000, #000) 100% 0 / 20px 100% no-repeat;",
+            (110, 60),
+        );
+        let long = masked(
+            "mask-image: linear-gradient(#000, transparent), linear-gradient(#000, #000); \
+             mask-position: 0 0, 100% 0; mask-size: 50% 100%, 20px 100%; mask-repeat: no-repeat;",
+            (110, 60),
+        );
+        same_pixels(&short, &long, (110, 60));
+        // Chrome 153: a fade on the left half, a strip at the right.
+        assert_g(
+            &short,
+            &[
+                (2, 25, 130),
+                (25, 25, 130),
+                (48, 25, 130),
+                (52, 25, 255),
+                (79, 25, 255),
+                (81, 25, 0),
+                (99, 25, 0),
+            ],
+            4,
+        );
+        assert_g(
+            &short,
+            &[
+                (10, 0, 3),
+                (10, 10, 54),
+                (10, 25, 130),
+                (10, 40, 207),
+                (10, 49, 252),
+            ],
+            4,
+        );
+    }
+
+    #[test]
+    fn a_masked_group_paints_the_same_on_a_bounded_and_a_full_surface() {
+        let tree: Element = view! { <div class="b"><div class="kid" /></div> };
+        for mask in [
+            "mask-image: radial-gradient(circle at 40% 50%, #000 20px, transparent 40px);",
+            "mask: linear-gradient(#000, transparent) 0 0 / 50% 100% no-repeat, \
+                   linear-gradient(#000, #000) 100% 0 / 20px 100% no-repeat;",
+            "mask-image: linear-gradient(#000, #000), linear-gradient(#000, #000); \
+             mask-size: 60px 40px, 40px 60px; mask-composite: exclude, add; mask-repeat: no-repeat;",
+        ] {
+            let css = format!(
+                ".b {{ margin: 90px; width: 100px; height: 60px; background: #3366cc; {mask} }} \
+                 .kid {{ width: 40px; height: 40px; background: #ff0000; }}"
             );
             assert_bounded_and_full_target_paint_within(1, || {
                 paint_text_css(&tree, &css, (300, 300))

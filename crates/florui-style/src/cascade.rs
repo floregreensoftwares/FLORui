@@ -1087,6 +1087,9 @@ pub struct ComputedStyle {
     /// to a node's rendered content.
     /// `clip-path` — see [`ClipPath`].
     pub clip_path: ClipPath,
+    /// `mask-image` and what goes with it, one entry per layer that has an image
+    /// (the first on top); empty when nothing masks the node. See [`MaskLayer`].
+    pub mask: Vec<crate::MaskLayer>,
     pub filter: Vec<FilterFunction>,
     /// Same grammar/subset as [`Self::filter`], applied to whatever is
     /// already painted behind this node instead of its own content.
@@ -1145,7 +1148,7 @@ impl ComputedStyle {
     /// transform: it has a filter or a `clip-path`, which act on what the node and
     /// everything in it painted together.
     pub fn has_group_effect(&self) -> bool {
-        !self.filter.is_empty() || self.clip_path != ClipPath::None
+        !self.filter.is_empty() || self.clip_path != ClipPath::None || !self.mask.is_empty()
     }
 
     /// Whether the node is the containing block of its `position: fixed`
@@ -1257,6 +1260,7 @@ impl ComputedStyle {
             preserve_3d: _,
             backface_hidden: _,
             clip_path: _,
+            mask: _,
             filter: _,
             backdrop_filter: _,
             container_type: _,
@@ -5097,6 +5101,271 @@ mod tests {
             computed[&arena.children(parent)[0]].clip_path,
             ClipPath::None
         );
+    }
+
+    fn mask_of(declarations: &str) -> Vec<crate::MaskLayer> {
+        computed_of(&format!(".t {{ {declarations} }}")).mask
+    }
+
+    const FADE: &str = "linear-gradient(#000, transparent)";
+
+    #[test]
+    fn a_mask_image_is_a_layer_with_the_initial_values() {
+        use crate::{BackgroundBox, BackgroundRepeat, BackgroundSize, MaskComposite, MaskMode};
+        assert!(mask_of("").is_empty());
+        assert!(mask_of("mask-image: none;").is_empty());
+        let layers = mask_of(&format!("mask-image: {FADE};"));
+        assert_eq!(layers.len(), 1);
+        let layer = &layers[0];
+        assert!(matches!(
+            layer.layer.image,
+            crate::BackgroundImage::Linear(_)
+        ));
+        assert_eq!(layer.layer.size, BackgroundSize::Explicit(None, None));
+        assert_eq!(layer.layer.position, (lp(0.0, 0.0), lp(0.0, 0.0)));
+        assert_eq!(
+            layer.layer.repeat,
+            (BackgroundRepeat::Repeat, BackgroundRepeat::Repeat)
+        );
+        assert_eq!(layer.layer.origin, BackgroundBox::Border);
+        assert_eq!(layer.layer.clip, BackgroundBox::Border);
+        assert_eq!(layer.composite, MaskComposite::Add);
+        assert_eq!(layer.mode, MaskMode::MatchSource);
+        // A `none` layer masks nothing and leaves no entry, but keeps its place in the lists.
+        let layers = mask_of(&format!(
+            "mask-image: none, {FADE}; mask-repeat: no-repeat, repeat-x;"
+        ));
+        assert_eq!(layers.len(), 1);
+        assert_eq!(
+            layers[0].layer.repeat,
+            (BackgroundRepeat::Repeat, BackgroundRepeat::NoRepeat)
+        );
+        assert!(
+            mask_of("mask-image: url(a.png);")[0].layer.image
+                == crate::BackgroundImage::Url("a.png".into())
+        );
+    }
+
+    #[test]
+    fn the_mask_longhands_are_read_per_layer_and_cycle() {
+        use crate::{BackgroundBox, BackgroundRepeat, BackgroundSize, MaskComposite, MaskMode};
+        let layers = mask_of(&format!(
+            "mask-image: {FADE}, {FADE}, {FADE}; \
+             mask-mode: luminance, alpha; \
+             mask-composite: subtract, intersect, exclude; \
+             mask-repeat: no-repeat; \
+             mask-size: cover, 20px 50%, auto 10px; \
+             mask-origin: content-box, padding-box; \
+             mask-clip: no-clip, border-box, fill-box;"
+        ));
+        let modes: Vec<_> = layers.iter().map(|l| l.mode).collect();
+        assert_eq!(
+            modes,
+            [MaskMode::Luminance, MaskMode::Alpha, MaskMode::Luminance]
+        );
+        let composites: Vec<_> = layers.iter().map(|l| l.composite).collect();
+        assert_eq!(
+            composites,
+            [
+                MaskComposite::Subtract,
+                MaskComposite::Intersect,
+                MaskComposite::Exclude
+            ]
+        );
+        assert!(layers
+            .iter()
+            .all(|l| l.layer.repeat == (BackgroundRepeat::NoRepeat, BackgroundRepeat::NoRepeat)));
+        assert_eq!(layers[0].layer.size, BackgroundSize::Cover);
+        assert_eq!(
+            layers[1].layer.size,
+            BackgroundSize::Explicit(Some(lp(20.0, 0.0)), Some(lp(0.0, 0.5)))
+        );
+        assert_eq!(
+            layers[2].layer.size,
+            BackgroundSize::Explicit(None, Some(lp(10.0, 0.0)))
+        );
+        let origins: Vec<_> = layers.iter().map(|l| l.layer.origin).collect();
+        assert_eq!(
+            origins,
+            [
+                BackgroundBox::Content,
+                BackgroundBox::Padding,
+                BackgroundBox::Content
+            ]
+        );
+        let clips: Vec<_> = layers.iter().map(|l| l.layer.clip).collect();
+        assert_eq!(
+            clips,
+            [
+                BackgroundBox::NoClip,
+                BackgroundBox::Border,
+                BackgroundBox::Content
+            ]
+        );
+    }
+
+    #[test]
+    fn mask_box_keywords_follow_what_chrome_makes_of_them() {
+        use crate::BackgroundBox;
+        let clip = |keyword: &str| {
+            mask_of(&format!(
+                "mask-image: {FADE}; mask-clip: {keyword}; mask-origin: {keyword};"
+            ))
+            .remove(0)
+            .layer
+        };
+        // `margin-box` is the border box here, as measured in Chrome 153: a
+        // shadow outside the border box stays cut.
+        assert_eq!(clip("margin-box").clip, BackgroundBox::Border);
+        assert_eq!(clip("margin-box").origin, BackgroundBox::Border);
+        assert_eq!(clip("stroke-box").clip, BackgroundBox::Border);
+        assert_eq!(clip("view-box").clip, BackgroundBox::Border);
+        assert_eq!(clip("fill-box").clip, BackgroundBox::Content);
+        assert_eq!(clip("padding-box").clip, BackgroundBox::Padding);
+        // `no-clip` is only a clip; as an origin the declaration is invalid and dropped.
+        let layer = mask_of(&format!("mask-image: {FADE}; mask-origin: no-clip;"))
+            .remove(0)
+            .layer;
+        assert_eq!(layer.origin, BackgroundBox::Border);
+    }
+
+    #[test]
+    fn mask_position_reads_one_to_four_values() {
+        let position = |css: &str| {
+            mask_of(&format!("mask-image: {FADE}; mask-position: {css};"))
+                .remove(0)
+                .layer
+                .position
+        };
+        assert_eq!(position("10px 20%"), (lp(10.0, 0.0), lp(0.0, 0.2)));
+        assert_eq!(position("20px"), (lp(20.0, 0.0), lp(0.0, 0.5)));
+        assert_eq!(position("right"), (lp(0.0, 1.0), lp(0.0, 0.5)));
+        assert_eq!(position("bottom"), (lp(0.0, 0.5), lp(0.0, 1.0)));
+        assert_eq!(position("top left"), (lp(0.0, 0.0), lp(0.0, 0.0)));
+        assert_eq!(position("center bottom"), (lp(0.0, 0.5), lp(0.0, 1.0)));
+        // An offset from an edge is that far in from it.
+        assert_eq!(
+            position("right 10px bottom 5px"),
+            (lp(-10.0, 1.0), lp(-5.0, 1.0))
+        );
+        assert_eq!(
+            position("bottom 5px right 10px"),
+            (lp(-10.0, 1.0), lp(-5.0, 1.0))
+        );
+        assert_eq!(position("left 4px top 6px"), (lp(4.0, 0.0), lp(6.0, 0.0)));
+        assert_eq!(position("right 10px top"), (lp(-10.0, 1.0), lp(0.0, 0.0)));
+        assert_eq!(
+            position("calc(10px + 5%) 1em"),
+            (lp(10.0, 0.05), lp(16.0, 0.0))
+        );
+        // Two values on one axis, or an offset on `center`, are not a position.
+        assert_eq!(position("left right"), (lp(0.0, 0.0), lp(0.0, 0.0)));
+        assert_eq!(position("center 10px bottom"), (lp(0.0, 0.0), lp(0.0, 0.0)));
+    }
+
+    #[test]
+    fn the_mask_shorthand_sets_every_longhand_and_resets_the_rest() {
+        use crate::{BackgroundBox, BackgroundRepeat, BackgroundSize, MaskComposite, MaskMode};
+        let layers = mask_of(&format!(
+            "mask-composite: exclude; \
+             mask: {FADE} 0 0 / 50% 100% no-repeat, \
+                   url(b.png) right 4px bottom / contain space repeat padding-box content-box subtract luminance;"
+        ));
+        assert_eq!(layers.len(), 2);
+        // The first layer says nothing of composite or mode: they are initial,
+        // which also undoes the earlier `mask-composite: exclude`.
+        assert_eq!(layers[0].composite, MaskComposite::Add);
+        assert_eq!(layers[0].mode, MaskMode::MatchSource);
+        assert_eq!(
+            layers[0].layer.size,
+            BackgroundSize::Explicit(Some(lp(0.0, 0.5)), Some(lp(0.0, 1.0)))
+        );
+        assert_eq!(
+            layers[0].layer.repeat,
+            (BackgroundRepeat::NoRepeat, BackgroundRepeat::NoRepeat)
+        );
+        assert_eq!(layers[0].layer.origin, BackgroundBox::Border);
+        let second = &layers[1];
+        assert!(second.layer.image == crate::BackgroundImage::Url("b.png".into()));
+        assert_eq!(second.layer.position, (lp(-4.0, 1.0), lp(0.0, 1.0)));
+        assert_eq!(second.layer.size, BackgroundSize::Contain);
+        assert_eq!(
+            second.layer.repeat,
+            (BackgroundRepeat::Space, BackgroundRepeat::Repeat)
+        );
+        assert_eq!(second.layer.origin, BackgroundBox::Padding);
+        assert_eq!(second.layer.clip, BackgroundBox::Content);
+        assert_eq!(second.composite, MaskComposite::Subtract);
+        assert_eq!(second.mode, MaskMode::Luminance);
+        // One box is both the origin and the clip; `no-clip` alone is a clip.
+        let one = mask_of(&format!("mask: {FADE} padding-box;"))
+            .remove(0)
+            .layer;
+        assert_eq!(
+            (one.origin, one.clip),
+            (BackgroundBox::Padding, BackgroundBox::Padding)
+        );
+        let free = mask_of(&format!("mask: {FADE} no-clip;")).remove(0).layer;
+        assert_eq!(
+            (free.origin, free.clip),
+            (BackgroundBox::Border, BackgroundBox::NoClip)
+        );
+        // A later `mask-image` replaces the images; `mask: none` clears them.
+        assert!(mask_of(&format!("mask: {FADE}; mask: none;")).is_empty());
+        // An invalid shorthand is dropped whole.
+        assert!(mask_of("mask: bogus;").is_empty());
+        assert!(mask_of(&format!("mask: {FADE} no-clip padding-box;")).is_empty());
+        // The global keywords reach every longhand.
+        assert!(mask_of(&format!("mask: {FADE}; mask: initial;")).is_empty());
+    }
+
+    #[test]
+    fn the_prefixed_mask_properties_are_read_too() {
+        use crate::{BackgroundBox, BackgroundRepeat, MaskComposite};
+        let layers = mask_of(&format!(
+            "-webkit-mask-image: {FADE}, {FADE}; -webkit-mask-repeat: no-repeat; \
+             -webkit-mask-composite: source-out, xor; -webkit-mask-clip: padding; \
+             -webkit-mask-origin: content;"
+        ));
+        assert_eq!(layers.len(), 2);
+        assert_eq!(layers[0].composite, MaskComposite::Subtract);
+        assert_eq!(layers[1].composite, MaskComposite::Exclude);
+        assert_eq!(
+            layers[0].layer.repeat,
+            (BackgroundRepeat::NoRepeat, BackgroundRepeat::NoRepeat)
+        );
+        assert_eq!(layers[0].layer.clip, BackgroundBox::Padding);
+        assert_eq!(layers[0].layer.origin, BackgroundBox::Content);
+        let shorthand = mask_of(&format!("-webkit-mask: {FADE} no-repeat;"));
+        assert_eq!(shorthand.len(), 1);
+    }
+
+    #[test]
+    fn invalid_mask_longhands_fall_back_and_the_mask_does_not_inherit() {
+        use crate::{BackgroundRepeat, MaskMode};
+        let layer = mask_of(&format!(
+            "mask-image: {FADE}; mask-repeat: sideways; mask-mode: dark; mask-position: 10px 20px 30px 40px 50px;"
+        ))
+        .remove(0);
+        assert_eq!(
+            layer.layer.repeat,
+            (BackgroundRepeat::Repeat, BackgroundRepeat::Repeat)
+        );
+        assert_eq!(layer.mode, MaskMode::MatchSource);
+        assert_eq!(layer.layer.position, (lp(0.0, 0.0), lp(0.0, 0.0)));
+        let tree: Element = view! { <div class="p"><span class="c" /></div> };
+        let (arena, computed) = styles(
+            &tree,
+            &format!(".p {{ mask: {FADE} no-repeat; }} .c {{ mask-image: {FADE}; }}"),
+            &InteractionState::new(),
+        );
+        let child = &computed[&arena.children(arena.roots()[0])[0]];
+        // The child's own mask-image is its own; the parent's no-repeat is not inherited.
+        assert_eq!(
+            child.mask[0].layer.repeat,
+            (BackgroundRepeat::Repeat, BackgroundRepeat::Repeat)
+        );
+        assert!(computed[&arena.roots()[0]].has_group_effect());
     }
     #[test]
     fn a_box_alone_or_beside_a_shape_names_the_reference_box() {
