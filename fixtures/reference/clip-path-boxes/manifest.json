@@ -1,0 +1,133 @@
+{
+    "id":  "clip-path-boxes",
+    "description":  "clip-path reference boxes, a box alone with rounded corners, a shape against a box, and what it cuts (children, shadow), with transform and opacity",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  540,
+                     "height_css_px":  280,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 540px; height: 280px; background-color: #ffffff; } .b { position: absolute; width: 100px; height: 50px; box-sizing: content-box; padding: 8px; border: 5px solid #1c2a4a; margin: 6px; } .p0 { left: 14px; top: 14px; background-color: #d05040; clip-path: padding-box; } .p1 { left: 164px; top: 14px; background-color: #40a060; clip-path: content-box; } .p2 { left: 314px; top: 14px; background-color: #4070d0; clip-path: margin-box; } .p3 { left: 464px; top: 14px; background-color: #e0b030; border-radius: 24px; clip-path: padding-box; } .p4 { left: 14px; top: 104px; background-color: #a050c0; border-radius: 24px; clip-path: content-box; } .p5 { left: 164px; top: 104px; background-color: #30a0b0; clip-path: circle(30px) padding-box; } .p6 { left: 314px; top: 104px; background-color: #d05040; clip-path: inset(10%) content-box; } .p7 { left: 464px; top: 104px; background-color: #40a060; clip-path: fill-box; } .p8 { left: 14px; top: 194px; background-color: #4070d0; box-shadow: 6px 6px 0 #222222; clip-path: inset(0 40% 0 0); } .p9 { left: 164px; top: 194px; background-color: #e0b030; clip-path: circle(30px at 50% 50%); transform: rotate(15deg); } .p10 { left: 314px; top: 194px; background-color: #a050c0; clip-path: polygon(0 0, 100% 0, 100% 100%); opacity: 0.5; } .p11 { left: 464px; top: 194px; background-color: #30a0b0; overflow: hidden; border-radius: 20px; clip-path: inset(0 0 40% 0); }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p0",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p1",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p2",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p3",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p4",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p5",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p6",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p7",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p8",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p9",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p10",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p11",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  1.8,
+                           "reason":  "Measured against Chromium 153 on Windows: 1.31% of the pixels differ and every box has the same bounding box. The reference boxes, the rounding of a box alone, a shape against a box, the children and shadow it cuts, and the transform and opacity applied after it all agree; what is left is the antialiasing along the edges, as in the shapes fixture. With clip-path ignored the same fixture measures 31.1%, so it fails."
+                       }
+}
