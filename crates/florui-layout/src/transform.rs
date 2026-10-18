@@ -456,11 +456,13 @@ pub fn resolve_node_transform(
 
 /// Whether `style`'s `transform-style: preserve-3d` takes effect. CSS forces
 /// it back to `flat` for anything that must be flattened to be drawn as a
-/// unit: a clip (`overflow`), `opacity` below one, or a `filter`.
+/// unit: a clip (`overflow`), `opacity` below one, a `filter`, `clip-path`,
+/// `mask`, a blend mode, or `isolation: isolate`.
 pub fn preserves_3d(style: &ComputedStyle) -> bool {
     style.preserve_3d
         && !style.overflow_clips
         && style.opacity >= 1.0
+        && !style.isolate
         && !style.has_group_effect()
         && style.backdrop_filter.is_empty()
 }

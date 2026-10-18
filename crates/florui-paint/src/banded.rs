@@ -127,7 +127,11 @@ fn filtered_rows(
                 }
                 _ => 0.0,
             };
-            if style.has_transform() || style.preserve_3d || style.has_group_effect() {
+            if style.has_transform()
+                || style.preserve_3d
+                || style.has_group_effect()
+                || crate::blend::isolates(arena, styles, id)
+            {
                 return inks.get(&id).map(|ink| (ink.1, ink.3));
             }
             (!style.backdrop_filter.is_empty() || reach > 0.0).then(|| {
