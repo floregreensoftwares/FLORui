@@ -58,7 +58,7 @@ mod tree;
 
 pub use animation::AnimationTimeline;
 pub use background::{
-    BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BackgroundSize,
+    BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BackgroundSize, BlendMode,
     ConicGradient, ConicItem, GradientItem, LinearDirection, LinearGradient, MaskComposite,
     MaskLayer, MaskMode, RadialExtent, RadialGradient, RadialSize,
 };

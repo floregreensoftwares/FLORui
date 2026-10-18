@@ -1090,6 +1090,12 @@ pub struct ComputedStyle {
     /// `mask-image` and what goes with it, one entry per layer that has an image
     /// (the first on top); empty when nothing masks the node. See [`MaskLayer`].
     pub mask: Vec<crate::MaskLayer>,
+    /// `mix-blend-mode`: how this node, painted as a group, mixes with what is
+    /// behind it in its stacking context.
+    pub mix_blend_mode: crate::BlendMode,
+    /// `isolation: isolate`: the node is a stacking context of its own, so what
+    /// blends inside it does not reach what is behind it.
+    pub isolate: bool,
     pub filter: Vec<FilterFunction>,
     /// Same grammar/subset as [`Self::filter`], applied to whatever is
     /// already painted behind this node instead of its own content.
@@ -1148,7 +1154,10 @@ impl ComputedStyle {
     /// transform: it has a filter or a `clip-path`, which act on what the node and
     /// everything in it painted together.
     pub fn has_group_effect(&self) -> bool {
-        !self.filter.is_empty() || self.clip_path != ClipPath::None || !self.mask.is_empty()
+        !self.filter.is_empty()
+            || self.clip_path != ClipPath::None
+            || !self.mask.is_empty()
+            || self.mix_blend_mode != crate::BlendMode::Normal
     }
 
     /// Whether the node is the containing block of its `position: fixed`
@@ -1261,6 +1270,8 @@ impl ComputedStyle {
             backface_hidden: _,
             clip_path: _,
             mask: _,
+            mix_blend_mode: _,
+            isolate: _,
             filter: _,
             backdrop_filter: _,
             container_type: _,
@@ -5366,6 +5377,88 @@ mod tests {
             (BackgroundRepeat::Repeat, BackgroundRepeat::Repeat)
         );
         assert!(computed[&arena.roots()[0]].has_group_effect());
+    }
+
+    #[test]
+    fn mix_blend_mode_keeps_every_mode_and_makes_a_group() {
+        use crate::BlendMode as B;
+        let initial = computed_of(".t { }");
+        assert_eq!(initial.mix_blend_mode, B::Normal);
+        assert!(!initial.isolate && !initial.has_group_effect());
+        for (keyword, mode) in [
+            ("multiply", B::Multiply),
+            ("screen", B::Screen),
+            ("overlay", B::Overlay),
+            ("darken", B::Darken),
+            ("lighten", B::Lighten),
+            ("color-dodge", B::ColorDodge),
+            ("color-burn", B::ColorBurn),
+            ("hard-light", B::HardLight),
+            ("soft-light", B::SoftLight),
+            ("difference", B::Difference),
+            ("exclusion", B::Exclusion),
+            ("hue", B::Hue),
+            ("saturation", B::Saturation),
+            ("color", B::Color),
+            ("luminosity", B::Luminosity),
+            ("plus-lighter", B::PlusLighter),
+        ] {
+            let style = computed_of(&format!(".t {{ mix-blend-mode: {keyword}; }}"));
+            assert_eq!(style.mix_blend_mode, mode, "{keyword}");
+            assert!(style.has_group_effect(), "{keyword} paints as a group");
+        }
+        assert_eq!(
+            computed_of(".t { mix-blend-mode: bogus; }").mix_blend_mode,
+            B::Normal
+        );
+        // It does not inherit.
+        let tree: Element = view! { <div class="p"><span class="c" /></div> };
+        let (arena, computed) = styles(
+            &tree,
+            ".p { mix-blend-mode: multiply; isolation: isolate; }",
+            &InteractionState::new(),
+        );
+        let child = &computed[&arena.children(arena.roots()[0])[0]];
+        assert_eq!(child.mix_blend_mode, B::Normal);
+        assert!(!child.isolate);
+    }
+
+    #[test]
+    fn isolation_is_kept_and_is_not_a_group_by_itself() {
+        let isolated = computed_of(".t { isolation: isolate; }");
+        assert!(isolated.isolate);
+        assert!(!isolated.has_group_effect());
+        assert!(!computed_of(".t { isolation: auto; }").isolate);
+    }
+
+    #[test]
+    fn background_blend_mode_goes_to_each_layer_and_cycles() {
+        use crate::BlendMode as B;
+        let layers = computed_of(
+            ".t { background-image: linear-gradient(#f00, #00f), none, linear-gradient(#0f0, #00f), \
+             linear-gradient(#ff0, #00f); background-blend-mode: multiply, screen; }",
+        )
+        .background_layers;
+        // The `none` layer has no entry but keeps its place in the cycle.
+        let modes: Vec<B> = layers.iter().map(|l| l.blend).collect();
+        assert_eq!(modes, [B::Multiply, B::Multiply, B::Screen]);
+        let normal = computed_of(".t { background-image: linear-gradient(#f00, #00f); }");
+        assert_eq!(normal.background_layers[0].blend, B::Normal);
+        // An invalid list is dropped whole.
+        let bad = computed_of(
+            ".t { background-image: linear-gradient(#f00, #00f); background-blend-mode: sideways; }",
+        );
+        assert_eq!(bad.background_layers[0].blend, B::Normal);
+        // It does not inherit.
+        let tree: Element = view! { <div class="p"><span class="c" /></div> };
+        let (arena, computed) = styles(
+            &tree,
+            ".p { background-blend-mode: multiply; } \
+             .c { background-image: linear-gradient(#f00, #00f); }",
+            &InteractionState::new(),
+        );
+        let child = &computed[&arena.children(arena.roots()[0])[0]];
+        assert_eq!(child.background_layers[0].blend, B::Normal);
     }
     #[test]
     fn a_box_alone_or_beside_a_shape_names_the_reference_box() {

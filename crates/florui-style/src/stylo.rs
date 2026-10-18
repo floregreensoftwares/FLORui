@@ -1803,7 +1803,7 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
             .as_absolute()
             .map(to_absolute_rgba)
             .unwrap_or(color),
-        background_layers: to_background_layers(background, &text.color),
+        background_layers: to_background_layers(background, &text.color, background_blends(values)),
         color,
         width: to_optional_length(&position.width),
         height: to_optional_length(&position.height),
@@ -1951,6 +1951,11 @@ fn to_computed_style(values: &ComputedValues) -> ComputedStyle {
         ),
         clip_path: to_clip_path_with_shape(values, font_size_px),
         mask: to_mask_layers(values, &text.color, font_size_px),
+        mix_blend_mode: to_blend_mode(effects.mix_blend_mode),
+        isolate: matches!(
+            box_style.isolation,
+            style::computed_values::isolation::T::Isolate
+        ),
         filter: to_filter(&effects.filter.0, color),
         backdrop_filter: to_filter(&effects.backdrop_filter.0, color),
         container_type: to_container_type(box_style.clone_container_type()),
@@ -2418,6 +2423,7 @@ fn to_mask_layers(
                     ),
                     origin: pick(&origins, index, BackgroundBox::Border),
                     clip: pick(&clips, index, BackgroundBox::Border),
+                    blend: crate::BlendMode::Normal,
                 },
                 composite: pick(&composites, index, MaskComposite::Add),
                 mode: pick(&modes, index, MaskMode::MatchSource),
@@ -2841,6 +2847,30 @@ fn to_length_percentage(value: &style::values::computed::LengthPercentage) -> Fl
     }
 }
 
+fn to_blend_mode(value: style::computed_values::mix_blend_mode::T) -> crate::BlendMode {
+    use crate::BlendMode;
+    use style::computed_values::mix_blend_mode::T;
+    match value {
+        T::Normal => BlendMode::Normal,
+        T::Multiply => BlendMode::Multiply,
+        T::Screen => BlendMode::Screen,
+        T::Overlay => BlendMode::Overlay,
+        T::Darken => BlendMode::Darken,
+        T::Lighten => BlendMode::Lighten,
+        T::ColorDodge => BlendMode::ColorDodge,
+        T::ColorBurn => BlendMode::ColorBurn,
+        T::HardLight => BlendMode::HardLight,
+        T::SoftLight => BlendMode::SoftLight,
+        T::Difference => BlendMode::Difference,
+        T::Exclusion => BlendMode::Exclusion,
+        T::Hue => BlendMode::Hue,
+        T::Saturation => BlendMode::Saturation,
+        T::Color => BlendMode::Color,
+        T::Luminosity => BlendMode::Luminosity,
+        T::PlusLighter => BlendMode::PlusLighter,
+    }
+}
+
 /// The layers of `background-image`. The list is as long as the images are
 /// many; `background-size`, `-position`, `-repeat`, `-origin` and `-clip` are
 /// read cyclically against it, as CSS says. A `none` or `url()` image makes
@@ -2848,6 +2878,7 @@ fn to_length_percentage(value: &style::values::computed::LengthPercentage) -> Fl
 fn to_background_layers(
     background: &style::properties::style_structs::Background,
     current: &style::color::AbsoluteColor,
+    blends: Vec<crate::BlendMode>,
 ) -> Vec<crate::BackgroundLayer> {
     use crate::{BackgroundBox, BackgroundLayer};
     use style::properties::longhands::{background_clip, background_origin};
@@ -2890,9 +2921,25 @@ fn to_background_layers(
                 repeat: (to_repeat(repeat.0), to_repeat(repeat.1)),
                 origin: origin_box(origin),
                 clip: clip_box(clip),
+                blend: blends
+                    .get(cycle(blends.len(), index))
+                    .copied()
+                    .unwrap_or_default(),
             })
         })
         .collect()
+}
+
+/// `background-blend-mode`, which the engine's servo build lacks, read back from
+/// the custom property that carries it when this element's own rules declare it
+/// (the property does not inherit and the custom property does).
+fn background_blends(values: &ComputedValues) -> Vec<crate::BlendMode> {
+    if !declares_mirrored(values, "background-blend-mode") {
+        return Vec::new();
+    }
+    mirrored(values, "background-blend-mode")
+        .and_then(|css| crate::mask_values::parse_blend_modes(&css))
+        .unwrap_or_default()
 }
 
 fn to_repeat(

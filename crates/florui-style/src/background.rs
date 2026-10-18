@@ -117,6 +117,31 @@ pub enum BackgroundBox {
     NoClip,
 }
 
+/// A blend mode: how a color is mixed with what is behind it, for `mix-blend-mode`
+/// and `background-blend-mode`. The separable modes work on each channel alone,
+/// the last four on hue, saturation and luminance, and `plus-lighter` adds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BlendMode {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+    PlusLighter,
+}
+
 /// One layer of `background-image`, with the properties that go with it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BackgroundLayer {
@@ -128,6 +153,9 @@ pub struct BackgroundLayer {
     pub repeat: (BackgroundRepeat, BackgroundRepeat),
     pub origin: BackgroundBox,
     pub clip: BackgroundBox,
+    /// `background-blend-mode`: how this layer mixes with the ones below it and
+    /// the background color. Unused by a mask layer.
+    pub blend: BlendMode,
 }
 
 /// How a mask layer combines with the layers below it (`mask-composite`).
