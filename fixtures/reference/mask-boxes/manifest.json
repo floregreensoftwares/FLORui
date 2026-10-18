@@ -1,0 +1,98 @@
+{
+    "id":  "mask-boxes",
+    "description":  "mask-clip and mask-origin boxes, no-clip, a shadow and children under a mask, with a radius, a transform and opacity",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  540,
+                     "height_css_px":  280,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 540px; height: 280px; background-color: #ffffff; } .b { position: absolute; width: 100px; height: 50px; box-sizing: border-box; border: 8px solid #1c2a4a; padding: 6px; } .p0 { left: 20px; top: 20px; background-color: #d05040; mask-image: linear-gradient(#000, #000); mask-clip: padding-box; } .p1 { left: 150px; top: 20px; background-color: #40a060; mask-image: linear-gradient(#000, #000); mask-origin: content-box; mask-clip: border-box; mask-repeat: no-repeat; mask-size: 50% 50%; } .p2 { left: 280px; top: 20px; background-color: #4070d0; mask-image: linear-gradient(#000, #000); mask-clip: content-box; } .p3 { left: 410px; top: 20px; background-color: #e0b030; box-shadow: 8px 8px 0 #00aa00; mask-image: linear-gradient(#000, #000); } .p4 { left: 20px; top: 110px; background-color: #a050c0; box-shadow: 10px 10px 0 #00aa00; mask-image: linear-gradient(#000, #000); mask-size: 160px 90px; mask-repeat: no-repeat; mask-position: -20px -10px; mask-clip: no-clip; } .p5 { left: 150px; top: 110px; background-color: #30a0b0; box-shadow: 8px 8px 0 #00aa00; mask-image: linear-gradient(#000, #000); mask-clip: margin-box; mask-origin: margin-box; } .p6 { left: 280px; top: 110px; background-color: #d05040; border-radius: 22px; mask-image: linear-gradient(to right, #000, transparent); } .p7 { left: 410px; top: 110px; background-color: #40a060; mask-image: linear-gradient(#000, transparent); transform: rotate(12deg); opacity: 0.6; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p0",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p1",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p2",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p3",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p4",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p5",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p6",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p7",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  0.5,
+                           "reason":  "Measured against Chromium 153 on Windows: 0.17% of the pixels differ by more than 3 levels of a channel and every box has the same bounding box. It covers mask-clip and mask-origin boxes (margin-box acts as the border box, as in Chromium), no-clip letting a shadow show, a shadow and children under a mask, and a radius, a transform and opacity after it. With the masks ignored the same fixture measures 14.6%, so it fails.",
+                           "channel_tolerance":  3
+                       }
+}

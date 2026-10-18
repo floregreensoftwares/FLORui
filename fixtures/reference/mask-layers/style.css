@@ -1,0 +1,18 @@
+.wrap { position: relative; width: 540px; height: 370px; background-color: #ffffff; }
+.b { position: absolute; width: 100px; height: 50px; box-sizing: border-box; }
+.p0 { left: 20px; top: 20px; background-color: #d05040; mask-image: linear-gradient(to right, #000, transparent); }
+.p1 { left: 150px; top: 20px; background-color: #40a060; mask-image: linear-gradient(to right, #000, #fff); mask-mode: luminance; }
+.p2 { left: 280px; top: 20px; background-color: #4070d0; mask-image: linear-gradient(#000, transparent); mask-size: 20px 25px; }
+.p3 { left: 410px; top: 20px; background-color: #e0b030; mask-image: radial-gradient(circle at 50% 50%, #000 10px, transparent 30px); }
+.p4 { left: 20px; top: 110px; background-color: #a050c0; mask-image: conic-gradient(#000 25%, transparent 25% 50%, #000 50% 75%, transparent 75%); }
+.p5 { left: 150px; top: 110px; background-color: #30a0b0; mask-image: linear-gradient(#000, #000); mask-size: 30px 50px; mask-repeat: space no-repeat; }
+.p6 { left: 280px; top: 110px; background-color: #d05040; mask-image: linear-gradient(#000, #000); mask-size: 28px 50px; mask-repeat: round no-repeat; }
+.p7 { left: 410px; top: 110px; background-color: #40a060; mask-image: linear-gradient(#000, #000), radial-gradient(circle at 50% 50%, #000 20px, transparent 20px); mask-composite: subtract, add; }
+.p8 { left: 20px; top: 200px; background-color: #4070d0; mask-image: linear-gradient(to right, #000 60%, transparent 60%), radial-gradient(circle at 50% 50%, #000 22px, transparent 22px); mask-composite: intersect, add; }
+.p9 { left: 150px; top: 200px; background-color: #e0b030; mask-image: linear-gradient(to right, #000 60%, transparent 60%), radial-gradient(circle at 50% 50%, #000 22px, transparent 22px); mask-composite: exclude, add; }
+.p10 { left: 280px; top: 200px; background-color: #a050c0; mask: linear-gradient(#000, transparent) 0 0 / 50% 100% no-repeat, linear-gradient(#000, #000) 100% 0 / 20px 100% no-repeat; }
+.p11 { left: 410px; top: 200px; background-color: #30a0b0; mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='20'><rect width='20' height='20' fill='%23000'/><rect x='20' width='20' height='20' fill='%23fff' fill-opacity='0.5'/></svg>"); mask-size: 100% 100%; }
+.p12 { left: 20px; top: 290px; background-color: #d05040; mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='20'><rect width='20' height='20' fill='%23000'/><rect x='20' width='20' height='20' fill='%23fff' fill-opacity='0.5'/></svg>"); mask-size: 100% 100%; mask-mode: luminance; }
+.p13 { left: 150px; top: 290px; background-color: #40a060; mask-image: linear-gradient(#000, #000); mask-position: right 10px bottom 5px; mask-size: 30px 20px; mask-repeat: no-repeat; }
+.p14 { left: 280px; top: 290px; background-color: #4070d0; -webkit-mask-image: linear-gradient(to bottom, #000, transparent); -webkit-mask-size: 100% 100%; }
+.p15 { left: 410px; top: 290px; background-color: #e0b030; mask-image: none, linear-gradient(#000, transparent) ; }
