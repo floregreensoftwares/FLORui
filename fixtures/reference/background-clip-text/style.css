@@ -1,0 +1,14 @@
+.wrap { position: relative; width: 540px; height: 190px; background-color: #ffffff; }
+.b, .q { position: absolute; font-size: 44px; font-weight: 700; line-height: 50px; box-sizing: border-box; }
+.b { width: 100px; height: 60px; }
+.q { width: 100px; height: 60px; }
+.i { display: inline; font-size: 44px; font-weight: 700; }
+.p0 { left: 20px; top: 20px; background-image: linear-gradient(#d05040, #d05040); -webkit-background-clip: text; color: transparent; }
+.p1 { left: 150px; top: 20px; background-image: linear-gradient(90deg, #d05040, #4070d0); background-clip: text; color: transparent; }
+.p2 { left: 280px; top: 20px; background: linear-gradient(#d05040, #d05040) text; color: transparent; }
+.p3 { left: 410px; top: 20px; background-color: #8080ff; background-image: linear-gradient(rgb(208, 80, 64), rgb(208, 80, 64)), linear-gradient(rgba(0, 255, 0, 0.5), rgba(0, 255, 0, 0.5)); background-clip: text; background-blend-mode: multiply, normal; color: transparent; }
+.p4 { left: 20px; top: 110px; }
+.i4 { background-image: linear-gradient(#d05040, #d05040); -webkit-background-clip: text; color: transparent; }
+.p5 { left: 150px; top: 110px; width: 70px; line-height: 38px; background-image: linear-gradient(#d05040, #d05040); background-clip: text; color: transparent; }
+.p6 { left: 280px; top: 110px; border: 8px solid transparent; padding: 8px; background-color: #40a060; background-clip: padding-box; }
+.p7 { left: 410px; top: 110px; background-color: #4070d0; background-image: linear-gradient(#d05040, #d05040); background-clip: text; color: #202020; }
