@@ -41,6 +41,7 @@ pub(crate) const MIRRORED: &[&str] = &[
     "text-underline-offset",
     "text-underline-position",
     "text-decoration-skip-ink",
+    "clip-path",
 ];
 
 const GLOBAL_KEYWORDS: [&str; 5] = ["inherit", "initial", "unset", "revert", "revert-layer"];
@@ -227,6 +228,7 @@ fn expand(name: &str, value: &str, important: &str) -> Option<String> {
     match name {
         "font-variant" => expand_font_variant(value, important),
         "text-decoration" => expand_text_decoration(value, important),
+        "clip-path" => Some(expand_clip_path(value, important)),
         _ => Some(format!("{}: {value}{important}", mirror_name(name))),
     }
 }
@@ -474,6 +476,20 @@ fn is_length_percentage(word: &str) -> bool {
         .is_some_and(|c| c.is_ascii_digit() || c == '.')
         && lower.chars().any(|c| c.is_ascii_alphabetic() || c == '%')
         && !lower.starts_with('#')
+}
+
+/// `clip-path`: the engine reads every form of it but `shape()`, which it drops.
+/// A `shape()` is written as `none` for the engine and as the mirrored custom
+/// property for [`crate::shape_function`]; any other value is written as itself
+/// and the custom property is reset, so the last declaration wins whichever
+/// form it has.
+fn expand_clip_path(value: &str, important: &str) -> String {
+    let mirror = mirror_name("clip-path");
+    if value.to_ascii_lowercase().contains("shape(") {
+        format!("clip-path: none{important}; {mirror}: {value}{important}")
+    } else {
+        format!("clip-path: {value}{important}; {mirror}: initial{important}")
+    }
 }
 
 #[cfg(test)]

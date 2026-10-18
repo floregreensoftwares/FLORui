@@ -461,7 +461,7 @@ pub fn preserves_3d(style: &ComputedStyle) -> bool {
     style.preserve_3d
         && !style.overflow_clips
         && style.opacity >= 1.0
-        && style.filter.is_empty()
+        && !style.has_group_effect()
         && style.backdrop_filter.is_empty()
 }
 

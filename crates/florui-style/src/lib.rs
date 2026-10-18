@@ -33,6 +33,7 @@
 mod animation;
 mod background;
 mod cascade;
+pub mod clip;
 mod color;
 mod container_query_adapter;
 mod default_stylesheet;
@@ -45,6 +46,7 @@ mod reduced_motion_adapter;
 mod rounded;
 mod scope_adapter;
 mod scroll_behavior_adapter;
+mod shape_function;
 mod state_reach;
 mod style_map;
 mod style_session;
@@ -71,6 +73,7 @@ pub use cascade::{
     TextTransform, TransformFunction, UnderlineOffset, UnderlinePosition, VerticalAlign, Viewport,
     Visibility, WhiteSpaceCollapse, WordBreak, compute, compute_with_container_query_signature,
 };
+pub use clip::{ClipPath, ClipShape, PathSegment, ReferenceBox, ShapeRadius};
 pub use color::{ColorParseError, Rgba, parse_hex_color};
 pub use container_query_adapter::{ContentBoxSize, resolve_container_query_signatures};
 pub use error::StyleError;

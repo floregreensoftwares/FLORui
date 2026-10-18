@@ -62,10 +62,12 @@ use taffy::prelude::*;
 use taffy::{Baselines, compute_leaf_layout};
 
 mod cache;
+mod clip;
 mod deferred;
 mod transform;
 
 pub use cache::LayoutCache;
+pub use clip::{ClipGeometry, resolve_clip_path};
 pub use transform::{
     ContextPlane, Matrix4, NEAR_W, context_planes, hides_its_back, node_screen_bounds,
     perspective_matrix, preserves_3d, resolve_node_transform, resolve_transform, screen_bounds,
@@ -3255,6 +3257,14 @@ fn hit_walk(
                 }
             }
             let outline = border_box_outline(styles, node, ax, ay, layout);
+            // A `clip-path` cuts the box and everything in it: outside its shape
+            // neither is hit.
+            let admitted = admitted
+                && style.is_none_or(|s| {
+                    resolve_clip_path(s, &layout, ax, ay, 1.0)
+                        .is_none_or(|shape| shape.contains(point.0, point.1))
+                });
+            admits_children = admitted;
             let pointer_events_none =
                 style.is_some_and(|s| s.pointer_events_none || !s.visibility.is_visible());
             // An inline element that wraps over lines is hit only inside its
@@ -5881,6 +5891,315 @@ mod tests {
         let overlay = arena.children(arena.roots()[0])[1];
         assert_eq!(hit, Some(overlay));
     }
+
+    /// `clip-path` of a lone box at the origin, resolved the way painting and
+    /// hit testing do.
+    fn clip_of(css: &str) -> Option<ClipGeometry> {
+        let tree: Element = view! { <div class="t" /> };
+        let (arena, styles, layouts) = layout_with_styles(&tree, css);
+        let node = arena.roots()[0];
+        let (x, y) = absolute_position(&arena, &layouts, node);
+        resolve_clip_path(&styles[&node], &layouts[&node], x, y, 1.0)
+    }
+
+    fn bounds_of(geometry: &ClipGeometry) -> (f32, f32, f32, f32) {
+        let points = geometry.contours.iter().flatten();
+        points.fold(
+            (
+                f32::INFINITY,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+            ),
+            |(x0, y0, x1, y1), &(x, y)| (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
+        )
+    }
+
+    #[test]
+    fn a_box_without_a_clip_path_has_none() {
+        assert!(clip_of(".t { width: 100px; height: 50px; }").is_none());
+    }
+
+    #[test]
+    fn a_circle_covers_the_pixels_chrome_covers() {
+        let clip =
+            clip_of(".t { width: 100px; height: 50px; clip-path: circle(25px at 50% 50%); }")
+                .expect("a clip");
+        // Chrome 153: along the middle row the circle fills 45..95 of a box
+        // placed at 20, that is 25..75 here, and its top is at 0.
+        assert!(clip.contains(25.5, 25.0) && clip.contains(74.5, 25.0));
+        assert!(!clip.contains(24.0, 25.0) && !clip.contains(76.0, 25.0));
+        assert!(clip.contains(50.0, 0.5) && !clip.contains(50.0, -0.5));
+        // The corners of the box are outside it.
+        assert!(!clip.contains(1.0, 1.0) && !clip.contains(99.0, 49.0));
+        let (x0, y0, x1, y1) = bounds_of(&clip);
+        assert!((x0 - 25.0).abs() < 0.01 && (x1 - 75.0).abs() < 0.01);
+        assert!((y0 - 0.0).abs() < 0.01 && (y1 - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn circle_radius_keywords_and_percentages_resolve_against_the_box() {
+        // closest-side from the center of a 100x50 box is 25.
+        let closest =
+            clip_of(".t { width: 100px; height: 50px; clip-path: circle(closest-side); }")
+                .expect("a clip");
+        let (x0, _, x1, _) = bounds_of(&closest);
+        assert!((x1 - x0 - 50.0).abs() < 0.01);
+        // farthest-side is 50.
+        let farthest =
+            clip_of(".t { width: 100px; height: 50px; clip-path: circle(farthest-side); }")
+                .expect("a clip");
+        let (x0, _, x1, _) = bounds_of(&farthest);
+        assert!((x1 - x0 - 100.0).abs() < 0.01);
+        // 50% of sqrt((100^2 + 50^2) / 2) = 50% of 79.06.
+        let percent =
+            clip_of(".t { width: 100px; height: 50px; clip-path: circle(50%); }").expect("a clip");
+        let (x0, _, x1, _) = bounds_of(&percent);
+        assert!((x1 - x0 - 79.057).abs() < 0.02, "{}", x1 - x0);
+        // An ellipse's radii are of the width and the height.
+        let ellipse =
+            clip_of(".t { width: 100px; height: 50px; clip-path: ellipse(40% 10px at 25% 80%); }")
+                .expect("a clip");
+        let (x0, y0, x1, y1) = bounds_of(&ellipse);
+        assert!((x0 - -15.0).abs() < 0.01 && (x1 - 65.0).abs() < 0.01);
+        assert!((y0 - 30.0).abs() < 0.01 && (y1 - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_polygon_is_filled_by_its_rule() {
+        let triangle = clip_of(
+            ".t { width: 100px; height: 50px; clip-path: polygon(0 0, 100% 0, 50% 100%); }",
+        )
+        .expect("a clip");
+        // Chrome 153: at the middle row the triangle spans 25..75.
+        assert!(triangle.contains(26.0, 25.0) && triangle.contains(74.0, 25.0));
+        assert!(!triangle.contains(24.0, 25.0) && !triangle.contains(76.0, 25.0));
+        assert!(triangle.contains(50.0, 49.0) && !triangle.contains(5.0, 40.0));
+        // A bow tie crossing itself: nonzero fills both halves, evenodd the same,
+        // but a pentagram's center is the difference.
+        let star = "polygon({rule} 50px 0, 20px 49px, 90px 15px, 10px 15px, 80px 49px)";
+        let nonzero = clip_of(&format!(
+            ".t {{ width: 100px; height: 50px; clip-path: {}; }}",
+            star.replace("{rule}", "nonzero,")
+        ))
+        .expect("a clip");
+        let evenodd = clip_of(&format!(
+            ".t {{ width: 100px; height: 50px; clip-path: {}; }}",
+            star.replace("{rule}", "evenodd,")
+        ))
+        .expect("a clip");
+        assert!(
+            nonzero.contains(50.0, 28.0),
+            "the middle of a pentagram is wound twice"
+        );
+        assert!(!evenodd.contains(50.0, 28.0), "and is a hole in even-odd");
+        assert!(nonzero.contains(50.0, 5.0) && evenodd.contains(50.0, 5.0));
+    }
+
+    #[test]
+    fn an_inset_is_a_rounded_rectangle() {
+        let clip =
+            clip_of(".t { width: 100px; height: 50px; clip-path: inset(10px 20px round 8px); }")
+                .expect("a clip");
+        // x 20..80, y 10..40, corners of radius 8 (Chrome 153).
+        let (x0, y0, x1, y1) = bounds_of(&clip);
+        assert!((x0 - 20.0).abs() < 0.01 && (x1 - 80.0).abs() < 0.01);
+        assert!((y0 - 10.0).abs() < 0.01 && (y1 - 40.0).abs() < 0.01);
+        assert!(clip.contains(50.0, 25.0));
+        assert!(!clip.contains(20.5, 10.5), "the corner is cut");
+        assert!(clip.contains(22.5, 12.5), "but not deeper in");
+        assert!(!clip.contains(10.0, 25.0));
+        // An inset that crosses itself is empty and clips everything.
+        let empty = clip_of(".t { width: 100px; height: 50px; clip-path: inset(30px 0 30px 0); }")
+            .expect("a clip");
+        assert!(empty.contours.is_empty() && !empty.contains(50.0, 25.0));
+    }
+
+    #[test]
+    fn rect_and_xywh_name_the_same_rectangles() {
+        let by_rect =
+            clip_of(".t { width: 100px; height: 50px; clip-path: rect(5px 80px 40px 10px); }")
+                .expect("a clip");
+        let (x0, y0, x1, y1) = bounds_of(&by_rect);
+        assert_eq!((x0, y0, x1, y1), (10.0, 5.0, 80.0, 40.0));
+        let by_xywh =
+            clip_of(".t { width: 100px; height: 50px; clip-path: xywh(10px 5px 70px 35px); }")
+                .expect("a clip");
+        assert_eq!(bounds_of(&by_xywh), (10.0, 5.0, 80.0, 40.0));
+    }
+
+    #[test]
+    fn the_reference_box_moves_a_shape_and_its_percentages() {
+        // A 100x50 content box inside 10px padding, a 5px border and a 20px margin.
+        let base = "width: 100px; height: 50px; padding: 10px; border: 5px solid; margin: 20px;";
+        let rect_of = |clip: &str| {
+            let tree: Element = view! { <div class="t" /> };
+            let (arena, styles, layouts) =
+                layout_with_styles(&tree, &format!(".t {{ {base} clip-path: {clip}; }}"));
+            let node = arena.roots()[0];
+            let (x, y) = absolute_position(&arena, &layouts, node);
+            let clip =
+                resolve_clip_path(&styles[&node], &layouts[&node], x, y, 1.0).expect("a clip");
+            bounds_of(&clip)
+        };
+        // The border box is 130x80 at the margin (Chrome 153 measured these).
+        assert_eq!(rect_of("border-box"), (20.0, 20.0, 150.0, 100.0));
+        assert_eq!(rect_of("padding-box"), (25.0, 25.0, 145.0, 95.0));
+        assert_eq!(rect_of("content-box"), (35.0, 35.0, 135.0, 85.0));
+        assert_eq!(rect_of("margin-box"), (0.0, 0.0, 170.0, 120.0));
+        // fill-box is the content box; stroke-box and view-box the border box.
+        assert_eq!(rect_of("fill-box"), rect_of("content-box"));
+        assert_eq!(rect_of("stroke-box"), rect_of("border-box"));
+        assert_eq!(rect_of("view-box"), rect_of("border-box"));
+        // A shape's percentages are of that box.
+        assert_eq!(rect_of("inset(10%) content-box"), (45.0, 40.0, 125.0, 80.0));
+        assert_eq!(rect_of("inset(0) padding-box"), (25.0, 25.0, 145.0, 95.0));
+        let (x0, _, x1, _) = rect_of("circle(50%) border-box");
+        assert!(
+            (x1 - x0 - 2.0 * 0.5 * (((130.0f32 * 130.0 + 80.0 * 80.0) / 2.0).sqrt())).abs() < 0.05
+        );
+    }
+
+    #[test]
+    fn a_box_alone_keeps_the_rounding_of_the_borders_inside_it() {
+        // `border-radius: 30px` with a 5px border and 10px padding: the padding
+        // edge is rounded by 25 and the content edge by 15 (Chrome 153 measured a
+        // content box that lost 4781 of 5000 pixels, which is a 15px radius).
+        let css = |reference: &str| {
+            format!(
+                ".t {{ width: 100px; height: 50px; padding: 10px; border: 5px solid; \
+                       border-radius: 30px; clip-path: {reference}; }}"
+            )
+        };
+        let content = clip_of(&css("content-box")).expect("a clip");
+        let (x0, y0, x1, y1) = bounds_of(&content);
+        assert_eq!((x0, y0, x1, y1), (15.0, 15.0, 115.0, 65.0));
+        // The corner of the content box is cut by a 15px arc: (15.5, 15.5) is out,
+        // (15 + 15 * (1 - 0.7071) + 0.5, same) is in.
+        assert!(!content.contains(15.5, 15.5));
+        assert!(content.contains(15.0 + 15.0 * 0.2929 + 0.6, 15.0 + 15.0 * 0.2929 + 0.6));
+        let padding = clip_of(&css("padding-box")).expect("a clip");
+        assert!(!padding.contains(5.5, 5.5));
+        assert!(padding.contains(5.0 + 25.0 * 0.2929 + 0.6, 5.0 + 25.0 * 0.2929 + 0.6));
+        // The border box of a rounded box is its rounded outline.
+        let border = clip_of(&css("border-box")).expect("a clip");
+        assert!(!border.contains(0.5, 0.5));
+        assert!(border.contains(30.0 * 0.2929 + 0.6, 30.0 * 0.2929 + 0.6));
+        // A margin box pushes a round corner out by the margin, and leaves a square one.
+        let margin = clip_of(
+            ".t { width: 100px; height: 50px; margin: 20px; border-radius: 10px; clip-path: margin-box; }",
+        )
+        .expect("a clip");
+        assert_eq!(bounds_of(&margin), (0.0, 0.0, 140.0, 90.0));
+        assert!(
+            !margin.contains(0.5, 0.5),
+            "a 30px corner at the margin edge"
+        );
+    }
+
+    #[test]
+    fn a_path_is_flattened_with_its_arcs_and_curves() {
+        // An upper half disc: an arc over the top from (0, 25) to (50, 25).
+        let half = clip_of(
+            ".t { width: 100px; height: 50px; clip-path: path(\"M 0 25 A 25 25 0 0 1 50 25 Z\"); }",
+        )
+        .expect("a clip");
+        assert!(half.contains(25.0, 10.0) && half.contains(25.0, 24.0));
+        assert!(!half.contains(25.0, 40.0) && !half.contains(60.0, 20.0));
+        let (x0, y0, x1, y1) = bounds_of(&half);
+        assert!((x0 - 0.0).abs() < 0.02 && (x1 - 50.0).abs() < 0.02);
+        assert!(
+            (y0 - 0.0).abs() < 0.05 && (y1 - 25.0).abs() < 0.02,
+            "{y0} {y1}"
+        );
+        // The same arc swept the other way is the lower half.
+        let lower = clip_of(
+            ".t { width: 100px; height: 50px; clip-path: path(\"M 0 25 A 25 25 0 0 0 50 25 Z\"); }",
+        )
+        .expect("a clip");
+        assert!(lower.contains(25.0, 40.0) && !lower.contains(25.0, 10.0));
+        // A cubic and a quadratic stay inside their control polygons.
+        let curved = clip_of(
+            ".t { width: 100px; height: 50px; clip-path: path(\"M 0 40 C 0 0 50 0 50 40 Q 25 50 0 40 Z\"); }",
+        )
+        .expect("a clip");
+        assert!(curved.contains(25.0, 20.0) && !curved.contains(2.0, 5.0));
+        // Two subpaths, even-odd: a ring.
+        let ring = clip_of(
+            ".t { width: 100px; height: 50px; \
+               clip-path: path(evenodd, \"M 0 0 H 50 V 50 H 0 Z M 15 15 H 35 V 35 H 15 Z\"); }",
+        )
+        .expect("a clip");
+        assert!(ring.contains(5.0, 5.0) && !ring.contains(25.0, 25.0));
+    }
+
+    #[test]
+    fn lengths_in_a_clip_scale_with_the_device_pixel_ratio() {
+        let tree: Element = view! { <div class="t" /> };
+        let (arena, styles, layouts) = layout_with_styles(
+            &tree,
+            ".t { width: 100px; height: 50px; border: 4px solid; \
+                 clip-path: inset(10px round 5px) padding-box; }",
+        );
+        let node = arena.roots()[0];
+        let layout = layouts[&node];
+        let doubled = BoxLayout {
+            x: layout.x * 2.0,
+            y: layout.y * 2.0,
+            width: layout.width * 2.0,
+            height: layout.height * 2.0,
+        };
+        let one = resolve_clip_path(&styles[&node], &layout, 0.0, 0.0, 1.0).expect("a clip");
+        let two = resolve_clip_path(&styles[&node], &doubled, 0.0, 0.0, 2.0).expect("a clip");
+        let (a, b) = (bounds_of(&one), bounds_of(&two));
+        for (one, two) in [(a.0, b.0), (a.1, b.1), (a.2, b.2), (a.3, b.3)] {
+            assert!((one * 2.0 - two).abs() < 0.01, "{one} vs {two}");
+        }
+    }
+
+    #[test]
+    fn a_box_is_hit_only_inside_its_clip_path_and_so_are_its_children() {
+        let tree: Element = view! {
+            <div class="outer"><div class="box"><div class="kid" /></div></div>
+        };
+        let css = ".outer { width: 200px; height: 100px; } \
+                   .box { width: 100px; height: 100px; clip-path: circle(40px at 50% 50%); } \
+                   .kid { width: 100px; height: 100px; }";
+        let (arena, hit) = hit_in(css, &tree, 50.0, 50.0);
+        let outer = arena.roots()[0];
+        let boxed = arena.children(outer)[0];
+        let kid = arena.children(boxed)[0];
+        assert_eq!(hit, Some(kid), "inside the circle the child is on top");
+        // The corner of the box is outside the circle: neither it nor the child
+        // is hit, and the pointer falls through to what is behind.
+        let (_, corner) = hit_in(css, &tree, 5.0, 5.0);
+        assert_eq!(corner, Some(outer));
+        // Just inside and just outside the edge, along the middle row.
+        let (_, inside) = hit_in(css, &tree, 89.5, 50.0);
+        assert_eq!(inside, Some(kid));
+        let (_, outside) = hit_in(css, &tree, 90.5, 50.0);
+        assert_eq!(outside, Some(outer));
+    }
+
+    #[test]
+    fn a_clip_path_is_followed_through_a_transform_when_hitting() {
+        let tree: Element = view! { <div class="box" /> };
+        // 100x50 turned 90deg about its center (50, 25): the box's top edge is
+        // the vertical line x = 75 (y from -25 to 75) and the triangle's apex, at
+        // the middle of the bottom edge, is at (25, 25).
+        let css = ".box { width: 100px; height: 50px; transform: rotate(90deg); \
+                          clip-path: polygon(0 0, 100% 0, 50% 100%); }";
+        let (arena, inside) = hit_in(css, &tree, 70.0, 25.0);
+        assert_eq!(inside, Some(arena.roots()[0]));
+        // At x = 60 the triangle spans y from -10 to 60.
+        let (_, in_the_box_in_the_triangle) = hit_in(css, &tree, 60.0, 0.0);
+        assert_eq!(in_the_box_in_the_triangle, Some(arena.roots()[0]));
+        let (_, in_the_box_outside_it) = hit_in(css, &tree, 60.0, -20.0);
+        assert_eq!(in_the_box_outside_it, None);
+        let (_, beyond_the_apex) = hit_in(css, &tree, 20.0, 25.0);
+        assert_eq!(beyond_the_apex, None);
+    }
+
     #[test]
     fn screen_bounds_of_an_untransformed_tree_are_the_layout_boxes() {
         let tree: Element = view! { <div class="box" /> };

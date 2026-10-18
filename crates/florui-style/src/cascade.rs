@@ -6,6 +6,7 @@
 
 use crate::style_map::StyleMap;
 
+use crate::clip::ClipPath;
 use crate::color::Rgba;
 use crate::interaction::InteractionState;
 use crate::stylesheet_parse::Rule;
@@ -1084,6 +1085,8 @@ pub struct ComputedStyle {
     /// (the first-listed function reads the node's own unfiltered
     /// content); `florui-paint`'s own doc covers how that chain applies
     /// to a node's rendered content.
+    /// `clip-path` — see [`ClipPath`].
+    pub clip_path: ClipPath,
     pub filter: Vec<FilterFunction>,
     /// Same grammar/subset as [`Self::filter`], applied to whatever is
     /// already painted behind this node instead of its own content.
@@ -1136,6 +1139,13 @@ impl ComputedStyle {
             || self.translate.is_some()
             || self.rotate.is_some()
             || self.scale.is_some()
+    }
+
+    /// Whether the node must be painted as a group, apart from its `opacity` and
+    /// transform: it has a filter or a `clip-path`, which act on what the node and
+    /// everything in it painted together.
+    pub fn has_group_effect(&self) -> bool {
+        !self.filter.is_empty() || self.clip_path != ClipPath::None
     }
 
     /// Whether the node is the containing block of its `position: fixed`
@@ -1246,6 +1256,7 @@ impl ComputedStyle {
             perspective_origin: _,
             preserve_3d: _,
             backface_hidden: _,
+            clip_path: _,
             filter: _,
             backdrop_filter: _,
             container_type: _,
@@ -1710,6 +1721,7 @@ mod tests {
     use florui::prelude::*;
 
     use super::*;
+    use crate::clip::{ClipShape, PathSegment, ReferenceBox, ShapeRadius};
     use crate::stylesheet_parse::parse_stylesheet;
 
     fn styles(tree: &Element, css: &str, state: &InteractionState) -> (Arena, StyleMap) {
@@ -4736,6 +4748,375 @@ mod tests {
         );
     }
 
+    fn clip_of(declaration: &str) -> ClipPath {
+        computed_of(&format!(".t {{ clip-path: {declaration}; }}")).clip_path
+    }
+
+    fn shape_of(declaration: &str) -> ClipShape {
+        match clip_of(declaration) {
+            ClipPath::Shape(shape, ReferenceBox::Border) => *shape,
+            other => panic!("{declaration}: expected a shape on the border box, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_path_defaults_to_none_and_an_svg_reference_is_none() {
+        assert_eq!(computed_of(".t { }").clip_path, ClipPath::None);
+        assert_eq!(clip_of("none"), ClipPath::None);
+        assert_eq!(clip_of("url(#a)"), ClipPath::None);
+        // It does not inherit.
+        let tree: Element = view! { <div class="p"><span class="c" /></div> };
+        let (arena, computed) = styles(
+            &tree,
+            ".p { clip-path: circle(10px); }",
+            &InteractionState::new(),
+        );
+        assert_eq!(
+            computed[&arena.children(arena.roots()[0])[0]].clip_path,
+            ClipPath::None
+        );
+    }
+
+    #[test]
+    fn a_circle_and_an_ellipse_keep_their_center_and_radii() {
+        assert_eq!(
+            shape_of("circle(25px at 50% 50%)"),
+            ClipShape::Circle {
+                center: (lp(0.0, 0.5), lp(0.0, 0.5)),
+                radius: ShapeRadius::Length(lp(25.0, 0.0)),
+            }
+        );
+        assert_eq!(
+            shape_of("circle()"),
+            ClipShape::Circle {
+                center: (lp(0.0, 0.5), lp(0.0, 0.5)),
+                radius: ShapeRadius::ClosestSide,
+            }
+        );
+        assert_eq!(
+            shape_of("circle(farthest-side at 10px 20%)"),
+            ClipShape::Circle {
+                center: (lp(10.0, 0.0), lp(0.0, 0.2)),
+                radius: ShapeRadius::FarthestSide,
+            }
+        );
+        assert_eq!(
+            shape_of("circle(10px at right 5px bottom 8px)"),
+            ClipShape::Circle {
+                center: (lp(-5.0, 1.0), lp(-8.0, 1.0)),
+                radius: ShapeRadius::Length(lp(10.0, 0.0)),
+            }
+        );
+        assert_eq!(
+            shape_of("ellipse(30px 20% at 20% 80%)"),
+            ClipShape::Ellipse {
+                center: (lp(0.0, 0.2), lp(0.0, 0.8)),
+                radius_x: ShapeRadius::Length(lp(30.0, 0.0)),
+                radius_y: ShapeRadius::Length(lp(0.0, 0.2)),
+            }
+        );
+        assert_eq!(
+            shape_of("ellipse(closest-side farthest-side)"),
+            ClipShape::Ellipse {
+                center: (lp(0.0, 0.5), lp(0.0, 0.5)),
+                radius_x: ShapeRadius::ClosestSide,
+                radius_y: ShapeRadius::FarthestSide,
+            }
+        );
+    }
+
+    #[test]
+    fn inset_rect_and_xywh_are_all_insets() {
+        let zero = lp(0.0, 0.0);
+        assert_eq!(
+            shape_of("inset(10px 20px round 8px)"),
+            ClipShape::Inset {
+                top: lp(10.0, 0.0),
+                right: lp(20.0, 0.0),
+                bottom: lp(10.0, 0.0),
+                left: lp(20.0, 0.0),
+                radii: [(lp(8.0, 0.0), lp(8.0, 0.0)); 4],
+            }
+        );
+        assert_eq!(
+            shape_of("inset(5px round 1px 2px 3px 4px / 5px 6px 7px 8px)"),
+            ClipShape::Inset {
+                top: lp(5.0, 0.0),
+                right: lp(5.0, 0.0),
+                bottom: lp(5.0, 0.0),
+                left: lp(5.0, 0.0),
+                radii: [
+                    (lp(1.0, 0.0), lp(5.0, 0.0)),
+                    (lp(2.0, 0.0), lp(6.0, 0.0)),
+                    (lp(3.0, 0.0), lp(7.0, 0.0)),
+                    (lp(4.0, 0.0), lp(8.0, 0.0)),
+                ],
+            }
+        );
+        // `rect()` names the edges from the top left; the distance of the right
+        // and bottom edges from theirs is the size minus that.
+        assert_eq!(
+            shape_of("rect(5px 80px 40px 10px)"),
+            ClipShape::Inset {
+                top: lp(5.0, 0.0),
+                right: lp(-80.0, 1.0),
+                bottom: lp(-40.0, 1.0),
+                left: lp(10.0, 0.0),
+                radii: [(zero, zero); 4],
+            }
+        );
+        // xywh() is the same, to within the rounding of a percentage.
+        let ClipShape::Inset {
+            top,
+            right,
+            bottom,
+            left,
+            ..
+        } = shape_of("xywh(10px 5px 60% 70%)")
+        else {
+            panic!("an inset");
+        };
+        let near = |a: LengthPercentage, b: LengthPercentage| {
+            (a.length - b.length).abs() < 1e-4 && (a.percentage - b.percentage).abs() < 1e-5
+        };
+        assert!(near(top, lp(5.0, 0.0)) && near(left, lp(10.0, 0.0)));
+        assert!(near(right, lp(-10.0, 0.4)) && near(bottom, lp(-5.0, 0.3)));
+    }
+
+    #[test]
+    fn a_polygon_keeps_its_points_and_fill_rule() {
+        assert_eq!(
+            shape_of("polygon(0 0, 100% 0, 50% 100%)"),
+            ClipShape::Polygon {
+                even_odd: false,
+                points: vec![
+                    (lp(0.0, 0.0), lp(0.0, 0.0)),
+                    (lp(0.0, 1.0), lp(0.0, 0.0)),
+                    (lp(0.0, 0.5), lp(0.0, 1.0)),
+                ],
+            }
+        );
+        let ClipShape::Polygon { even_odd, .. } =
+            shape_of("polygon(evenodd, 0 0, 10px 0, 10px 10px)")
+        else {
+            panic!("a polygon");
+        };
+        assert!(even_odd);
+        // A calc() mixing a length and a percentage is kept as both.
+        let ClipShape::Polygon { points, .. } =
+            shape_of("polygon(calc(10px + 5%) 1px, 0 0, 1px 1px)")
+        else {
+            panic!("a polygon");
+        };
+        assert_eq!(points[0].0, lp(10.0, 0.05));
+    }
+
+    #[test]
+    fn path_and_shape_become_absolute_segments() {
+        let p = |x: f32, y: f32| (lp(x, 0.0), lp(y, 0.0));
+        assert_eq!(
+            shape_of("path(\"M 10 10 L 50 10 l 0 20 H 10 v -20 Z\")"),
+            ClipShape::Path {
+                even_odd: false,
+                segments: vec![
+                    PathSegment::Move(p(10.0, 10.0)),
+                    PathSegment::Line(p(50.0, 10.0)),
+                    PathSegment::Line(p(50.0, 30.0)),
+                    PathSegment::Line(p(10.0, 30.0)),
+                    PathSegment::Line(p(10.0, 10.0)),
+                    PathSegment::Close,
+                ],
+            }
+        );
+        let ClipShape::Path { even_odd, .. } = shape_of("path(evenodd, \"M0 0 L10 0 L10 10 Z\")")
+        else {
+            panic!("a path");
+        };
+        assert!(even_odd);
+        // A smooth curve reflects the control point before it.
+        let ClipShape::Path { segments, .. } =
+            shape_of("path(\"M 0 0 C 0 10 10 10 10 0 S 20 -10 20 0\")")
+        else {
+            panic!("a path");
+        };
+        assert_eq!(
+            segments[2],
+            PathSegment::Cubic(p(10.0, -10.0), p(20.0, -10.0), p(20.0, 0.0))
+        );
+    }
+
+    fn segments_of(declaration: &str) -> (bool, Vec<PathSegment>) {
+        match clip_of(declaration) {
+            ClipPath::Shape(shape, ReferenceBox::Border) => match *shape {
+                ClipShape::Path { even_odd, segments } => (even_odd, segments),
+                other => panic!("{declaration}: expected a path, got {other:?}"),
+            },
+            other => panic!("{declaration}: expected a shape, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shape_function_commands_become_absolute_segments() {
+        let p = |x: f32, y: f32| (lp(x, 0.0), lp(y, 0.0));
+        let (even_odd, segments) = segments_of(
+            "shape(from 0 0, line by 50px 0, line to 25px 100%, hline by 10px, vline to 5px, close)",
+        );
+        assert!(!even_odd);
+        assert_eq!(
+            segments,
+            vec![
+                PathSegment::Move(p(0.0, 0.0)),
+                PathSegment::Line(p(50.0, 0.0)),
+                PathSegment::Line((lp(25.0, 0.0), lp(0.0, 1.0))),
+                PathSegment::Line((lp(35.0, 0.0), lp(0.0, 1.0))),
+                PathSegment::Line((lp(35.0, 0.0), lp(5.0, 0.0))),
+                PathSegment::Close,
+            ]
+        );
+        let (even_odd, _) = segments_of("shape(evenodd from 0 0, line to 10px 0, close)");
+        assert!(even_odd);
+        let (even_odd, _) = segments_of("shape(nonzero from 0 0, line to 10px 0, close)");
+        assert!(!even_odd);
+    }
+
+    #[test]
+    fn shape_function_curves_arcs_and_smooth_segments() {
+        let p = |x: f32, y: f32| (lp(x, 0.0), lp(y, 0.0));
+        let (_, segments) = segments_of(
+            "shape(from 0px 0px, curve to 50px 0px with 10px 20px / 40px 20px, \
+             smooth to 100px 0px with 90px -20px, curve by 10px 10px with 5px 0px, \
+             smooth by 10px 0px, arc to 0px 0px of 30px 20px cw large rotate 15deg)",
+        );
+        assert_eq!(
+            segments[1],
+            PathSegment::Cubic(p(10.0, 20.0), p(40.0, 20.0), p(50.0, 0.0))
+        );
+        // The smooth cubic reflects the previous second control point (40, 20)
+        // about the current point (50, 0).
+        assert_eq!(
+            segments[2],
+            PathSegment::Cubic(p(60.0, -20.0), p(90.0, -20.0), p(100.0, 0.0))
+        );
+        // A `by` quadratic is relative to where it starts.
+        assert_eq!(
+            segments[3],
+            PathSegment::Quad(p(105.0, 0.0), p(110.0, 10.0))
+        );
+        // A smooth quadratic after a quadratic reflects its control point.
+        assert_eq!(
+            segments[4],
+            PathSegment::Quad(p(115.0, 20.0), p(120.0, 10.0))
+        );
+        assert_eq!(
+            segments[5],
+            PathSegment::Arc {
+                radii: p(30.0, 20.0),
+                rotation: 15.0,
+                large: true,
+                clockwise: true,
+                to: p(0.0, 0.0),
+            }
+        );
+        // The defaults of an arc: counterclockwise, small, unrotated, one radius.
+        let (_, segments) = segments_of("shape(from 0 0, arc to 10px 0 of 7px)");
+        assert_eq!(
+            segments[1],
+            PathSegment::Arc {
+                radii: p(7.0, 7.0),
+                rotation: 0.0,
+                large: false,
+                clockwise: false,
+                to: p(10.0, 0.0),
+            }
+        );
+    }
+
+    #[test]
+    fn shape_function_takes_a_reference_box_and_calc_and_units() {
+        let ClipPath::Shape(shape, reference) =
+            clip_of("padding-box shape(from 1in 0, line to calc(10px + 50% - 2px) 1em)")
+        else {
+            panic!("a shape");
+        };
+        assert_eq!(reference, ReferenceBox::Padding);
+        let ClipShape::Path { segments, .. } = *shape else {
+            panic!("a path");
+        };
+        assert_eq!(
+            segments[0],
+            PathSegment::Move((lp(96.0, 0.0), lp(0.0, 0.0)))
+        );
+        // 1em is 16px in a box that sets no font size.
+        assert_eq!(
+            segments[1],
+            PathSegment::Line((lp(8.0, 0.5), lp(16.0, 0.0)))
+        );
+        let ClipPath::Shape(_, reference) = clip_of("shape(from 0 0, close) content-box") else {
+            panic!("a shape");
+        };
+        assert_eq!(reference, ReferenceBox::Content);
+    }
+
+    #[test]
+    fn an_invalid_shape_function_is_dropped_and_the_last_declaration_wins() {
+        // A command it does not know, a missing `to` or `by`, a missing comma.
+        for invalid in [
+            "shape(from 0 0, spin to 1px 1px)",
+            "shape(from 0 0, line 1px 1px)",
+            "shape(from 0 0 line to 1px 1px)",
+            "shape(0 0, line to 1px 1px)",
+            "shape(from 0 0, line to 1vw 1px)",
+        ] {
+            assert_eq!(clip_of(invalid), ClipPath::None, "{invalid}");
+        }
+        let css = |a: &str, b: &str| {
+            computed_of(&format!(".t {{ clip-path: {a}; clip-path: {b}; }}")).clip_path
+        };
+        assert!(matches!(
+            css("circle(10px)", "shape(from 0 0, close)"),
+            ClipPath::Shape(shape, _) if matches!(*shape, ClipShape::Path { .. })
+        ));
+        assert!(matches!(
+            css("shape(from 0 0, close)", "circle(10px)"),
+            ClipPath::Shape(shape, _) if matches!(*shape, ClipShape::Circle { .. })
+        ));
+        assert_eq!(css("shape(from 0 0, close)", "none"), ClipPath::None);
+    }
+
+    #[test]
+    fn a_shape_function_does_not_reach_the_children() {
+        let tree: Element = view! { <div class="p"><span class="c" /></div> };
+        let (arena, computed) = styles(
+            &tree,
+            ".p { clip-path: shape(from 0 0, line to 10px 0, close); }",
+            &InteractionState::new(),
+        );
+        let parent = arena.roots()[0];
+        assert!(matches!(computed[&parent].clip_path, ClipPath::Shape(..)));
+        assert_eq!(
+            computed[&arena.children(parent)[0]].clip_path,
+            ClipPath::None
+        );
+    }
+    #[test]
+    fn a_box_alone_or_beside_a_shape_names_the_reference_box() {
+        assert_eq!(clip_of("border-box"), ClipPath::Box(ReferenceBox::Border));
+        assert_eq!(clip_of("padding-box"), ClipPath::Box(ReferenceBox::Padding));
+        assert_eq!(clip_of("content-box"), ClipPath::Box(ReferenceBox::Content));
+        assert_eq!(clip_of("margin-box"), ClipPath::Box(ReferenceBox::Margin));
+        // For an element with a CSS layout box, as measured in Chrome.
+        assert_eq!(clip_of("fill-box"), ClipPath::Box(ReferenceBox::Content));
+        assert_eq!(clip_of("stroke-box"), ClipPath::Box(ReferenceBox::Border));
+        assert_eq!(clip_of("view-box"), ClipPath::Box(ReferenceBox::Border));
+        let ClipPath::Shape(_, reference) = clip_of("circle(30px) padding-box") else {
+            panic!("a shape");
+        };
+        assert_eq!(reference, ReferenceBox::Padding);
+        let ClipPath::Shape(_, reference) = clip_of("inset(0) content-box") else {
+            panic!("a shape");
+        };
+        assert_eq!(reference, ReferenceBox::Content);
+    }
     #[test]
     fn drop_shadow_keeps_its_offset_blur_and_color() {
         assert_eq!(
