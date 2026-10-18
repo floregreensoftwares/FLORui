@@ -765,15 +765,9 @@ pub enum ContainerType {
     Size,
 }
 
-/// One `filter` function, already reduced to this crate's documented
-/// initial subset: `blur()`, `brightness()`, `contrast()`, and
-/// `saturate()`. `grayscale()`, `hue-rotate()`, `invert()`, the filter
-/// list's own `opacity()` function (distinct from the `opacity`
-/// property), `sepia()`, `drop-shadow()`, and `url()` all parse and
-/// cascade correctly through Stylo but drop out of this list entirely —
-/// the same treatment [`TransformFunction`] gives its own unsupported
-/// functions. See `florui-paint`'s own doc for how the surviving
-/// functions apply to a node's own rendered content.
+/// One `filter` function: every one of the list except `url()`, which names an
+/// SVG filter this crate has no way to define. Applied in order, each to the
+/// output of the one before; see `florui-paint` for how.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FilterFunction {
     /// `blur(<length>)` — a Gaussian blur radius in pixels; real CSS's
@@ -791,6 +785,26 @@ pub enum FilterFunction {
     /// grayscale; real CSS's own grammar already forbids a negative
     /// factor.
     Saturate(f32),
+    /// `grayscale(<amount>)`, `0.0` (the initial) to `1.0` (fully gray).
+    Grayscale(f32),
+    /// `hue-rotate(<angle>)`, in degrees.
+    HueRotate(f32),
+    /// `invert(<amount>)`, `0.0` to `1.0` (the colors fully inverted).
+    Invert(f32),
+    /// The filter list's own `opacity(<amount>)`, `0.0` to `1.0`; not the
+    /// `opacity` property, which fades the whole group once at the end.
+    Opacity(f32),
+    /// `sepia(<amount>)`, `0.0` to `1.0`.
+    Sepia(f32),
+    /// `drop-shadow(<x> <y> <blur> <color>)`: the shape the content paints,
+    /// moved by `x` and `y`, blurred and drawn behind it. Unlike a
+    /// `box-shadow`, its blur is the standard deviation itself, as in `blur()`.
+    DropShadow {
+        x: f32,
+        y: f32,
+        blur: f32,
+        color: Rgba,
+    },
 }
 
 /// `box-sizing`: what a declared `width` or `height` measures. Not
@@ -4688,15 +4702,81 @@ mod tests {
     }
 
     #[test]
-    fn a_grayscale_function_is_dropped_as_an_unsupported_gap() {
-        let tree: Element = view! { <div class="gray" /> };
-        let (arena, computed) = styles(
-            &tree,
-            ".gray { filter: grayscale(1); }",
-            &InteractionState::new(),
+    fn every_filter_function_is_kept_with_its_arguments() {
+        let filter = |css: &str| computed_of(css).filter;
+        assert_eq!(
+            filter(".t { filter: grayscale(0.4); }"),
+            vec![FilterFunction::Grayscale(0.4)]
         );
-        let node = arena.roots()[0];
-        assert!(computed[&node].filter.is_empty());
+        assert_eq!(
+            filter(".t { filter: hue-rotate(0.25turn); }"),
+            vec![FilterFunction::HueRotate(90.0)]
+        );
+        assert_eq!(
+            filter(".t { filter: invert(50%); }"),
+            vec![FilterFunction::Invert(0.5)]
+        );
+        assert_eq!(
+            filter(".t { filter: opacity(0.2); }"),
+            vec![FilterFunction::Opacity(0.2)]
+        );
+        assert_eq!(
+            filter(".t { filter: sepia(1) blur(2px); }"),
+            vec![FilterFunction::Sepia(1.0), FilterFunction::Blur(2.0)]
+        );
+        // An amount above one is one for the functions that stop there.
+        assert_eq!(
+            filter(".t { filter: grayscale(3) invert(200%) sepia(1.5) opacity(2); }"),
+            vec![
+                FilterFunction::Grayscale(1.0),
+                FilterFunction::Invert(1.0),
+                FilterFunction::Sepia(1.0),
+                FilterFunction::Opacity(1.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn drop_shadow_keeps_its_offset_blur_and_color() {
+        assert_eq!(
+            computed_of(".t { filter: drop-shadow(6px 6px 4px #000000); }").filter,
+            vec![FilterFunction::DropShadow {
+                x: 6.0,
+                y: 6.0,
+                blur: 4.0,
+                color: Rgba::opaque(0, 0, 0),
+            }]
+        );
+        // The blur and the color are optional; the color is `currentcolor`.
+        assert_eq!(
+            computed_of(".t { color: #336699; filter: drop-shadow(2px -3px); }").filter,
+            vec![FilterFunction::DropShadow {
+                x: 2.0,
+                y: -3.0,
+                blur: 0.0,
+                color: Rgba::opaque(0x33, 0x66, 0x99),
+            }]
+        );
+        assert_eq!(
+            computed_of(".t { filter: drop-shadow(rgba(255, 0, 0, 0.5) 1px 2px 3px); }").filter,
+            vec![FilterFunction::DropShadow {
+                x: 1.0,
+                y: 2.0,
+                blur: 3.0,
+                color: Rgba {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 128
+                },
+            }]
+        );
+        // A negative blur is invalid: the whole declaration is dropped.
+        assert!(
+            computed_of(".t { filter: drop-shadow(1px 1px -2px #000); }")
+                .filter
+                .is_empty()
+        );
     }
 
     #[test]
