@@ -58,7 +58,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use florui_view_syntax::{AttrValue, Node, Nodes};
+use florui_view_syntax::{AttrName, AttrValue, Node, Nodes};
 use proc_macro2::TokenStream;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
@@ -314,7 +314,7 @@ fn print_node(node: &Node, indent: usize, source: &str) -> String {
 
 fn print_element(
     tag: &syn::Ident,
-    attrs: &[(syn::Ident, AttrValue)],
+    attrs: &[(AttrName, AttrValue)],
     children: &[Node],
     self_closing: bool,
     indent: usize,

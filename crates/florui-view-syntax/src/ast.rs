@@ -16,7 +16,7 @@ pub enum Node {
     /// component call. `self_closing` tags never carry a `children` value.
     Element {
         tag: Ident,
-        attrs: Vec<(Ident, AttrValue)>,
+        attrs: Vec<(AttrName, AttrValue)>,
         children: Vec<Node>,
         self_closing: bool,
     },
@@ -30,6 +30,54 @@ pub enum Node {
 pub enum AttrValue {
     Lit(LitStr),
     Expr(Expr),
+}
+
+/// The name of an attribute: one identifier (`class`, `viewBox`), or several
+/// joined by `-` or `:` (`stop-color`, `xlink:href`), as SVG has them. Only a
+/// primitive element takes the second kind; a component's props are fields.
+#[derive(Clone)]
+#[cfg_attr(test, derive(Debug))]
+pub struct AttrName {
+    first: Ident,
+    text: String,
+}
+
+impl AttrName {
+    pub fn new(first: Ident, text: String) -> Self {
+        Self { first, text }
+    }
+
+    /// The name as written, with its `-` and `:`.
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    /// The identifier, when the name is only one.
+    pub fn ident(&self) -> Option<&Ident> {
+        (self.first == self.text.as_str()).then_some(&self.first)
+    }
+
+    pub fn span(&self) -> proc_macro2::Span {
+        self.first.span()
+    }
+}
+
+impl std::fmt::Display for AttrName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl PartialEq<str> for AttrName {
+    fn eq(&self, other: &str) -> bool {
+        self.text == other
+    }
+}
+
+impl PartialEq<&str> for AttrName {
+    fn eq(&self, other: &&str) -> bool {
+        self.text == *other
+    }
 }
 
 impl Node {

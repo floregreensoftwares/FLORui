@@ -17,7 +17,7 @@ use proc_macro2::{Literal, Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
 use syn::{Expr, Ident};
 
-use florui_view_syntax::{AttrValue, Node};
+use florui_view_syntax::{AttrName, AttrValue, Node};
 
 /// Finds where each element of one `view!` block was written, from the text
 /// of the invocation. A macro cannot read a token's own line on stable Rust,
@@ -244,13 +244,13 @@ fn children_vec(children: &[Node], scope: Option<&TokenStream>, locator: &Locato
 /// `scope={...}` on a primitive element, like `key=` on a component
 /// call, is a `view!`-level directive, not an attribute of the element
 /// itself — it never reaches `Element::node`'s own attrs.
-fn is_scope_attr(name: &Ident) -> bool {
+fn is_scope_attr(name: &AttrName) -> bool {
     name == "scope"
 }
 
 fn primitive_element(
     tag: &Ident,
-    attrs: &[(Ident, AttrValue)],
+    attrs: &[(AttrName, AttrValue)],
     children: &[Node],
     inherited_scope: Option<&TokenStream>,
     locator: &Locator,
@@ -441,7 +441,7 @@ fn primitive_element(
 /// `key={...}` on a component call is its caller-assigned identity (see
 /// `florui_reactive::use_child_scope_keyed`), not a prop of the component
 /// itself — it never becomes a `Props` field.
-fn is_key_attr(name: &Ident) -> bool {
+fn is_key_attr(name: &AttrName) -> bool {
     name == "key"
 }
 
@@ -452,7 +452,7 @@ fn is_key_attr(name: &Ident) -> bool {
 /// reaches inside the component's own separately-expanded body.
 fn component_call(
     tag: &Ident,
-    attrs: &[(Ident, AttrValue)],
+    attrs: &[(AttrName, AttrValue)],
     children: &[Node],
     self_closing: bool,
     scope: Option<&TokenStream>,
@@ -473,7 +473,15 @@ fn component_call(
                 AttrValue::Lit(lit) => quote! { #lit },
                 AttrValue::Expr(expr) => quote! { #expr },
             };
-            quote! { #name: #value_expr, }
+            match name.ident() {
+                Some(field) => quote! { #field: #value_expr, },
+                None => {
+                    let message = format!(
+                        "`{name}` cannot be a prop of a component; only a primitive element takes a name with `-` or `:`"
+                    );
+                    quote_spanned! { name.span() => compile_error!(#message); }
+                }
+            }
         });
 
     let children_field = if self_closing {
