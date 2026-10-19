@@ -1,0 +1,33 @@
+.wrap { position: relative; width: 540px; height: 380px; background-color: #ffffff; }
+.c { position: absolute; width: 120px; font-size: 20px; line-height: 30px; font-weight: 700; color: #202020; }
+.e { background-color: #d05040; color: #ffffff; }
+.p5 { background-color: #ffe080; }
+.p0 { left: 20px; top: 20px; }
+.e0 { opacity: 0.5; }
+.p1 { left: 150px; top: 20px; }
+.e1 { clip-path: inset(0 50% 0 0); }
+.p2 { left: 280px; top: 20px; }
+.e2 { filter: blur(2px); }
+.p3 { left: 410px; top: 20px; }
+.e3 { filter: grayscale(1); }
+.p4 { left: 20px; top: 110px; }
+.e4 { mask-image: linear-gradient(#000 50%, transparent 50%); }
+.p5 { left: 150px; top: 110px; }
+.e5 { mix-blend-mode: multiply; }
+.p6 { left: 280px; top: 110px; }
+.e6 { padding: 0 4px; border: 2px solid #2a3a58; opacity: 0.6; }
+.p7 { left: 410px; top: 110px; }
+.e7 { padding: 0 4px; border: 2px solid #2a3a58; clip-path: border-box; }
+.p8 { left: 20px; top: 200px; }
+.e8 { filter: drop-shadow(3px 3px 0 #000000); }
+.p9 { left: 150px; top: 200px; }
+.e9 { filter: url(#f1); }
+.p10 { left: 280px; top: 200px; }
+.e10 { margin: 6px 14px; padding: 0 5px; border: 3px solid #2a3a58; box-shadow: 0 0 0 40px #d05040; clip-path: margin-box; }
+.p11 { left: 410px; top: 200px; }
+.e11 { clip-path: circle(30px at 50% 50%); padding: 0 4px; }
+.p12 { left: 20px; top: 290px; }
+.e12 { box-shadow: 3px 3px 0 #202020; border-radius: 6px; padding: 0 4px; }
+.p13 { left: 150px; top: 290px; }
+.e13 { opacity: 0.5; }
+.n { background-color: #4070d0; opacity: 0.5; }

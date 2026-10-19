@@ -1,0 +1,364 @@
+{
+    "id":  "inline-effects",
+    "description":  "opacity, filters, clip-path, mask, blend mode and box-shadow on inline elements: one line and wrapped, the first fragment as the box of a clip, margin-box, and an element inside one",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  540,
+                     "height_css_px":  380,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 540px; height: 380px; background-color: #ffffff; } .c { position: absolute; width: 120px; font-size: 20px; line-height: 30px; font-weight: 700; color: #202020; } .e { background-color: #d05040; color: #ffffff; } .p5 { background-color: #ffe080; } .p0 { left: 20px; top: 20px; } .e0 { opacity: 0.5; } .p1 { left: 150px; top: 20px; } .e1 { clip-path: inset(0 50% 0 0); } .p2 { left: 280px; top: 20px; } .e2 { filter: blur(2px); } .p3 { left: 410px; top: 20px; } .e3 { filter: grayscale(1); } .p4 { left: 20px; top: 110px; } .e4 { mask-image: linear-gradient(#000 50%, transparent 50%); } .p5 { left: 150px; top: 110px; } .e5 { mix-blend-mode: multiply; } .p6 { left: 280px; top: 110px; } .e6 { padding: 0 4px; border: 2px solid #2a3a58; opacity: 0.6; } .p7 { left: 410px; top: 110px; } .e7 { padding: 0 4px; border: 2px solid #2a3a58; clip-path: border-box; } .p8 { left: 20px; top: 200px; } .e8 { filter: drop-shadow(3px 3px 0 #000000); } .p9 { left: 150px; top: 200px; } .e9 { filter: url(#f1); } .p10 { left: 280px; top: 200px; } .e10 { margin: 6px 14px; padding: 0 5px; border: 3px solid #2a3a58; box-shadow: 0 0 0 40px #d05040; clip-path: margin-box; } .p11 { left: 410px; top: 200px; } .e11 { clip-path: circle(30px at 50% 50%); padding: 0 4px; } .p12 { left: 20px; top: 290px; } .e12 { box-shadow: 3px 3px 0 #202020; border-radius: 6px; padding: 0 4px; } .p13 { left: 150px; top: 290px; } .e13 { opacity: 0.5; } .n { background-color: #4070d0; opacity: 0.5; }",
+                   "children":  [
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "defs",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "filter",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "feColorMatrix",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "type",
+                                                                                                                         "matrix"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "values",
+                                                                                                                         "0 0 0 0 0  0 0 0 0 1  0 0 0 0 0  0 0 0 1 0"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   }
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "id",
+                                                                                                    "f1"
+                                                                                                ]
+                                                                                            ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "style",
+                                                          "position:absolute"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "0"
+                                                      ],
+                                                      [
+                                                          "height",
+                                                          "0"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p0",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "aa ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "e e0",
+                                                             "css":  "",
+                                                             "text":  "bbbb",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ee"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p1",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "aa ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "e e1",
+                                                             "css":  "",
+                                                             "text":  "bbbb",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ee"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p2",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "aa ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "e e2",
+                                                             "css":  "",
+                                                             "text":  "bbbb",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ee"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p3",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "aa ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "e e3",
+                                                             "css":  "",
+                                                             "text":  "bbbb",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ee"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p4",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "aa ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "e e4",
+                                                             "css":  "",
+                                                             "text":  "bbbb",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ee"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p5",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "aa ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "e e5",
+                                                             "css":  "",
+                                                             "text":  "bbbb",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ee"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p6",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "aa ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "e e6",
+                                                             "css":  "",
+                                                             "text":  "bbbbbb cccccc dddd",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ee"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p7",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "aa ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "e e7",
+                                                             "css":  "",
+                                                             "text":  "bbbbbb cccccc dddd",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ee"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p8",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "aa ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "e e8",
+                                                             "css":  "",
+                                                             "text":  "bbbb",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ee"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p9",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "aa ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "e e9",
+                                                             "css":  "",
+                                                             "text":  "bbbb",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ee"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p10",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "aa ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "e e10",
+                                                             "css":  "",
+                                                             "text":  "bb",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ee"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p11",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "aa ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "e e11",
+                                                             "css":  "",
+                                                             "text":  "bbbbbb cccccc dddd",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ee"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p12",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "aa ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "e e12",
+                                                             "css":  "",
+                                                             "text":  "bbbb",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ee"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p13",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "aa ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "e e13",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "bbbb",
+                                                                              {
+                                                                                  "tag":  "span",
+                                                                                  "class":  "n",
+                                                                                  "css":  "",
+                                                                                  "text":  "cc",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         " ee"
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  4,
+                           "reason":  "Measured against Chromium 153 on Windows: 2.02% of the pixels differ by more than 24 levels of a channel and every box has the same bounding box. What is left is the edge of the glyphs, as in the other text fixtures. It covers opacity, filters (blur, grayscale, drop-shadow, url), clip-path (the box of the first fragment, margin-box), mask, a blend mode and box-shadow on an inline element, on one line and wrapped, and an element inside one. With the effects ignored the same fixture measures 12.23%, so it fails.",
+                           "channel_tolerance":  24
+                       }
+}
