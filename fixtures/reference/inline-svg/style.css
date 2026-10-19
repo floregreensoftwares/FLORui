@@ -1,0 +1,12 @@
+.wrap { position: relative; width: 540px; height: 200px; background-color: #ffffff; }
+.s { position: absolute; border: 2px solid #2a3a58; background-color: #f4f4f4; }
+.k { fill: #d05040; stroke: #2a3a58; stroke-width: 3; }
+.p2 { color: #4070d0; }
+.p6 { width: 100px; }.p0 { left: 20px; top: 20px; }
+.p1 { left: 150px; top: 20px; }
+.p2 { left: 280px; top: 20px; }
+.p3 { left: 410px; top: 20px; }
+.p4 { left: 20px; top: 110px; }
+.p5 { left: 150px; top: 110px; }
+.p6 { left: 280px; top: 110px; }
+.p7 { left: 410px; top: 110px; }
