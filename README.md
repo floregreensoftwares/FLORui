@@ -295,22 +295,36 @@ A node with a `filter`, `clip-path`, `mask` or `mix-blend-mode` is painted on a 
 the page after it, in that order: filter, clip, mask, then opacity, transform and the blend mode.
 
 - `filter` takes a list: `blur()`, `brightness()`, `contrast()`, `saturate()`, `grayscale()`, `sepia()`,
-  `hue-rotate()`, `invert()`, `opacity()` and `drop-shadow()`. As in Chromium a `drop-shadow()` blur is a
-  standard deviation, unlike `box-shadow`'s. A `url(#id)` filter is not supported.
+  `hue-rotate()`, `invert()`, `opacity()`, `drop-shadow()` and `url(#id)` to an SVG `<filter>`. As in Chromium a
+  `drop-shadow()` blur is a standard deviation, unlike `box-shadow`'s. `backdrop-filter` takes the same.
 - `clip-path` takes `inset()` (with `round`), `circle()`, `ellipse()`, `polygon()`, `path()`, `rect()`,
   `xywh()` and `shape()`, with a reference box (`border-box`, `padding-box`, `content-box`, `margin-box`,
-  `fill-box`, `stroke-box`, `view-box`), or a box alone. What the shape cuts is also what a pointer can hit.
-  `url(#id)` is not supported.
-- `mask-image` takes gradients and `url()` images (a PNG, or an SVG), several layers, with `mask-mode`,
-  `mask-size`, `mask-position`, `mask-repeat`, `mask-origin`, `mask-clip` (including `no-clip`),
-  `mask-composite`, the `mask` shorthand and the `-webkit-mask` forms. Not supported: `mask-border`,
-  `-webkit-mask-box-image`, `mask-type` and a mask that is an SVG `<mask>` element.
+  `fill-box`, `stroke-box`, `view-box`), a box alone, or `url(#id)` to an SVG `<clipPath>`. Lengths may use
+  viewport units. `margin-box` is the margin box layout made, `auto` margins included. What the shape cuts is
+  also what a pointer can hit.
+- `mask-image` takes gradients, `url()` images (a PNG, or an SVG) and `url(#id)` to an SVG `<mask>`, several
+  layers, with `mask-mode`, `mask-size`, `mask-position`, `mask-repeat`, `mask-origin`, `mask-clip` (including
+  `no-clip`), `mask-composite`, the `mask` shorthand and the `-webkit-mask` forms. `-webkit-mask-box-image`
+  (and its parts) masks by a nine-slice image, laid out as a `border-image` is. Chromium has no unprefixed
+  `mask-border`, so neither does this engine.
 - `mix-blend-mode` takes every blend mode, `plus-lighter` included. A stacking context that holds a blended
   box is painted as a group, so what blends inside it meets only its own content, and `isolation: isolate`
   makes one. `background-blend-mode` blends each layer with the layers and the colour below it.
 - `background-clip: text` (and `-webkit-background-clip: text`, and `text` in the `background` shorthand)
   shows a layer through the glyphs of the box and of what is in it, including the text of inline elements.
   `background-color` is cut to the clip of the bottom layer, whatever it is.
+- `transform-box` picks the box `transform-origin` and the percentages of `translate` are of: `content-box` and
+  `fill-box` the content box, `border-box`, `stroke-box` and `view-box` (the initial value) the border box.
+
+A `url(#id)` points at an inline `<svg>` of the document (written in `view!` like any element, attributes such as
+`stop-color` and `xlink:href` included), or at an SVG file or a `data:` URL with a fragment (`url(masks.svg#m)`).
+The SVG is drawn by the SVG renderer, so everything it knows is available: mask and clip units, `mask-type`,
+`clip-rule`, every filter primitive, `filterUnits` and `primitiveUnits`. The SVG properties a stylesheet gives
+the elements in it (`fill`, `stroke`, `stop-color`, `mask-type`, ...), their `opacity` and `display`, and the
+`color` that `currentColor` takes reach the renderer; the inline `<svg>` itself holds definitions and is not
+drawn. A reference to nothing hides the box for a mask and does nothing for a clip or a filter, as in
+Chromium. `mask-mode` reads a mask element as alpha or luminance whatever its own type is, and the properties
+that place an image (`mask-size`, `-position`, `-repeat`, `-origin`, `-clip`) do not apply to a mask element.
 
 The fixtures that compare these with Chromium use flat fills, because Chromium dithers gradients.
 
