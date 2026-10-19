@@ -59,6 +59,7 @@ use florui_style::{
     NodeId, Position as StylePosition, RoundedRect, Rule, Tree, Viewport,
 };
 use taffy::prelude::*;
+use taffy::util::ResolveOrZero;
 use taffy::{Baselines, compute_leaf_layout};
 
 mod cache;
@@ -1968,7 +1969,11 @@ fn run_layout(
                     _ => None,
                 });
                 if let Some(baseline) = baseline {
-                    output.baselines = Baselines::from_first(Some(baseline));
+                    // Measured from the content box; a box's baseline lies below
+                    // its own padding and border.
+                    let inset = style.padding.top.resolve_or_zero(None, |_, _| 0.0)
+                        + style.border.top.resolve_or_zero(None, |_, _| 0.0);
+                    output.baselines = Baselines::from_first(Some(baseline + inset));
                 }
                 output
             },
@@ -6676,6 +6681,30 @@ mod tests {
         let grid = arena.children(arena.roots()[0])[0];
         let b = arena.children(grid)[1];
         assert_eq!(layouts[&b].x, 70.0, "50px and a gap of 10% of 200px");
+    }
+
+    #[test]
+    fn the_baseline_of_a_box_lies_below_its_padding() {
+        // Chrome 153: the row is 26px tall, `c1` sits 8px down and `c3`, whose
+        // padding-top of 8px is above its text, is not pushed down at all.
+        let tree: Element = view! {
+            <div class="g">
+                <div class="c1">"small"</div>
+                <div class="c2">"Large"</div>
+                <div class="c3">"padded"</div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".g { display: grid; width: 320px; font-size: 14px; line-height: 18px; \
+             grid-template-columns: 90px 90px 90px; align-items: baseline; } \
+             .c2 { font-size: 22px; line-height: 26px; } .c3 { padding-top: 8px; }",
+        );
+        assert_eq!(layouts[&arena.roots()[0]].height, 26.0);
+        let boxes = child_boxes(&arena, &layouts);
+        assert_eq!(boxes[0], (0.0, 8.0, 90.0, 18.0));
+        assert_eq!(boxes[1], (90.0, 0.0, 90.0, 26.0));
+        assert_eq!(boxes[2], (180.0, 0.0, 90.0, 26.0));
     }
 
     #[test]
