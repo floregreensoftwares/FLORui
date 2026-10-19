@@ -319,12 +319,23 @@ the page after it, in that order: filter, clip, mask, then opacity, transform an
 A `url(#id)` points at an inline `<svg>` of the document (written in `view!` like any element, attributes such as
 `stop-color` and `xlink:href` included), or at an SVG file or a `data:` URL with a fragment (`url(masks.svg#m)`).
 The SVG is drawn by the SVG renderer, so everything it knows is available: mask and clip units, `mask-type`,
-`clip-rule`, every filter primitive, `filterUnits` and `primitiveUnits`. The SVG properties a stylesheet gives
-the elements in it (`fill`, `stroke`, `stop-color`, `mask-type`, ...), their `opacity` and `display`, and the
-`color` that `currentColor` takes reach the renderer; the inline `<svg>` itself holds definitions and is not
-drawn. A reference to nothing hides the box for a mask and does nothing for a clip or a filter, as in
-Chromium. `mask-mode` reads a mask element as alpha or luminance whatever its own type is, and the properties
-that place an image (`mask-size`, `-position`, `-repeat`, `-origin`, `-clip`) do not apply to a mask element.
+`clip-rule`, every filter primitive, `filterUnits` and `primitiveUnits`, text, gradients and a `<style>` of its own.
+A reference to nothing hides the box for a mask and does nothing for a clip or a filter, as in Chromium.
+`mask-mode` reads a mask element as alpha or luminance whatever its own type is, and the properties that place an
+image (`mask-size`, `-position`, `-repeat`, `-origin`, `-clip`) do not apply to a mask element.
+
+An inline `<svg>` is a box, drawn whole by the same renderer into its content box. It is sized as Chromium sizes it:
+the `width` and `height` attributes where CSS says none, its `viewBox` for a ratio (and for the width, when there
+is no size at all), 300 by 150 when it says nothing. It is `display: block`, as `img` is, and what is in it takes no
+room. What the stylesheets give the elements in it reaches the renderer: the SVG properties (`fill`, `stroke`,
+`stop-color`, `mask-type`, ...), `opacity`, `visibility`, an authored `display: none`, the font of the page for
+its text, the `color` that `currentColor` takes, and a `transform` (translate, rotate, scale, skew, matrix, with its
+origin; a percentage is of the viewBox, as for any SVG element). A transform in three dimensions, and
+`transform-box` on a shape inside an SVG, are not read.
+
+An inline element (a `span`) with `opacity`, a filter, a `clip-path`, a mask or a blend mode is painted with its
+fragments and what is in it as a unit, and the effects are applied to that. A clip or a mask is of the box of its
+first fragment, as in Chromium, and `margin-box` takes in its computed margins. It paints its `box-shadow` too.
 
 The fixtures that compare these with Chromium use flat fills, because Chromium dithers gradients.
 
