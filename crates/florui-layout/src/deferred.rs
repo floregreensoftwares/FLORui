@@ -43,7 +43,7 @@ pub(crate) fn resolve(
 ) -> Result<(), LayoutError> {
     let mut nodes: Vec<NodeId> = styles
         .iter()
-        .filter(|(_, style)| !style.deferred.is_empty())
+        .filter(|(_, style)| !style.deferred.is_empty() || style.has_grid_calc())
         .map(|(&node, _)| node)
         .filter(|&node| id_of(node).is_some())
         .collect();
@@ -61,7 +61,8 @@ pub(crate) fn resolve(
                 continue;
             };
             let basis = containing_block(arena, styles, tree, id_of, node, available);
-            let patched = patch(style, basis, intrinsics.get(&node).copied());
+            let own = own_content_box(arena, styles, tree, tid, node, available);
+            let patched = patch(style, basis, own, intrinsics.get(&node).copied());
             let taffy_style = to_taffy_style(Some(&patched));
             if tree.style(tid).map_err(LayoutError)? != &taffy_style {
                 tree.set_style(tid, taffy_style).map_err(LayoutError)?;
@@ -195,6 +196,40 @@ fn containing_block(
     }
 }
 
+/// The content box of `node` as the last layout left it, for what a grid
+/// track is a percentage of. Its height only when that is known without
+/// laying out what it holds.
+fn own_content_box(
+    arena: &Tree,
+    styles: &StyleMap,
+    tree: &TaffyTree<LeafContext>,
+    id: taffy::NodeId,
+    node: NodeId,
+    available: Size<AvailableSpace>,
+) -> Basis {
+    let (Some(style), Ok(layout)) = (styles.get(&node), tree.layout(id)) else {
+        return Basis {
+            width: 0.0,
+            height: None,
+            row: true,
+        };
+    };
+    let across = style.border.left.width
+        + style.border.right.width
+        + style.padding.left
+        + style.padding.right;
+    let down = style.border.top.width
+        + style.border.bottom.width
+        + style.padding.top
+        + style.padding.bottom;
+    Basis {
+        width: (layout.size.width - across).max(0.0),
+        height: definite_height(arena, styles, node, available)
+            .then(|| (layout.size.height - down).max(0.0)),
+        row: true,
+    }
+}
+
 /// Whether the height of `node` is known without laying out what it holds,
 /// which a percentage height needs of its parent.
 fn definite_height(
@@ -225,7 +260,12 @@ fn definite_height(
 }
 
 /// `style` with its deferred values worked out against `basis`.
-fn patch(style: &ComputedStyle, basis: Basis, intrinsic: Option<Intrinsic>) -> ComputedStyle {
+fn patch(
+    style: &ComputedStyle,
+    basis: Basis,
+    own: Basis,
+    intrinsic: Option<Intrinsic>,
+) -> ComputedStyle {
     let mut patched = style.clone();
     patched.deferred.clear();
     let margin_x = style.margin.left.unwrap_or(0.0) + style.margin.right.unwrap_or(0.0);
@@ -259,10 +299,13 @@ fn patch(style: &ComputedStyle, basis: Basis, intrinsic: Option<Intrinsic>) -> C
                 slot,
                 Slot::MarginTop | Slot::MarginBottom | Slot::PaddingTop | Slot::PaddingBottom
             );
-        let reference = if of_width {
-            Some(basis.width)
-        } else {
-            basis.height
+        // A gap is a percentage of the container's own content box, not of
+        // the box around it.
+        let reference = match slot {
+            Slot::ColumnGap => Some(own.width),
+            Slot::RowGap => own.height,
+            _ if of_width => Some(basis.width),
+            _ => basis.height,
         };
         let value = match &deferred.value {
             DeferredValue::Math(calc) => reference.map(|reference| calc.resolve(reference)),
@@ -333,6 +376,20 @@ fn patch(style: &ComputedStyle, basis: Basis, intrinsic: Option<Intrinsic>) -> C
             Slot::ColumnGap => patched.column_gap = value,
             Slot::RowGap => patched.row_gap = value,
         }
+    }
+    if style.has_grid_calc() {
+        patched.grid_template_columns = style.grid_template_columns.resolve_calc(Some(own.width));
+        patched.grid_template_rows = style.grid_template_rows.resolve_calc(own.height);
+        patched.grid_auto_columns = style
+            .grid_auto_columns
+            .iter()
+            .map(|track| track.resolve_calc(Some(own.width)))
+            .collect();
+        patched.grid_auto_rows = style
+            .grid_auto_rows
+            .iter()
+            .map(|track| track.resolve_calc(own.height))
+            .collect();
     }
     patched
 }

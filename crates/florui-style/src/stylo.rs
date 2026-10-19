@@ -66,6 +66,10 @@ use crate::cascade::{
 };
 use crate::clip::{ClipPath, ClipShape, PathSegment, ReferenceBox, ShapeRadius};
 use crate::color::Rgba;
+use crate::grid::{
+    GridArea, GridAutoFlow, GridBreadth, GridLimit, GridPlacement, GridRepeat, GridRepeatCount,
+    GridTemplate, GridTemplateAreas, GridTemplateComponent, GridTrackSize,
+};
 use crate::interaction::InteractionState;
 use crate::stylesheet_parse::Rule;
 use crate::tree::{Arena, NodeId};
@@ -1935,8 +1939,15 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
             bottom_right: to_corner_radius(&border.border_bottom_right_radius),
             bottom_left: to_corner_radius(&border.border_bottom_left_radius),
         },
-        grid_template_columns: to_grid_template_tracks(&position.grid_template_columns),
-        grid_template_rows: to_grid_template_tracks(&position.grid_template_rows),
+        grid_template_columns: to_grid_template(&position.grid_template_columns),
+        grid_template_rows: to_grid_template(&position.grid_template_rows),
+        grid_auto_columns: to_implicit_tracks(&position.grid_auto_columns),
+        grid_auto_rows: to_implicit_tracks(&position.grid_auto_rows),
+        grid_auto_flow: to_grid_auto_flow(position.grid_auto_flow),
+        grid_template_areas: to_grid_template_areas(&position.grid_template_areas),
+        justify_items: to_item_alignment(position.justify_items.computed.0),
+        justify_self: to_item_alignment(position.justify_self.0.0),
+        order: position.order,
         grid_column: (
             to_grid_placement(&position.grid_column_start),
             to_grid_placement(&position.grid_column_end),
@@ -2902,9 +2913,22 @@ fn to_length_percentage(value: &style::values::computed::LengthPercentage) -> Fl
     // (a basis of 1 loses two).
     let at_zero = value.resolve(Length::new(0.0)).px();
     let at_hundred = value.resolve(Length::new(100.0)).px();
+    let at_two_hundred = value.resolve(Length::new(200.0)).px();
+    let percentage = (at_hundred - at_zero) / 100.0;
+    // A value that cannot be negative, like a track size, is clamped at zero
+    // when its length is negative (`calc(50% - 10px)` is `0` at a basis of
+    // `0`), which bends the line at the start. The two larger bases are past
+    // the bend and give the same line the value has everywhere above it.
+    if ((at_two_hundred - at_hundred) / 100.0 - percentage).abs() > 1e-4 {
+        let percentage = (at_two_hundred - at_hundred) / 100.0;
+        return FlorLengthPercentage {
+            length: at_hundred - percentage * 100.0,
+            percentage,
+        };
+    }
     FlorLengthPercentage {
         length: at_zero,
-        percentage: (at_hundred - at_zero) / 100.0,
+        percentage,
     }
 }
 
@@ -3503,69 +3527,149 @@ fn to_border_side(
     }
 }
 
-/// A `grid-template-columns`/`-rows` track list down to what this crate
-/// resolves — see [`crate::cascade::GridTrackSize`]'s own doc for the
-/// bound (`repeat()`, `grid-template-areas`, `subgrid`, and `masonry`
-/// aren't read back, only a plain track list).
-fn to_grid_template_tracks(
-    component: &style::values::computed::GridTemplateComponent,
-) -> Vec<crate::cascade::GridTrackSize> {
-    use style::values::generics::grid::{GridTemplateComponent, TrackListValue};
+/// A `grid-template-columns`/`-rows` track list: tracks, `repeat()`s and the
+/// names of the lines. `none`, `subgrid` and `masonry` read as no template,
+/// the same as an unsupported keyword.
+fn to_grid_template(component: &style::values::computed::GridTemplateComponent) -> GridTemplate {
+    use style::values::generics::grid::{GridTemplateComponent as Component, TrackListValue};
 
-    let GridTemplateComponent::TrackList(list) = component else {
-        return Vec::new();
+    let Component::TrackList(list) = component else {
+        return GridTemplate::default();
     };
-    list.values
+    let components = list
+        .values
         .iter()
-        .filter_map(|value| match value {
-            TrackListValue::TrackSize(size) => Some(to_grid_track_size(size)),
-            // `repeat()` isn't expanded into concrete tracks in this slice.
-            TrackListValue::TrackRepeat(_) => None,
+        .map(|value| match value {
+            TrackListValue::TrackSize(size) => {
+                GridTemplateComponent::Track(to_grid_track_size(size))
+            }
+            TrackListValue::TrackRepeat(repeat) => GridTemplateComponent::Repeat(GridRepeat {
+                count: match repeat.count {
+                    style::values::generics::grid::RepeatCount::Number(count) => {
+                        GridRepeatCount::Count(count.max(1) as u16)
+                    }
+                    style::values::generics::grid::RepeatCount::AutoFill => {
+                        GridRepeatCount::AutoFill
+                    }
+                    style::values::generics::grid::RepeatCount::AutoFit => GridRepeatCount::AutoFit,
+                },
+                tracks: repeat.track_sizes.iter().map(to_grid_track_size).collect(),
+                line_names: to_line_names(&repeat.line_names),
+            }),
         })
+        .collect();
+    GridTemplate {
+        components,
+        line_names: to_line_names(&list.line_names),
+    }
+}
+
+/// The names of each line, empty when none is named.
+fn to_line_names(names: &[style::OwnedSlice<style::values::CustomIdent>]) -> Vec<Vec<String>> {
+    if names.iter().all(|line| line.is_empty()) {
+        return Vec::new();
+    }
+    names
+        .iter()
+        .map(|line| line.iter().map(|name| name.0.to_string()).collect())
         .collect()
 }
 
-fn to_grid_track_size(size: &style::values::computed::TrackSize) -> crate::cascade::GridTrackSize {
+/// The implicit tracks of `grid-auto-columns`/`-rows`.
+fn to_implicit_tracks(tracks: &style::values::computed::ImplicitGridTracks) -> Vec<GridTrackSize> {
+    tracks.0.iter().map(to_grid_track_size).collect()
+}
+
+fn to_grid_track_size(size: &style::values::computed::TrackSize) -> GridTrackSize {
     use style::values::generics::grid::TrackSize;
     match size {
-        TrackSize::Breadth(breadth) => to_grid_track_breadth(breadth),
-        // Only the max side is read back — real CSS's own "in all cases,
-        // treat auto and fit-content() as max-content, except..." leaves
-        // the min side mostly informational for this crate's purposes.
-        TrackSize::Minmax(_, max) => to_grid_track_breadth(max),
-        TrackSize::FitContent(_) => crate::cascade::GridTrackSize::Auto,
+        TrackSize::Breadth(breadth) => GridTrackSize::Breadth(to_grid_breadth(breadth)),
+        TrackSize::Minmax(min, max) => {
+            GridTrackSize::MinMax(to_grid_breadth(min), to_grid_breadth(max))
+        }
+        TrackSize::FitContent(limit) => GridTrackSize::FitContent(match limit {
+            style::values::generics::grid::TrackBreadth::Breadth(value) => {
+                match to_grid_breadth_length(value) {
+                    GridBreadth::Length(px) => GridLimit::Length(px),
+                    GridBreadth::Percent(fraction) => GridLimit::Percent(fraction),
+                    GridBreadth::Calc(calc) => GridLimit::Calc(calc),
+                    _ => GridLimit::Length(0.0),
+                }
+            }
+            _ => GridLimit::Length(0.0),
+        }),
     }
 }
 
-fn to_grid_track_breadth(
-    breadth: &style::values::computed::TrackBreadth,
-) -> crate::cascade::GridTrackSize {
-    use crate::cascade::GridTrackSize as FlorGridTrackSize;
+fn to_grid_breadth(breadth: &style::values::computed::TrackBreadth) -> GridBreadth {
     use style::values::generics::grid::TrackBreadth;
     match breadth {
-        TrackBreadth::Breadth(lp) => lp
-            .to_length()
-            .map(|length| FlorGridTrackSize::Length(length.px()))
-            .unwrap_or(FlorGridTrackSize::Auto),
-        TrackBreadth::Fr(fraction) => FlorGridTrackSize::Fr(*fraction),
-        TrackBreadth::Auto => FlorGridTrackSize::Auto,
-        TrackBreadth::MinContent => FlorGridTrackSize::MinContent,
-        TrackBreadth::MaxContent => FlorGridTrackSize::MaxContent,
+        TrackBreadth::Breadth(value) => to_grid_breadth_length(value),
+        TrackBreadth::Fr(share) => GridBreadth::Fr(*share),
+        TrackBreadth::Auto => GridBreadth::Auto,
+        TrackBreadth::MinContent => GridBreadth::MinContent,
+        TrackBreadth::MaxContent => GridBreadth::MaxContent,
     }
 }
 
-/// A `grid-{row,column}-{start,end}` line down to what this crate resolves
-/// — see [`crate::cascade::GridPlacement`]'s own doc for the bound (named
-/// lines fall back to `Auto`).
-fn to_grid_placement(line: &style::values::computed::GridLine) -> crate::cascade::GridPlacement {
-    use crate::cascade::GridPlacement as FlorGridPlacement;
-    if line.is_auto() || !line.ident.0.is_empty() {
-        return FlorGridPlacement::Auto;
-    }
-    if line.is_span {
-        FlorGridPlacement::Span(line.line_num.max(1) as u16)
+/// A `<length-percentage>` track size: a length, a percentage or a mix.
+fn to_grid_breadth_length(value: &style::values::computed::LengthPercentage) -> GridBreadth {
+    let parts = to_length_percentage(value);
+    if parts.percentage == 0.0 {
+        GridBreadth::Length(parts.length)
+    } else if parts.length == 0.0 {
+        GridBreadth::Percent(parts.percentage)
     } else {
-        FlorGridPlacement::Line(line.line_num as i16)
+        GridBreadth::Calc(parts)
+    }
+}
+
+/// `grid-template-areas` with the size of its template.
+fn to_grid_template_areas(
+    areas: &style::values::computed::GridTemplateAreas,
+) -> Option<GridTemplateAreas> {
+    let style::values::computed::GridTemplateAreas::Areas(areas) = areas else {
+        return None;
+    };
+    let template = &areas.0;
+    Some(GridTemplateAreas {
+        areas: template
+            .areas
+            .iter()
+            .map(|area| GridArea {
+                name: area.name.to_string(),
+                row_start: area.rows.start as u16,
+                row_end: area.rows.end as u16,
+                column_start: area.columns.start as u16,
+                column_end: area.columns.end as u16,
+            })
+            .collect(),
+        rows: template.strings.len() as u16,
+        columns: template.width as u16,
+    })
+}
+
+fn to_grid_auto_flow(flow: style::values::computed::GridAutoFlow) -> GridAutoFlow {
+    use style::values::computed::GridAutoFlow as Flow;
+    match (flow.contains(Flow::COLUMN), flow.contains(Flow::DENSE)) {
+        (false, false) => GridAutoFlow::Row,
+        (false, true) => GridAutoFlow::RowDense,
+        (true, false) => GridAutoFlow::Column,
+        (true, true) => GridAutoFlow::ColumnDense,
+    }
+}
+
+/// A `grid-{row,column}-{start,end}` line.
+fn to_grid_placement(line: &style::values::computed::GridLine) -> GridPlacement {
+    let name = line.ident.0.to_string();
+    if line.is_auto() {
+        return GridPlacement::Auto;
+    }
+    match (name.is_empty(), line.is_span) {
+        (true, true) => GridPlacement::Span(line.line_num.max(1) as u16),
+        (true, false) => GridPlacement::Line(line.line_num as i16),
+        (false, true) => GridPlacement::NamedSpan(name, line.line_num.max(1) as u16),
+        (false, false) => GridPlacement::NamedLine(name, line.line_num as i16),
     }
 }
 

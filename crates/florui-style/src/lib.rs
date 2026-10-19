@@ -39,6 +39,7 @@ mod container_query_adapter;
 mod default_stylesheet;
 mod error;
 mod focus;
+mod grid;
 mod height_media_adapter;
 mod interaction;
 mod intern;
@@ -71,18 +72,21 @@ pub use cascade::{
     ComputedStyle, ContainerType, ContentAlignment, Corners, DecorationLines, DecorationStyle,
     DecorationThickness, Deferred, DeferredSlot, DeferredValue, Display, Edges, FilterFunction,
     FlexDirection, FlexWrap, FontFamily, FontStyle, FontSynthesis, FontVariantCaps, GlassMaterial,
-    GlassQuality, GlassSpec, GridPlacement, GridTrackSize, ItemAlignment, LengthPercentage,
-    LineHeight, ObjectFit, Outline, OutlineStyle, OverflowWrap, Position, Resize, SizeKeyword,
-    SkipInk, TextAlign, TextCase, TextDecoration, TextIndent, TextOverflow, TextShadow,
-    TextTransform, TransformBox, TransformFunction, UnderlineOffset, UnderlinePosition,
-    VerticalAlign, Viewport, Visibility, WhiteSpaceCollapse, WordBreak, compute,
-    compute_with_container_query_signature,
+    GlassQuality, GlassSpec, ItemAlignment, LengthPercentage, LineHeight, ObjectFit, Outline,
+    OutlineStyle, OverflowWrap, Position, Resize, SizeKeyword, SkipInk, TextAlign, TextCase,
+    TextDecoration, TextIndent, TextOverflow, TextShadow, TextTransform, TransformBox,
+    TransformFunction, UnderlineOffset, UnderlinePosition, VerticalAlign, Viewport, Visibility,
+    WhiteSpaceCollapse, WordBreak, compute, compute_with_container_query_signature,
 };
 pub use clip::{ClipPath, ClipShape, PathSegment, ReferenceBox, ShapeRadius};
 pub use color::{ColorParseError, Rgba, parse_hex_color};
 pub use container_query_adapter::{ContentBoxSize, resolve_container_query_signatures};
 pub use error::StyleError;
 pub use focus::FocusPath;
+pub use grid::{
+    GridArea, GridAutoFlow, GridBreadth, GridLimit, GridPlacement, GridRepeat, GridRepeatCount,
+    GridTemplate, GridTemplateAreas, GridTemplateComponent, GridTrackSize,
+};
 pub use interaction::{FormState, InteractionState};
 pub use mask_box_image::{MaskBoxImageSpec, resolve_mask_box_image};
 pub use matrix::{Matrix4, NEAR_W, transform_matrix};
