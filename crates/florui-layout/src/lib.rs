@@ -6316,6 +6316,48 @@ mod tests {
         }
     }
     #[test]
+    fn an_inline_svg_sits_on_the_baseline_whatever_text_it_holds() {
+        // Chrome 153: a replaced box rests on the baseline by its bottom edge; the text
+        // inside it is not a line of the paragraph.
+        let top_of_svg = |inside: Vec<Element>| {
+            let svg = Element::node(
+                "svg",
+                vec![
+                    ("width".to_owned(), "20".to_owned()),
+                    ("height".to_owned(), "20".to_owned()),
+                ],
+                inside,
+            );
+            let tree = Element::node(
+                "div",
+                vec![("class".to_owned(), "p".to_owned())],
+                vec![Element::text("aa "), svg, Element::text(" bb")],
+            );
+            let (arena, _styles, layouts) = layout_with_styles(
+                &tree,
+                ".p { font-size: 20px; line-height: 30px; width: 300px; }",
+            );
+            let svg = arena
+                .children(arena.roots()[0])
+                .iter()
+                .copied()
+                .find(|&node| arena.tag(node) == "svg")
+                .expect("the svg");
+            layouts[&svg].y
+        };
+        let empty = top_of_svg(Vec::new());
+        let with_text = top_of_svg(vec![Element::node(
+            "text",
+            Vec::new(),
+            vec![Element::text("hi")],
+        )]);
+        assert!(
+            (empty - with_text).abs() < 0.01,
+            "{empty} against {with_text}"
+        );
+    }
+
+    #[test]
     fn the_margin_box_uses_the_margins_layout_resolved() {
         let margin_box = |wrapper: &str, own: &str| {
             let tree: Element = view! { <div class="w"><div class="t" /></div> };
