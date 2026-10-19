@@ -1,4 +1,4 @@
-.wrap { position: relative; width: 540px; height: 560px; background-color: #ffffff; }
+.wrap { position: relative; width: 540px; height: 650px; background-color: #ffffff; }
 .k5 { fill: #ffffff; }
 .b { position: absolute; width: 100px; height: 50px; box-sizing: border-box; border: 4px solid #2a3a58; }
 .p0 { left: 20px; top: 20px; background-color: #d05040; mask: url(#m1); }
@@ -25,3 +25,5 @@
 .p21 { left: 150px; top: 470px; background-color: #e0b030; clip-path: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><clipPath id='c'><circle cx='50' cy='25' r='20'/></clipPath></svg>#c"); }
 .p22 { left: 280px; top: 470px; background-color: #a050c0; filter: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='f'><feColorMatrix type='matrix' values='0 0 0 0 0  0 0 0 0 1  0 0 0 0 0  0 0 0 1 0'/></filter></svg>#f"); }
 .p23 { left: 410px; top: 470px; background-color: #30a0b0; mask-image: url(#m1), linear-gradient(#000, #000); mask-composite: exclude; }
+.p24 { left: 20px; top: 560px; background-color: #d05040; filter: url(#f7); }
+.p25 { left: 150px; top: 560px; background-color: #40a060; filter: url(#f8); }

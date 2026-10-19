@@ -6,14 +6,14 @@
     "element_id":  "el",
     "viewport":  {
                      "width_css_px":  540,
-                     "height_css_px":  560,
+                     "height_css_px":  650,
                      "device_pixel_ratio":  1
                  },
     "canvas_color":  "#ffffff",
     "florui":  {
                    "tag":  "div",
                    "class":  "wrap",
-                   "css":  ".wrap { position: relative; width: 540px; height: 560px; background-color: #ffffff; } .k5 { fill: #ffffff; } .b { position: absolute; width: 100px; height: 50px; box-sizing: border-box; border: 4px solid #2a3a58; } .p0 { left: 20px; top: 20px; background-color: #d05040; mask: url(#m1); } .p1 { left: 150px; top: 20px; background-color: #40a060; mask: url(#m2); } .p2 { left: 280px; top: 20px; background-color: #4070d0; mask: url(#m3); } .p3 { left: 410px; top: 20px; background-color: #e0b030; mask: url(#nope); } .p4 { left: 20px; top: 110px; background-color: #a050c0; clip-path: url(#c1); } .p5 { left: 150px; top: 110px; background-color: #30a0b0; clip-path: url(#c2); } .p6 { left: 280px; top: 110px; background-color: #d05040; clip-path: url(#c3); } .p7 { left: 410px; top: 110px; background-color: #40a060; clip-path: url(#nope); } .p8 { left: 20px; top: 200px; background-color: #4070d0; filter: url(#f1); } .p9 { left: 150px; top: 200px; background-color: #e0b030; filter: url(#f2); } .p10 { left: 280px; top: 200px; background-color: #a050c0; filter: url(#f3); } .p11 { left: 410px; top: 200px; background-color: #30a0b0; filter: url(#f4); } .p12 { left: 20px; top: 290px; background-color: #d05040; filter: invert(1) url(#f1); } .p13 { left: 150px; top: 290px; background-color: #40a060; filter: url(#f6); } .p14 { left: 280px; top: 290px; background-color: #4070d0; filter: url(#nope); } .p15 { left: 410px; top: 290px; background-color: #e0b030; clip-path: url(#c1); transform: rotate(10deg); opacity: 0.7; } .p16 { left: 20px; top: 380px; background-color: #a050c0; mask: url(#m1); mask-mode: alpha; } .p17 { left: 150px; top: 380px; background-color: #30a0b0; mask: url(#m3); mask-mode: luminance; } .p18 { left: 280px; top: 380px; background-color: #d05040; mask: url(#m5); } .p19 { left: 410px; top: 380px; background-color: #40a060; background-color: transparent; backdrop-filter: url(#f1); } .p20 { left: 20px; top: 470px; background-color: #4070d0; mask: url(\"data:image/svg+xml;utf8,\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027\u003e\u003cmask id=\u0027e\u0027 maskUnits=\u0027userSpaceOnUse\u0027 x=\u00270\u0027 y=\u00270\u0027 width=\u0027100\u0027 height=\u002750\u0027\u003e\u003crect width=\u002750\u0027 height=\u002750\u0027 fill=\u0027%23fff\u0027/\u003e\u003c/mask\u003e\u003c/svg\u003e#e\"); } .p21 { left: 150px; top: 470px; background-color: #e0b030; clip-path: url(\"data:image/svg+xml;utf8,\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027\u003e\u003cclipPath id=\u0027c\u0027\u003e\u003ccircle cx=\u002750\u0027 cy=\u002725\u0027 r=\u002720\u0027/\u003e\u003c/clipPath\u003e\u003c/svg\u003e#c\"); } .p22 { left: 280px; top: 470px; background-color: #a050c0; filter: url(\"data:image/svg+xml;utf8,\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027\u003e\u003cfilter id=\u0027f\u0027\u003e\u003cfeColorMatrix type=\u0027matrix\u0027 values=\u00270 0 0 0 0  0 0 0 0 1  0 0 0 0 0  0 0 0 1 0\u0027/\u003e\u003c/filter\u003e\u003c/svg\u003e#f\"); } .p23 { left: 410px; top: 470px; background-color: #30a0b0; mask-image: url(#m1), linear-gradient(#000, #000); mask-composite: exclude; }",
+                   "css":  ".wrap { position: relative; width: 540px; height: 650px; background-color: #ffffff; } .k5 { fill: #ffffff; } .b { position: absolute; width: 100px; height: 50px; box-sizing: border-box; border: 4px solid #2a3a58; } .p0 { left: 20px; top: 20px; background-color: #d05040; mask: url(#m1); } .p1 { left: 150px; top: 20px; background-color: #40a060; mask: url(#m2); } .p2 { left: 280px; top: 20px; background-color: #4070d0; mask: url(#m3); } .p3 { left: 410px; top: 20px; background-color: #e0b030; mask: url(#nope); } .p4 { left: 20px; top: 110px; background-color: #a050c0; clip-path: url(#c1); } .p5 { left: 150px; top: 110px; background-color: #30a0b0; clip-path: url(#c2); } .p6 { left: 280px; top: 110px; background-color: #d05040; clip-path: url(#c3); } .p7 { left: 410px; top: 110px; background-color: #40a060; clip-path: url(#nope); } .p8 { left: 20px; top: 200px; background-color: #4070d0; filter: url(#f1); } .p9 { left: 150px; top: 200px; background-color: #e0b030; filter: url(#f2); } .p10 { left: 280px; top: 200px; background-color: #a050c0; filter: url(#f3); } .p11 { left: 410px; top: 200px; background-color: #30a0b0; filter: url(#f4); } .p12 { left: 20px; top: 290px; background-color: #d05040; filter: invert(1) url(#f1); } .p13 { left: 150px; top: 290px; background-color: #40a060; filter: url(#f6); } .p14 { left: 280px; top: 290px; background-color: #4070d0; filter: url(#nope); } .p15 { left: 410px; top: 290px; background-color: #e0b030; clip-path: url(#c1); transform: rotate(10deg); opacity: 0.7; } .p16 { left: 20px; top: 380px; background-color: #a050c0; mask: url(#m1); mask-mode: alpha; } .p17 { left: 150px; top: 380px; background-color: #30a0b0; mask: url(#m3); mask-mode: luminance; } .p18 { left: 280px; top: 380px; background-color: #d05040; mask: url(#m5); } .p19 { left: 410px; top: 380px; background-color: #40a060; background-color: transparent; backdrop-filter: url(#f1); } .p20 { left: 20px; top: 470px; background-color: #4070d0; mask: url(\"data:image/svg+xml;utf8,\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027\u003e\u003cmask id=\u0027e\u0027 maskUnits=\u0027userSpaceOnUse\u0027 x=\u00270\u0027 y=\u00270\u0027 width=\u0027100\u0027 height=\u002750\u0027\u003e\u003crect width=\u002750\u0027 height=\u002750\u0027 fill=\u0027%23fff\u0027/\u003e\u003c/mask\u003e\u003c/svg\u003e#e\"); } .p21 { left: 150px; top: 470px; background-color: #e0b030; clip-path: url(\"data:image/svg+xml;utf8,\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027\u003e\u003cclipPath id=\u0027c\u0027\u003e\u003ccircle cx=\u002750\u0027 cy=\u002725\u0027 r=\u002720\u0027/\u003e\u003c/clipPath\u003e\u003c/svg\u003e#c\"); } .p22 { left: 280px; top: 470px; background-color: #a050c0; filter: url(\"data:image/svg+xml;utf8,\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027\u003e\u003cfilter id=\u0027f\u0027\u003e\u003cfeColorMatrix type=\u0027matrix\u0027 values=\u00270 0 0 0 0  0 0 0 0 1  0 0 0 0 0  0 0 0 1 0\u0027/\u003e\u003c/filter\u003e\u003c/svg\u003e#f\"); } .p23 { left: 410px; top: 470px; background-color: #30a0b0; mask-image: url(#m1), linear-gradient(#000, #000); mask-composite: exclude; } .p24 { left: 20px; top: 560px; background-color: #d05040; filter: url(#f7); } .p25 { left: 150px; top: 560px; background-color: #40a060; filter: url(#f8); }",
                    "children":  [
                                     {
                                         "tag":  "svg",
@@ -594,6 +594,108 @@
                                                                                                        "attrs":  [
                                                                                                                      [
                                                                                                                          "dx",
+                                                                                                                         "0.2"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "dy",
+                                                                                                                         "0.3"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   }
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "id",
+                                                                                                    "f7"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "primitiveUnits",
+                                                                                                    "objectBoundingBox"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "width",
+                                                                                                    "1.6"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "y",
+                                                                                                    "-0.1"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "x",
+                                                                                                    "-0.1"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "height",
+                                                                                                    "1.6"
+                                                                                                ]
+                                                                                            ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "filter",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "feGaussianBlur",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "stdDeviation",
+                                                                                                                         "0.05 0.1"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   }
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "id",
+                                                                                                    "f8"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "primitiveUnits",
+                                                                                                    "objectBoundingBox"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "width",
+                                                                                                    "1.6"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "y",
+                                                                                                    "-0.3"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "x",
+                                                                                                    "-0.3"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "height",
+                                                                                                    "1.6"
+                                                                                                ]
+                                                                                            ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "filter",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "feOffset",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "dx",
                                                                                                                          "10"
                                                                                                                      ],
                                                                                                                      [
@@ -863,13 +965,31 @@
                                         "children":  [
 
                                                      ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p24",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p25",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
                                     }
                                 ]
                },
     "classification":  {
                            "kind":  "tolerant",
                            "threshold_percent":  0.3,
-                           "reason":  "Measured against Chromium 153 on Windows: 0.09% of the pixels differ by more than 8 levels of a channel and every box has the same bounding box. What is left is the antialiasing along the edge of a circular clip. It covers url(#id) of mask (user-space and box units, luminance and alpha, mask-mode reading a mask as it says, a rule giving the shapes their fill, a missing one hiding the box, one of several layers), of clip-path (units, clip-rule, a missing one clipping nothing), of filter and backdrop-filter (primitives, default and user-space regions, in a list after a native function, a missing one filtering nothing), and the same three named by a data: URL of an SVG. With the references ignored the same fixture measures 23.41%, so it fails.",
+                           "reason":  "Measured against Chromium 153 on Windows: 0.09% of the pixels differ by more than 8 levels of a channel and every box has the same bounding box. What is left is the antialiasing along the edge of a circular clip. It covers url(#id) of mask (user-space and box units, luminance and alpha, mask-mode reading a mask as it says, a rule giving the shapes their fill, a missing one hiding the box, one of several layers), of clip-path (units, clip-rule, a missing one clipping nothing), of filter and backdrop-filter (primitives, default and user-space regions, primitives in units of the box, in a list after a native function, a missing one filtering nothing), and the same three named by a data: URL of an SVG. With the references ignored the same fixture measures 23.41%, so it fails.",
                            "channel_tolerance":  8
                        }
 }
