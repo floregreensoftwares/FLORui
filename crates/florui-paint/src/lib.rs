@@ -4558,6 +4558,11 @@ fn fill_rect(
     let y0 = ly.round().max(0.0);
     let x1 = (lx + width).round().max(0.0).min(buffer.width() as f32);
     let y1 = (ly + height).round().max(0.0).min(buffer.height() as f32);
+    // A box that snaps to nothing paints nothing; the rasterizer would draw a
+    // hairline for an empty rect.
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
     let Some(rect) = Rect::from_ltrb(x0, y0, x1, y1) else {
         return;
     };
@@ -15775,6 +15780,47 @@ mod tests {
                 25.0,
             )
         });
+    }
+
+    #[test]
+    fn a_box_with_no_width_paints_no_pixel() {
+        // Chrome 153 paints nothing for a flex item squeezed to 0px; the
+        // rasterizer drew a one pixel line for an empty rect.
+        let tree: Element = view! { <div class="box" /> };
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(".box { background-color: #ff0000; }").unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut layouts = HashMap::new();
+        layouts.insert(
+            arena.roots()[0],
+            BoxLayout {
+                x: 10.0,
+                y: 5.0,
+                width: 0.0,
+                height: 20.0,
+                margin: florui_layout::BoxMargin::ZERO,
+            },
+        );
+        let mut font = Font::load_embedded();
+        let canvas = paint_to_buffer(
+            &mut font,
+            30,
+            30,
+            Rgba::opaque(255, 255, 255),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        );
+        for x in 8..13 {
+            assert_eq!(pixel_rgb(&canvas, x, 10), [255, 255, 255], "column {x}");
+        }
     }
 
     #[test]
