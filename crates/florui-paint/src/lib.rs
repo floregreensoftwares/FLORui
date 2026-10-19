@@ -13258,6 +13258,34 @@ mod tests {
         assert_eq!(pixel_rgb(&canvas, 10, 10), [0, 170, 0]);
         assert_eq!(pixel_rgb(&canvas, 30, 10), WHITE);
     }
+
+    #[test]
+    fn svg_text_takes_monospace_and_sans_serif_from_the_engines_fonts() {
+        let tree: Element = view! {
+            <div class="r">
+                <svg width="120" height="40">
+                    <text x="0" y="30" font-size="28" font-family="monospace">iiii</text>
+                </svg>
+                <svg width="120" height="40">
+                    <text x="0" y="30" font-size="28" font-family="sans-serif">iiii</text>
+                </svg>
+            </div>
+        };
+        let canvas = paint_text_css(&tree, "", (130, 90));
+        let extent = |y0: u32| {
+            let columns: Vec<u32> = (0..130)
+                .filter(|&x| (y0..y0 + 40).any(|y| pixel_rgb(&canvas, x, y)[0] < 128))
+                .collect();
+            columns.last().copied().unwrap_or(0) - columns.first().copied().unwrap_or(0)
+        };
+        // Monospace letters take the width of a wide one; sans-serif ones do not.
+        assert!(
+            extent(0) > extent(40) + 20,
+            "{} against {}",
+            extent(0),
+            extent(40)
+        );
+    }
     #[test]
     fn an_inline_svg_draws_its_text_and_uses_the_definitions_of_another() {
         let tree: Element = view! {
