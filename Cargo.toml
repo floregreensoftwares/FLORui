@@ -17,6 +17,7 @@ members = [
     "crates/florui-layout",
     "crates/florui-text",
     "crates/florui-paint",
+    "crates/florui-svg",
     "crates/florui-platform",
     "crates/florui-test",
     "crates/florui-bench",

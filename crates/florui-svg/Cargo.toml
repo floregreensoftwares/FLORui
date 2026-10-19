@@ -1,0 +1,18 @@
+[package]
+name = "florui-svg"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "florui_svg"
+
+[dependencies]
+florui-assets = { path = "../florui-assets", default-features = false }
+florui-style = { path = "../florui-style" }
+base64 = "0.22"
+png = "0.17"
+
+[dev-dependencies]
+florui = { path = "../florui" }
