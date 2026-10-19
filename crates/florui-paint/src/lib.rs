@@ -3538,7 +3538,9 @@ fn saturate_by_unpremultiplying(pixel: PremultipliedColorU8, factor: f32) -> Pre
 /// (where a positioned descendant's `z-index` can reach past its own
 /// siblings to stack against unrelated, non-sibling content elsewhere in
 /// the tree) are not implemented — this only ever reorders siblings
-/// within the one shared parent `nodes` already came from.
+/// within the one shared parent `nodes` already came from. Under a flex or
+/// grid parent the `order` of an item then breaks the tie within one level,
+/// ahead of document order.
 pub fn paint_order(
     styles: &StyleMap,
     parent_display: Option<Display>,
@@ -3557,11 +3559,18 @@ pub fn paint_order(
     }
     let mut ordered = nodes.to_vec();
     ordered.sort_by_key(|id| {
-        if is_eligible(id) {
-            styles.get(id).and_then(|s| s.z_index).unwrap_or(0)
+        let style = styles.get(id);
+        let level = if is_eligible(id) {
+            style.and_then(|s| s.z_index).unwrap_or(0)
         } else {
             0
-        }
+        };
+        let order = if parent_is_flex_or_grid {
+            style.map_or(0, |s| s.order)
+        } else {
+            0
+        };
+        (level, order)
     });
     ordered
 }
@@ -8097,6 +8106,41 @@ mod tests {
             "front is position: relative with a real z-index now -- it must win over \
              back's later source position, the same as inside a flex/grid container"
         );
+    }
+
+    #[test]
+    fn paint_order_follows_order_within_a_z_index_level_and_only_for_flex_and_grid_items() {
+        let tree: Element = view! {
+            <div class="row">
+                <div class="a" />
+                <div class="b" />
+                <div class="c" />
+                <div class="d" />
+            </div>
+        };
+        // `d` has the highest z-index, so the highest level whatever its order;
+        // `a`, `b` and `c` share one and go by order, `b` and `c` tying.
+        let css = ".row { display: flex; } .a { order: 5; } .b { order: 1; } .c { order: 1; } \
+                   .d { order: -9; z-index: 1; }";
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let children = arena.children(arena.roots()[0]).to_vec();
+        let (a, b, c, d) = (children[0], children[1], children[2], children[3]);
+
+        let flex = paint_order(&styles, Some(florui_style::Display::Flex), &children);
+        assert_eq!(flex, vec![b, c, a, d]);
+        let grid = paint_order(&styles, Some(florui_style::Display::Grid), &children);
+        assert_eq!(grid, vec![b, c, a, d]);
+        // In a block the property means nothing.
+        let block = paint_order(&styles, Some(florui_style::Display::Block), &children);
+        assert_eq!(block, children);
     }
 
     #[test]

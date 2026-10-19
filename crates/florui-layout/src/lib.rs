@@ -64,6 +64,7 @@ use taffy::{Baselines, compute_leaf_layout};
 mod cache;
 mod clip;
 mod deferred;
+mod grid;
 mod transform;
 
 pub use cache::LayoutCache;
@@ -2680,15 +2681,17 @@ fn build_node(
                 taffy_ids.insert(node, id);
             }
             BuildStep::BuildMixed(node, parts) => {
-                let mut children = Vec::with_capacity(parts.len());
+                let mut children: Vec<(i32, taffy::NodeId)> = Vec::with_capacity(parts.len());
                 let mut run_number = 0;
                 for part in &parts {
                     match part {
-                        Part::Block(child) => children.push(taffy_ids[child]),
+                        Part::Block(child) => {
+                            children.push((order_of(styles, *child), taffy_ids[child]));
+                        }
                         Part::Spot(fixed) => {
                             let spot = tree.new_leaf(static_spot_style())?;
                             taffy_ids.insert(static_spot_id(*fixed), spot);
-                            children.push(spot);
+                            children.push((0, spot));
                         }
                         Part::Run(range) => {
                             let context = build_run_content_items(
@@ -2710,33 +2713,58 @@ fn build_node(
                             run_number += 1;
                             taffy_ids.insert(key, leaf);
                             inline_leaves.push((key, context));
-                            children.push(leaf);
+                            children.push((0, leaf));
                         }
                     }
                 }
-                let id = tree.new_with_children(to_taffy_style(styles.get(&node)), &children)?;
+                let id = tree.new_with_children(
+                    to_taffy_style(styles.get(&node)),
+                    &in_order(styles, node, children),
+                )?;
                 taffy_ids.insert(node, id);
             }
             BuildStep::Build(node) => {
                 let style = to_taffy_style(styles.get(&node));
-                let mut children: Vec<taffy::NodeId> =
+                let mut children: Vec<(i32, taffy::NodeId)> =
                     Vec::with_capacity(arena.children(node).len());
                 for &child in arena.children(node) {
                     if is_viewport_fixed(arena, styles, child) {
                         let spot = tree.new_leaf(static_spot_style())?;
                         taffy_ids.insert(static_spot_id(child), spot);
-                        children.push(spot);
+                        children.push((0, spot));
                     } else {
-                        children.push(taffy_ids[&child]);
+                        children.push((order_of(styles, child), taffy_ids[&child]));
                     }
                 }
-                let id = tree.new_with_children(style, &children)?;
+                let id = tree.new_with_children(style, &in_order(styles, node, children))?;
                 taffy_ids.insert(node, id);
             }
         }
     }
 
     Ok(taffy_ids[&root])
+}
+
+/// The `order` of a flex or grid item.
+fn order_of(styles: &StyleMap, node: NodeId) -> i32 {
+    styles.get(&node).map_or(0, |style| style.order)
+}
+
+/// The children of a flex or grid container by `order`, then by document
+/// order (the sort is stable); the children of any other box as they are. An
+/// anonymous item made from text, and a spot, count as `0`.
+fn in_order(
+    styles: &StyleMap,
+    parent: NodeId,
+    mut children: Vec<(i32, taffy::NodeId)>,
+) -> Vec<taffy::NodeId> {
+    let reorders = styles
+        .get(&parent)
+        .is_some_and(|style| matches!(style.display, StyleDisplay::Flex | StyleDisplay::Grid));
+    if reorders {
+        children.sort_by_key(|&(order, _)| order);
+    }
+    children.into_iter().map(|(_, id)| id).collect()
 }
 
 /// A zero-sized box in the flow of a fixed box's parent, which Taffy gives
@@ -2889,51 +2917,23 @@ fn to_taffy_style(style: Option<&ComputedStyle>) -> taffy::Style {
         // Only meaningful when `display` above is `Grid`, the same way the
         // flex-* fields above are only meaningful for `Flex` — Taffy
         // ignores them otherwise, so setting them unconditionally is safe.
-        grid_template_columns: to_grid_template_tracks(&style.grid_template_columns),
-        grid_template_rows: to_grid_template_tracks(&style.grid_template_rows),
-        // These two instead describe how *this node itself* is placed
+        grid_template_columns: grid::to_template(&style.grid_template_columns),
+        grid_template_rows: grid::to_template(&style.grid_template_rows),
+        grid_template_column_names: grid::to_line_names(&style.grid_template_columns),
+        grid_template_row_names: grid::to_line_names(&style.grid_template_rows),
+        grid_auto_columns: grid::to_tracks(&style.grid_auto_columns),
+        grid_auto_rows: grid::to_tracks(&style.grid_auto_rows),
+        grid_auto_flow: grid::to_auto_flow(style.grid_auto_flow),
+        grid_template_areas: grid::to_areas(&style.grid_template_areas),
+        justify_items: to_item_alignment(style.justify_items),
+        // These instead describe how *this node itself* is placed
         // within its *parent's* grid — meaningful only when this node's
         // parent has `display: grid`, regardless of this node's own
         // `display`, the same as `align_self` above.
-        grid_column: to_grid_placement_line(style.grid_column),
-        grid_row: to_grid_placement_line(style.grid_row),
+        justify_self: to_item_alignment(style.justify_self),
+        grid_column: grid::to_placement_line(&style.grid_column),
+        grid_row: grid::to_placement_line(&style.grid_row),
         ..Default::default()
-    }
-}
-
-fn to_grid_template_tracks(
-    tracks: &[florui_style::GridTrackSize],
-) -> Vec<GridTemplateComponent<String>> {
-    tracks
-        .iter()
-        .map(|&track| GridTemplateComponent::Single(to_track_sizing_function(track)))
-        .collect()
-}
-
-fn to_track_sizing_function(track: florui_style::GridTrackSize) -> TrackSizingFunction {
-    match track {
-        florui_style::GridTrackSize::Length(px) => length(px),
-        florui_style::GridTrackSize::Fr(fraction) => fr(fraction),
-        florui_style::GridTrackSize::Auto => auto(),
-        florui_style::GridTrackSize::MinContent => min_content(),
-        florui_style::GridTrackSize::MaxContent => max_content(),
-    }
-}
-
-fn to_grid_placement_line(
-    value: (florui_style::GridPlacement, florui_style::GridPlacement),
-) -> Line<GridPlacement> {
-    Line {
-        start: to_grid_placement(value.0),
-        end: to_grid_placement(value.1),
-    }
-}
-
-fn to_grid_placement(value: florui_style::GridPlacement) -> GridPlacement {
-    match value {
-        florui_style::GridPlacement::Auto => GridPlacement::Auto,
-        florui_style::GridPlacement::Line(index) => line(index),
-        florui_style::GridPlacement::Span(count) => span(count),
     }
 }
 
@@ -3358,6 +3358,22 @@ struct HitVisit {
     /// it, or atomic boxes inside an inline element of one).
     leaf: bool,
 }
+/// The children of `node` in the order they are drawn: a flex or grid
+/// container's by `z-index` then `order`, any other box's as they come.
+fn children_by_paint(arena: &Arena, styles: &StyleMap, node: NodeId) -> Vec<NodeId> {
+    let mut children = arena.children(node).to_vec();
+    if styles
+        .get(&node)
+        .is_some_and(|style| matches!(style.display, StyleDisplay::Flex | StyleDisplay::Grid))
+    {
+        children.sort_by_key(|child| {
+            styles
+                .get(child)
+                .map_or((0, 0), |style| (style.z_index.unwrap_or(0), style.order))
+        });
+    }
+    children
+}
 
 /// The topmost hit among the nodes `stack` starts from and everything under
 /// them; `pointer` is the pointer on screen, where boxes fixed to the viewport
@@ -3525,7 +3541,7 @@ fn hit_walk(
             }
             continue;
         }
-        for &child in arena.children(node).iter().rev() {
+        for child in children_by_paint(arena, styles, node).into_iter().rev() {
             stack.push(HitVisit {
                 node: child,
                 parent_point: point,
@@ -6355,6 +6371,337 @@ mod tests {
             (empty - with_text).abs() < 0.01,
             "{empty} against {with_text}"
         );
+    }
+
+    #[test]
+    fn a_shrinking_flex_item_stops_at_its_min_width_and_the_rest_take_what_is_left() {
+        // Chrome 153: 120, 80 and 0 in a row of 200px.
+        let tree: Element = view! {
+            <div class="r">
+                <div class="i c1" />
+                <div class="i c2" />
+                <div class="i c3" />
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".r { display: flex; width: 200px; height: 40px; } .i { width: 40px; height: 20px; } \
+             .c1 { flex: 1 1 100px; min-width: 120px; } .c2 { flex: 0 1 150px; } \
+             .c3 { flex: 2 1 0; }",
+        );
+        let items = arena.children(arena.roots()[0]);
+        let spans: Vec<(f32, f32)> = items
+            .iter()
+            .map(|i| (layouts[i].x, layouts[i].width))
+            .collect();
+        assert_eq!(spans, vec![(0.0, 120.0), (120.0, 80.0), (200.0, 0.0)]);
+    }
+
+    /// The `(x, y, width, height)` of each child of the first root.
+    fn child_boxes(
+        arena: &Arena,
+        layouts: &HashMap<NodeId, BoxLayout>,
+    ) -> Vec<(f32, f32, f32, f32)> {
+        arena
+            .children(arena.roots()[0])
+            .iter()
+            .map(|child| {
+                let b = layouts[child];
+                (b.x, b.y, b.width, b.height)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn order_lays_flex_items_out_by_order_then_by_source() {
+        let tree: Element = view! {
+            <div class="r">
+                <div class="a" />
+                <div class="b" />
+                <div class="c" />
+                <div class="d" />
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".r { display: flex; width: 300px; height: 20px; gap: 6px; } \
+             .a { width: 10px; order: 3; } .b { width: 20px; order: 1; } \
+             .c { width: 30px; order: 1; } .d { width: 40px; order: -1; }",
+        );
+        let boxes = child_boxes(&arena, &layouts);
+        // d (-1), then b and c (1, in source order), then a (3).
+        assert_eq!(boxes[3].0, 0.0, "d first");
+        assert_eq!(boxes[1].0, 46.0, "b after d and the gap");
+        assert_eq!(boxes[2].0, 72.0, "c after b");
+        assert_eq!(boxes[0].0, 108.0, "a last");
+    }
+
+    #[test]
+    fn order_applies_to_grid_items_placed_automatically() {
+        let tree: Element = view! {
+            <div class="g">
+                <div class="a" />
+                <div class="b" />
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".g { display: grid; width: 100px; grid-template-columns: 50px 50px; } \
+             .a { order: 2; height: 10px; } .b { order: 1; height: 10px; }",
+        );
+        let boxes = child_boxes(&arena, &layouts);
+        assert_eq!(boxes[1].0, 0.0);
+        assert_eq!(boxes[0].0, 50.0);
+    }
+
+    #[test]
+    fn order_decides_what_is_hit_on_top_of_an_overlap() {
+        let tree: Element = view! {
+            <div class="r">
+                <div class="a" />
+                <div class="b" />
+            </div>
+        };
+        let (arena, styles, layouts) = layout_with_styles(
+            &tree,
+            ".r { display: flex; width: 100px; height: 20px; } \
+             .a { width: 60px; height: 20px; order: 2; } \
+             .b { width: 60px; height: 20px; order: 1; margin-right: -30px; }",
+        );
+        let [a, b] = arena.children(arena.roots()[0])[..] else {
+            panic!("two items");
+        };
+        // b comes first, a after it overlapping its end from x = 30: a is on top
+        // there, though b comes later in the source.
+        assert_eq!(layouts[&b].x, 0.0);
+        assert_eq!(layouts[&a].x, 30.0);
+        let alone = super::hit_test(&arena, &layouts, &styles, 10.0, 5.0);
+        assert_eq!(alone, Some(b), "only b reaches x = 10");
+        let overlap = super::hit_test(&arena, &layouts, &styles, 45.0, 5.0);
+        assert_eq!(overlap, Some(a), "a is later in order, so on top");
+    }
+
+    #[test]
+    fn justify_items_and_justify_self_place_a_grid_item_in_its_cell() {
+        let tree: Element = view! {
+            <div class="g">
+                <div class="a" />
+                <div class="b" />
+                <div class="c" />
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".g { display: grid; width: 300px; grid-template-columns: 100px 100px 100px; \
+             grid-auto-rows: 40px; justify-items: center; } \
+             .a, .b, .c { width: 40px; height: 20px; } \
+             .b { justify-self: end; } .c { justify-self: start; }",
+        );
+        let xs: Vec<f32> = child_boxes(&arena, &layouts).iter().map(|b| b.0).collect();
+        assert_eq!(xs, vec![30.0, 160.0, 200.0]);
+    }
+
+    #[test]
+    fn grid_auto_rows_size_the_implicit_rows() {
+        let tree: Element = view! {
+            <div class="g">
+                <div class="a" />
+                <div class="b" />
+                <div class="c" />
+                <div class="d" />
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".g { display: grid; width: 200px; grid-template-columns: 100px 100px; \
+             grid-auto-rows: 28px; }",
+        );
+        let grid = arena.roots()[0];
+        assert_eq!(layouts[&grid].height, 56.0);
+        let ys: Vec<f32> = child_boxes(&arena, &layouts).iter().map(|b| b.1).collect();
+        assert_eq!(ys, vec![0.0, 0.0, 28.0, 28.0]);
+    }
+
+    #[test]
+    fn grid_auto_flow_column_fills_columns_of_the_implicit_width() {
+        let tree: Element = view! {
+            <div class="g">
+                <div class="a" />
+                <div class="b" />
+                <div class="c" />
+                <div class="d" />
+                <div class="e" />
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".g { display: grid; grid-template-rows: 30px 30px; grid-auto-flow: column; \
+             grid-auto-columns: 40px; }",
+        );
+        let boxes = child_boxes(&arena, &layouts);
+        assert_eq!(layouts[&arena.roots()[0]].width, 120.0);
+        assert_eq!((boxes[0].0, boxes[0].1), (0.0, 0.0));
+        assert_eq!((boxes[1].0, boxes[1].1), (0.0, 30.0));
+        assert_eq!((boxes[2].0, boxes[2].1), (40.0, 0.0));
+        assert_eq!((boxes[4].0, boxes[4].1), (80.0, 0.0));
+    }
+
+    #[test]
+    fn grid_template_areas_name_the_regions_items_go_to() {
+        let tree: Element = view! {
+            <div class="g">
+                <div class="head" />
+                <div class="side" />
+                <div class="main" />
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".g { display: grid; width: 200px; \
+             grid-template-areas: \"head head\" \"side main\"; \
+             grid-template-columns: 60px 1fr; grid-template-rows: 20px 40px; } \
+             .head { grid-area: head; } .side { grid-area: side; } .main { grid-area: main; }",
+        );
+        let boxes = child_boxes(&arena, &layouts);
+        assert_eq!(boxes[0], (0.0, 0.0, 200.0, 20.0));
+        assert_eq!(boxes[1], (0.0, 20.0, 60.0, 40.0));
+        assert_eq!(boxes[2], (60.0, 20.0, 140.0, 40.0));
+    }
+
+    #[test]
+    fn named_lines_inside_a_repeat_resolve() {
+        let tree: Element = view! {
+            <div class="g">
+                <div class="a" />
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".g { display: grid; grid-template-columns: repeat(2, [x] 40px [y]) 40px; \
+             grid-template-rows: 30px; } .a { grid-column: x 2 / y 2; }",
+        );
+        // Lines: 1 [x], 2 [y x], 3 [y]: the second x is line 2, the second y line 3.
+        let boxes = child_boxes(&arena, &layouts);
+        assert_eq!((boxes[0].0, boxes[0].2), (40.0, 40.0));
+    }
+
+    #[test]
+    fn repeat_and_minmax_make_the_columns() {
+        let tree: Element = view! {
+            <div class="g">
+                <div class="a" />
+                <div class="b" />
+                <div class="c" />
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".g { display: grid; width: 200px; \
+             grid-template-columns: repeat(2, minmax(50px, 1fr)); grid-auto-rows: 20px; }",
+        );
+        let boxes = child_boxes(&arena, &layouts);
+        assert_eq!((boxes[0].2, boxes[1].0, boxes[1].2), (100.0, 100.0, 100.0));
+        assert_eq!(boxes[2].1, 20.0, "the third wraps to a second row");
+        assert_eq!(layouts[&arena.roots()[0]].height, 40.0);
+    }
+
+    #[test]
+    fn auto_fill_counts_the_tracks_that_fit_and_auto_fit_collapses_the_empty_ones() {
+        let tree: Element = view! {
+            <div class="g">
+                <div class="a" />
+                <div class="b" />
+            </div>
+        };
+        let widths = |repeat: &str| {
+            let (arena, layouts) = layout_for(
+                &tree,
+                &format!(
+                    ".g {{ display: grid; width: 250px; grid-auto-rows: 20px; \
+                     grid-template-columns: repeat({repeat}, minmax(60px, 1fr)); gap: 4px; }}"
+                ),
+            );
+            child_boxes(&arena, &layouts)
+                .iter()
+                .map(|b| b.2)
+                .collect::<Vec<_>>()
+        };
+        // 250 holds three columns of 60 and two gaps of 4 (188), not four (252).
+        assert_eq!(widths("auto-fill"), vec![(250.0 - 8.0) / 3.0; 2]);
+        // The empty third column collapses, leaving two to share the width.
+        assert_eq!(widths("auto-fit"), vec![(250.0 - 4.0) / 2.0; 2]);
+    }
+
+    #[test]
+    fn a_calc_mixing_a_length_and_a_percentage_sizes_a_track_from_the_grids_own_width() {
+        let tree: Element = view! {
+            <div class="outer">
+                <div class="g">
+                    <div class="a" />
+                    <div class="b" />
+                </div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".outer { width: 400px; } \
+             .g { display: grid; width: 200px; grid-auto-rows: 20px; \
+             grid-template-columns: calc(10px + 25%) 1fr; }",
+        );
+        let grid = arena.children(arena.roots()[0])[0];
+        let [a, b] = arena.children(grid)[..] else {
+            panic!("two items");
+        };
+        // 10px + 25% of the grid's 200px, not of the 400px around it.
+        assert_eq!(layouts[&a].width, 60.0);
+        assert_eq!(layouts[&b].width, 140.0);
+    }
+
+    #[test]
+    fn a_percentage_gap_is_of_the_containers_own_content_box() {
+        let tree: Element = view! {
+            <div class="outer">
+                <div class="g">
+                    <div class="a" />
+                    <div class="b" />
+                </div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".outer { width: 400px; } \
+             .g { display: flex; width: 200px; height: 20px; gap: 10%; } \
+             .a, .b { width: 50px; }",
+        );
+        let grid = arena.children(arena.roots()[0])[0];
+        let b = arena.children(grid)[1];
+        assert_eq!(layouts[&b].x, 70.0, "50px and a gap of 10% of 200px");
+    }
+
+    #[test]
+    fn a_track_calc_that_is_clamped_at_zero_below_some_width_still_follows_its_percentage() {
+        let tree: Element = view! {
+            <div class="wrap">
+                <div class="g">
+                    <div class="c1" />
+                    <div class="c2" />
+                    <div class="c3" />
+                </div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".wrap { width: 340px; } .g { display: grid; width: 250px; grid-auto-rows: 22px; \
+             grid-template-columns: calc(10px + 20%) minmax(40px, calc(50% - 10px)) 1fr; }",
+        );
+        let grid = arena.children(arena.roots()[0])[0];
+        let spans: Vec<(f32, f32)> = arena
+            .children(grid)
+            .iter()
+            .map(|c| (layouts[c].x, layouts[c].width))
+            .collect();
+        // Chrome 153: 60px, 115px (the calc is 50% of 250 less 10), what is left.
+        assert_eq!(spans, vec![(0.0, 60.0), (60.0, 115.0), (175.0, 75.0)]);
     }
 
     #[test]

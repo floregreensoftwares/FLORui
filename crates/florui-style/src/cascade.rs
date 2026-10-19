@@ -8,6 +8,7 @@ use crate::style_map::StyleMap;
 
 use crate::clip::ClipPath;
 use crate::color::Rgba;
+use crate::grid::{GridAutoFlow, GridPlacement, GridTemplate, GridTemplateAreas, GridTrackSize};
 use crate::interaction::InteractionState;
 use crate::stylesheet_parse::Rule;
 use crate::stylo;
@@ -397,32 +398,6 @@ pub enum Position {
     /// In flow like `Relative`, then held inside its scrolling ancestor by
     /// its `top`/`right`/`bottom`/`left` while that scrolls.
     Sticky,
-}
-
-/// One track's sizing function, from `grid-template-columns`/`-rows` —
-/// bounded to what a single (non-`repeat()`) track can be: `repeat()`,
-/// named lines, `grid-template-areas`, and `fit-content()`/`minmax()`
-/// beyond their max side aren't resolved here yet (real CSS still cascades
-/// and parses them through Stylo; this crate just doesn't read them back).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum GridTrackSize {
-    Length(f32),
-    Fr(f32),
-    Auto,
-    MinContent,
-    MaxContent,
-}
-
-/// One line of a `grid-column`/`grid-row` placement — `grid-*-start`/`-end`
-/// each resolve to one of these. Named lines aren't resolved (a `<custom-
-/// ident>` falls back to [`Self::Auto`], the same as an unrecognized name
-/// would in real CSS once no line actually carries that name).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum GridPlacement {
-    #[default]
-    Auto,
-    Line(i16),
-    Span(u16),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -975,14 +950,31 @@ pub struct ComputedStyle {
     /// scale-down-when-radii-overlap rule needs that same final box.
     pub border_radius: Corners<(LengthPercentage, LengthPercentage)>,
     /// `grid-template-columns`. Meaningless when [`Self::display`] isn't
-    /// [`Display::Grid`]. See [`GridTrackSize`]'s own doc for the bound.
-    pub grid_template_columns: Vec<GridTrackSize>,
+    /// [`Display::Grid`].
+    pub grid_template_columns: GridTemplate,
     /// `grid-template-rows`, the same on the other axis.
-    pub grid_template_rows: Vec<GridTrackSize>,
+    pub grid_template_rows: GridTemplate,
+    /// `grid-auto-columns`: the size of the columns the placement adds.
+    pub grid_auto_columns: Vec<GridTrackSize>,
+    /// `grid-auto-rows`, the same for rows.
+    pub grid_auto_rows: Vec<GridTrackSize>,
+    /// `grid-auto-flow`.
+    pub grid_auto_flow: GridAutoFlow,
+    /// `grid-template-areas`.
+    pub grid_template_areas: Option<GridTemplateAreas>,
     /// `grid-column-start`/`grid-column-end`.
     pub grid_column: (GridPlacement, GridPlacement),
     /// `grid-row-start`/`grid-row-end`.
     pub grid_row: (GridPlacement, GridPlacement),
+    /// `justify-items`: the default inline-axis alignment of a grid
+    /// container's items. `None` is `normal`/`legacy`, which stretches.
+    pub justify_items: Option<ItemAlignment>,
+    /// `justify-self`: this item's own inline-axis alignment in its grid
+    /// cell, over its container's [`Self::justify_items`]. `None` is `auto`.
+    pub justify_self: Option<ItemAlignment>,
+    /// `order` of a flex or grid item: items lay out and paint by it, then by
+    /// document order.
+    pub order: i32,
     /// `position`. `Absolute`'s real containing-block rule (the *nearest
     /// explicitly* `relative`/`absolute` ancestor) is simplified:
     /// this crate's own [`Position::Static`] still counts as a valid
@@ -1173,6 +1165,18 @@ pub struct ComputedStyle {
 }
 
 impl ComputedStyle {
+    /// Whether a grid track of the node is a `calc()` of a length and a
+    /// percentage, which layout works out once the grid's own box is known.
+    pub fn has_grid_calc(&self) -> bool {
+        self.grid_template_columns.has_calc()
+            || self.grid_template_rows.has_calc()
+            || self
+                .grid_auto_columns
+                .iter()
+                .chain(&self.grid_auto_rows)
+                .any(|track| track.has_calc())
+    }
+
     /// Whether the node has a transform of its own: `transform`, or any of the
     /// individual `translate`, `rotate` and `scale`.
     pub fn has_transform(&self) -> bool {
@@ -1275,6 +1279,13 @@ impl ComputedStyle {
             border_radius: _,
             grid_template_columns: _,
             grid_template_rows: _,
+            grid_auto_columns: _,
+            grid_auto_rows: _,
+            grid_auto_flow: _,
+            grid_template_areas: _,
+            justify_items: _,
+            justify_self: _,
+            order: _,
             grid_column: _,
             grid_row: _,
             position: _,
@@ -1776,6 +1787,7 @@ mod tests {
 
     use super::*;
     use crate::clip::{ClipShape, PathSegment, ReferenceBox, ShapeRadius};
+    use crate::grid::{GridArea, GridBreadth, GridLimit, GridRepeatCount, GridTemplateComponent};
     use crate::stylesheet_parse::parse_stylesheet;
 
     fn styles(tree: &Element, css: &str, state: &InteractionState) -> (Arena, StyleMap) {
@@ -4034,11 +4046,11 @@ mod tests {
         );
         let node = arena.roots()[0];
         assert_eq!(
-            computed[&node].grid_template_columns,
+            computed[&node].grid_template_columns.tracks(),
             vec![
-                GridTrackSize::Length(100.0),
-                GridTrackSize::Fr(1.0),
-                GridTrackSize::Fr(2.0),
+                GridTrackSize::length(100.0),
+                GridTrackSize::fr(1.0),
+                GridTrackSize::fr(2.0),
             ]
         );
     }
@@ -4053,12 +4065,100 @@ mod tests {
         );
         let node = arena.roots()[0];
         assert_eq!(
-            computed[&node].grid_template_rows,
+            computed[&node].grid_template_rows.tracks(),
             vec![
-                GridTrackSize::Auto,
-                GridTrackSize::MinContent,
-                GridTrackSize::MaxContent,
+                GridTrackSize::AUTO,
+                GridTrackSize::Breadth(GridBreadth::MinContent),
+                GridTrackSize::Breadth(GridBreadth::MaxContent),
             ]
+        );
+    }
+
+    #[test]
+    fn a_track_keeps_minmax_fit_content_percentages_and_calc() {
+        let tree: Element = view! { <div class="g" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".g { display: grid; grid-template-columns: minmax(50px, 1fr) fit-content(80px) 25% \
+             calc(10px + 50%) minmax(auto, max-content); }",
+            &InteractionState::new(),
+        );
+        let node = arena.roots()[0];
+        assert_eq!(
+            computed[&node].grid_template_columns.tracks(),
+            vec![
+                GridTrackSize::MinMax(GridBreadth::Length(50.0), GridBreadth::Fr(1.0)),
+                GridTrackSize::FitContent(GridLimit::Length(80.0)),
+                GridTrackSize::Breadth(GridBreadth::Percent(0.25)),
+                GridTrackSize::Breadth(GridBreadth::Calc(LengthPercentage {
+                    length: 10.0,
+                    percentage: 0.5,
+                })),
+                GridTrackSize::MinMax(GridBreadth::Auto, GridBreadth::MaxContent),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_track_calc_with_a_negative_length_keeps_its_percentage() {
+        // A track size cannot be negative, so Stylo clamps the calc at zero
+        // where its length wins; the line above that is the value's own.
+        let tree: Element = view! { <div class="g" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".g { display: grid; grid-template-columns: minmax(40px, calc(50% - 10px)); }",
+            &InteractionState::new(),
+        );
+        assert_eq!(
+            computed[&arena.roots()[0]].grid_template_columns.tracks(),
+            vec![GridTrackSize::MinMax(
+                GridBreadth::Length(40.0),
+                GridBreadth::Calc(LengthPercentage {
+                    length: -10.0,
+                    percentage: 0.5,
+                })
+            )]
+        );
+    }
+
+    #[test]
+    fn repeat_and_line_names_are_read_back() {
+        let tree: Element = view! { <div class="g" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".g { display: grid; grid-template-columns: [a] 10px repeat(2, [b] 20px [c]) \
+             repeat(auto-fill, minmax(30px, 1fr)) [z]; }",
+            &InteractionState::new(),
+        );
+        let template = &computed[&arena.roots()[0]].grid_template_columns;
+        assert_eq!(template.components.len(), 3);
+        assert_eq!(
+            template.components[0],
+            GridTemplateComponent::Track(GridTrackSize::length(10.0))
+        );
+        let GridTemplateComponent::Repeat(fixed) = &template.components[1] else {
+            panic!("the second entry is a repeat");
+        };
+        assert_eq!(fixed.count, GridRepeatCount::Count(2));
+        assert_eq!(fixed.tracks, vec![GridTrackSize::length(20.0)]);
+        assert_eq!(
+            fixed.line_names,
+            vec![vec!["b".to_owned()], vec!["c".to_owned()]]
+        );
+        let GridTemplateComponent::Repeat(auto) = &template.components[2] else {
+            panic!("the third entry is a repeat");
+        };
+        assert_eq!(auto.count, GridRepeatCount::AutoFill);
+        assert_eq!(
+            auto.tracks,
+            vec![GridTrackSize::MinMax(
+                GridBreadth::Length(30.0),
+                GridBreadth::Fr(1.0)
+            )]
+        );
+        assert_eq!(
+            template.line_names,
+            vec![vec!["a".to_owned()], vec![], vec![], vec!["z".to_owned()]]
         );
     }
 
@@ -4069,6 +4169,132 @@ mod tests {
         let node = arena.roots()[0];
         assert!(computed[&node].grid_template_columns.is_empty());
         assert!(computed[&node].grid_template_rows.is_empty());
+        assert!(computed[&node].grid_auto_columns.is_empty());
+        assert!(computed[&node].grid_auto_rows.is_empty());
+        assert_eq!(computed[&node].grid_auto_flow, GridAutoFlow::Row);
+        assert_eq!(computed[&node].grid_template_areas, None);
+        assert_eq!(computed[&node].order, 0);
+        assert_eq!(computed[&node].justify_items, None);
+        assert_eq!(computed[&node].justify_self, None);
+    }
+
+    #[test]
+    fn the_implicit_tracks_and_the_flow_are_read_back() {
+        let tree: Element = view! { <div class="g" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".g { display: grid; grid-auto-rows: 28px minmax(10px, auto); grid-auto-columns: 40px; \
+             grid-auto-flow: column dense; }",
+            &InteractionState::new(),
+        );
+        let style = &computed[&arena.roots()[0]];
+        assert_eq!(
+            style.grid_auto_rows,
+            vec![
+                GridTrackSize::length(28.0),
+                GridTrackSize::MinMax(GridBreadth::Length(10.0), GridBreadth::Auto),
+            ]
+        );
+        assert_eq!(style.grid_auto_columns, vec![GridTrackSize::length(40.0)]);
+        assert_eq!(style.grid_auto_flow, GridAutoFlow::ColumnDense);
+        for (flow, expected) in [
+            ("row", GridAutoFlow::Row),
+            ("dense", GridAutoFlow::RowDense),
+            ("column", GridAutoFlow::Column),
+        ] {
+            let (arena, computed) = styles(
+                &tree,
+                &format!(".g {{ grid-auto-flow: {flow}; }}"),
+                &InteractionState::new(),
+            );
+            assert_eq!(
+                computed[&arena.roots()[0]].grid_auto_flow,
+                expected,
+                "{flow}"
+            );
+        }
+    }
+
+    #[test]
+    fn template_areas_are_read_back_with_the_size_of_the_template() {
+        let tree: Element = view! { <div class="g" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".g { display: grid; grid-template-areas: \"head head .\" \"nav main main\"; }",
+            &InteractionState::new(),
+        );
+        let areas = computed[&arena.roots()[0]]
+            .grid_template_areas
+            .clone()
+            .expect("areas");
+        assert_eq!((areas.rows, areas.columns), (2, 3));
+        let find = |name: &str| areas.areas.iter().find(|area| area.name == name).cloned();
+        assert_eq!(
+            find("head"),
+            Some(GridArea {
+                name: "head".to_owned(),
+                row_start: 1,
+                row_end: 2,
+                column_start: 1,
+                column_end: 3,
+            })
+        );
+        assert_eq!(
+            find("main"),
+            Some(GridArea {
+                name: "main".to_owned(),
+                row_start: 2,
+                row_end: 3,
+                column_start: 2,
+                column_end: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn justify_items_justify_self_and_order_resolve() {
+        let tree: Element = view! { <div class="g" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".g { justify-items: center; justify-self: end; order: -3; }",
+            &InteractionState::new(),
+        );
+        let style = &computed[&arena.roots()[0]];
+        assert_eq!(style.justify_items, Some(ItemAlignment::Center));
+        assert_eq!(style.justify_self, Some(ItemAlignment::End));
+        assert_eq!(style.order, -3);
+        let (arena, computed) = styles(
+            &tree,
+            ".g { place-items: start end; place-self: stretch; }",
+            &InteractionState::new(),
+        );
+        let style = &computed[&arena.roots()[0]];
+        assert_eq!(style.justify_items, Some(ItemAlignment::End));
+        assert_eq!(style.align_items, Some(ItemAlignment::Start));
+        assert_eq!(style.justify_self, Some(ItemAlignment::Stretch));
+    }
+
+    #[test]
+    fn named_lines_and_areas_place_an_item() {
+        let tree: Element = view! { <div class="item" /> };
+        let place = |css: &str| {
+            let (arena, computed) = styles(&tree, css, &InteractionState::new());
+            let style = &computed[&arena.roots()[0]];
+            (style.grid_row.clone(), style.grid_column.clone())
+        };
+        let named = |name: &str| GridPlacement::NamedLine(name.to_owned(), 0);
+        let (row, column) = place(".item { grid-area: head; }");
+        assert_eq!(row, (named("head"), named("head")));
+        assert_eq!(column, (named("head"), named("head")));
+        let (row, column) = place(".item { grid-row: a 2 / span b 3; grid-column: span 2 / c; }");
+        assert_eq!(
+            row,
+            (
+                GridPlacement::NamedLine("a".to_owned(), 2),
+                GridPlacement::NamedSpan("b".to_owned(), 3)
+            )
+        );
+        assert_eq!(column, (GridPlacement::Span(2), named("c")));
     }
 
     #[test]
