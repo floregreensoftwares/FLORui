@@ -4385,6 +4385,27 @@ fn paint_image(
     let Some(source) = premultiplied_pixmap(image) else {
         return;
     };
+    blit_image(
+        buffer,
+        &source,
+        content_x,
+        content_y,
+        rect,
+        scale_factor,
+        clip,
+    );
+}
+
+/// [`paint_image`] of pixels that are premultiplied already.
+fn blit_image(
+    buffer: &mut Surface,
+    source: &Pixmap,
+    content_x: f32,
+    content_y: f32,
+    rect: florui_layout::BoxLayout,
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
     let (lx, ly) = buffer.local(
         content_x + rect.x * scale_factor,
         content_y + rect.y * scale_factor,
@@ -4400,8 +4421,8 @@ fn paint_image(
     // `draw_pixmap(lx, ly, ..., Transform::from_scale(sx, sy), ...)`
     // pushed the image to roughly double its intended offset).
     let transform = Transform::from_scale(
-        (rect.width * scale_factor) / image.width as f32,
-        (rect.height * scale_factor) / image.height as f32,
+        (rect.width * scale_factor) / source.width() as f32,
+        (rect.height * scale_factor) / source.height() as f32,
     )
     .post_translate(lx, ly);
     buffer.pixmap.draw_pixmap(
@@ -4412,6 +4433,49 @@ fn paint_image(
         transform,
         clip,
     );
+}
+
+/// An inline svg's straight pixels, held weakly (they go when the renderer lets
+/// them go, and the address stays this svg's while the pointer lives), and the
+/// same premultiplied.
+type InlineSvg = (std::rc::Weak<Vec<u8>>, std::rc::Rc<Pixmap>);
+
+thread_local! {
+    /// The inline svgs last drawn, premultiplied and ready to blit, each by the
+    /// pixels it was made from, which the renderer hands out again while nothing
+    /// about the svg changes.
+    static INLINE_SVGS: std::cell::RefCell<Vec<InlineSvg>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+const INLINE_SVGS_KEPT: usize = 16;
+
+/// `rgba` of `size` as a premultiplied pixmap, made once for as long as the
+/// renderer hands out the same pixels.
+fn inline_svg_pixmap(rgba: &std::rc::Rc<Vec<u8>>, size: (u32, u32)) -> Option<std::rc::Rc<Pixmap>> {
+    let this = std::rc::Rc::downgrade(rgba);
+    if let Some(found) = INLINE_SVGS.with(|kept| {
+        kept.borrow()
+            .iter()
+            .find(|(pixels, _)| std::rc::Weak::ptr_eq(pixels, &this))
+            .map(|(_, pixmap)| std::rc::Rc::clone(pixmap))
+    }) {
+        return Some(found);
+    }
+    let image = florui_assets::RasterImage {
+        rgba: rgba.to_vec(),
+        width: size.0,
+        height: size.1,
+    };
+    let pixmap = std::rc::Rc::new(premultiplied_pixmap(&image)?);
+    INLINE_SVGS.with(|kept| {
+        let mut kept = kept.borrow_mut();
+        kept.retain(|(pixels, _)| pixels.strong_count() > 0);
+        if kept.len() >= INLINE_SVGS_KEPT {
+            kept.remove(0);
+        }
+        kept.push((this, std::rc::Rc::clone(&pixmap)));
+    });
+    Some(pixmap)
 }
 
 /// An inline `<svg>` drawn whole by the SVG renderer into its content box
@@ -4436,10 +4500,8 @@ fn paint_inline_svg(
     let Some(rgba) = florui_svg::render_svg(arena, styles, node, css, size) else {
         return;
     };
-    let image = florui_assets::RasterImage {
-        rgba: rgba.to_vec(),
-        width: size.0,
-        height: size.1,
+    let Some(pixmap) = inline_svg_pixmap(&rgba, size) else {
+        return;
     };
     let rect = florui_layout::BoxLayout {
         x: 0.0,
@@ -4448,7 +4510,7 @@ fn paint_inline_svg(
         height: size.1 as f32 / scale_factor,
         margin: florui_layout::BoxMargin::ZERO,
     };
-    paint_image(buffer, &image, x, y, rect, scale_factor, clip);
+    blit_image(buffer, &pixmap, x, y, rect, scale_factor, clip);
 }
 
 /// `florui_assets::RasterImage::rgba` is straight (non-premultiplied)
@@ -13189,6 +13251,26 @@ mod tests {
             y1 >= border.3 + 5 && y1 <= border.3 + 7,
             "the bottom margin"
         );
+    }
+
+    #[test]
+    fn an_inline_svg_is_premultiplied_once_for_as_long_as_its_pixels_stay() {
+        let pixels = std::rc::Rc::new([200u8, 100, 50, 128].repeat(4));
+        let first = inline_svg_pixmap(&pixels, (2, 2)).expect("a pixmap");
+        let again = inline_svg_pixmap(&pixels, (2, 2)).expect("a pixmap");
+        assert!(std::rc::Rc::ptr_eq(&first, &again));
+        // Premultiplied by the alpha of 128.
+        let pixel = first.pixels()[0];
+        assert_eq!((pixel.red(), pixel.alpha()), (100, 128));
+        let other = std::rc::Rc::new([200u8, 100, 50, 128].repeat(4));
+        let separate = inline_svg_pixmap(&other, (2, 2)).expect("a pixmap");
+        assert!(!std::rc::Rc::ptr_eq(&first, &separate));
+        // What the renderer let go is not kept.
+        drop(pixels);
+        drop(other);
+        let last = std::rc::Rc::new([9u8, 9, 9, 255].repeat(4));
+        inline_svg_pixmap(&last, (2, 2)).expect("a pixmap");
+        assert_eq!(INLINE_SVGS.with(|kept| kept.borrow().len()), 1);
     }
 
     #[test]
