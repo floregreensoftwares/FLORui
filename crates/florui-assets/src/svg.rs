@@ -92,7 +92,8 @@ pub fn parse_svg(svg_text: &str) -> Result<VectorImage, AssetError> {
 /// that `sans-serif` and `monospace` (and a family that is not found) stand for.
 #[derive(Debug, Clone, Copy)]
 pub struct SvgFonts<'a> {
-    pub faces: &'a [&'a [u8]],
+    /// Static, so that the address of a face names it for as long as the process lives.
+    pub faces: &'static [&'static [u8]],
     pub sans_serif: &'a str,
     pub monospace: &'a str,
 }
@@ -105,13 +106,18 @@ pub fn parse_svg_with_fonts(
 ) -> Result<VectorImage, AssetError> {
     use std::sync::{Arc, Mutex, OnceLock};
     type Table = Arc<resvg::usvg::fontdb::Database>;
-    type Kept = Vec<(Vec<usize>, Table)>;
+    type Key = (Vec<(usize, usize)>, String, String);
+    type Kept = Vec<(Key, Table)>;
     static TABLES: OnceLock<Mutex<Kept>> = OnceLock::new();
-    let key: Vec<usize> = fonts
-        .faces
-        .iter()
-        .map(|face| face.as_ptr() as usize)
-        .collect();
+    let key: Key = (
+        fonts
+            .faces
+            .iter()
+            .map(|face| (face.as_ptr() as usize, face.len()))
+            .collect(),
+        fonts.sans_serif.to_owned(),
+        fonts.monospace.to_owned(),
+    );
     let table = {
         let mut tables = TABLES
             .get_or_init(|| Mutex::new(Vec::new()))
@@ -128,6 +134,8 @@ pub fn parse_svg_with_fonts(
                 database.set_serif_family(fonts.sans_serif);
                 database.set_monospace_family(fonts.monospace);
                 let table = Arc::new(database);
+                // Only the latest set is kept.
+                tables.clear();
                 tables.push((key, Arc::clone(&table)));
                 table
             }
