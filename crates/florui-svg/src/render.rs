@@ -80,7 +80,7 @@ const KEPT: usize = 24;
 const FILTERED_KEPT: usize = 4;
 
 thread_local! {
-    static DRAWN: RefCell<HashMap<String, Rc<Vec<u8>>>> = RefCell::new(HashMap::new());
+    static DRAWN: RefCell<HashMap<u64, Rc<Vec<u8>>>> = RefCell::new(HashMap::new());
     static FILTERED: RefCell<Vec<(u64, Rc<Vec<u8>>)>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -118,7 +118,14 @@ fn raster(text: &str, size: (u32, u32)) -> Option<Vec<u8>> {
 
 /// The alpha of the document, kept for the next time.
 fn alpha_of(text: String, size: (u32, u32)) -> Option<Rc<Vec<u8>>> {
-    let key = format!("{size:?}|{text}");
+    // The document is named by a hash of it: the text itself is not kept.
+    let key = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        size.hash(&mut hasher);
+        text.hash(&mut hasher);
+        hasher.finish()
+    };
     if let Some(found) = DRAWN.with(|cache| cache.borrow().get(&key).cloned()) {
         return Some(found);
     }
