@@ -3670,7 +3670,19 @@ fn paint_node(
                     && (background::clips_to_text(&s.background_layers)
                         || s.background_color_clip == florui_style::BackgroundBox::Text)
             })
-            .and_then(|_| text_coverage(buffer, arena, styles, layouts, font, node, scale_factor));
+            .and_then(|_| {
+                let region = background::Region::of(buffer, &outline)?;
+                text_coverage(
+                    buffer,
+                    region,
+                    arena,
+                    styles,
+                    layouts,
+                    font,
+                    node,
+                    scale_factor,
+                )
+            });
         // `background-color` is cut to the clip of the bottom layer.
         let color_clip = style.map_or(florui_style::BackgroundBox::Border, |s| {
             s.background_color_clip
@@ -5673,8 +5685,10 @@ fn paint_text(buffer: &mut Surface, font: &mut Font, params: TextPaint<'_>) {
 /// surface like `buffer`: the box is painted again with nothing but its text,
 /// in opaque black whatever its colour, which is what `background-clip: text`
 /// cuts a background to.
+#[allow(clippy::too_many_arguments)]
 fn text_coverage(
     buffer: &Surface,
+    region: background::Region,
     arena: &Tree,
     styles: &StyleMap,
     layouts: &HashMap<NodeId, BoxLayout>,
@@ -5682,11 +5696,15 @@ fn text_coverage(
     node: NodeId,
     scale_factor: f32,
 ) -> Option<Surface> {
-    let mut cover = Surface::new(buffer.pixmap.width(), buffer.pixmap.height(), buffer.origin)?;
-    let mut text_styles = styles.clone();
+    let mut cover = region.surface(buffer)?;
+    // Only the box and what is in it, as the styles of the same boxes with all
+    // they paint but text taken away.
+    let mut text_styles = StyleMap::new();
     let mut below = vec![node];
     while let Some(id) = below.pop() {
-        if let Some(style) = text_styles.get_mut(&id) {
+        if let Some(original) = styles.get(&id) {
+            let mut style = original.clone();
+            let style = &mut style;
             style.background_color = Rgba::TRANSPARENT;
             style.background_layers.clear();
             style.background_color_clip = florui_style::BackgroundBox::Border;
@@ -5709,6 +5727,7 @@ fn text_coverage(
             style.opacity = 1.0;
             style.filter.clear();
             style.mix_blend_mode = BlendMode::Normal;
+            text_styles.insert(id, style.clone());
         }
         below.extend_from_slice(arena.children(id));
     }
@@ -5746,13 +5765,14 @@ fn text_coverage(
 /// lines of the context they flow in.
 fn inline_text_coverage(
     buffer: &Surface,
+    region: background::Region,
     inline: &florui_layout::InlineShaped,
     runs: &[florui_text::ShapedRun],
     element: usize,
     (origin_x, origin_y): (f32, f32),
     scale_factor: f32,
 ) -> Option<Surface> {
-    let mut cover = Surface::new(buffer.pixmap.width(), buffer.pixmap.height(), buffer.origin)?;
+    let mut cover = region.surface(buffer)?;
     let within = |mut run_element: usize| {
         // Element `0` is the container, its own parent.
         while run_element != element && run_element != 0 {
@@ -5867,8 +5887,10 @@ fn paint_inline_boxes(
         let text_cover = (background::clips_to_text(&style.background_layers)
             || color_clip == florui_style::BackgroundBox::Text)
             .then(|| {
+                let region = background::Region::of(buffer, &outline)?;
                 inline_text_coverage(
                     buffer,
+                    region,
                     inline,
                     runs,
                     fragment.element,
@@ -12592,6 +12614,68 @@ mod tests {
             .find(|&(x, y)| pixel_rgb(&plain, x, y) == [255, 0, 0])
             .unwrap();
         assert_eq!(pixel_rgb(&faded, inside.0, inside.1), [255, 0, 0]);
+    }
+
+    #[test]
+    fn text_clipped_and_whole_box_layers_blend_with_each_other_as_chrome_does() {
+        let a = "linear-gradient(rgb(208, 80, 64), rgb(208, 80, 64))";
+        let b = "linear-gradient(rgb(64, 128, 192), rgb(64, 128, 192))";
+        let font = "font-size: 64px; font-weight: 700; line-height: 80px; padding: 10px; \
+                    color: transparent; background-color: #8080ff;";
+        let tree: Element = view! { <div class="t">"Mg"</div> };
+        let plain = text_clipped(
+            &tree,
+            ".t { font-size: 64px; font-weight: 700; line-height: 80px; padding: 10px; color: #ff0000; }",
+        );
+        let inside = (0..110)
+            .flat_map(|y| (0..260).map(move |x| (x, y)))
+            .find(|&(x, y)| pixel_rgb(&plain, x, y) == [255, 0, 0])
+            .unwrap();
+        let outside = (130, 15);
+        // Chrome 153, a layer of each kind: `(layers, clips, blends)` and what is
+        // inside a glyph and outside it.
+        let cases = [
+            // The text layer multiplies with the box layer under it.
+            (
+                "text, border-box",
+                "multiply, normal",
+                [52, 40, 48],
+                [64, 128, 192],
+            ),
+            // The box layer multiplies with the text layer under it, and with
+            // nothing outside the glyphs, where only the layer shows.
+            (
+                "border-box, text",
+                "multiply, normal",
+                [52, 40, 48],
+                [208, 80, 64],
+            ),
+            // The bottom box layer blends with the colour, which it covers.
+            (
+                "text, border-box",
+                "normal, multiply",
+                [208, 80, 64],
+                [32, 64, 192],
+            ),
+        ];
+        for (clips, blends, glyph, around) in cases {
+            let canvas = text_clipped(
+                &tree,
+                &format!(
+                    ".t {{ {font} background-image: {a}, {b}; background-clip: {clips}; \
+                     background-blend-mode: {blends}; }}"
+                ),
+            );
+            for (name, point, chrome) in [("glyph", inside, glyph), ("outside", outside, around)] {
+                let got = pixel_rgb(&canvas, point.0, point.1);
+                for channel in 0..3 {
+                    assert!(
+                        got[channel].abs_diff(chrome[channel]) <= 2,
+                        "{clips} / {blends}, {name}: got {got:?}, Chrome gives {chrome:?}"
+                    );
+                }
+            }
+        }
     }
     #[test]
     fn background_clip_text_follows_the_shorthand_and_blend_modes() {

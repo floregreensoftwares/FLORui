@@ -160,6 +160,58 @@ pub(crate) fn clips_to_text(layers: &[BackgroundLayer]) -> bool {
     layers.iter().any(|layer| layer.clip == BackgroundBox::Text)
 }
 
+/// The part of a surface a box's background can reach: the box, in whole pixels,
+/// cut to the surface. What is painted on the side, to be cut to the glyphs or
+/// blended, is this size and not the surface's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Region {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+impl Region {
+    /// The box `outline`, on `buffer`; `None` when none of it is.
+    pub(crate) fn of(buffer: &Surface, outline: &RoundedRect) -> Option<Self> {
+        let (left, top) = buffer.local(outline.x, outline.y);
+        let x0 = (left.floor().max(0.0)) as i32;
+        let y0 = (top.floor().max(0.0)) as i32;
+        let x1 = ((left + outline.width)
+            .ceil()
+            .min(buffer.pixmap.width() as f32)) as i32;
+        let y1 = ((top + outline.height)
+            .ceil()
+            .min(buffer.pixmap.height() as f32)) as i32;
+        (x1 > x0 && y1 > y0).then(|| Self {
+            x: x0,
+            y: y0,
+            width: (x1 - x0) as u32,
+            height: (y1 - y0) as u32,
+        })
+    }
+
+    /// A clear surface of this part of `buffer`.
+    pub(crate) fn surface(self, buffer: &Surface) -> Option<Surface> {
+        Surface::new(
+            self.width,
+            self.height,
+            (buffer.origin.0 + self.x, buffer.origin.1 + self.y),
+        )
+    }
+
+    /// `source`, a surface of this part, laid over `target`, which it is a part of.
+    fn lay(self, target: &mut Pixmap, source: &Pixmap, clip: Option<&Mask>) {
+        draw_shifted(
+            target,
+            source,
+            (self.x, self.y),
+            &PixmapPaint::default(),
+            clip,
+        );
+    }
+}
+
 /// Paints `layers` of one box, the first on top, over what is already there.
 /// Lengths in the layers are CSS pixels and are multiplied by `scale`; the
 /// boxes are already in painted pixels. `text` is how much of each pixel the
@@ -181,14 +233,11 @@ pub(crate) fn paint_layers(
             paint_layer(buffer, &boxes, layer, scale, clip);
             continue;
         }
-        if let Some(alone) = painted_alone(buffer, &boxes, layer, scale, text) {
-            draw_shifted(
-                &mut buffer.pixmap,
-                &alone.pixmap,
-                (0, 0),
-                &PixmapPaint::default(),
-                clip,
-            );
+        let Some(region) = Region::of(buffer, outline) else {
+            continue;
+        };
+        if let Some(alone) = painted_alone(buffer, region, &boxes, layer, scale, text) {
+            region.lay(&mut buffer.pixmap, &alone.pixmap, clip);
         }
     }
 }
@@ -204,12 +253,13 @@ pub(crate) fn blends(layers: &[BackgroundLayer]) -> bool {
 /// is clipped to the text. `None` when it is and there is no text to cut it to.
 fn painted_alone(
     buffer: &Surface,
+    region: Region,
     boxes: &Boxes,
     layer: &BackgroundLayer,
     scale: f32,
     text: Option<&Pixmap>,
 ) -> Option<Surface> {
-    let mut alone = Surface::new(buffer.pixmap.width(), buffer.pixmap.height(), buffer.origin)?;
+    let mut alone = region.surface(buffer)?;
     paint_layer(&mut alone, boxes, layer, scale, None);
     if layer.clip == BackgroundBox::Text {
         cut_to_text(&mut alone.pixmap, text?);
@@ -233,8 +283,10 @@ pub(crate) fn paint_blended(
     text: Option<&Pixmap>,
     fill_color: &dyn Fn(&mut Surface),
 ) {
-    let (width, height) = (buffer.pixmap.width(), buffer.pixmap.height());
-    let Some(mut group) = Surface::new(width, height, buffer.origin) else {
+    let Some(region) = Region::of(buffer, outline) else {
+        return;
+    };
+    let Some(mut group) = region.surface(buffer) else {
         return;
     };
     fill_color(&mut group);
@@ -252,7 +304,7 @@ pub(crate) fn paint_blended(
             paint_layer(&mut group, &boxes, layer, scale, None);
             continue;
         }
-        let Some(alone) = painted_alone(buffer, &boxes, layer, scale, text) else {
+        let Some(alone) = painted_alone(buffer, region, &boxes, layer, scale, text) else {
             continue;
         };
         let paint = PixmapPaint {
@@ -261,13 +313,7 @@ pub(crate) fn paint_blended(
         };
         draw_shifted(&mut group.pixmap, &alone.pixmap, (0, 0), &paint, None);
     }
-    draw_shifted(
-        &mut buffer.pixmap,
-        &group.pixmap,
-        (0, 0),
-        &PixmapPaint::default(),
-        clip,
-    );
+    region.lay(&mut buffer.pixmap, &group.pixmap, clip);
 }
 
 fn paint_layer(
@@ -801,20 +847,15 @@ pub(crate) fn fill_clipped(
     let Some(text) = text else {
         return;
     };
-    let Some(mut alone) =
-        Surface::new(buffer.pixmap.width(), buffer.pixmap.height(), buffer.origin)
-    else {
+    let Some(region) = Region::of(buffer, outline) else {
+        return;
+    };
+    let Some(mut alone) = region.surface(buffer) else {
         return;
     };
     crate::fill_rounded_rect(&mut alone, outline, color, None);
     cut_to_text(&mut alone.pixmap, text);
-    draw_shifted(
-        &mut buffer.pixmap,
-        &alone.pixmap,
-        (0, 0),
-        &PixmapPaint::default(),
-        clip,
-    );
+    region.lay(&mut buffer.pixmap, &alone.pixmap, clip);
 }
 
 /// Scales every pixel of `pixmap` by how much of it the glyphs in `text` cover.
