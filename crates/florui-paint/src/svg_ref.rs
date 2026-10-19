@@ -3,7 +3,7 @@
 //! the box and applied to its group.
 
 use florui_layout::BoxLayout;
-use florui_style::{FilterFunction, Tree};
+use florui_style::{FilterFunction, MaskMode, StyleMap, Tree};
 use florui_svg::{Canvas, Reference};
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
@@ -26,16 +26,25 @@ fn canvas(group: &Surface, node_abs: (f32, f32), layout: &BoxLayout, scale: f32)
 
 /// How much of each pixel of `group` the mask `url` leaves; nothing when it names
 /// no mask, which hides the box.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn mask_coverage(
     arena: &Tree,
+    styles: &StyleMap,
     url: &str,
     group: &Surface,
     node_abs: (f32, f32),
     layout: &BoxLayout,
     scale: f32,
+    mode: MaskMode,
 ) -> Vec<u8> {
-    let covered = florui_svg::reference(arena, url).and_then(|reference| {
-        florui_svg::mask_coverage(&reference, &canvas(group, node_abs, layout, scale))
+    // `match-source` is the mask's own type; the other two say how to read it.
+    let kind = match mode {
+        MaskMode::MatchSource => None,
+        MaskMode::Alpha => Some(florui_svg::MaskKind::Alpha),
+        MaskMode::Luminance => Some(florui_svg::MaskKind::Luminance),
+    };
+    let covered = florui_svg::reference(arena, styles, url).and_then(|reference| {
+        florui_svg::mask_coverage(&reference, &canvas(group, node_abs, layout, scale), kind)
     });
     match covered {
         Some(coverage) => coverage.to_vec(),
@@ -47,13 +56,14 @@ pub(crate) fn mask_coverage(
 /// drawn, clips nothing.
 pub(crate) fn clip(
     arena: &Tree,
+    styles: &StyleMap,
     url: &str,
     group: &mut Surface,
     node_abs: (f32, f32),
     layout: &BoxLayout,
     scale: f32,
 ) {
-    let Some(reference) = florui_svg::reference(arena, url) else {
+    let Some(reference) = florui_svg::reference(arena, styles, url) else {
         return;
     };
     let Some(coverage) =
@@ -80,13 +90,14 @@ pub(crate) fn clip(
 /// no filter or cannot be drawn.
 pub(crate) fn filter(
     arena: &Tree,
+    styles: &StyleMap,
     url: &str,
     group: &mut Surface,
     node_abs: (f32, f32),
     layout: &BoxLayout,
     scale: f32,
 ) {
-    let Some(reference) = florui_svg::reference(arena, url) else {
+    let Some(reference) = florui_svg::reference(arena, styles, url) else {
         return;
     };
     // A reference that is no `<filter>` filters nothing.
@@ -106,8 +117,8 @@ pub(crate) fn filter(
 
 /// How far the filter `url` reaches past the border box of `size` (CSS pixels):
 /// the most its region extends beyond any side.
-pub(crate) fn filter_reach(arena: &Tree, url: &str, size: (f32, f32)) -> f32 {
-    let Some(reference): Option<Reference> = florui_svg::reference(arena, url) else {
+pub(crate) fn filter_reach(arena: &Tree, styles: &StyleMap, url: &str, size: (f32, f32)) -> f32 {
+    let Some(reference): Option<Reference> = florui_svg::reference(arena, styles, url) else {
         return 0.0;
     };
     let Some((left, top, right, bottom)) = florui_svg::filter_region(&reference, size.0, size.1)
@@ -123,8 +134,10 @@ pub(crate) fn filter_reach(arena: &Tree, url: &str, size: (f32, f32)) -> f32 {
 
 /// A filter list's own native stretches and its `url()` items, in order: each
 /// native stretch goes through `native` and each `url()` through the SVG renderer.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_chain(
     arena: &Tree,
+    styles: &StyleMap,
     filters: &[FilterFunction],
     group: &mut Surface,
     node_abs: (f32, f32),
@@ -140,8 +153,45 @@ pub(crate) fn apply_chain(
         native(&mut group.pixmap, &filters[start..index]);
         start = index + 1;
         if let Some(layout) = layout {
-            filter(arena, url, group, node_abs, layout, scale);
+            filter(arena, styles, url, group, node_abs, layout, scale);
         }
     }
     native(&mut group.pixmap, &filters[start..]);
+}
+
+/// `pixmap` (a part of the surface, whose top left is at `origin` in device
+/// pixels) put through the filter `url` for the border box `box_px` (`x, y,
+/// width, height`, device pixels); as it was when the filter names nothing.
+pub(crate) fn filter_pixmap(
+    arena: &Tree,
+    styles: &StyleMap,
+    url: &str,
+    pixmap: Pixmap,
+    origin: (i32, i32),
+    box_px: (f32, f32, f32, f32),
+    scale: f32,
+) -> Pixmap {
+    let Some(reference) = florui_svg::reference(arena, styles, url) else {
+        return pixmap;
+    };
+    if !reference.defines("filter") {
+        return pixmap;
+    }
+    let canvas = Canvas {
+        size: (pixmap.width(), pixmap.height()),
+        scale,
+        origin: (origin.0 as f32 / scale, origin.1 as f32 / scale),
+        border_box: (
+            box_px.0 / scale,
+            box_px.1 / scale,
+            box_px.2 / scale,
+            box_px.3 / scale,
+        ),
+    };
+    let Some(filtered) = florui_svg::filter_pixels(&reference, &canvas, pixmap.data()) else {
+        return pixmap;
+    };
+    let mut out = pixmap;
+    out.data_mut().copy_from_slice(&filtered);
+    out
 }

@@ -12,4 +12,4 @@ mod render;
 
 pub use document::{Reference, is_reference, reference};
 pub use filter::filter_region;
-pub use render::{Canvas, clip_coverage, filter_pixels, mask_coverage};
+pub use render::{Canvas, MaskKind, clip_coverage, filter_pixels, mask_coverage};

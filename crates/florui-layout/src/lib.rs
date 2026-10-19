@@ -3293,8 +3293,8 @@ fn hit_walk(
             let outline = border_box_outline(styles, node, ax, ay, layout);
             // A `clip-path` cuts the box and everything in it: outside its shape
             // neither is hit.
-            let admitted =
-                admitted && style.is_none_or(|s| clip_admits(arena, s, &layout, (ax, ay), point));
+            let admitted = admitted
+                && style.is_none_or(|s| clip_admits(arena, styles, s, &layout, (ax, ay), point));
             admits_children = admitted;
             let pointer_events_none =
                 style.is_some_and(|s| s.pointer_events_none || !s.visibility.is_visible());

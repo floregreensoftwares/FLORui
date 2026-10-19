@@ -1696,8 +1696,8 @@ pub(crate) fn node_filter_inflation(
     if let Some(layout) = layouts.get(&node) {
         for function in &style.filter {
             if let FilterFunction::Url(url) = function {
-                pad +=
-                    svg_ref::filter_reach(arena, url, (layout.width, layout.height)) * scale_factor;
+                pad += svg_ref::filter_reach(arena, styles, url, (layout.width, layout.height))
+                    * scale_factor;
             }
         }
     }
@@ -2347,6 +2347,7 @@ fn render_group(
     let filter = styles.get(&node).map_or(&[][..], |s| &s.filter[..]);
     svg_ref::apply_chain(
         arena,
+        styles,
         &scaled_filters(filter, scale_factor),
         &mut group,
         node_abs,
@@ -2355,8 +2356,24 @@ fn render_group(
         &mut |pixmap, functions| apply_filters(pixmap, functions),
     );
     if let (Some(style), Some(layout)) = (styles.get(&node), layouts.get(&node)) {
-        apply_clip_path(&mut group, arena, style, layout, node_abs, scale_factor);
-        mask::apply_mask(&mut group, arena, style, layout, node_abs, scale_factor);
+        apply_clip_path(
+            &mut group,
+            arena,
+            styles,
+            style,
+            layout,
+            node_abs,
+            scale_factor,
+        );
+        mask::apply_mask(
+            &mut group,
+            arena,
+            styles,
+            style,
+            layout,
+            node_abs,
+            scale_factor,
+        );
     }
     Some(group)
 }
@@ -2369,13 +2386,14 @@ fn render_group(
 fn apply_clip_path(
     group: &mut Surface,
     arena: &Tree,
+    styles: &StyleMap,
     style: &ComputedStyle,
     layout: &BoxLayout,
     node_abs: (f32, f32),
     scale_factor: f32,
 ) {
     if let florui_style::ClipPath::Url(url) = &style.clip_path {
-        svg_ref::clip(arena, url, group, node_abs, layout, scale_factor);
+        svg_ref::clip(arena, styles, url, group, node_abs, layout, scale_factor);
         return;
     }
     let Some(geometry) =
@@ -2725,8 +2743,10 @@ fn map_rect_aabb(x0: f32, y0: f32, x1: f32, y1: f32, transform: Transform) -> (f
 /// erase what's already there); only the write-back respects it. A rounded
 /// `outline` narrows that write-back to its own shape, so the filtered
 /// backdrop doesn't show at the cut corners.
+#[allow(clippy::too_many_arguments)]
 fn apply_backdrop_filter(
     buffer: &mut Surface,
+    svg: (&Tree, &StyleMap),
     outline: &RoundedRect,
     functions: &[FilterFunction],
     glass: Option<&GlassMaterial>,
@@ -2778,11 +2798,27 @@ fn apply_backdrop_filter(
     {
         backdrop = refracted;
     }
-    let backdrop = filtered_backdrop(
-        backdrop,
-        &scaled_filters(functions, scale_factor),
-        fast_blur,
-    );
+    // A `url()` item goes through the SVG renderer, between the native stretches.
+    let scaled = scaled_filters(functions, scale_factor);
+    let origin = (buffer.origin.0 + x0, buffer.origin.1 + y0);
+    let mut start = 0;
+    for (index, function) in scaled.iter().enumerate() {
+        let FilterFunction::Url(url) = function else {
+            continue;
+        };
+        backdrop = filtered_backdrop(backdrop, &scaled[start..index], fast_blur);
+        backdrop = svg_ref::filter_pixmap(
+            svg.0,
+            svg.1,
+            url,
+            backdrop,
+            origin,
+            (x, y, width, height),
+            scale_factor,
+        );
+        start = index + 1;
+    }
+    let backdrop = filtered_backdrop(backdrop, &scaled[start..], fast_blur);
     // Replace, weighted by the mask: `BlendMode::Source` with a mask would
     // scale the source itself, clearing the pixels outside it instead of
     // leaving them alone.
@@ -3595,6 +3631,7 @@ fn paint_node(
             let _span = florui_profile::span(florui_profile::Phase::RasterBackdrop);
             apply_backdrop_filter(
                 buffer,
+                (arena, styles),
                 &outline,
                 backdrop_filter,
                 glass,
@@ -12673,6 +12710,9 @@ mod tests {
                             <rect x="0" y="0" width="50" height="50" fill="#ffffff" />
                             <rect x="50" y="0" width="25" height="50" fill="#808080" />
                         </mask>
+                        <mask id="a" mask-type="alpha" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="50">
+                            <rect x="0" y="0" width="100" height="50" fill="#000000" fill-opacity="0.5" />
+                        </mask>
                     </defs>
                 </svg>
                 <div class="b" />
@@ -12703,6 +12743,32 @@ mod tests {
             assert_eq!(pixel_rgb(&canvas, 20, 25), [255, 0, 0], "{declaration}");
             assert_eq!(pixel_rgb(&canvas, 90, 25), WHITE, "{declaration}");
         }
+        // `mask-mode` reads the mask as it says, whatever the mask's own type is
+        // (Chrome 153), and the properties that place an image do not apply.
+        let by = |declaration: &str| {
+            pixel_rgb(
+                &paint_text_css(
+                    &tree,
+                    &format!(
+                        ".b {{ width: 100px; height: 50px; background-color: #ff0000; {declaration}; }}"
+                    ),
+                    (110, 60),
+                ),
+                60,
+                25,
+            )
+        };
+        assert_eq!(by("mask: url(#m); mask-mode: alpha"), [255, 0, 0]);
+        assert_eq!(by("mask: url(#a); mask-mode: luminance"), WHITE);
+        let half = by("mask: url(#a)");
+        assert!((126..=129).contains(&half[1]), "alpha mask: {half:?}");
+        assert_eq!(
+            by(
+                "mask: url(#m); mask-size: 10px 10px; mask-position: 40px 0; mask-clip: content-box"
+            ),
+            by("mask: url(#m)"),
+            "a mask element is not placed like an image"
+        );
         // A reference to nothing hides the box.
         let missing = paint_text_css(
             &tree,
@@ -12712,6 +12778,76 @@ mod tests {
         assert_eq!(pixel_rgb(&missing, 20, 25), WHITE);
     }
 
+    #[test]
+    fn css_styles_the_inline_svg_a_reference_names() {
+        let tree: Element = view! {
+            <div class="r">
+                <svg width="0" height="0">
+                    <defs>
+                        <mask id="s" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="50">
+                            <rect class="k" x="0" y="0" width="50" height="50" />
+                        </mask>
+                        <clipPath id="e"><rect class="e" x="0" y="0" width="100" height="50" /></clipPath>
+                    </defs>
+                </svg>
+                <div class="b" />
+            </div>
+        };
+        let paint = |css: &str, declaration: &str| {
+            paint_text_css(
+                &tree,
+                &format!(
+                    "{css} .b {{ width: 100px; height: 50px; background-color: #ff0000; {declaration}; }}"
+                ),
+                (110, 60),
+            )
+        };
+        // Without a fill the rect is black and the luminance mask hides everything.
+        assert_eq!(pixel_rgb(&paint("", "mask: url(#s)"), 20, 25), WHITE);
+        // A rule gives it the fill, and the left half shows.
+        let shown = paint(".k { fill: #ffffff; }", "mask: url(#s)");
+        assert_eq!(pixel_rgb(&shown, 20, 25), [255, 0, 0]);
+        assert_eq!(pixel_rgb(&shown, 80, 25), WHITE);
+        // `mask-type: alpha` from a rule reads the black rect by its alpha.
+        let alpha = paint("mask { mask-type: alpha; }", "mask: url(#s)");
+        assert_eq!(pixel_rgb(&alpha, 20, 25), [255, 0, 0]);
+        // A clip path's `clip-rule`, and `display: none` on a shape of it.
+        let hidden = paint(".e { display: none; }", "clip-path: url(#e)");
+        assert_eq!(pixel_rgb(&hidden, 20, 25), WHITE);
+    }
+
+    #[test]
+    fn a_backdrop_filter_url_filters_what_is_behind_the_box() {
+        let tree: Element = view! {
+            <div class="r">
+                <svg width="0" height="0">
+                    <defs>
+                        <filter id="g">
+                            <feColorMatrix type="matrix"
+                                values="0 0 0 0 0  0 0 0 0 1  0 0 0 0 0  0 0 0 1 0" />
+                        </filter>
+                    </defs>
+                </svg>
+                <div class="back" />
+                <div class="front" />
+            </div>
+        };
+        let canvas = paint_text_css(
+            &tree,
+            ".r { position: relative; width: 120px; height: 60px; } \
+             .back { position: absolute; left: 0; top: 0; width: 60px; height: 60px; \
+             background-color: #ff0000; } \
+             .front { position: absolute; left: 30px; top: 10px; width: 60px; height: 40px; \
+             backdrop-filter: url(#g); }",
+            (130, 70),
+        );
+        // Chrome 153: the matrix makes green of what is behind the box, on red
+        // and on the page alike, and only inside the box.
+        assert_eq!(pixel_rgb(&canvas, 45, 30), [0, 255, 0]);
+        assert_eq!(pixel_rgb(&canvas, 80, 30), [0, 255, 0]);
+        assert_eq!(pixel_rgb(&canvas, 10, 30), [255, 0, 0]);
+        assert_eq!(pixel_rgb(&canvas, 110, 30), WHITE);
+    }
     #[test]
     fn a_clip_path_url_to_an_inline_svg_clip_path_clips_the_box() {
         let tree: Element = view! {

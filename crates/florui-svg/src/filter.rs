@@ -140,6 +140,52 @@ pub(crate) fn with_resolved_region(reference: &Reference, width: f32, height: f3
     }
 }
 
+/// `style` without the declarations of `property`.
+fn without_declaration(style: &str, property: &str) -> String {
+    style
+        .split(';')
+        .filter(|declaration| {
+            declaration
+                .split(':')
+                .next()
+                .is_none_or(|name| !name.trim().eq_ignore_ascii_case(property))
+                && !declaration.trim().is_empty()
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
+/// `reference` with its `<mask>` made of the given type, `"alpha"` or
+/// `"luminance"`, whatever it said: `mask-mode` on the layer decides.
+pub(crate) fn with_mask_type(reference: &Reference, kind: &str) -> Reference {
+    let Some(StartTag { begin, end, attrs }) = start_tag(&reference.defs, "mask", &reference.id)
+    else {
+        return reference.clone();
+    };
+    let mut tag = String::from("<mask");
+    for (name, value) in &attrs {
+        match name.as_str() {
+            "mask-type" => {}
+            "style" => {
+                let kept = without_declaration(value, "mask-type");
+                if !kept.is_empty() {
+                    tag.push_str(&format!(" style=\"{kept}\""));
+                }
+            }
+            _ => tag.push_str(&format!(" {name}=\"{value}\"")),
+        }
+    }
+    tag.push_str(&format!(" mask-type=\"{kind}\">"));
+    let mut defs = String::with_capacity(reference.defs.len() + 32);
+    defs.push_str(&reference.defs[..begin]);
+    defs.push_str(&tag);
+    defs.push_str(&reference.defs[end..]);
+    Reference {
+        id: reference.id.clone(),
+        defs,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
