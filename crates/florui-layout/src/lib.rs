@@ -67,7 +67,7 @@ mod deferred;
 mod transform;
 
 pub use cache::LayoutCache;
-pub use clip::{ClipGeometry, resolve_clip_path};
+pub use clip::{ClipGeometry, clip_admits, resolve_clip_path};
 pub use transform::{
     ContextPlane, Matrix4, NEAR_W, context_planes, hides_its_back, node_screen_bounds,
     perspective_matrix, preserves_3d, resolve_node_transform, resolve_transform, screen_bounds,
@@ -3293,11 +3293,8 @@ fn hit_walk(
             let outline = border_box_outline(styles, node, ax, ay, layout);
             // A `clip-path` cuts the box and everything in it: outside its shape
             // neither is hit.
-            let admitted = admitted
-                && style.is_none_or(|s| {
-                    resolve_clip_path(s, &layout, ax, ay, 1.0)
-                        .is_none_or(|shape| shape.contains(point.0, point.1))
-                });
+            let admitted =
+                admitted && style.is_none_or(|s| clip_admits(arena, s, &layout, (ax, ay), point));
             admits_children = admitted;
             let pointer_events_none =
                 style.is_some_and(|s| s.pointer_events_none || !s.visibility.is_visible());
@@ -6289,6 +6286,38 @@ mod tests {
         assert_eq!(outside, Some(outer));
     }
 
+    #[test]
+    fn a_box_is_hit_only_inside_a_clip_path_url_to_an_inline_svg() {
+        let tree: Element = view! {
+            <div class="outer">
+                <svg width="0" height="0">
+                    <defs>
+                        <clipPath id="c"><circle cx="50" cy="50" r="40" /></clipPath>
+                    </defs>
+                </svg>
+                <div class="box"><div class="kid" /></div>
+            </div>
+        };
+        let css = ".outer { width: 200px; height: 100px; } \
+                   .box { width: 100px; height: 100px; clip-path: url(#c); } \
+                   .kid { width: 100px; height: 100px; }";
+        let (arena, hit) = hit_in(css, &tree, 50.0, 50.0);
+        let outer = arena.roots()[0];
+        let boxed = arena.children(outer)[1];
+        let kid = arena.children(boxed)[0];
+        assert_eq!(hit, Some(kid), "inside the circle the child is on top");
+        // The corner of the box is outside the circle.
+        let (_, corner) = hit_in(css, &tree, 5.0, 5.0);
+        assert_eq!(corner, Some(outer));
+        let (_, inside) = hit_in(css, &tree, 85.0, 50.0);
+        assert_eq!(inside, Some(kid));
+        let (_, outside) = hit_in(css, &tree, 95.0, 50.0);
+        assert_eq!(outside, Some(outer));
+        // A reference that names nothing clips nothing.
+        let missing = css.replace("#c", "#nope");
+        let (_, corner) = hit_in(&missing, &tree, 5.0, 5.0);
+        assert_eq!(corner, Some(kid));
+    }
     #[test]
     fn a_clip_path_is_followed_through_a_transform_when_hitting() {
         let tree: Element = view! { <div class="box" /> };

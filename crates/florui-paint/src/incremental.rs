@@ -20,8 +20,8 @@ use florui_text::Font;
 
 use super::material::Params;
 use super::{
-    Canvas, ImagePaint, Surface, TextInputPaint, absolute_position, filter_inflation, own_extent,
-    paint_nodes, resolve_projection, subtree_extent, to_tiny_skia_color,
+    Canvas, ImagePaint, Surface, TextInputPaint, absolute_position, node_filter_inflation,
+    own_extent, paint_nodes, resolve_projection, subtree_extent, to_tiny_skia_color,
 };
 
 /// A rectangle `(x0, y0, x1, y1)` in painted pixels.
@@ -480,10 +480,10 @@ fn group_extent(
     else {
         return (x, y, x, y);
     };
-    let Some(style) = styles.get(&top) else {
+    if styles.get(&top).is_none() {
         return (x0, y0, x1, y1);
-    };
-    let pad = filter_inflation(&style.filter, scale_factor);
+    }
+    let pad = node_filter_inflation(arena, styles, layouts, top, scale_factor);
     resolve_projection(arena, styles, layouts, top, (x, y), scale_factor)
         .map_rect_aabb(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
         .unwrap_or((x, y, x, y))

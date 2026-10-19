@@ -57,6 +57,8 @@ pub(crate) const MIRRORED: &[&str] = &[
     "mask-box-image-width",
     "mask-box-image-outset",
     "mask-box-image-repeat",
+    "filter-urls",
+    "backdrop-filter-urls",
 ];
 
 const GLOBAL_KEYWORDS: [&str; 5] = ["inherit", "initial", "unset", "revert", "revert-layer"];
@@ -88,6 +90,7 @@ fn mentions(css: &str) -> bool {
         || lower.contains("text-decoration")
         || lower.contains("mask")
         || lower.contains("background")
+        || lower.contains("filter")
         || MIRRORED.iter().any(|name| lower.contains(name))
 }
 
@@ -177,7 +180,9 @@ fn is_mask_box_image_name(name: &str) -> bool {
 }
 
 fn is_handled(name: &str) -> bool {
-    is_mask_box_image_name(name)
+    name.eq_ignore_ascii_case("filter")
+        || name.eq_ignore_ascii_case("backdrop-filter")
+        || is_mask_box_image_name(name)
         || name.eq_ignore_ascii_case("background")
         || name.eq_ignore_ascii_case("-webkit-background-clip")
         || name.eq_ignore_ascii_case("font-variant")
@@ -278,6 +283,7 @@ fn expand(name: &str, value: &str, important: &str) -> Option<String> {
         "text-decoration" => expand_text_decoration(value, important),
         "clip-path" => Some(expand_clip_path(value, important)),
         "background" => Some(expand_background(value, important)),
+        "filter" | "backdrop-filter" => expand_filter(name, value, important),
         "transform-box" => {
             let valid = is_global(value)
                 || [
@@ -470,6 +476,106 @@ fn expand_mask_box_image(name: &str, value: &str, important: &str) -> Option<Str
             .collect::<Vec<_>>()
             .join("; "),
     )
+}
+
+/// Whether `word` is a `url(...)` item of a filter list.
+fn is_url_item(word: &str) -> bool {
+    let lower = word.to_ascii_lowercase();
+    lower.starts_with("url(") && lower.ends_with(')')
+}
+
+/// The address in a `url(...)`: what is inside the parentheses, without quotes.
+pub(crate) fn url_address(item: &str) -> Option<String> {
+    let inner = item
+        .trim()
+        .get(4..item.trim().len().checked_sub(1)?)?
+        .trim();
+    let unquoted = match inner.chars().next() {
+        Some(quote @ ('"' | '\'')) => inner.strip_prefix(quote)?.strip_suffix(quote)?,
+        _ => inner,
+    };
+    (!unquoted.is_empty()).then(|| unquoted.to_owned())
+}
+
+/// Whether `item` is a filter function the engine takes, with an argument of
+/// the right kind, so that a list the engine will drop as invalid is not
+/// mirrored (the declaration before it must stay).
+fn is_valid_filter_function(item: &str) -> bool {
+    let lower = item.to_ascii_lowercase();
+    let Some((name, rest)) = lower.split_once('(') else {
+        return false;
+    };
+    let Some(argument) = rest.strip_suffix(')') else {
+        return false;
+    };
+    let argument = argument.trim();
+    let amount = |text: &str| {
+        text.is_empty()
+            || text.parse::<f32>().is_ok_and(|n| n >= 0.0)
+            || text
+                .strip_suffix('%')
+                .is_some_and(|n| n.parse::<f32>().is_ok_and(|n| n >= 0.0))
+    };
+    let is_length = |text: &str| is_length_percentage(text) && !text.ends_with('%');
+    match name {
+        "brightness" | "contrast" | "saturate" | "grayscale" | "sepia" | "invert" | "opacity" => {
+            amount(argument)
+        }
+        "blur" => argument.is_empty() || is_length(argument),
+        "hue-rotate" => {
+            argument.is_empty()
+                || argument == "0"
+                || ["deg", "grad", "rad", "turn"].iter().any(|unit| {
+                    argument
+                        .strip_suffix(unit)
+                        .is_some_and(|n| n.parse::<f32>().is_ok())
+                })
+        }
+        "drop-shadow" => words(argument).len() >= 2,
+        _ => false,
+    }
+}
+
+/// `filter` and `backdrop-filter`, whose `url()` items the engine's servo build
+/// cannot hold. The engine gets the list without them, and the custom property
+/// the shape of the whole list (`n` for an item the engine has, `url(...)` for
+/// the others), or `none` when there is no `url()`. Written for every value, so
+/// that a later rule without one takes the urls back.
+fn expand_filter(name: &str, value: &str, important: &str) -> Option<String> {
+    let mirror = mirror_name(&format!("{name}-urls"));
+    let value = value.trim();
+    let items = if is_global(value) || value.eq_ignore_ascii_case("none") {
+        Vec::new()
+    } else {
+        words(value)
+    };
+    if !items.iter().any(|item| is_url_item(item)) {
+        return Some(format!(
+            "{name}: {value}{important}; {mirror}: none{important}"
+        ));
+    }
+    let mut native = Vec::new();
+    let mut shape = Vec::new();
+    for item in items {
+        if is_url_item(item) {
+            shape.push(item);
+        } else {
+            if !is_valid_filter_function(item) {
+                return None;
+            }
+            native.push(item);
+            shape.push("n");
+        }
+    }
+    let list = if native.is_empty() {
+        "none".to_owned()
+    } else {
+        native.join(" ")
+    };
+    Some(format!(
+        "{name}: {list}{important}; {mirror}: {}{important}",
+        shape.join(", ")
+    ))
 }
 
 fn is_box_keyword(word: &str) -> bool {
@@ -877,7 +983,7 @@ fn space_slashes(value: &str) -> String {
 }
 
 /// Splits at the top-level commas.
-fn split_commas(value: &str) -> Vec<&str> {
+pub(crate) fn split_commas(value: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let (mut depth, mut quote, mut start) = (0usize, None::<char>, 0usize);
     for (index, c) in value.char_indices() {

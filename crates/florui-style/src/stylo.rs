@@ -1969,8 +1969,12 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
             box_style.isolation,
             style::computed_values::isolation::T::Isolate
         ),
-        filter: to_filter(&effects.filter.0, color),
-        backdrop_filter: to_filter(&effects.backdrop_filter.0, color),
+        filter: with_filter_urls(values, to_filter(&effects.filter.0, color), "filter"),
+        backdrop_filter: with_filter_urls(
+            values,
+            to_filter(&effects.backdrop_filter.0, color),
+            "backdrop-filter",
+        ),
         container_type: to_container_type(box_style.clone_container_type()),
         container_name: to_container_name(&box_style.clone_container_name()),
         object_fit: to_object_fit(position.object_fit),
@@ -2322,6 +2326,48 @@ fn to_container_name(value: &style::values::computed::ContainerName) -> Vec<Stri
     value.0.iter().map(|ident| ident.0.to_string()).collect()
 }
 
+/// A filter list with the `url()` items the engine's servo build cannot hold put
+/// back where they were written. The rewrite of a `filter` (or `backdrop-filter`)
+/// gives the engine the list without them and the custom property the shape of the
+/// whole one, `n` for an item the engine has and `url(...)` for the others; it is
+/// used only when this element's own rules declare it and it fits the engine's list.
+fn with_filter_urls(
+    values: &ComputedValues,
+    native: Vec<FlorFilterFunction>,
+    property: &str,
+) -> Vec<FlorFilterFunction> {
+    let mirror = format!("{property}-urls");
+    if !declares_mirrored(values, &mirror) {
+        return native;
+    }
+    let Some(shape) = mirrored(values, &mirror) else {
+        return native;
+    };
+    let items = crate::property_mirror::split_commas(&shape);
+    if !items.iter().any(|item| item.trim().starts_with("url(")) {
+        return native;
+    }
+    // A `drop-shadow()` or any other item the engine dropped as invalid would
+    // leave the shape and the list apart: then the list is the engine's alone.
+    let natives = items.iter().filter(|item| item.trim() == "n").count();
+    if natives != native.len() {
+        return native;
+    }
+    let mut native = native.into_iter();
+    items
+        .iter()
+        .filter_map(|item| {
+            let item = item.trim();
+            if item == "n" {
+                native.next()
+            } else {
+                let address = crate::property_mirror::url_address(item)?;
+                Some(FlorFilterFunction::Url(crate::intern::intern(&address)))
+            }
+        })
+        .collect()
+}
+
 /// Shared by `filter` and `backdrop-filter` — same grammar, and Stylo's
 /// two `OwnedList` wrappers share the same inner `OwnedSlice` type, so
 /// one function converts both. See [`crate::cascade::FilterFunction`] for
@@ -2465,7 +2511,8 @@ fn to_clip_path_with_shape(values: &ComputedValues, units: Units) -> ClipPath {
 fn to_clip_path(value: &style::values::computed::basic_shape::ClipPath) -> ClipPath {
     use style::values::generics::basic_shape::GenericClipPath;
     match value {
-        GenericClipPath::None | GenericClipPath::Url(_) => ClipPath::None,
+        GenericClipPath::None => ClipPath::None,
+        GenericClipPath::Url(url) => ClipPath::Url(url_text(url)),
         GenericClipPath::Box(reference) => ClipPath::Box(to_reference_box(*reference)),
         GenericClipPath::Shape(shape, reference) => {
             ClipPath::Shape(Box::new(to_clip_shape(shape)), to_reference_box(*reference))

@@ -12,6 +12,7 @@ name = "florui_layout"
 florui-profile = { path = "../florui-profile" }
 florui-style = { path = "../florui-style" }
 florui-text = { path = "../florui-text" }
+florui-svg = { path = "../florui-svg" }
 taffy = "0.14"
 stacker = "0.1"
 

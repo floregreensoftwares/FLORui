@@ -298,6 +298,12 @@ const CSS: &str = "
         display: block;
     }
 
+    /* An inline SVG holds the masks, clips and filters that `url(#id)` points at;
+       it is not drawn itself. */
+    svg {
+        display: none;
+    }
+
     .florui-optgroup-label {
         display: block;
         font-weight: bold;

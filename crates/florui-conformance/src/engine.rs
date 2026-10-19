@@ -99,6 +99,7 @@ fn build_element(spec: &FloruiSpec, id: Option<&str>) -> Result<Element, EngineE
     if !spec.class.is_empty() {
         attrs.push(("class".to_string(), spec.class.clone()));
     }
+    attrs.extend(spec.attrs.iter().cloned());
 
     let kids = if spec.children.is_empty() {
         vec![Element::text(spec.text.clone())]
@@ -262,7 +263,21 @@ mod tests {
             text: String::new(),
             css: String::new(),
             children: Vec::new(),
+            attrs: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_spec_carries_its_attributes_and_svg_tags_into_the_element() {
+        let mut svg = spec("svg");
+        svg.attrs = vec![("width".to_owned(), "0".to_owned())];
+        let element = build_element(&svg, None).unwrap();
+        let Element::Node(node) = &element else {
+            panic!("a node");
+        };
+        assert_eq!(node.tag, "svg");
+        assert!(node.attrs.contains(&("width".to_owned(), "0".to_owned())));
+        assert!(to_static_tag("clipPath").is_ok());
     }
 
     #[test]
