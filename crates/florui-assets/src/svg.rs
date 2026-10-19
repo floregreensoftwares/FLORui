@@ -65,6 +65,67 @@ pub fn parse_svg(svg_text: &str) -> Result<VectorImage, AssetError> {
     })
 }
 
+/// The fonts an SVG's `<text>` can use: faces given as bytes, and the families
+/// that `sans-serif` and `monospace` (and a family that is not found) stand for.
+#[derive(Debug, Clone, Copy)]
+pub struct SvgFonts<'a> {
+    pub faces: &'a [&'a [u8]],
+    pub sans_serif: &'a str,
+    pub monospace: &'a str,
+}
+
+/// [`parse_svg`] with fonts for the text in it, which it is otherwise drawn
+/// without. The font table is built once for each set of faces and shared.
+pub fn parse_svg_with_fonts(
+    svg_text: &str,
+    fonts: SvgFonts<'_>,
+) -> Result<VectorImage, AssetError> {
+    use std::sync::{Arc, Mutex, OnceLock};
+    type Table = Arc<resvg::usvg::fontdb::Database>;
+    type Kept = Vec<(Vec<usize>, Table)>;
+    static TABLES: OnceLock<Mutex<Kept>> = OnceLock::new();
+    let key: Vec<usize> = fonts
+        .faces
+        .iter()
+        .map(|face| face.as_ptr() as usize)
+        .collect();
+    let table = {
+        let mut tables = TABLES
+            .get_or_init(|| Mutex::new(Vec::new()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match tables.iter().find(|(kept, _)| *kept == key) {
+            Some((_, table)) => Arc::clone(table),
+            None => {
+                let mut database = resvg::usvg::fontdb::Database::new();
+                for face in fonts.faces {
+                    database.load_font_data(face.to_vec());
+                }
+                database.set_sans_serif_family(fonts.sans_serif);
+                database.set_serif_family(fonts.sans_serif);
+                database.set_monospace_family(fonts.monospace);
+                let table = Arc::new(database);
+                tables.push((key, Arc::clone(&table)));
+                table
+            }
+        }
+    };
+    let options = resvg::usvg::Options {
+        fontdb: table,
+        font_family: fonts.sans_serif.to_owned(),
+        ..Default::default()
+    };
+    let tree = resvg::usvg::Tree::from_str(svg_text, &options).map_err(AssetError::Svg)?;
+    let size = tree.size();
+    Ok(VectorImage {
+        tree,
+        intrinsic_size: Size2D {
+            width: size.width(),
+            height: size.height(),
+        },
+    })
+}
+
 /// How a vector image's own intrinsic aspect ratio relates to the pixel
 /// buffer it is rasterized into. Kept as an explicit, separate choice
 /// from the raster dimensions themselves: requesting a non-square target
