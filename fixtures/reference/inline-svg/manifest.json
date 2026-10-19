@@ -1,0 +1,704 @@
+{
+    "id":  "inline-svg",
+    "description":  "An inline svg as a replaced box: sizes, viewBox and preserveAspectRatio, CSS giving fills and colour, a gradient, text, overflow, and a size from the width and the ratio",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  540,
+                     "height_css_px":  200,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 540px; height: 200px; background-color: #ffffff; } .s { position: absolute; border: 2px solid #2a3a58; background-color: #f4f4f4; } .k { fill: #d05040; stroke: #2a3a58; stroke-width: 3; } .p2 { color: #4070d0; } .p6 { width: 100px; }.p0 { left: 20px; top: 20px; } .p1 { left: 150px; top: 20px; } .p2 { left: 280px; top: 20px; } .p3 { left: 410px; top: 20px; } .p4 { left: 20px; top: 110px; } .p5 { left: 150px; top: 110px; } .p6 { left: 280px; top: 110px; } .p7 { left: 410px; top: 110px; }",
+                   "children":  [
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "y",
+                                                                               "0"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "60"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "60"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "0"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         {
+                                                             "tag":  "circle",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "fill",
+                                                                               "#4070d0"
+                                                                           ],
+                                                                           [
+                                                                               "cx",
+                                                                               "70"
+                                                                           ],
+                                                                           [
+                                                                               "fill-opacity",
+                                                                               "0.7"
+                                                                           ],
+                                                                           [
+                                                                               "cy",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "r",
+                                                                               "24"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "60"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "100"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p0"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "y",
+                                                                               "0"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#40a060"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "50"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "50"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "0"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         {
+                                                             "tag":  "path",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "d",
+                                                                               "M5 45 L25 5 L45 45 Z"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#ffffff"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "viewBox",
+                                                          "0 0 50 50"
+                                                      ],
+                                                      [
+                                                          "height",
+                                                          "60"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "100"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p1"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "rx",
+                                                                               "10"
+                                                                           ],
+                                                                           [
+                                                                               "class",
+                                                                               "k"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "5"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "50"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "5"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "90"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         {
+                                                             "tag":  "circle",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "fill",
+                                                                               "currentColor"
+                                                                           ],
+                                                                           [
+                                                                               "cx",
+                                                                               "50"
+                                                                           ],
+                                                                           [
+                                                                               "cy",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "r",
+                                                                               "14"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "viewBox",
+                                                          "0 0 100 60"
+                                                      ],
+                                                      [
+                                                          "height",
+                                                          "60"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "100"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p2"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "defs",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "linearGradient",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "stop",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "offset",
+                                                                                                                         "0"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "stop-color",
+                                                                                                                         "#e0b030"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   },
+                                                                                                   {
+                                                                                                       "tag":  "stop",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "offset",
+                                                                                                                         "1"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "stop-color",
+                                                                                                                         "#a050c0"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   }
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "x1",
+                                                                                                    "0"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "x2",
+                                                                                                    "1"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "y1",
+                                                                                                    "0"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "id",
+                                                                                                    "gr"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "y2",
+                                                                                                    "0"
+                                                                                                ]
+                                                                                            ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "y",
+                                                                               "0"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "url(#gr)"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "100"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "60"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "0"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "60"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "100"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p3"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "text",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hi!",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "y",
+                                                                               "42"
+                                                                           ],
+                                                                           [
+                                                                               "font-size",
+                                                                               "36"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#202020"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "6"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "60"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "100"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p4"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "y",
+                                                                               "-20"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#30a0b0"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "70"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "50"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "-20"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         {
+                                                             "tag":  "circle",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "cx",
+                                                                               "100"
+                                                                           ],
+                                                                           [
+                                                                               "cy",
+                                                                               "60"
+                                                                           ],
+                                                                           [
+                                                                               "r",
+                                                                               "30"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "60"
+                                                      ],
+                                                      [
+                                                          "style",
+                                                          "overflow:hidden"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "100"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p5"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "y",
+                                                                               "0"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#a050c0"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "100"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "60"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "0"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "y",
+                                                                               "10"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#ffffff"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "10"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "class",
+                                                          "s p6"
+                                                      ],
+                                                      [
+                                                          "viewBox",
+                                                          "0 0 100 60"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "y",
+                                                                               "0"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#e0b030"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "20"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "20"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "0"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         {
+                                                             "tag":  "circle",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "fill",
+                                                                               "#4070d0"
+                                                                           ],
+                                                                           [
+                                                                               "cx",
+                                                                               "10"
+                                                                           ],
+                                                                           [
+                                                                               "cy",
+                                                                               "10"
+                                                                           ],
+                                                                           [
+                                                                               "r",
+                                                                               "6"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "viewBox",
+                                                          "0 0 20 20"
+                                                      ],
+                                                      [
+                                                          "height",
+                                                          "60"
+                                                      ],
+                                                      [
+                                                          "preserveAspectRatio",
+                                                          "xMinYMin slice"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "100"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p7"
+                                                      ]
+                                                  ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  1,
+                           "reason":  "Measured against Chromium 153 on Windows: 0.19% of the pixels differ by more than 24 levels of a channel and every box has the same bounding box. What is left is the edge of the glyphs and of the gradient, which Chromium dithers. It covers an inline svg sized by its attributes, by a viewBox with preserveAspectRatio (meet and slice), by CSS, and by a width and the ratio of its viewBox; shapes given their fill and colour by rules; a gradient; text in the page font; and overflow. With the svgs left out of the flow, as when they had no box, the same fixture measures 42.80%, so it fails.",
+                           "channel_tolerance":  24
+                       }
+}
