@@ -1165,6 +1165,12 @@ pub struct ComputedStyle {
 }
 
 impl ComputedStyle {
+    /// Where a flex or grid item stacks among its siblings: by `z-index`, then
+    /// by `order`, with document order left to break any tie.
+    pub fn item_stacking(&self) -> (i32, i32) {
+        (self.z_index.unwrap_or(0), self.order)
+    }
+
     /// Whether a grid track of the node is a `calc()` of a length and a
     /// percentage, which layout works out once the grid's own box is known.
     pub fn has_grid_calc(&self) -> bool {
@@ -4046,7 +4052,7 @@ mod tests {
         );
         let node = arena.roots()[0];
         assert_eq!(
-            computed[&node].grid_template_columns.tracks(),
+            computed[&node].grid_template_columns.explicit_tracks(),
             vec![
                 GridTrackSize::length(100.0),
                 GridTrackSize::fr(1.0),
@@ -4065,7 +4071,7 @@ mod tests {
         );
         let node = arena.roots()[0];
         assert_eq!(
-            computed[&node].grid_template_rows.tracks(),
+            computed[&node].grid_template_rows.explicit_tracks(),
             vec![
                 GridTrackSize::AUTO,
                 GridTrackSize::Breadth(GridBreadth::MinContent),
@@ -4085,7 +4091,7 @@ mod tests {
         );
         let node = arena.roots()[0];
         assert_eq!(
-            computed[&node].grid_template_columns.tracks(),
+            computed[&node].grid_template_columns.explicit_tracks(),
             vec![
                 GridTrackSize::MinMax(GridBreadth::Length(50.0), GridBreadth::Fr(1.0)),
                 GridTrackSize::FitContent(GridLimit::Length(80.0)),
@@ -4110,7 +4116,9 @@ mod tests {
             &InteractionState::new(),
         );
         assert_eq!(
-            computed[&arena.roots()[0]].grid_template_columns.tracks(),
+            computed[&arena.roots()[0]]
+                .grid_template_columns
+                .explicit_tracks(),
             vec![GridTrackSize::MinMax(
                 GridBreadth::Length(40.0),
                 GridBreadth::Calc(LengthPercentage {
@@ -4119,6 +4127,31 @@ mod tests {
                 })
             )]
         );
+    }
+
+    #[test]
+    fn a_percentage_track_stays_a_percentage_whatever_its_digits() {
+        // Stylo rounds lengths to 1/60 px; that must not leave a stray length
+        // on a plain percentage.
+        let tree: Element = view! { <div class="g" /> };
+        for step in 1..=400 {
+            let percent = format!("{:.3}", 1.0 + f64::from(step) * 0.1973);
+            let (arena, computed) = styles(
+                &tree,
+                &format!(".g {{ display: grid; grid-template-columns: {percent}% 1fr; }}"),
+                &InteractionState::new(),
+            );
+            let tracks = computed[&arena.roots()[0]]
+                .grid_template_columns
+                .explicit_tracks();
+            let GridTrackSize::Breadth(GridBreadth::Percent(fraction)) = tracks[0] else {
+                panic!("{percent}%: {:?}", tracks[0]);
+            };
+            assert!(
+                (fraction - percent.parse::<f32>().unwrap() / 100.0).abs() < 2e-4,
+                "{percent}%: {fraction}"
+            );
+        }
     }
 
     #[test]

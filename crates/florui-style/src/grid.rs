@@ -93,8 +93,8 @@ impl GridTemplate {
         self.components.is_empty()
     }
 
-    /// The tracks of a list with no `repeat()`.
-    pub fn tracks(&self) -> Vec<GridTrackSize> {
+    /// The single tracks, leaving out every `repeat()`.
+    pub fn explicit_tracks(&self) -> Vec<GridTrackSize> {
         self.components
             .iter()
             .filter_map(|component| match component {

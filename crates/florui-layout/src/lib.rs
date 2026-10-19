@@ -3364,20 +3364,24 @@ struct HitVisit {
     leaf: bool,
 }
 /// The children of `node` in the order they are drawn: a flex or grid
-/// container's by `z-index` then `order`, any other box's as they come.
-fn children_by_paint(arena: &Arena, styles: &StyleMap, node: NodeId) -> Vec<NodeId> {
-    let mut children = arena.children(node).to_vec();
-    if styles
+/// container's by [`ComputedStyle::item_stacking`], any other box's as they
+/// come. Borrowed unless something has to move.
+fn children_by_paint<'a>(
+    arena: &'a Arena,
+    styles: &StyleMap,
+    node: NodeId,
+) -> std::borrow::Cow<'a, [NodeId]> {
+    let children = arena.children(node);
+    let stacks = styles
         .get(&node)
-        .is_some_and(|style| matches!(style.display, StyleDisplay::Flex | StyleDisplay::Grid))
-    {
-        children.sort_by_key(|child| {
-            styles
-                .get(child)
-                .map_or((0, 0), |style| (style.z_index.unwrap_or(0), style.order))
-        });
+        .is_some_and(|style| matches!(style.display, StyleDisplay::Flex | StyleDisplay::Grid));
+    let key = |child: &NodeId| styles.get(child).map_or((0, 0), |s| s.item_stacking());
+    if !stacks || children.iter().all(|child| key(child) == (0, 0)) {
+        return std::borrow::Cow::Borrowed(children);
     }
-    children
+    let mut sorted = children.to_vec();
+    sorted.sort_by_key(key);
+    std::borrow::Cow::Owned(sorted)
 }
 
 /// The topmost hit among the nodes `stack` starts from and everything under
@@ -3546,7 +3550,7 @@ fn hit_walk(
             }
             continue;
         }
-        for child in children_by_paint(arena, styles, node).into_iter().rev() {
+        for &child in children_by_paint(arena, styles, node).iter().rev() {
             stack.push(HitVisit {
                 node: child,
                 parent_point: point,
@@ -6484,6 +6488,28 @@ mod tests {
         assert_eq!(alone, Some(b), "only b reaches x = 10");
         let overlap = super::hit_test(&arena, &layouts, &styles, 45.0, 5.0);
         assert_eq!(overlap, Some(a), "a is later in order, so on top");
+    }
+
+    #[test]
+    fn z_index_decides_what_is_hit_on_top_of_an_overlap_between_flex_items() {
+        let tree: Element = view! {
+            <div class="r">
+                <div class="a" />
+                <div class="b" />
+            </div>
+        };
+        let (arena, styles, layouts) = layout_with_styles(
+            &tree,
+            ".r { display: flex; width: 100px; height: 20px; } \
+             .a { width: 60px; height: 20px; z-index: 2; margin-right: -30px; } \
+             .b { width: 60px; height: 20px; }",
+        );
+        let [a, _b] = arena.children(arena.roots()[0])[..] else {
+            panic!("two items");
+        };
+        // b is later in the source and overlaps a from x = 30, but a is above it.
+        let overlap = super::hit_test(&arena, &layouts, &styles, 45.0, 5.0);
+        assert_eq!(overlap, Some(a));
     }
 
     #[test]
