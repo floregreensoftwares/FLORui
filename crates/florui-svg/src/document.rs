@@ -89,9 +89,9 @@ fn document_defs(arena: &Tree, styles: &StyleMap) -> String {
     out
 }
 
-/// What the SVG `node` holds, in a `<g>` carrying what it takes from the page: its
-/// colour (for `currentColor`) and the inherited properties its ancestors declare.
-fn content(arena: &Tree, styles: &StyleMap, node: NodeId) -> String {
+/// What `node` and its ancestors give what is inside it, as declarations: its colour,
+/// font and the inherited SVG properties.
+fn carried(arena: &Tree, styles: &StyleMap, node: NodeId) -> String {
     let root = styles.get(&node);
     let mut chain = vec![node];
     let mut up = arena.parent(node);
@@ -121,7 +121,14 @@ fn content(arena: &Tree, styles: &StyleMap, node: NodeId) -> String {
             .iter()
             .map(|(name, value)| format!("{name}:{value}")),
     );
-    let mut out = format!("<g style=\"{}\">", escape(&declarations.join(";")));
+    declarations.join(";")
+}
+
+/// What the SVG `node` holds, in a `<g>` carrying what it takes from the page: its
+/// colour (for `currentColor`) and the inherited properties its ancestors declare.
+fn content(arena: &Tree, styles: &StyleMap, node: NodeId) -> String {
+    let root = styles.get(&node);
+    let mut out = format!("<g style=\"{}\">", escape(&carried(arena, styles, node)));
     write_children(arena, styles, node, root, view_of(arena, node), &mut out);
     out.push_str("</g>");
     out
@@ -140,7 +147,7 @@ fn write_children(
         match item {
             InlineItem::Text(text) => escape_into(text, out),
             InlineItem::Element(child) => {
-                write_element(arena, styles, *child, parent, view, out);
+                write_element(arena, styles, *child, parent, view, true, out);
             }
         }
     }
@@ -283,90 +290,98 @@ fn font_declarations(style: &ComputedStyle, parent: Option<&ComputedStyle>) -> V
     out
 }
 
+/// The box `transform-box` names, `(x, y, width, height)` in the element's user
+/// space: the viewport (`view-box`, the initial value), the box of its geometry
+/// (`fill-box`, and `content-box`) or that box with the stroke (`stroke-box`, and
+/// `border-box`).
+fn reference_box(
+    arena: &Tree,
+    styles: &StyleMap,
+    node: NodeId,
+    style: &ComputedStyle,
+    parent: Option<&ComputedStyle>,
+    view: (f32, f32),
+) -> (f64, f64, f64, f64) {
+    use florui_style::TransformBox as B;
+    let measured = |stroke: bool| {
+        let bounds = element_bounds(arena, styles, node, parent, view);
+        let (x, y, w, h) =
+            bounds.map_or(
+                (0.0, 0.0, 0.0, 0.0),
+                |b| {
+                    if stroke { b.stroke } else { b.fill }
+                },
+            );
+        (f64::from(x), f64::from(y), f64::from(w), f64::from(h))
+    };
+    match style.transform_box {
+        B::View => (0.0, 0.0, f64::from(view.0), f64::from(view.1)),
+        B::Fill | B::Content => measured(false),
+        B::Stroke | B::Border => measured(true),
+    }
+}
+
+/// What an element of the SVG draws takes up, measured on its own: the element
+/// written without its own transform, with what it inherits, drawn by the renderer
+/// in a document of the size of the viewport.
+fn element_bounds(
+    arena: &Tree,
+    styles: &StyleMap,
+    node: NodeId,
+    parent: Option<&ComputedStyle>,
+    view: (f32, f32),
+) -> Option<florui_assets::ObjectBounds> {
+    let mut inner = String::new();
+    write_element(arena, styles, node, parent, view, false, &mut inner);
+    let carried = arena
+        .parent(node)
+        .map(|up| carried(arena, styles, up))
+        .unwrap_or_default();
+    let text = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
+         width=\"{}\" height=\"{}\"><g style=\"{}\">{inner}</g></svg>",
+        view.0.max(1.0),
+        view.1.max(1.0),
+        escape(&carried)
+    );
+    crate::render::object_bounds(&text)
+}
+
 /// The transform CSS gives an SVG element, as the value of its `transform`
-/// attribute, which is what the SVG renderer reads: the two-dimensional functions,
-/// the origin in pixels (`0 0` when none was given, as for an element of an
-/// SVG). What needs a box to be resolved (a percentage) or a third dimension is
-/// left out.
-fn transform_attribute(style: &ComputedStyle, view: (f32, f32)) -> Option<String> {
-    use florui_style::{LengthPercentage, TransformFunction as F};
+/// attribute, which is what the SVG renderer reads: its `transform`, `translate`,
+/// `rotate` and `scale` about the origin of its `transform-box`. A third
+/// dimension is drawn as Chrome draws it, flat (see
+/// [`florui_style::Matrix4::flattened_affine`]). The origin is `0 0` of the box
+/// when none was given: the style sheet gives that to the elements of an SVG.
+fn transform_attribute(
+    arena: &Tree,
+    styles: &StyleMap,
+    node: NodeId,
+    style: &ComputedStyle,
+    parent: Option<&ComputedStyle>,
+    view: (f32, f32),
+) -> Option<String> {
     if !style.has_transform() {
         return None;
     }
-    // A percentage is of the viewport the SVG shows, the box of an SVG element.
-    let across = |lp: &LengthPercentage| Some(lp.length + lp.percentage * view.0);
-    let down = |lp: &LengthPercentage| Some(lp.length + lp.percentage * view.1);
-    let mut parts: Vec<String> = Vec::new();
-    if let Some((x, y, _)) = &style.translate
-        && let (Some(x), Some(y)) = (across(x), down(y))
-    {
-        parts.push(format!("translate({x} {y})"));
-    }
-    if let Some((x, y, z, degrees)) = style.rotate
-        && x == 0.0
-        && y == 0.0
-        && z != 0.0
-    {
-        parts.push(format!("rotate({})", degrees * z.signum()));
-    }
-    if let Some((x, y, _)) = style.scale {
-        parts.push(format!("scale({x} {y})"));
-    }
-    for function in &style.transform {
-        match function {
-            F::Translate(x, y) => {
-                if let (Some(x), Some(y)) = (across(x), down(y)) {
-                    parts.push(format!("translate({x} {y})"));
-                }
-            }
-            F::Scale(x, y) => parts.push(format!("scale({x} {y})")),
-            F::Rotate(degrees) => parts.push(format!("rotate({degrees})")),
-            F::Skew(x, y) => parts.push(format!(
-                "matrix(1 {} {} 1 0 0)",
-                y.to_radians().tan(),
-                x.to_radians().tan()
-            )),
-            F::Matrix { a, b, c, d, e, f } => {
-                parts.push(format!("matrix({a} {b} {c} {d} {e} {f})"));
-            }
-            _ => {}
-        }
-    }
-    if parts.is_empty() {
+    let reference = reference_box(arena, styles, node, style, parent, view);
+    let matrix = florui_style::transform_matrix(style, reference, style.transform_origin, 1.0);
+    if matrix.is_identity() {
         return None;
     }
-    let initial = (
-        LengthPercentage {
-            length: 0.0,
-            percentage: 0.5,
-        },
-        LengthPercentage {
-            length: 0.0,
-            percentage: 0.5,
-        },
-    );
-    let (ox, oy) = if style.transform_origin == initial {
-        (0.0, 0.0)
-    } else {
-        (
-            across(&style.transform_origin.0).unwrap_or(0.0),
-            down(&style.transform_origin.1).unwrap_or(0.0),
-        )
-    };
-    let list = parts.join(" ");
-    Some(if ox == 0.0 && oy == 0.0 {
-        list
-    } else {
-        format!("translate({ox} {oy}) {list} translate({} {})", -ox, -oy)
-    })
+    let [a, b, c, d, e, f] = matrix.flattened_affine();
+    Some(format!("matrix({a} {b} {c} {d} {e} {f})"))
 }
 
+/// The element `node` as markup. `own_transform` is whether what CSS gives it, or
+/// its attribute, goes with it.
 fn write_element(
     arena: &Tree,
     styles: &StyleMap,
     node: NodeId,
     parent: Option<&ComputedStyle>,
     view: (f32, f32),
+    own_transform: bool,
     out: &mut String,
 ) {
     let tag = arena.tag(node);
@@ -376,13 +391,16 @@ fn write_element(
     let own = style
         .map(|s| style_declarations(s, parent))
         .unwrap_or_default();
-    let transform = style.and_then(|s| transform_attribute(s, view));
+    let transform = style
+        .filter(|_| own_transform)
+        .and_then(|s| transform_attribute(arena, styles, node, s, parent, view));
     out.push('<');
     out.push_str(tag);
     let mut wrote_style = false;
     for (name, value) in arena.attrs(node) {
-        // What CSS gives wins over the attribute.
-        if name == "transform" && transform.is_some() {
+        // What CSS gives wins over the attribute, and the attribute of what is
+        // measured without its transform does not apply.
+        if name == "transform" && (transform.is_some() || !own_transform) {
             continue;
         }
         out.push(' ');
@@ -558,6 +576,40 @@ mod tests {
         assert!(defs.contains("><circle id=\"c\" r=\"1\">"));
     }
 
+    /// The `matrix(...)` an element carries in `defs`, from the first one after
+    /// `marker`.
+    fn matrix_after(defs: &str, marker: &str) -> [f64; 6] {
+        let rest = &defs[defs
+            .find(marker)
+            .unwrap_or_else(|| panic!("{marker} in {defs}"))..];
+        let start = rest.find("transform=\"matrix(").expect("a matrix") + 18;
+        let end = start + rest[start..].find(')').expect("its end");
+        let numbers: Vec<f64> = rest[start..end]
+            .split_whitespace()
+            .map(|n| n.parse().expect("a number"))
+            .collect();
+        numbers.try_into().expect("six numbers")
+    }
+
+    fn assert_close(found: [f64; 6], expected: [f64; 6]) {
+        for (a, b) in found.iter().zip(expected) {
+            assert!((a - b).abs() < 1e-4, "{found:?} against {expected:?}");
+        }
+    }
+
+    /// A rotation by `degrees` about `(x, y)`, as `matrix()` writes it.
+    fn rotation_about(degrees: f64, x: f64, y: f64) -> [f64; 6] {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        [
+            cos,
+            sin,
+            -sin,
+            cos,
+            x - cos * x + sin * y,
+            y - sin * x - cos * y,
+        ]
+    }
+
     #[test]
     fn a_css_transform_of_an_svg_element_is_its_transform_attribute() {
         let tree: Element = view! {
@@ -575,19 +627,96 @@ mod tests {
         let defs = reference(&arena, &styles, "#x").expect("a reference").defs;
         // The default origin of an SVG element is its own corner, and a rule wins
         // over the attribute.
-        assert!(
-            defs.contains("transform=\"translate(20 5) scale(1.5 1.5)\""),
-            "{defs}"
+        assert_close(
+            matrix_after(&defs, "class=\"a\""),
+            [1.5, 0.0, 0.0, 1.5, 20.0, 5.0],
         );
         assert!(!defs.contains("rotate(5)"), "{defs}");
-        assert!(
-            defs.contains("transform=\"translate(25 25) rotate(30) translate(-25 -25)\""),
-            "{defs}"
+        assert_close(
+            matrix_after(&defs, "class=\"b\""),
+            rotation_about(30.0, 25.0, 25.0),
         );
-        // A percentage is of the viewport (300 by 150 here), and a third dimension
-        // is left out.
-        let third = &defs[defs.find("class=\"c\"").expect("the third")..];
-        assert!(third.contains("transform=\"translate(150 0)\""), "{third}");
+        // A percentage is of the viewport (300 by 150 here), and a rotation about x
+        // shows as the squeeze of the plane it leaves: the third dimension is
+        // projected away, as Chrome draws it.
+        let cos = 20.0f64.to_radians().cos();
+        assert_close(
+            matrix_after(&defs, "class=\"c\""),
+            [1.0, 0.0, 0.0, cos, 150.0, 0.0],
+        );
+    }
+
+    #[test]
+    fn the_transform_box_of_an_svg_element_is_the_box_of_its_geometry_or_its_stroke() {
+        let tree: Element = view! {
+            <div><svg>
+                <rect class="r f" x="60" y="40" width="40" height="30" />
+                <rect class="r s" x="60" y="40" width="40" height="30" stroke="blue" stroke-width="20" />
+                <g class="g"><rect x="60" y="40" width="20" height="20" /><rect x="90" y="50" width="20" height="20" /></g>
+                <rect class="r v" x="60" y="40" width="40" height="30" />
+            </svg></div>
+        };
+        let arena = Arena::build(&tree);
+        let styles = styles_of(
+            &arena,
+            ".f { transform: rotate(45deg); transform-box: fill-box; transform-origin: center; } \n\
+             .s { transform: rotate(45deg); transform-box: stroke-box; transform-origin: left top; } \n\
+             .g { transform: scale(2); transform-box: fill-box; transform-origin: center; } \n\
+             .v { transform: rotate(45deg); transform-box: view-box; transform-origin: 50% 50%; }",
+        );
+        let defs = reference(&arena, &styles, "#x").expect("a reference").defs;
+        assert_close(
+            matrix_after(&defs, "class=\"r f\""),
+            rotation_about(45.0, 80.0, 55.0),
+        );
+        // The stroke of 20 widens the box by 10 each way: it starts at (50, 30).
+        assert_close(
+            matrix_after(&defs, "class=\"r s\""),
+            rotation_about(45.0, 50.0, 30.0),
+        );
+        // A group is the union of what is in it, (60, 40) to (110, 70).
+        assert_close(
+            matrix_after(&defs, "class=\"g\""),
+            [2.0, 0.0, 0.0, 2.0, -85.0, -55.0],
+        );
+        // The viewport is 300 by 150.
+        assert_close(
+            matrix_after(&defs, "class=\"r v\""),
+            rotation_about(45.0, 150.0, 75.0),
+        );
+    }
+
+    #[test]
+    fn a_perspective_on_an_svg_element_drops_its_row_as_chrome_does() {
+        let tree: Element = view! {
+            <div><svg>
+                <rect class="p" x="40" y="25" width="40" height="30" />
+                <rect class="z" x="60" y="30" width="80" height="60" />
+            </svg></div>
+        };
+        let arena = Arena::build(&tree);
+        let styles = styles_of(
+            &arena,
+            ".p { transform: perspective(100px) rotateY(40deg); transform-box: fill-box; transform-origin: center; } \n\
+             .z { transform: perspective(100px) translateZ(30px); transform-box: fill-box; transform-origin: center; }",
+        );
+        let defs = reference(&arena, &styles, "#x").expect("a reference").defs;
+        // Measured on Chrome 153: the entries of the matrix with the origin folded
+        // in, not divided by the perspective. The first scales x by cos(40) plus
+        // the 60 of the origin times the 0.00643 the perspective gives x, and
+        // shears y by the 40 of the origin times the same.
+        let (sin, cos) = 40.0f64.to_radians().sin_cos();
+        let k = sin / 100.0;
+        let [a, b, c, d, _, _] = matrix_after(&defs, "class=\"p\"");
+        assert!((a - (cos + 60.0 * k)).abs() < 1e-4, "{a}");
+        assert!((b - 40.0 * k).abs() < 1e-4, "{b}");
+        assert!(c.abs() < 1e-9 && (d - 1.0).abs() < 1e-9);
+        // A translation in depth moves the box by 0.3 of its origin and does not
+        // scale it: (-30, -18) for the origin (100, 60).
+        assert_close(
+            matrix_after(&defs, "class=\"z\""),
+            [1.0, 0.0, 0.0, 1.0, -30.0, -18.0],
+        );
     }
 
     #[test]

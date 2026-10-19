@@ -368,14 +368,19 @@ pub enum Display {
     None,
 }
 
-/// `transform-box` for an element with a layout box: what `transform-origin` and
-/// the percentages of `translate` are of. `fill-box` is the content box;
-/// `view-box` and `stroke-box` are the border box.
+/// `transform-box`: what `transform-origin` and the percentages of `translate`
+/// are of. For an element with a layout box, `content-box` and `fill-box` are the
+/// content box, and the rest the border box. For an element of an SVG, `fill-box`
+/// (and `content-box`) is its object bounding box, `stroke-box` (and `border-box`)
+/// that box with the stroke, and `view-box`, the initial value, the viewport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TransformBox {
     #[default]
+    View,
     Border,
     Content,
+    Fill,
+    Stroke,
 }
 
 /// `position`.
@@ -5623,16 +5628,16 @@ mod tests {
     }
 
     #[test]
-    fn transform_box_names_the_content_or_the_border_box() {
+    fn transform_box_keeps_the_keyword_it_was_given() {
         use crate::TransformBox as T;
         let of = |css: &str| computed_of(css).transform_box;
-        assert_eq!(of(".t { }"), T::Border);
+        assert_eq!(of(".t { }"), T::View);
         for (keyword, expected) in [
             ("content-box", T::Content),
-            ("fill-box", T::Content),
+            ("fill-box", T::Fill),
             ("border-box", T::Border),
-            ("stroke-box", T::Border),
-            ("view-box", T::Border),
+            ("stroke-box", T::Stroke),
+            ("view-box", T::View),
         ] {
             assert_eq!(of(&format!(".t {{ transform-box: {keyword}; }}")), expected);
         }
@@ -5643,7 +5648,7 @@ mod tests {
         );
         assert_eq!(
             of(".t { transform-box: content-box; } .t { transform-box: view-box; }"),
-            T::Border
+            T::View
         );
         // It is not inherited.
         let tree: Element = view! { <div class="p"><span class="c" /></div> };
@@ -5653,7 +5658,7 @@ mod tests {
             &InteractionState::new(),
         );
         let child = &computed[&arena.children(arena.roots()[0])[0]];
-        assert_eq!(child.transform_box, T::Border);
+        assert_eq!(child.transform_box, T::View);
     }
 
     #[test]

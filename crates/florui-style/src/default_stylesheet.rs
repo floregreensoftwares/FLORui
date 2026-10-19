@@ -304,8 +304,10 @@ const CSS: &str = "
         display: inline-block;
     }
 
+    /* The origin of the transforms of an SVG element is the corner of its box. */
     svg * {
         display: none;
+        transform-origin: 0 0;
     }
 
     style {

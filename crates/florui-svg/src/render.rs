@@ -449,3 +449,32 @@ mod tests {
         assert_eq!(moved[((3 * size + 9) * 4) as usize], 255);
     }
 }
+
+const BOUNDS_KEPT: usize = 64;
+
+thread_local! {
+    static BOUNDS: RefCell<HashMap<u64, Option<florui_assets::ObjectBounds>>> =
+        RefCell::new(HashMap::new());
+}
+
+/// What the document `text` draws takes up, kept for the next time.
+pub(crate) fn object_bounds(text: &str) -> Option<florui_assets::ObjectBounds> {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    let key = hasher.finish();
+    if let Some(found) = BOUNDS.with(|cache| cache.borrow().get(&key).copied()) {
+        return found;
+    }
+    let bounds = parse_svg_with_fonts(text, fonts())
+        .ok()
+        .and_then(|image| image.object_bounds());
+    BOUNDS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= BOUNDS_KEPT {
+            cache.clear();
+        }
+        cache.insert(key, bounds);
+    });
+    bounds
+}

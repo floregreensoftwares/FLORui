@@ -1,0 +1,1110 @@
+{
+    "id":  "svg-transforms",
+    "description":  "Transforms of shapes inside an svg: transform-box (fill, stroke, content, border, view), three dimensions, perspective, and the order of paint around a projected shape",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  540,
+                     "height_css_px":  380,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 540px; height: 380px; background-color: #ffffff; } .s { position: absolute; width: 120px; height: 80px; background-color: #f4f4f4; } .t0 { transform: rotate(45deg); transform-box: fill-box; transform-origin: center; } .t1 { transform: rotate(45deg); transform-box: stroke-box; transform-origin: left top; } .t2 { transform: rotateX(60deg); } .t3 { transform: rotateY(60deg); transform-box: fill-box; transform-origin: center; } .t4 { transform: perspective(100px) rotateY(40deg); transform-box: fill-box; transform-origin: center; } .t5 { transform: translateZ(50px) translate(10px, 5px) rotate3d(1, 1, 0, 30deg); transform-box: fill-box; transform-origin: center; } .t6 { transform: scale(2); transform-box: fill-box; transform-origin: center; } .t7 { transform: rotate(45deg); transform-box: content-box; transform-origin: left top; } .t8 { transform: rotate(45deg); transform-box: border-box; transform-origin: left top; } .t9 { transform: rotate(30deg) translate(50%, 0); transform-box: fill-box; } .t10 { transform: rotate(30deg); transform-box: view-box; transform-origin: 50% 50%; } .t11 { transform: perspective(60px) rotateX(50deg); transform-box: fill-box; transform-origin: center; } .t12 { transform: perspective(90px) rotateY(35deg); transform-box: fill-box; transform-origin: center; } .t13 { transform: perspective(90px) rotateY(-35deg); transform-box: fill-box; transform-origin: center; } .t14 { transform: perspective(80px) rotateX(40deg); transform-box: fill-box; transform-origin: center; } .t15 { transform: matrix3d(1, 0, 0, 0.004, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1); transform-box: fill-box; transform-origin: center; }.p0 { left: 10px; top: 10px; } .p1 { left: 140px; top: 10px; } .p2 { left: 270px; top: 10px; } .p3 { left: 400px; top: 10px; } .p4 { left: 10px; top: 100px; } .p5 { left: 140px; top: 100px; } .p6 { left: 270px; top: 100px; } .p7 { left: 400px; top: 100px; } .p8 { left: 10px; top: 190px; } .p9 { left: 140px; top: 190px; } .p10 { left: 270px; top: 190px; } .p11 { left: 400px; top: 190px; } .p12 { left: 10px; top: 280px; } .p13 { left: 140px; top: 280px; } .p14 { left: 270px; top: 280px; } .p15 { left: 400px; top: 280px; }",
+                   "children":  [
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "class",
+                                                                               "t0"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "25"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "40"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "80"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "120"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p0"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "class",
+                                                                               "t1"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "25"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "stroke-width",
+                                                                               "16"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "stroke",
+                                                                               "#4070d0"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "80"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "120"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p1"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "class",
+                                                                               "t2"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "25"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "40"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "80"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "120"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p2"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "class",
+                                                                               "t3"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "25"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "40"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "80"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "120"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p3"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "class",
+                                                                               "t4"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "25"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "40"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "80"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "120"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p4"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "class",
+                                                                               "t5"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "25"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "40"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "80"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "120"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p5"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "g",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "rect",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "y",
+                                                                                                    "25"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "fill",
+                                                                                                    "#d05040"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "width",
+                                                                                                    "16"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "height",
+                                                                                                    "16"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "x",
+                                                                                                    "40"
+                                                                                                ]
+                                                                                            ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "rect",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "y",
+                                                                                                    "34"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "fill",
+                                                                                                    "#4070d0"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "width",
+                                                                                                    "16"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "height",
+                                                                                                    "16"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "x",
+                                                                                                    "62"
+                                                                                                ]
+                                                                                            ]
+                                                                              }
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "class",
+                                                                               "t6"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "80"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "120"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p6"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "class",
+                                                                               "t7"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "25"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "stroke-width",
+                                                                               "16"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "stroke",
+                                                                               "#4070d0"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "80"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "120"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p7"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "class",
+                                                                               "t8"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "25"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "stroke-width",
+                                                                               "16"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "stroke",
+                                                                               "#4070d0"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "80"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "120"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p8"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "class",
+                                                                               "t9"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "25"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "40"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "80"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "120"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p9"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "class",
+                                                                               "t10"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "12"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "16"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "20"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "20"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "viewBox",
+                                                          "0 0 60 40"
+                                                      ],
+                                                      [
+                                                          "height",
+                                                          "80"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "120"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p10"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "circle",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "cx",
+                                                                               "60"
+                                                                           ],
+                                                                           [
+                                                                               "r",
+                                                                               "22"
+                                                                           ],
+                                                                           [
+                                                                               "class",
+                                                                               "t11"
+                                                                           ],
+                                                                           [
+                                                                               "cy",
+                                                                               "40"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "80"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "120"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p11"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "class",
+                                                                               "t12"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "20"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "40"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "width",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#4070d0"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "35"
+                                                                           ],
+                                                                           [
+                                                                               "fill-opacity",
+                                                                               "0.8"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "55"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "30"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "80"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "120"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p12"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "y",
+                                                                               "20"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "30"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "fill-opacity",
+                                                                               "0.8"
+                                                                           ],
+                                                                           [
+                                                                               "class",
+                                                                               "t13"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#4070d0"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "35"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "55"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "40"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "80"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "120"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p13"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "g",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "rect",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "y",
+                                                                                                    "25"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "fill",
+                                                                                                    "#d05040"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "width",
+                                                                                                    "20"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "height",
+                                                                                                    "30"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "x",
+                                                                                                    "40"
+                                                                                                ]
+                                                                                            ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "circle",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "fill",
+                                                                                                    "#4070d0"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "cx",
+                                                                                                    "70"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "cy",
+                                                                                                    "40"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "r",
+                                                                                                    "12"
+                                                                                                ]
+                                                                                            ]
+                                                                              }
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "class",
+                                                                               "t14"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "80"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "120"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p14"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "class",
+                                                                               "t15"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "25"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "40"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "40"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "80"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "120"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p15"
+                                                      ]
+                                                  ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  0.3,
+                           "reason":  "Measured against Chromium 153 on Windows: 0.05% of the pixels differ by more than 24 levels of a channel and every box has the same bounding box. What is left is the antialiased edge of the shapes. It covers transform-box (fill-box, stroke-box, content-box, border-box and view-box) on shapes and groups, rotations about x and y, translateZ and rotate3d, and perspective() and matrix3d() drawn as Chrome draws them in an svg, flat, with the perspective row dropped, and the order of paint around a shape with a perspective. With transform-box left out the same fixture measures 5.12%, with the rotations in three dimensions left out 3.10% and with perspective() left out 1.66%, so it fails each time.",
+                           "channel_tolerance":  24
+                       }
+}
