@@ -106,6 +106,103 @@ pub fn filter_region(
     Some((round(x), round(y), round(x + w), round(y + h)))
 }
 
+fn round(n: f32) -> f32 {
+    (n * 1000.0).round() / 1000.0
+}
+
+/// A number or a percentage as a fraction (`0.1` and `10%` are the same).
+fn fraction(text: &str) -> Option<f32> {
+    let text = text.trim();
+    match text.strip_suffix('%') {
+        Some(percent) => percent.trim().parse::<f32>().ok().map(|n| n / 100.0),
+        None => text.parse::<f32>().ok(),
+    }
+}
+
+/// `value`, one or two numbers (`"2 3"`), each multiplied by the box's `scales`,
+/// the second by the second of them (and by the first when there is only one).
+fn scaled_pair(value: &str, (horizontal, vertical): (f32, f32)) -> Option<String> {
+    let numbers: Vec<f32> = value
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|part| !part.is_empty())
+        .map(|part| part.parse::<f32>().ok())
+        .collect::<Option<_>>()?;
+    match numbers[..] {
+        [one] => Some(format!(
+            "{} {}",
+            round(one * horizontal),
+            round(one * vertical)
+        )),
+        [a, b] => Some(format!("{} {}", round(a * horizontal), round(b * vertical))),
+        _ => None,
+    }
+}
+
+/// The attributes of a filter primitive, written in the box's units (fractions of
+/// its `width` and `height`), as numbers of user space.
+fn in_user_space(
+    tag: &str,
+    attrs: &[(String, String)],
+    width: f32,
+    height: f32,
+) -> Vec<(String, String)> {
+    let diagonal = ((width * width + height * height) / 2.0).sqrt();
+    attrs
+        .iter()
+        .map(|(name, value)| {
+            let converted = match name.as_str() {
+                "x" | "dx" | "pointsAtX" => fraction(value).map(|n| n * width),
+                "y" | "dy" | "pointsAtY" => fraction(value).map(|n| n * height),
+                "width" => fraction(value).map(|n| n * width),
+                "height" => fraction(value).map(|n| n * height),
+                "z" | "pointsAtZ" | "scale" => fraction(value).map(|n| n * diagonal),
+                "stdDeviation" | "radius" if tag != "feConvolveMatrix" => {
+                    return (
+                        name.clone(),
+                        scaled_pair(value, (width, height)).unwrap_or_else(|| value.clone()),
+                    );
+                }
+                _ => None,
+            };
+            // To a thousandth, as an authored number is.
+            let value = converted.map_or_else(
+                || value.clone(),
+                |n| ((n * 1000.0).round() / 1000.0).to_string(),
+            );
+            (name.clone(), value)
+        })
+        .collect()
+}
+
+/// The primitives in `body` with their attributes put in user space.
+fn primitives_in_user_space(body: &str, width: f32, height: f32) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(open) = rest.find("<fe") {
+        out.push_str(&rest[..open]);
+        let after = &rest[open..];
+        let Some(close) = after.find('>') else {
+            rest = after;
+            break;
+        };
+        let inside = &after[1..close];
+        let name_end = inside
+            .find(|c: char| c.is_whitespace() || c == '/')
+            .unwrap_or(inside.len());
+        let (tag, attributes_text) = inside.split_at(name_end);
+        let self_closing = attributes_text.trim_end().ends_with('/');
+        let attrs = in_user_space(tag, &attributes(attributes_text), width, height);
+        out.push('<');
+        out.push_str(tag);
+        for (name, value) in attrs {
+            out.push_str(&format!(" {name}=\"{value}\""));
+        }
+        out.push_str(if self_closing { "/>" } else { ">" });
+        rest = &after[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
 /// `reference` with the region of its filter written as numbers of the box's own
 /// user space (`filterUnits="userSpaceOnUse"`), for a box of `width` by `height`.
 pub(crate) fn with_resolved_region(reference: &Reference, width: f32, height: f32) -> Reference {
@@ -116,24 +213,40 @@ pub(crate) fn with_resolved_region(reference: &Reference, width: f32, height: f3
     else {
         return reference.clone();
     };
+    // The primitives' own units, when they are the box's, are put in user space too.
+    let box_primitives = attrs
+        .iter()
+        .any(|(name, value)| name == "primitiveUnits" && value == "objectBoundingBox");
     let mut tag = String::from("<filter");
     for (name, value) in &attrs {
         if !matches!(
             name.as_str(),
-            "x" | "y" | "width" | "height" | "filterUnits"
+            "x" | "y" | "width" | "height" | "filterUnits" | "primitiveUnits"
         ) {
             tag.push_str(&format!(" {name}=\"{value}\""));
         }
     }
     tag.push_str(&format!(
-        " x=\"{left}\" y=\"{top}\" width=\"{}\" height=\"{}\" filterUnits=\"userSpaceOnUse\">",
+        " x=\"{left}\" y=\"{top}\" width=\"{}\" height=\"{}\" filterUnits=\"userSpaceOnUse\" primitiveUnits=\"userSpaceOnUse\">",
         right - left,
         bottom - top
     ));
     let mut defs = String::with_capacity(reference.defs.len() + 64);
     defs.push_str(&reference.defs[..begin]);
     defs.push_str(&tag);
-    defs.push_str(&reference.defs[end..]);
+    let body_end = reference.defs[end..]
+        .find("</filter>")
+        .map_or(reference.defs.len(), |close| end + close);
+    if box_primitives {
+        defs.push_str(&primitives_in_user_space(
+            &reference.defs[end..body_end],
+            width,
+            height,
+        ));
+    } else {
+        defs.push_str(&reference.defs[end..body_end]);
+    }
+    defs.push_str(&reference.defs[body_end..]);
     Reference {
         id: reference.id.clone(),
         defs,
@@ -229,6 +342,47 @@ mod tests {
         assert_eq!(region.0, 10.0);
     }
 
+    #[test]
+    fn primitives_in_the_boxs_units_are_written_in_user_space() {
+        let reference = Reference {
+            id: "f".to_owned(),
+            defs: "<filter id=\"f\" primitiveUnits=\"objectBoundingBox\"><feOffset dx=\"0.2\" dy=\"0.3\"/>\
+                   <feGaussianBlur stdDeviation=\"0.05 0.1\"></feGaussianBlur>\
+                   <feFlood x=\"10%\" width=\"0.5\" flood-color=\"red\"/></filter>"
+                .to_owned(),
+        };
+        let rewritten = with_resolved_region(&reference, 100.0, 50.0);
+        assert!(rewritten.defs.contains("primitiveUnits=\"userSpaceOnUse\""));
+        assert!(
+            rewritten.defs.contains("<feOffset dx=\"20\" dy=\"15\"/>"),
+            "{}",
+            rewritten.defs
+        );
+        assert!(
+            rewritten
+                .defs
+                .contains("<feGaussianBlur stdDeviation=\"5 5\">"),
+            "{}",
+            rewritten.defs
+        );
+        assert!(
+            rewritten
+                .defs
+                .contains("x=\"10\" width=\"50\" flood-color=\"red\""),
+            "{}",
+            rewritten.defs
+        );
+        // Left alone when they are in user space already.
+        let plain = Reference {
+            id: "f".to_owned(),
+            defs: "<filter id=\"f\"><feOffset dx=\"0.2\"/></filter>".to_owned(),
+        };
+        assert!(
+            with_resolved_region(&plain, 100.0, 50.0)
+                .defs
+                .contains("<feOffset dx=\"0.2\"/>")
+        );
+    }
     #[test]
     fn the_resolved_region_is_written_back_in_user_space() {
         let rewritten =
