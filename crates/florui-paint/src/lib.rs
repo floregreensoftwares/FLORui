@@ -4135,32 +4135,14 @@ fn paint_node(
                     let origin = (x + at.x, y + at.y);
                     let (runs, cuts) =
                         inline_runs_for(font, style, &shaped, at.width / scale_factor);
-                    paint_inline_boxes(
+                    paint_inline_context(
                         buffer,
-                        styles,
+                        (arena, styles),
                         &shaped,
                         &runs,
                         &cuts,
-                        origin,
-                        scale_factor,
-                        clip,
-                    );
-                    paint_inline_runs(
-                        buffer,
-                        styles,
-                        &shaped,
-                        &runs,
                         origin,
                         color,
-                        scale_factor,
-                        clip,
-                    );
-                    paint_inline_outlines(
-                        buffer,
-                        styles,
-                        &shaped,
-                        &cuts,
-                        origin,
                         scale_factor,
                         clip,
                     );
@@ -4195,27 +4177,17 @@ fn paint_node(
                 let origin = (content_x + dx, content_y + dy);
                 let (runs, cuts) =
                     inline_runs_for(font, style, &shaped, content_width / scale_factor);
-                paint_inline_boxes(
+                paint_inline_context(
                     buffer,
-                    styles,
+                    (arena, styles),
                     &shaped,
                     &runs,
                     &cuts,
-                    origin,
-                    scale_factor,
-                    clip,
-                );
-                paint_inline_runs(
-                    buffer,
-                    styles,
-                    &shaped,
-                    &runs,
                     origin,
                     color,
                     scale_factor,
                     clip,
                 );
-                paint_inline_outlines(buffer, styles, &shaped, &cuts, origin, scale_factor, clip);
             }
         } else {
             let text = arena.text_content(node);
@@ -5867,6 +5839,272 @@ fn paint_inline_color(
     }
 }
 
+/// Whether an inline element is painted as a unit of its own, as a stacking
+/// context is: it fades, filters, clips, masks or blends all of its fragments, and
+/// what is in it, together.
+fn paints_as_group(style: &ComputedStyle) -> bool {
+    style.opacity < 1.0 || style.has_group_effect()
+}
+
+/// What an inline context paints as groups, and the way to paint it.
+struct InlineEffects<'a> {
+    arena: &'a Tree,
+    styles: &'a StyleMap,
+    inline: &'a florui_layout::InlineShaped,
+    runs: &'a [florui_text::ShapedRun],
+    cuts: &'a [(u32, f32)],
+    origin: (f32, f32),
+    color: Rgba,
+    scale: f32,
+    /// For each element, the nearest element (itself included) that is a group;
+    /// `None` for the container and what is in no group.
+    owners: Vec<Option<usize>>,
+}
+
+/// An inline context's elements, boxes, text and outlines: the whole of what the
+/// context paints on `buffer`, the elements that are groups each by itself.
+#[allow(clippy::too_many_arguments)]
+fn paint_inline_context(
+    buffer: &mut Surface,
+    (arena, styles): (&Tree, &StyleMap),
+    inline: &florui_layout::InlineShaped,
+    runs: &[florui_text::ShapedRun],
+    cuts: &[(u32, f32)],
+    origin: (f32, f32),
+    color: Rgba,
+    scale: f32,
+    clip: Option<&Mask>,
+) {
+    let mut owners: Vec<Option<usize>> = Vec::with_capacity(inline.nodes.len());
+    for (element, node) in inline.nodes.iter().enumerate() {
+        let group = element != 0 && styles.get(node).is_some_and(paints_as_group);
+        owners.push(if group {
+            Some(element)
+        } else if element == 0 {
+            None
+        } else {
+            owners[inline.parents[element]]
+        });
+    }
+    let effects = InlineEffects {
+        arena,
+        styles,
+        inline,
+        runs,
+        cuts,
+        origin,
+        color,
+        scale,
+        owners,
+    };
+    effects.paint_level(buffer, None, clip);
+}
+
+impl InlineEffects<'_> {
+    /// What belongs to `level` (the elements whose nearest group is it), then the
+    /// groups directly inside it.
+    fn paint_level(&self, surface: &mut Surface, level: Option<usize>, clip: Option<&Mask>) {
+        if level.is_none() && self.owners.iter().all(Option::is_none) {
+            // No group at all: everything, as it always was.
+            self.paint_elements(surface, &|_| true, self.runs, clip);
+            return;
+        }
+        let own = |element: usize| self.owners.get(element).copied().flatten() == level;
+        let mine: Vec<florui_text::ShapedRun> = self
+            .runs
+            .iter()
+            .filter(|run| own(run.element))
+            .cloned()
+            .collect();
+        self.paint_elements(surface, &own, &mine, clip);
+        for root in 1..self.owners.len() {
+            let parent_owner = self.owners[self.inline.parents[root]];
+            if self.owners[root] == Some(root) && parent_owner == level {
+                self.paint_group(surface, root, clip);
+            }
+        }
+    }
+
+    fn paint_elements(
+        &self,
+        surface: &mut Surface,
+        include: &dyn Fn(usize) -> bool,
+        runs: &[florui_text::ShapedRun],
+        clip: Option<&Mask>,
+    ) {
+        paint_inline_boxes(
+            surface,
+            self.styles,
+            self.inline,
+            self.runs,
+            self.cuts,
+            self.origin,
+            self.scale,
+            clip,
+            include,
+        );
+        paint_inline_runs(
+            surface,
+            self.styles,
+            self.inline,
+            runs,
+            self.origin,
+            self.color,
+            self.scale,
+            clip,
+        );
+        paint_inline_outlines(
+            surface,
+            self.styles,
+            self.inline,
+            self.cuts,
+            self.origin,
+            self.scale,
+            clip,
+            include,
+        );
+    }
+
+    /// Whether `element` is `root` or in it.
+    fn within(&self, mut element: usize, root: usize) -> bool {
+        while element != root && element != 0 {
+            element = self.inline.parents[element];
+        }
+        element == root
+    }
+
+    /// The border box of a fragment, `(x, y, width, height)` in painted pixels.
+    fn fragment_box(&self, fragment: &florui_text::InlineFragment) -> Option<(f32, f32, f32, f32)> {
+        let style = self.styles.get(&self.inline.nodes[fragment.element])?;
+        let above = style.padding.top + style.border.top.width;
+        let below = style.padding.bottom + style.border.bottom.width;
+        Some((
+            self.origin.0 + fragment.x * self.scale,
+            self.origin.1 + (fragment.y - above) * self.scale,
+            fragment.width * self.scale,
+            (fragment.ascent + fragment.descent + above + below) * self.scale,
+        ))
+    }
+
+    /// `root` and what is in it painted on a surface of their own, given the
+    /// effects of `root`, and put on `surface`. The effects are of the first
+    /// fragment's box, as in Chromium, and take in all of them.
+    fn paint_group(&self, surface: &mut Surface, root: usize, clip: Option<&Mask>) {
+        let Some(style) = self.styles.get(&self.inline.nodes[root]) else {
+            return;
+        };
+        let mut first = None;
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for fragment in &self.inline.layout.fragments {
+            if !self.within(fragment.element, root) {
+                continue;
+            }
+            let Some((x, y, w, h)) = self.fragment_box(fragment) else {
+                continue;
+            };
+            if fragment.element == root && first.is_none() {
+                first = Some((x, y, w, h));
+            }
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x + w);
+            y1 = y1.max(y + h);
+        }
+        let Some((fx, fy, fw, fh)) = first else {
+            return;
+        };
+        let layout = florui_layout::BoxLayout {
+            x: 0.0,
+            y: 0.0,
+            width: fw / self.scale,
+            height: fh / self.scale,
+            margin: florui_layout::BoxMargin {
+                top: style.margin.top.unwrap_or(0.0),
+                right: style.margin.right.unwrap_or(0.0),
+                bottom: style.margin.bottom.unwrap_or(0.0),
+                left: style.margin.left.unwrap_or(0.0),
+            },
+        };
+        // Room for what a filter spreads, for the shadows of the elements, and for
+        // glyphs that reach past their line.
+        let shadow_reach = (1..self.owners.len())
+            .filter(|&element| self.within(element, root))
+            .filter_map(|element| self.styles.get(&self.inline.nodes[element]))
+            .flat_map(|style| style.box_shadow.iter().filter(|shadow| !shadow.inset))
+            .map(|shadow| {
+                shadow.offset_x.abs().max(shadow.offset_y.abs())
+                    + shadow.blur_radius
+                    + shadow.spread_radius.max(0.0)
+            })
+            .fold(0.0, f32::max);
+        let mut reach = 2.0 * self.scale
+            + shadow_reach * self.scale
+            + filter_inflation(&style.filter, self.scale);
+        for function in &style.filter {
+            if let FilterFunction::Url(url) = function {
+                reach += svg_ref::filter_reach(
+                    self.arena,
+                    self.styles,
+                    url,
+                    (fw / self.scale, fh / self.scale),
+                ) * self.scale;
+            }
+        }
+        let (left, top) = surface.local(x0 - reach, y0 - reach);
+        let (right, bottom) = surface.local(x1 + reach, y1 + reach);
+        let gx0 = left.floor().max(0.0) as i32;
+        let gy0 = top.floor().max(0.0) as i32;
+        let gx1 = (right.ceil().min(surface.pixmap.width() as f32)) as i32;
+        let gy1 = (bottom.ceil().min(surface.pixmap.height() as f32)) as i32;
+        if gx1 <= gx0 || gy1 <= gy0 {
+            return;
+        }
+        let Some(mut group) = Surface::new(
+            (gx1 - gx0) as u32,
+            (gy1 - gy0) as u32,
+            (surface.origin.0 + gx0, surface.origin.1 + gy0),
+        ) else {
+            return;
+        };
+        self.paint_level(&mut group, Some(root), None);
+        let node_abs = (fx, fy);
+        svg_ref::apply_chain(
+            self.arena,
+            self.styles,
+            &scaled_filters(&style.filter, self.scale),
+            &mut group,
+            node_abs,
+            Some(&layout),
+            self.scale,
+            &mut |pixmap, functions| apply_filters(pixmap, functions),
+        );
+        apply_clip_path(
+            &mut group,
+            self.arena,
+            self.styles,
+            style,
+            &layout,
+            node_abs,
+            self.scale,
+        );
+        mask::apply_mask(
+            &mut group,
+            self.arena,
+            self.styles,
+            style,
+            &layout,
+            node_abs,
+            self.scale,
+        );
+        let paint = PixmapPaint {
+            opacity: style.opacity,
+            blend_mode: blend::to_tiny_skia(style.mix_blend_mode),
+            ..Default::default()
+        };
+        draw_shifted(&mut surface.pixmap, &group.pixmap, (gx0, gy0), &paint, clip);
+    }
+}
+
 /// What each inline element of `inline` draws behind its text: its background
 /// and border, one box for each line it appears on. A box that continues on
 /// the next line has no border, padding or rounded corners at that end, as CSS
@@ -5881,12 +6119,16 @@ fn paint_inline_boxes(
     (origin_x, origin_y): (f32, f32),
     scale_factor: f32,
     clip: Option<&Mask>,
+    include: &dyn Fn(usize) -> bool,
 ) {
     let square = (
         florui_style::LengthPercentage::default(),
         florui_style::LengthPercentage::default(),
     );
     for fragment in &inline.layout.fragments {
+        if !include(fragment.element) {
+            continue;
+        }
         let Some(style) = styles.get(&inline.nodes[fragment.element]) else {
             continue;
         };
@@ -5906,7 +6148,11 @@ fn paint_inline_boxes(
         let has_border = [border.top, border.right, border.bottom, border.left]
             .iter()
             .any(|side| side.width > 0.0);
-        if style.background_color.a == 0 && style.background_layers.is_empty() && !has_border {
+        if style.background_color.a == 0
+            && style.background_layers.is_empty()
+            && !has_border
+            && style.box_shadow.is_empty()
+        {
             continue;
         }
         let mut padding = style.padding;
@@ -5931,6 +6177,8 @@ fn paint_inline_boxes(
         let height = (fragment.ascent + fragment.descent + above + below) * scale_factor;
         let outline = RoundedRect::new(x, y, width, height, &radius, scale_factor);
         let border = scaled_border(border, scale_factor);
+        // Outer shadows are behind everything the box paints, one for each fragment.
+        paint_box_shadows_clipped(buffer, &outline, border, &style.box_shadow, false, clip);
         let color_clip = style.background_color_clip;
         let text_cover = (background::clips_to_text(&style.background_layers)
             || color_clip == florui_style::BackgroundBox::Text)
@@ -5998,6 +6246,7 @@ fn paint_inline_boxes(
                 );
             }
         }
+        paint_box_shadows_clipped(buffer, &outline, border, &style.box_shadow, true, clip);
         if has_border {
             paint_box_border(buffer, &outline, border, clip);
         }
@@ -6006,6 +6255,7 @@ fn paint_inline_boxes(
 
 /// The outlines of the inline elements of a context, over their text: one ring
 /// round the line boxes of each element.
+#[allow(clippy::too_many_arguments)]
 fn paint_inline_outlines(
     buffer: &mut Surface,
     styles: &StyleMap,
@@ -6014,10 +6264,14 @@ fn paint_inline_outlines(
     (origin_x, origin_y): (f32, f32),
     scale_factor: f32,
     clip: Option<&Mask>,
+    include: &dyn Fn(usize) -> bool,
 ) {
     type Rects = Vec<(f32, f32, f32, f32)>;
     let mut boxes: Vec<(usize, Rects)> = Vec::new();
     for fragment in &inline.layout.fragments {
+        if !include(fragment.element) {
+            continue;
+        }
         let Some(style) = styles.get(&inline.nodes[fragment.element]) else {
             continue;
         };
@@ -12830,6 +13084,111 @@ mod tests {
         // A source that is not an image hides nothing and masks nothing more.
         let none = masked("-webkit-mask-box-image: none;", (110, 60));
         assert_g(&none, &[(50, 25, 0)], 0);
+    }
+
+    /// `(x0, y0, x1, y1)` of the pixels of exactly `color`; `None` when there are none.
+    fn bounds_of_color(canvas: &Canvas, color: [u8; 3]) -> Option<(u32, u32, u32, u32)> {
+        let (width, height) = (canvas.width(), canvas.height());
+        let mut bounds: Option<(u32, u32, u32, u32)> = None;
+        for y in 0..height {
+            for x in 0..width {
+                if pixel_rgb(canvas, x, y) == color {
+                    bounds = Some(match bounds {
+                        None => (x, y, x, y),
+                        Some((x0, y0, x1, y1)) => (x0.min(x), y0.min(y), x1.max(x), y1.max(y)),
+                    });
+                }
+            }
+        }
+        bounds
+    }
+
+    #[test]
+    fn an_inline_element_is_faded_filtered_and_masked_as_a_unit() {
+        let tree: Element = view! { <div class="p">"aa "<span class="s">"bbbb"</span>" cc"</div> };
+        let css = |rule: &str| {
+            paint_text_css(
+                &tree,
+                &format!(".p {{ font-size: 20px; }} .s {{ background-color: #ff0000; {rule} }}"),
+                (120, 40),
+            )
+        };
+        // Chrome 153: half of red over white, grey for grayscale, and the mask by half.
+        let faded = css("opacity: 0.5;");
+        assert!(bounds_of_color(&faded, [255, 0, 0]).is_none());
+        assert!(bounds_of_color(&faded, [255, 128, 128]).is_some());
+        let grey = css("filter: grayscale(1);");
+        assert!(bounds_of_color(&grey, [255, 0, 0]).is_none());
+        assert!(bounds_of_color(&grey, [54, 54, 54]).is_some());
+        let masked = css("mask-image: linear-gradient(#000 50%, transparent 50%);");
+        let whole = css("");
+        let (_, y0, _, y1) = bounds_of_color(&whole, [255, 0, 0]).expect("a box");
+        let (_, my0, _, my1) = bounds_of_color(&masked, [255, 0, 0]).expect("half of it");
+        assert_eq!(my0, y0);
+        assert!(
+            my1 < y1 && my1 >= (y0 + y1) / 2 - 2,
+            "{my0}..{my1} of {y0}..{y1}"
+        );
+    }
+
+    #[test]
+    fn a_clip_of_an_inline_element_is_the_box_of_its_first_fragment() {
+        let tree: Element = view! {
+            <div class="p">"aa "<span class="s">"bbbbbb cccccc dddd"</span>" ee"</div>
+        };
+        let css = |rule: &str| {
+            paint_text_css(
+                &tree,
+                &format!(
+                    ".p {{ width: 120px; font-size: 20px; line-height: 30px; }} \
+                     .s {{ background-color: #ff0000; padding: 0 4px; {rule} }}"
+                ),
+                (140, 120),
+            )
+        };
+        // Chrome 153: the box of the first line is all there is to clip to, and what
+        // is on the other lines is cut away.
+        let whole = bounds_of_color(&css(""), [255, 0, 0]).expect("boxes");
+        let clipped = bounds_of_color(&css("clip-path: border-box;"), [255, 0, 0]).expect("a box");
+        assert!(whole.3 > clipped.3 + 20, "{whole:?} against {clipped:?}");
+        assert!(clipped.3 - clipped.1 < 30);
+    }
+
+    #[test]
+    fn an_inline_element_has_its_shadow_and_a_margin_box_that_takes_in_its_margins() {
+        let tree: Element = view! { <div class="p">"aa "<span class="s">"bb"</span>" cc"</div> };
+        let css = |rule: &str| {
+            paint_text_css(
+                &tree,
+                &format!(
+                    ".p {{ margin: 60px; font-size: 20px; line-height: 30px; }} \
+                     .s {{ margin: 6px 14px; padding: 0 5px; {rule} }}"
+                ),
+                (200, 160),
+            )
+        };
+        let shadow = "box-shadow: 0 0 0 40px #ff0000;";
+        let all = bounds_of_color(&css(shadow), [255, 0, 0]).expect("a shadow");
+        let (x0, y0, x1, y1) = bounds_of_color(
+            &css(&format!("{shadow} clip-path: margin-box;")),
+            [255, 0, 0],
+        )
+        .expect("a clipped shadow");
+        // Chrome 153: the shadow is cut to the margin box, which takes in the
+        // horizontal margins of 14px and the vertical ones of 6px.
+        let border =
+            bounds_of_color(&css("background-color: #ff0000;"), [255, 0, 0]).expect("a box");
+        assert!(
+            all.0 < x0 && all.2 > x1,
+            "the shadow is wider than the clip"
+        );
+        assert!((x0 + 14).abs_diff(border.0) <= 1, "the left margin");
+        assert!(x1.abs_diff(border.2 + 14) <= 1, "the right margin");
+        assert!((y0 + 6).abs_diff(border.1) <= 1, "the top margin");
+        assert!(
+            y1 >= border.3 + 5 && y1 <= border.3 + 7,
+            "the bottom margin"
+        );
     }
 
     #[test]
