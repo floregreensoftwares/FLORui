@@ -259,6 +259,82 @@ fn font_declarations(style: &ComputedStyle, parent: Option<&ComputedStyle>) -> V
     out
 }
 
+/// The transform CSS gives an SVG element, as the value of its `transform`
+/// attribute, which is what the SVG renderer reads: the two-dimensional functions,
+/// the origin in pixels (`0 0` when none was given, as for an element of an
+/// SVG). What needs a box to be resolved (a percentage) or a third dimension is
+/// left out.
+fn transform_attribute(style: &ComputedStyle) -> Option<String> {
+    use florui_style::{LengthPercentage, TransformFunction as F};
+    if !style.has_transform() {
+        return None;
+    }
+    let pixels = |lp: &LengthPercentage| (lp.percentage == 0.0).then_some(lp.length);
+    let mut parts: Vec<String> = Vec::new();
+    if let Some((x, y, _)) = &style.translate
+        && let (Some(x), Some(y)) = (pixels(x), pixels(y))
+    {
+        parts.push(format!("translate({x} {y})"));
+    }
+    if let Some((x, y, z, degrees)) = style.rotate
+        && x == 0.0
+        && y == 0.0
+        && z != 0.0
+    {
+        parts.push(format!("rotate({})", degrees * z.signum()));
+    }
+    if let Some((x, y, _)) = style.scale {
+        parts.push(format!("scale({x} {y})"));
+    }
+    for function in &style.transform {
+        match function {
+            F::Translate(x, y) => {
+                if let (Some(x), Some(y)) = (pixels(x), pixels(y)) {
+                    parts.push(format!("translate({x} {y})"));
+                }
+            }
+            F::Scale(x, y) => parts.push(format!("scale({x} {y})")),
+            F::Rotate(degrees) => parts.push(format!("rotate({degrees})")),
+            F::Skew(x, y) => parts.push(format!(
+                "matrix(1 {} {} 1 0 0)",
+                y.to_radians().tan(),
+                x.to_radians().tan()
+            )),
+            F::Matrix { a, b, c, d, e, f } => {
+                parts.push(format!("matrix({a} {b} {c} {d} {e} {f})"));
+            }
+            _ => {}
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let initial = (
+        LengthPercentage {
+            length: 0.0,
+            percentage: 0.5,
+        },
+        LengthPercentage {
+            length: 0.0,
+            percentage: 0.5,
+        },
+    );
+    let (ox, oy) = if style.transform_origin == initial {
+        (0.0, 0.0)
+    } else {
+        (
+            pixels(&style.transform_origin.0).unwrap_or(0.0),
+            pixels(&style.transform_origin.1).unwrap_or(0.0),
+        )
+    };
+    let list = parts.join(" ");
+    Some(if ox == 0.0 && oy == 0.0 {
+        list
+    } else {
+        format!("translate({ox} {oy}) {list} translate({} {})", -ox, -oy)
+    })
+}
+
 fn write_element(
     arena: &Tree,
     styles: &StyleMap,
@@ -273,10 +349,15 @@ fn write_element(
     let own = style
         .map(|s| style_declarations(s, parent))
         .unwrap_or_default();
+    let transform = style.and_then(transform_attribute);
     out.push('<');
     out.push_str(tag);
     let mut wrote_style = false;
     for (name, value) in arena.attrs(node) {
+        // What CSS gives wins over the attribute.
+        if name == "transform" && transform.is_some() {
+            continue;
+        }
         out.push(' ');
         out.push_str(name);
         out.push_str("=\"");
@@ -291,6 +372,11 @@ fn write_element(
     if !own.is_empty() && !wrote_style {
         out.push_str(" style=\"");
         escape_into(&own.join(";"), out);
+        out.push('"');
+    }
+    if let Some(transform) = &transform {
+        out.push_str(" transform=\"");
+        escape_into(transform, out);
         out.push('"');
     }
     out.push('>');
@@ -443,6 +529,37 @@ mod tests {
             "<rect width=\"10\" height=\"10\" fill=\"white\" stop-color=\"a&amp;b\"></rect>"
         ));
         assert!(defs.contains("><circle id=\"c\" r=\"1\">"));
+    }
+
+    #[test]
+    fn a_css_transform_of_an_svg_element_is_its_transform_attribute() {
+        let tree: Element = view! {
+            <div><svg>
+                <rect class="a" transform="rotate(5)" />
+                <rect class="b" />
+                <rect class="c" />
+            </svg></div>
+        };
+        let arena = Arena::build(&tree);
+        let styles = styles_of(
+            &arena,
+            ".a { transform: translate(20px, 5px) scale(1.5); } \n             .b { transform: rotate(30deg); transform-origin: 25px 25px; } \n             .c { transform: translate(50%, 0) rotateX(20deg); }",
+        );
+        let defs = reference(&arena, &styles, "#x").expect("a reference").defs;
+        // The default origin of an SVG element is its own corner, and a rule wins
+        // over the attribute.
+        assert!(
+            defs.contains("transform=\"translate(20 5) scale(1.5 1.5)\""),
+            "{defs}"
+        );
+        assert!(!defs.contains("rotate(5)"), "{defs}");
+        assert!(
+            defs.contains("transform=\"translate(25 25) rotate(30) translate(-25 -25)\""),
+            "{defs}"
+        );
+        // What needs a box or a third dimension is left out.
+        let third = &defs[defs.find("class=\"c\"").expect("the third")..];
+        assert!(!third.contains("transform="), "{third}");
     }
 
     #[test]

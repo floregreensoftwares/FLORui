@@ -6,14 +6,14 @@
     "element_id":  "el",
     "viewport":  {
                      "width_css_px":  540,
-                     "height_css_px":  200,
+                     "height_css_px":  290,
                      "device_pixel_ratio":  1
                  },
     "canvas_color":  "#ffffff",
     "florui":  {
                    "tag":  "div",
                    "class":  "wrap",
-                   "css":  ".wrap { position: relative; width: 540px; height: 200px; background-color: #ffffff; } .s { position: absolute; border: 2px solid #2a3a58; background-color: #f4f4f4; } .k { fill: #d05040; stroke: #2a3a58; stroke-width: 3; } .p2 { color: #4070d0; } .p6 { width: 100px; }.p0 { left: 20px; top: 20px; } .p1 { left: 150px; top: 20px; } .p2 { left: 280px; top: 20px; } .p3 { left: 410px; top: 20px; } .p4 { left: 20px; top: 110px; } .p5 { left: 150px; top: 110px; } .p6 { left: 280px; top: 110px; } .p7 { left: 410px; top: 110px; }",
+                   "css":  ".wrap { position: relative; width: 540px; height: 290px; background-color: #ffffff; } .s { position: absolute; border: 2px solid #2a3a58; background-color: #f4f4f4; } .k { fill: #d05040; stroke: #2a3a58; stroke-width: 3; } .p2 { color: #4070d0; } .p6 { width: 100px; } .r8 { transform: rotate(30deg); transform-origin: 25px 25px; } .r9 { transform: translate(20px, 5px) scale(1.5); }.p0 { left: 20px; top: 20px; } .p1 { left: 150px; top: 20px; } .p2 { left: 280px; top: 20px; } .p3 { left: 410px; top: 20px; } .p4 { left: 20px; top: 110px; } .p5 { left: 150px; top: 110px; } .p6 { left: 280px; top: 110px; } .p7 { left: 410px; top: 110px; } .p8 { left: 20px; top: 200px; } .p9 { left: 150px; top: 200px; }",
                    "children":  [
                                     {
                                         "tag":  "svg",
@@ -692,13 +692,170 @@
                                                           "s p7"
                                                       ]
                                                   ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "class",
+                                                                               "r8"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#d05040"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "10"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "10"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "30"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "60"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "100"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p8"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "class",
+                                                                               "r9"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "#40a060"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "5"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "20"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "5"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "20"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         {
+                                                             "tag":  "rect",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "transform",
+                                                                               "rotate(45 75 25)"
+                                                                           ],
+                                                                           [
+                                                                               "y",
+                                                                               "10"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "stroke-width",
+                                                                               "4"
+                                                                           ],
+                                                                           [
+                                                                               "fill",
+                                                                               "none"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "x",
+                                                                               "60"
+                                                                           ],
+                                                                           [
+                                                                               "stroke",
+                                                                               "#2a3a58"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "height",
+                                                          "60"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "100"
+                                                      ],
+                                                      [
+                                                          "class",
+                                                          "s p9"
+                                                      ]
+                                                  ]
                                     }
                                 ]
                },
     "classification":  {
                            "kind":  "tolerant",
                            "threshold_percent":  1,
-                           "reason":  "Measured against Chromium 153 on Windows: 0.19% of the pixels differ by more than 24 levels of a channel and every box has the same bounding box. What is left is the edge of the glyphs and of the gradient, which Chromium dithers. It covers an inline svg sized by its attributes, by a viewBox with preserveAspectRatio (meet and slice), by CSS, and by a width and the ratio of its viewBox; shapes given their fill and colour by rules; a gradient; text in the page font; and overflow. With the svgs left out of the flow, as when they had no box, the same fixture measures 42.80%, so it fails.",
+                           "reason":  "Measured against Chromium 153 on Windows: 0.13% of the pixels differ by more than 24 levels of a channel and every box has the same bounding box. What is left is the edge of the glyphs and of the gradient, which Chromium dithers. It covers an inline svg sized by its attributes, by a viewBox with preserveAspectRatio (meet and slice), by CSS, and by a width and the ratio of its viewBox; shapes given their fill, colour and transform (with its origin) by rules; a gradient; text in the page font; and overflow. With the svgs left out of the flow, as when they had no box, the same fixture measures 35.80%, so it fails.",
                            "channel_tolerance":  24
                        }
 }
