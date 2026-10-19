@@ -19,7 +19,7 @@ use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitStr, Result, Token};
 
-use crate::ast::{AttrValue, Node};
+use crate::ast::{AttrName, AttrValue, Node};
 use crate::text;
 
 #[cfg_attr(test, derive(Debug))]
@@ -75,7 +75,7 @@ fn parse_node(input: ParseStream) -> Result<Node> {
         // `<input>`) and `for` (as on `<label>`) are ordinary HTML
         // attributes but reserved words in Rust, so a plain `Ident` parse
         // would reject them.
-        let name = input.call(Ident::parse_any)?;
+        let name = parse_attr_name(input)?;
         input.parse::<Token![=]>()?;
         let value = if input.peek(LitStr) {
             AttrValue::Lit(input.parse()?)
@@ -134,6 +134,28 @@ fn parse_node(input: ParseStream) -> Result<Node> {
     })
 }
 
+/// An attribute name: an identifier, then any number of `-` or `:` and another,
+/// as in `stop-color` and `xlink:href`.
+fn parse_attr_name(input: ParseStream) -> Result<AttrName> {
+    let first = input.call(Ident::parse_any)?;
+    let mut text = first.to_string();
+    loop {
+        let separator = if input.peek(Token![-]) {
+            input.parse::<Token![-]>()?;
+            '-'
+        } else if input.peek(Token![:]) && !input.peek(Token![::]) {
+            input.parse::<Token![:]>()?;
+            ':'
+        } else {
+            break;
+        };
+        let next = input.call(Ident::parse_any)?;
+        text.push(separator);
+        text.push_str(&next.to_string());
+    }
+    Ok(AttrName::new(first, text))
+}
+
 fn require_known_primitive(tag: &Ident) -> Result<&'static florui_primitives::Primitive> {
     let tag_name = tag.to_string();
     florui_primitives::find(&tag_name).ok_or_else(|| {
@@ -147,7 +169,7 @@ fn require_known_primitive(tag: &Ident) -> Result<&'static florui_primitives::Pr
     })
 }
 
-fn check_input_type(attrs: &[(Ident, AttrValue)]) -> Result<()> {
+fn check_input_type(attrs: &[(AttrName, AttrValue)]) -> Result<()> {
     let Some((_, AttrValue::Lit(lit))) = attrs.iter().find(|(name, _)| name == "type") else {
         // No `type`, or a dynamic `{expr}` value that cannot be checked
         // until runtime — nothing to validate here.
@@ -213,6 +235,36 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    #[test]
+    fn an_attribute_name_may_join_identifiers_with_a_hyphen_or_a_colon() {
+        let result: Result<Nodes> = syn::parse2(
+            quote! { <svg viewBox="0 0 10 10"><stop stop-color="red" xlink:href="#a" /></svg> },
+        );
+        let nodes = result.unwrap();
+        let Node::Element { children, .. } = &nodes.0[0] else {
+            panic!("an element");
+        };
+        let Node::Element { attrs, .. } = &children[0] else {
+            panic!("an element");
+        };
+        assert_eq!(attrs[0].0.as_str(), "stop-color");
+        assert_eq!(attrs[1].0.as_str(), "xlink:href");
+        assert!(attrs[0].0.ident().is_none());
+    }
+
+    #[test]
+    fn svg_elements_are_primitives_and_a_plain_name_is_one_identifier() {
+        let result: Result<Nodes> = syn::parse2(quote! {
+            <svg><defs><clipPath id="c"><rect width="1" height="1" /></clipPath></defs></svg>
+        });
+        assert!(result.is_ok());
+        let result: Result<Nodes> = syn::parse2(quote! { <div class="a" /> });
+        let nodes = result.unwrap();
+        let Node::Element { attrs, .. } = &nodes.0[0] else {
+            panic!("an element");
+        };
+        assert!(attrs[0].0.ident().is_some());
+    }
     #[test]
     fn accepts_a_supported_input_type() {
         let result: Result<Nodes> = syn::parse2(quote! { <input type="checkbox" /> });

@@ -18,5 +18,5 @@ pub mod ast;
 pub mod parse;
 pub mod text;
 
-pub use ast::{AttrValue, Node};
+pub use ast::{AttrName, AttrValue, Node};
 pub use parse::Nodes;
