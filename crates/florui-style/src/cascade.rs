@@ -5794,7 +5794,7 @@ mod tests {
             &mut crate::AnimationTimeline::default(),
         );
         let svg = arena.children(arena.roots()[0])[0];
-        assert_eq!(styles[&svg].display, crate::Display::Block);
+        assert_eq!(styles[&svg].display, crate::Display::InlineBlock);
         assert!(!styles[&svg].author_hidden);
         let [rect, g, hidden] = [0, 1, 2].map(|i| arena.children(svg)[i]);
         // The default stylesheet hides all of it from layout; that is not the author's.
