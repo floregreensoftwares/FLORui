@@ -1,6 +1,6 @@
 //! Finding what a `url()` points at, and writing it as SVG markup.
 
-use florui_style::{ComputedStyle, NodeId, Rgba, StyleMap, Tree};
+use florui_style::{ComputedStyle, InlineItem, NodeId, Rgba, StyleMap, Tree};
 
 /// The address a stylesheet's relative `url(#id)` resolves to.
 const BASE: &str = "about:florui";
@@ -84,46 +84,98 @@ fn document_defs(arena: &Tree, styles: &StyleMap) -> String {
     let tops =
         arena.find_all(|tree, node| tree.tag(node) == "svg" && !has_svg_ancestor(tree, node));
     for node in tops {
-        let root = styles.get(&node);
-        // What the SVG takes from the page: its colour (for `currentColor`) and
-        // the inherited properties its ancestors declare.
-        let mut chain = vec![node];
-        let mut up = arena.parent(node);
-        while let Some(parent) = up {
-            chain.push(parent);
-            up = arena.parent(parent);
-        }
-        let mut inherited: Vec<(&str, &str)> = Vec::new();
-        for &ancestor in chain.iter().rev() {
-            let own = styles
-                .get(&ancestor)
-                .map_or(&[][..], |s| &s.svg_properties[..]);
-            for (name, value) in own {
-                if INHERITED.contains(name) {
-                    inherited.retain(|(kept, _)| kept != name);
-                    inherited.push((name, value.as_str()));
-                }
-            }
-        }
-        let mut declarations = Vec::new();
-        if let Some(root) = root {
-            declarations.push(format!("color:{}", color(root.color)));
-        }
-        declarations.extend(
-            inherited
-                .iter()
-                .map(|(name, value)| format!("{name}:{value}")),
-        );
-        out.push_str(&format!(
-            "<g style=\"{}\">",
-            escape(&declarations.join(";"))
-        ));
-        for &child in arena.children(node) {
-            write_element(arena, styles, child, root.map(|s| s.color), &mut out);
-        }
-        out.push_str("</g>");
+        out.push_str(&content(arena, styles, node));
     }
     out
+}
+
+/// What the SVG `node` holds, in a `<g>` carrying what it takes from the page: its
+/// colour (for `currentColor`) and the inherited properties its ancestors declare.
+fn content(arena: &Tree, styles: &StyleMap, node: NodeId) -> String {
+    let root = styles.get(&node);
+    let mut chain = vec![node];
+    let mut up = arena.parent(node);
+    while let Some(parent) = up {
+        chain.push(parent);
+        up = arena.parent(parent);
+    }
+    let mut inherited: Vec<(&str, &str)> = Vec::new();
+    for &ancestor in chain.iter().rev() {
+        let own = styles
+            .get(&ancestor)
+            .map_or(&[][..], |s| &s.svg_properties[..]);
+        for (name, value) in own {
+            if INHERITED.contains(name) {
+                inherited.retain(|(kept, _)| kept != name);
+                inherited.push((name, value.as_str()));
+            }
+        }
+    }
+    let mut declarations = Vec::new();
+    if let Some(root) = root {
+        declarations.push(format!("color:{}", color(root.color)));
+        declarations.extend(font_declarations(root, None));
+    }
+    declarations.extend(
+        inherited
+            .iter()
+            .map(|(name, value)| format!("{name}:{value}")),
+    );
+    let mut out = format!("<g style=\"{}\">", escape(&declarations.join(";")));
+    write_children(arena, styles, node, root, &mut out);
+    out.push_str("</g>");
+    out
+}
+
+/// The text and elements in `node`, in order.
+fn write_children(
+    arena: &Tree,
+    styles: &StyleMap,
+    node: NodeId,
+    parent: Option<&ComputedStyle>,
+    out: &mut String,
+) {
+    for item in arena.inline_items(node) {
+        match item {
+            InlineItem::Text(text) => escape_into(text, out),
+            InlineItem::Element(child) => write_element(arena, styles, *child, parent, out),
+        }
+    }
+}
+
+/// The whole SVG `node` as a document of `width` by `height` CSS pixels: its own
+/// content, styled as CSS gives, after the definitions of the document's other
+/// SVGs, which it may point at. `None` for an element that is not an `<svg>`.
+pub(crate) fn svg_document(
+    arena: &Tree,
+    styles: &StyleMap,
+    node: NodeId,
+    width: f32,
+    height: f32,
+) -> Option<String> {
+    if arena.tag(node) != "svg" {
+        return None;
+    }
+    let others: String = arena
+        .find_all(|tree, other| {
+            other != node && tree.tag(other) == "svg" && !has_svg_ancestor(tree, other)
+        })
+        .into_iter()
+        .map(|other| content(arena, styles, other))
+        .collect();
+    let keep = |name: &str| {
+        arena
+            .attr(node, name)
+            .map(|value| format!(" {name}=\"{}\"", escape(value)))
+            .unwrap_or_default()
+    };
+    Some(format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
+         width=\"{width}\" height=\"{height}\"{}{}><defs>{others}</defs>{}</svg>",
+        keep("viewBox"),
+        keep("preserveAspectRatio"),
+        content(arena, styles, node)
+    ))
 }
 
 fn has_svg_ancestor(tree: &Tree, node: NodeId) -> bool {
@@ -150,7 +202,7 @@ fn color(color: Rgba) -> String {
 /// What CSS gives an element beyond its attributes: the SVG properties its rules
 /// declare, its `opacity`, `visibility` and `display`, and its `color` when it is
 /// not its parent's.
-fn style_declarations(style: &ComputedStyle, parent_color: Option<Rgba>) -> Vec<String> {
+fn style_declarations(style: &ComputedStyle, parent: Option<&ComputedStyle>) -> Vec<String> {
     let mut out: Vec<String> = style
         .svg_properties
         .iter()
@@ -162,11 +214,47 @@ fn style_declarations(style: &ComputedStyle, parent_color: Option<Rgba>) -> Vec<
     if !style.visibility.is_visible() {
         out.push("visibility:hidden".to_owned());
     }
-    if style.display == florui_style::Display::None {
+    if style.author_hidden {
         out.push("display:none".to_owned());
     }
-    if parent_color != Some(style.color) {
+    if parent.map(|p| p.color) != Some(style.color) {
         out.push(format!("color:{}", color(style.color)));
+    }
+    out.extend(font_declarations(style, parent));
+    out
+}
+
+/// The font of an element, as `font-*` declarations, where it is not its parent's:
+/// text in an SVG takes its font from the page as any text does.
+fn font_declarations(style: &ComputedStyle, parent: Option<&ComputedStyle>) -> Vec<String> {
+    use florui_style::{FontFamily, FontStyle};
+    let mut out = Vec::new();
+    let differs = |same: &dyn Fn(&ComputedStyle) -> bool| !parent.is_some_and(same);
+    if differs(&|p| p.font_size == style.font_size) {
+        out.push(format!("font-size:{}px", style.font_size));
+    }
+    if differs(&|p| p.font_family == style.font_family) {
+        out.push(match &style.font_family {
+            FontFamily::SansSerif => "font-family:sans-serif".to_owned(),
+            FontFamily::Monospace => "font-family:monospace".to_owned(),
+            FontFamily::Stack(list) => format!("font-family:{list}"),
+        });
+    }
+    if differs(&|p| p.font_weight == style.font_weight) {
+        out.push(format!("font-weight:{}", style.font_weight));
+    }
+    if differs(&|p| p.font_style == style.font_style) {
+        out.push(match style.font_style {
+            FontStyle::Normal => "font-style:normal".to_owned(),
+            FontStyle::Italic => "font-style:italic".to_owned(),
+            FontStyle::Oblique(degrees) => format!("font-style:oblique {degrees}deg"),
+        });
+    }
+    if differs(&|p| p.letter_spacing == style.letter_spacing) {
+        out.push(format!("letter-spacing:{}px", style.letter_spacing));
+    }
+    if differs(&|p| p.word_spacing == style.word_spacing) {
+        out.push(format!("word-spacing:{}px", style.word_spacing));
     }
     out
 }
@@ -175,7 +263,7 @@ fn write_element(
     arena: &Tree,
     styles: &StyleMap,
     node: NodeId,
-    parent_color: Option<Rgba>,
+    parent: Option<&ComputedStyle>,
     out: &mut String,
 ) {
     let tag = arena.tag(node);
@@ -183,7 +271,7 @@ fn write_element(
     // The rules' declarations come before the element's own `style` attribute,
     // which wins over them.
     let own = style
-        .map(|s| style_declarations(s, parent_color))
+        .map(|s| style_declarations(s, parent))
         .unwrap_or_default();
     out.push('<');
     out.push_str(tag);
@@ -206,10 +294,7 @@ fn write_element(
         out.push('"');
     }
     out.push('>');
-    let here = style.map(|s| s.color).or(parent_color);
-    for &child in arena.children(node) {
-        write_element(arena, styles, child, here, out);
-    }
+    write_children(arena, styles, node, style.or(parent), out);
     out.push_str("</");
     out.push_str(tag);
     out.push('>');
@@ -352,11 +437,12 @@ mod tests {
         let found = reference(&arena, &styles, "about:florui#m").expect("a reference");
         assert_eq!(found.id, "m");
         let defs = found.defs;
-        assert!(defs.starts_with("<g style=\"color:rgba(0,0,0,1)\"><defs><mask id=\"m\""));
+        assert!(defs.starts_with("<g style=\"color:rgba(0,0,0,1);font-size:16px;"));
+        assert!(defs.contains("><defs><mask id=\"m\""));
         assert!(defs.contains(
             "<rect width=\"10\" height=\"10\" fill=\"white\" stop-color=\"a&amp;b\"></rect>"
         ));
-        assert!(defs.contains("</g><g style=\"color:rgba(0,0,0,1)\"><circle id=\"c\" r=\"1\">"));
+        assert!(defs.contains("><circle id=\"c\" r=\"1\">"));
     }
 
     #[test]
@@ -379,7 +465,12 @@ mod tests {
         );
         let defs = reference(&arena, &styles, "#m").expect("a reference").defs;
         // The page's colour and inherited property, and the svg's own, on its root.
-        assert!(defs.starts_with("<g style=\"color:rgba(255,0,0,1);fill:green;stroke-width:3\">"));
+        let wrapper = &defs[..defs.find('>').expect("a tag")];
+        assert!(wrapper.contains("color:rgba(255,0,0,1)"), "{wrapper}");
+        assert!(
+            wrapper.ends_with("fill:green;stroke-width:3\""),
+            "{wrapper}"
+        );
         // A property a rule declares on the mask, and the inline style that beats it.
         assert!(
             defs.contains("<mask id=\"m\" style=\"mask-type:alpha\">"),

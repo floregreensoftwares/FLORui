@@ -4047,6 +4047,17 @@ fn paint_node(
                     );
                 }
             }
+        } else if arena.tag(node) == "svg" {
+            if shown {
+                paint_inline_svg(
+                    buffer,
+                    (arena, styles),
+                    node,
+                    (content_x, content_y, content_width, content_height),
+                    scale_factor,
+                    clip,
+                );
+            }
         } else if matches!(arena.tag(node), "img" | "icon") {
             // An `<icon>`'s own decoded pixels are already fully themed
             // (real `currentColor` substitution happened before
@@ -4429,6 +4440,43 @@ fn paint_image(
         transform,
         clip,
     );
+}
+
+/// An inline `<svg>` drawn whole by the SVG renderer into its content box
+/// (`x, y, width, height`, painted pixels), which holds the picture at one pixel
+/// to each of its own.
+fn paint_inline_svg(
+    buffer: &mut Surface,
+    (arena, styles): (&Tree, &StyleMap),
+    node: NodeId,
+    (x, y, width, height): (f32, f32, f32, f32),
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
+    let size = (
+        width.round().max(0.0) as u32,
+        height.round().max(0.0) as u32,
+    );
+    if size.0 == 0 || size.1 == 0 {
+        return;
+    }
+    let css = (width / scale_factor, height / scale_factor);
+    let Some(rgba) = florui_svg::render_svg(arena, styles, node, css, size) else {
+        return;
+    };
+    let image = florui_assets::RasterImage {
+        rgba: rgba.to_vec(),
+        width: size.0,
+        height: size.1,
+    };
+    let rect = florui_layout::BoxLayout {
+        x: 0.0,
+        y: 0.0,
+        width: size.0 as f32 / scale_factor,
+        height: size.1 as f32 / scale_factor,
+        margin: florui_layout::BoxMargin::ZERO,
+    };
+    paint_image(buffer, &image, x, y, rect, scale_factor, clip);
 }
 
 /// `florui_assets::RasterImage::rgba` is straight (non-premultiplied)
@@ -12784,6 +12832,87 @@ mod tests {
         assert_g(&none, &[(50, 25, 0)], 0);
     }
 
+    #[test]
+    fn an_inline_svg_is_a_box_drawn_whole_by_the_svg_renderer() {
+        let tree: Element = view! {
+            <div class="r">
+                <svg width="40" height="30">
+                    <rect width="20" height="30" fill="#ff0000" />
+                </svg>
+                <svg viewBox="0 0 10 10" width="40" height="40" class="v">
+                    <rect width="5" height="10" fill="#0000ff" />
+                </svg>
+                <div class="after" />
+            </div>
+        };
+        let canvas = paint_text_css(
+            &tree,
+            ".after { width: 10px; height: 10px; background-color: #00aa00; }",
+            (60, 100),
+        );
+        // The first svg is 40x30 at the origin: its rect fills the left half.
+        assert_eq!(pixel_rgb(&canvas, 10, 15), [255, 0, 0]);
+        assert_eq!(pixel_rgb(&canvas, 30, 15), WHITE);
+        // The second follows it as a block, and its viewBox scales the content.
+        assert_eq!(pixel_rgb(&canvas, 10, 50), [0, 0, 255]);
+        assert_eq!(pixel_rgb(&canvas, 30, 50), WHITE);
+        // What follows is after both, so the svgs took the room of their sizes.
+        assert_eq!(pixel_rgb(&canvas, 5, 75), [0, 170, 0]);
+        assert_eq!(pixel_rgb(&canvas, 30, 65), WHITE);
+    }
+
+    #[test]
+    fn css_sizes_and_styles_an_inline_svg() {
+        let tree: Element = view! {
+            <div class="r">
+                <svg class="s" viewBox="0 0 10 10">
+                    <rect class="k" width="10" height="10" />
+                    <circle cx="5" cy="5" r="2" fill="currentColor" />
+                </svg>
+            </div>
+        };
+        let canvas = paint_text_css(
+            &tree,
+            ".s { width: 50px; height: 50px; color: #ffffff; } .k { fill: #ff0000; }",
+            (60, 60),
+        );
+        // The rules size the svg and give the rect its fill and the circle its colour.
+        assert_eq!(pixel_rgb(&canvas, 5, 5), [255, 0, 0]);
+        assert_eq!(pixel_rgb(&canvas, 25, 25), WHITE);
+        assert_eq!(pixel_rgb(&canvas, 55, 55), WHITE);
+        // A viewBox alone fills the width and takes its height from the ratio.
+        let filled = paint_text_css(&tree, ".r { width: 60px; } .k { fill: #ff0000; }", (60, 60));
+        assert_eq!(pixel_rgb(&filled, 5, 55), [255, 0, 0]);
+    }
+
+    #[test]
+    fn an_inline_svg_draws_its_text_and_uses_the_definitions_of_another() {
+        let tree: Element = view! {
+            <div class="r">
+                <svg width="0" height="0">
+                    <defs>
+                        <linearGradient id="g" x1="0" x2="1" y1="0" y2="0">
+                            <stop offset="0" stop-color="#ff0000" />
+                            <stop offset="1" stop-color="#ff0000" />
+                        </linearGradient>
+                    </defs>
+                </svg>
+                <svg width="80" height="40">
+                    <rect x="0" y="0" width="20" height="40" fill="url(#g)" />
+                    <text x="24" y="30" font-size="28" fill="#000000">Hi</text>
+                </svg>
+            </div>
+        };
+        let canvas = paint_text_css(&tree, "", (90, 50));
+        assert_eq!(pixel_rgb(&canvas, 10, 20), [255, 0, 0]);
+        // Dark pixels where the letters are, none to the right of them.
+        let dark = (24..60)
+            .flat_map(|x| (5..35).map(move |y| (x, y)))
+            .filter(|&(x, y)| pixel_rgb(&canvas, x, y)[0] < 100)
+            .count();
+        assert!(dark > 40, "the text is drawn: {dark} dark pixels");
+        assert_eq!(pixel_rgb(&canvas, 75, 20), WHITE);
+    }
     #[test]
     fn a_mask_url_to_an_inline_svg_mask_masks_the_box() {
         let tree: Element = view! {

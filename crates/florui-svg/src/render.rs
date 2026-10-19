@@ -4,7 +4,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use florui_assets::{RasterFit, parse_svg, rasterize_svg};
+use florui_assets::{RasterFit, SvgFonts, parse_svg_with_fonts, rasterize_svg};
+use florui_style::{NodeId, StyleMap, Tree};
 
 use crate::document::Reference;
 
@@ -17,6 +18,61 @@ pub struct Canvas {
     pub scale: f32,
     pub origin: (f32, f32),
     pub border_box: (f32, f32, f32, f32),
+}
+
+/// The fonts the text in an SVG is drawn with: the engine's own.
+fn fonts() -> SvgFonts<'static> {
+    const FACES: [&[u8]; 3] = [
+        florui_text::EMBEDDED_SANS_SERIF_FONT,
+        florui_text::EMBEDDED_SANS_SERIF_ITALIC_FONT,
+        florui_text::EMBEDDED_MONOSPACE_FONT,
+    ];
+    SvgFonts {
+        faces: &FACES,
+        sans_serif: "Open Sans",
+        monospace: "Fira Mono",
+    }
+}
+
+const ELEMENTS_KEPT: usize = 16;
+
+thread_local! {
+    static ELEMENTS: RefCell<Vec<(u64, Rc<Vec<u8>>)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The inline `<svg>` `node`, drawn as `size` device pixels (`css_size` CSS
+/// pixels): straight RGBA. Kept for the next time while nothing about it changes.
+pub fn render_svg(
+    arena: &Tree,
+    styles: &StyleMap,
+    node: NodeId,
+    css_size: (f32, f32),
+    size: (u32, u32),
+) -> Option<Rc<Vec<u8>>> {
+    use std::hash::{Hash, Hasher};
+    let text = crate::document::svg_document(arena, styles, node, css_size.0, css_size.1)?;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    size.hash(&mut hasher);
+    let key = hasher.finish();
+    if let Some(found) = ELEMENTS.with(|cache| {
+        cache
+            .borrow()
+            .iter()
+            .find(|(kept, _)| *kept == key)
+            .map(|(_, pixels)| Rc::clone(pixels))
+    }) {
+        return Some(found);
+    }
+    let pixels = Rc::new(raster(&text, size)?);
+    ELEMENTS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= ELEMENTS_KEPT {
+            cache.remove(0);
+        }
+        cache.push((key, Rc::clone(&pixels)));
+    });
+    Some(pixels)
 }
 
 const KEPT: usize = 24;
@@ -48,7 +104,7 @@ fn document(canvas: &Canvas, reference: &Reference, body: &str) -> String {
 }
 
 fn raster(text: &str, size: (u32, u32)) -> Option<Vec<u8>> {
-    let image = parse_svg(text).ok()?;
+    let image = parse_svg_with_fonts(text, fonts()).ok()?;
     let drawn = rasterize_svg(
         &image,
         RasterFit::Stretch {

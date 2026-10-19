@@ -367,14 +367,21 @@ impl LayoutCache {
             match step {
                 Step::Visit(node) => {
                     let arena_children = arena.children(node);
-                    let kind = if arena_children.is_empty() {
+                    // An inline `<svg>` is a leaf: what is in it is drawn with it.
+                    let leaf = arena_children.is_empty() || arena.tag(node) == "svg";
+                    let kind = if leaf {
                         LayoutKind::Blocks
                     } else {
                         layout_kind(arena, styles, node)
                     };
-                    if arena_children.is_empty() {
+                    if leaf {
                         let context = leaf_context(font, arena, styles, node);
-                        self.place(node, to_taffy_style(styles.get(&node)), context, &[], false)?;
+                        let style = if arena.tag(node) == "svg" {
+                            crate::svg_taffy_style(arena, styles, node)
+                        } else {
+                            to_taffy_style(styles.get(&node))
+                        };
+                        self.place(node, style, context, &[], false)?;
                     } else if kind == LayoutKind::Inline {
                         let context = build_inline_content_items(font, arena, styles, node, None);
                         self.place(
@@ -562,6 +569,9 @@ fn leaf_context(
     node: NodeId,
 ) -> Option<LeafContext> {
     let style = styles.get(&node);
+    if arena.tag(node) == "svg" {
+        return Some(crate::svg_context(arena, styles, node));
+    }
     if matches!(arena.tag(node), "img" | "icon") {
         return Some(LeafContext::Image(ImageContext {
             intrinsic_size: None,

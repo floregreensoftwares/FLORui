@@ -1098,6 +1098,9 @@ pub struct ComputedStyle {
     /// declare, as written. Only an inline SVG is drawn by them: they reach the
     /// SVG renderer when a mask, clip or filter made of one is used.
     pub svg_properties: Vec<(&'static str, String)>,
+    /// Whether `display: none` is what an author wrote, not what the default
+    /// stylesheet gives the content of an inline `<svg>`.
+    pub author_hidden: bool,
     /// `transform-style: preserve-3d`.
     pub preserve_3d: bool,
     /// `backface-visibility: hidden`.
@@ -1294,6 +1297,7 @@ impl ComputedStyle {
             perspective_origin: _,
             transform_box: _,
             svg_properties: _,
+            author_hidden: _,
             preserve_3d: _,
             backface_hidden: _,
             clip_path: _,
@@ -5773,6 +5777,36 @@ mod tests {
             computed_of(".t { clip-path: url(shapes.svg#c); }").clip_path,
             ClipPath::Url("shapes.svg#c".to_owned())
         );
+    }
+
+    #[test]
+    fn what_is_in_an_inline_svg_is_hidden_from_layout_but_not_by_the_author() {
+        let tree: Element = view! {
+            <div><svg><rect class="r" /><g class="g"><circle /></g><rect style="display: none" /></svg><div class="d" /></div>
+        };
+        let arena = Arena::build(&tree);
+        let rules = parse_stylesheet(".g { display: none; } .d { display: none; }").unwrap();
+        let styles = crate::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            crate::Viewport::default(),
+            &mut crate::AnimationTimeline::default(),
+        );
+        let svg = arena.children(arena.roots()[0])[0];
+        assert_eq!(styles[&svg].display, crate::Display::Block);
+        assert!(!styles[&svg].author_hidden);
+        let [rect, g, hidden] = [0, 1, 2].map(|i| arena.children(svg)[i]);
+        // The default stylesheet hides all of it from layout; that is not the author's.
+        for node in [rect, g, hidden] {
+            assert_eq!(styles[&node].display, crate::Display::None);
+        }
+        assert!(!styles[&rect].author_hidden);
+        assert!(styles[&g].author_hidden, "a rule");
+        assert!(styles[&hidden].author_hidden, "a style attribute");
+        // A box outside an svg hidden by the author is the same.
+        let outside = arena.children(arena.roots()[0])[1];
+        assert!(styles[&outside].author_hidden);
     }
     #[test]
     fn background_blend_mode_goes_to_each_layer_and_cycles() {
