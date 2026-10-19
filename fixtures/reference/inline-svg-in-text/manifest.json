@@ -1,0 +1,229 @@
+{
+    "id":  "inline-svg-in-text",
+    "description":  "An inline svg among words: on the baseline, with vertical-align, and in a line that wraps",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  540,
+                     "height_css_px":  110,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 540px; height: 110px; background-color: #ffffff; } .c { position: absolute; width: 150px; font-size: 20px; line-height: 30px; color: #202020; } .p0 { left: 20px; top: 20px; } .p1 { left: 200px; top: 20px; } .p2 { left: 370px; top: 20px; width: 140px; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p0",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "aa ",
+                                                         {
+                                                             "tag":  "svg",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "rect",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "width",
+                                                                                                    "20"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "height",
+                                                                                                    "20"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "fill",
+                                                                                                    "#d05040"
+                                                                                                ]
+                                                                                            ]
+                                                                              }
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "height",
+                                                                               "20"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "20"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         " bb ",
+                                                         {
+                                                             "tag":  "svg",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "rect",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "width",
+                                                                                                    "30"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "height",
+                                                                                                    "14"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "fill",
+                                                                                                    "#4070d0"
+                                                                                                ]
+                                                                                            ]
+                                                                              }
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "height",
+                                                                               "14"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "30"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         " cc"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p1",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "aa ",
+                                                         {
+                                                             "tag":  "svg",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "circle",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "fill",
+                                                                                                    "#40a060"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "cx",
+                                                                                                    "10"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "cy",
+                                                                                                    "10"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "r",
+                                                                                                    "10"
+                                                                                                ]
+                                                                                            ]
+                                                                              }
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "style",
+                                                                               "vertical-align: middle"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "20"
+                                                                           ],
+                                                                           [
+                                                                               "height",
+                                                                               "20"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         " bb"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c p2",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "wrapped text with ",
+                                                         {
+                                                             "tag":  "svg",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "rect",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "width",
+                                                                                                    "40"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "height",
+                                                                                                    "30"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "fill",
+                                                                                                    "#a050c0"
+                                                                                                ]
+                                                                                            ]
+                                                                              }
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "height",
+                                                                               "30"
+                                                                           ],
+                                                                           [
+                                                                               "width",
+                                                                               "40"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         " inside a line that wraps"
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  4,
+                           "reason":  "Measured against Chromium 153 on Windows: 1.65% of the pixels differ by more than 24 levels of a channel and every box has the same bounding box. What is left is the edge of the glyphs, as in the other text fixtures. It covers an inline svg among words on the baseline, with vertical-align, and in a line that wraps. With the lines laid out as plain blocks of the page the same fixture measures 14.06%, so it fails.",
+                           "channel_tolerance":  24
+                       }
+}

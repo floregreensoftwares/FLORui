@@ -799,11 +799,38 @@ fn measure_inline_block_intrinsic_size(
     arena: &Tree,
     styles: &StyleMap,
     child: NodeId,
+    line_width: Option<f32>,
 ) -> (f32, f32, f32) {
     let style = styles.get(&child);
     let text = leaf_text(arena, child);
     let text_style = style.map_or_else(default_text_style, text_style_of);
-    let measured = if arena.tag(child) == "textarea" {
+    let measured = if arena.tag(child) == "svg" {
+        // A replaced box: the size its CSS, its attributes and its viewBox give.
+        let (intrinsic, ratio) = svg_intrinsic(arena, child);
+        let width = style
+            .and_then(|s| s.width)
+            .or(intrinsic.map(|size| size.width))
+            // A viewBox alone fills the line, as any replaced box without a size does.
+            .or(ratio.and(line_width))
+            .unwrap_or(300.0);
+        let attribute = |name: &str| {
+            arena
+                .attr(child, name)
+                .is_some_and(|value| value.trim().trim_end_matches("px").parse::<f32>().is_ok())
+        };
+        let height = style
+            .and_then(|s| s.height)
+            .or_else(|| match (attribute("height"), ratio) {
+                (false, Some((w, h))) => Some(width * h / w),
+                _ => intrinsic.map(|size| size.height),
+            })
+            .unwrap_or(150.0);
+        florui_text::TextMetrics {
+            width,
+            height,
+            baseline: 0.0,
+        }
+    } else if arena.tag(child) == "textarea" {
         let size = textarea_intrinsic_size(font, arena, child, style);
         florui_text::TextMetrics {
             width: size.width,
@@ -1140,9 +1167,15 @@ fn flatten_items(
                     Some(StyleDisplay::None) => context.hidden.push(*child),
                     Some(StyleDisplay::InlineBlock) => {
                         let (width, height, baseline, nested) = if arena.children(*child).is_empty()
+                            || arena.tag(*child) == "svg"
                         {
-                            let (width, height, baseline) =
-                                measure_inline_block_intrinsic_size(font, arena, styles, *child);
+                            let (width, height, baseline) = measure_inline_block_intrinsic_size(
+                                font,
+                                arena,
+                                styles,
+                                *child,
+                                definite_content_width(styles.get(&context.nodes[0])),
+                            );
                             (width, height, baseline, None)
                         } else {
                             // Painting finds the box where layout put it.
