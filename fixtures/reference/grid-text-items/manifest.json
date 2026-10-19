@@ -1,0 +1,202 @@
+{
+    "id":  "grid-text-items",
+    "description":  "Grid and flex items that hold text: intrinsic tracks (min-content, max-content, fit-content, auto), shrink-wrapped items under justify-items, baseline alignment and order.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  330,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 330px; background-color: #ffffff; font-size: 14px; line-height: 18px; color: #101010; } .g { display: grid; margin: 0 0 8px 10px; background-color: #e4e4e4; width: 320px; } .c1 { background-color: #f0b0a0; } .c2 { background-color: #a0dcb0; } .c3 { background-color: #a8c0f0; } .g1 { grid-template-columns: min-content max-content 1fr; } .g2 { grid-template-columns: fit-content(60px) auto 1fr; gap: 6px; } .g3 { grid-template-columns: repeat(3, 1fr); justify-items: center; align-items: start; } .g4 { grid-template-columns: 90px 90px 90px; align-items: baseline; } .g4 .c2 { font-size: 22px; line-height: 26px; } .g4 .c3 { padding-top: 8px; } .f { display: flex; margin: 0 0 8px 10px; width: 320px; background-color: #e4e4e4; gap: 6px; } .f .c1 { order: 2; } .f .c2 { order: 1; flex: 1; } .f .c3 { order: 3; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "g g1",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c1",
+                                                             "css":  "",
+                                                             "text":  "tall words here",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c2",
+                                                             "css":  "",
+                                                             "text":  "a longer line of text",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c3",
+                                                             "css":  "",
+                                                             "text":  "rest",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "g g2",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c1",
+                                                             "css":  "",
+                                                             "text":  "shrink wrapped text",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c2",
+                                                             "css":  "",
+                                                             "text":  "auto",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c3",
+                                                             "css":  "",
+                                                             "text":  "fr",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "g g3",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c1",
+                                                             "css":  "",
+                                                             "text":  "left",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c2",
+                                                             "css":  "",
+                                                             "text":  "middle one",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c3",
+                                                             "css":  "",
+                                                             "text":  "r",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "g g4",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c1",
+                                                             "css":  "",
+                                                             "text":  "small",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c2",
+                                                             "css":  "",
+                                                             "text":  "Large",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c3",
+                                                             "css":  "",
+                                                             "text":  "padded",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "f",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c1",
+                                                             "css":  "",
+                                                             "text":  "first in source",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c2",
+                                                             "css":  "",
+                                                             "text":  "second",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c3",
+                                                             "css":  "",
+                                                             "text":  "third",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  6,
+                           "geometry_tolerance_px":  0.5,
+                           "channel_tolerance":  0,
+                           "reason":  "Every box matches Chromium to the pixel; the remaining difference (4.6% measured) is text anti-aliasing, as in the other fixtures that render text."
+                       }
+}

@@ -1,0 +1,21 @@
+.wrap { position: relative; width: 340px; height: 440px; background-color: #ffffff; }
+.g { display: grid; margin: 0 0 8px 10px; background-color: #e4e4e4; width: 250px; grid-auto-rows: 22px; }
+.c1 { background-color: #d05040; }
+.c2 { background-color: #40a060; }
+.c3 { background-color: #4070d0; }
+.c4 { background-color: #e0b030; }
+.c5 { background-color: #a050c0; }
+.c6 { background-color: #30a0b0; }
+.g1 { grid-template-columns: repeat(2, minmax(50px, 1fr)); width: 200px; }
+.g2 { grid-template-columns: repeat(auto-fill, 60px); gap: 4px; }
+.g3 { grid-template-columns: repeat(auto-fit, minmax(60px, 1fr)); gap: 4px; }
+.g4 { grid-template-columns: fit-content(80px) 1fr; }
+.g4 .c1 > .w { width: 120px; height: 10px; background-color: #222222; }
+.g4 .c3 > .w { width: 40px; height: 10px; background-color: #222222; }
+.g5 { grid-template-columns: 25% 1fr 10%; }
+.g6 { grid-template-columns: calc(10px + 20%) minmax(40px, calc(50% - 10px)) 1fr; }
+.g7 { grid-template-columns: minmax(min-content, 1fr) max-content 1fr; }
+.g7 .c1 > .w { width: 70px; height: 10px; background-color: #222222; }
+.g7 .c2 > .w { width: 90px; height: 10px; background-color: #222222; }
+.g8 { grid-template-columns: 40px repeat(2, 30px 20px) minmax(10px, 2fr) 1fr; grid-template-rows: repeat(2, 22px); }
+.g9 { grid-template-columns: repeat(3, 1fr); gap: 10px; width: 200px; }

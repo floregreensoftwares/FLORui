@@ -1,0 +1,22 @@
+.wrap { position: relative; width: 340px; height: 440px; background-color: #ffffff; }
+.g { display: grid; margin: 0 0 8px 10px; background-color: #e4e4e4; gap: 4px; }
+.k { min-height: 8px; }
+.c1 { background-color: #d05040; }
+.c2 { background-color: #40a060; }
+.c3 { background-color: #4070d0; }
+.c4 { background-color: #e0b030; }
+.c5 { background-color: #a050c0; }
+.c6 { background-color: #30a0b0; }
+.g1 { grid-template-columns: 100px 100px; grid-auto-rows: 28px; width: 204px; }
+.g2 { grid-auto-flow: column; grid-auto-columns: 40px; grid-template-rows: 30px 30px; width: 300px; }
+.g3 { grid-template-columns: 60px 60px; grid-auto-rows: 20px 34px; width: 124px; }
+.g4 { grid-template-columns: 40px 40px 40px; grid-auto-rows: 24px; width: 128px; }
+.g4 .c1 { grid-column: span 2; }
+.g4 .c3 { grid-column: span 2; }
+.g5 { grid-template-columns: 40px 40px 40px; grid-auto-rows: 24px; grid-auto-flow: row dense; width: 128px; }
+.g5 .c1 { grid-column: span 2; }
+.g5 .c3 { grid-column: span 2; }
+.g6 { grid-template-columns: 100px 100px; grid-auto-rows: minmax(20px, auto); width: 204px; }
+.g6 .c1 { height: 36px; }
+.g6 .c3 { height: 12px; }
+.g7 { grid-template-rows: 20px; grid-auto-flow: column; grid-auto-columns: minmax(30px, 1fr); width: 240px; }
