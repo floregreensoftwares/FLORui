@@ -1,0 +1,33 @@
+.wrap { position: relative; width: 540px; height: 380px; background-color: #ffffff; }
+.s { position: absolute; width: 120px; height: 80px; background-color: #f4f4f4; }
+.t0 { transform: rotate(45deg); transform-box: fill-box; transform-origin: center; }
+.t1 { transform: rotate(45deg); transform-box: stroke-box; transform-origin: left top; }
+.t2 { transform: rotateX(60deg); }
+.t3 { transform: rotateY(60deg); transform-box: fill-box; transform-origin: center; }
+.t4 { transform: perspective(100px) rotateY(40deg); transform-box: fill-box; transform-origin: center; }
+.t5 { transform: translateZ(50px) translate(10px, 5px) rotate3d(1, 1, 0, 30deg); transform-box: fill-box; transform-origin: center; }
+.t6 { transform: scale(2); transform-box: fill-box; transform-origin: center; }
+.t7 { transform: rotate(45deg); transform-box: content-box; transform-origin: left top; }
+.t8 { transform: rotate(45deg); transform-box: border-box; transform-origin: left top; }
+.t9 { transform: rotate(30deg) translate(50%, 0); transform-box: fill-box; }
+.t10 { transform: rotate(30deg); transform-box: view-box; transform-origin: 50% 50%; }
+.t11 { transform: perspective(60px) rotateX(50deg); transform-box: fill-box; transform-origin: center; }
+.t12 { transform: perspective(90px) rotateY(35deg); transform-box: fill-box; transform-origin: center; }
+.t13 { transform: perspective(90px) rotateY(-35deg); transform-box: fill-box; transform-origin: center; }
+.t14 { transform: perspective(80px) rotateX(40deg); transform-box: fill-box; transform-origin: center; }
+.t15 { transform: matrix3d(1, 0, 0, 0.004, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1); transform-box: fill-box; transform-origin: center; }.p0 { left: 10px; top: 10px; }
+.p1 { left: 140px; top: 10px; }
+.p2 { left: 270px; top: 10px; }
+.p3 { left: 400px; top: 10px; }
+.p4 { left: 10px; top: 100px; }
+.p5 { left: 140px; top: 100px; }
+.p6 { left: 270px; top: 100px; }
+.p7 { left: 400px; top: 100px; }
+.p8 { left: 10px; top: 190px; }
+.p9 { left: 140px; top: 190px; }
+.p10 { left: 270px; top: 190px; }
+.p11 { left: 400px; top: 190px; }
+.p12 { left: 10px; top: 280px; }
+.p13 { left: 140px; top: 280px; }
+.p14 { left: 270px; top: 280px; }
+.p15 { left: 400px; top: 280px; }

@@ -33,6 +33,29 @@ pub struct Size2D {
     pub height: f32,
 }
 
+/// What an SVG's content takes up, in the document's own user space: the box
+/// of its geometry (`fill`) and the same with the strokes (`stroke`), each
+/// `(x, y, width, height)`. `None` when it draws nothing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ObjectBounds {
+    pub fill: (f32, f32, f32, f32),
+    pub stroke: (f32, f32, f32, f32),
+}
+
+impl VectorImage {
+    /// The bounding boxes of what the document draws.
+    pub fn object_bounds(&self) -> Option<ObjectBounds> {
+        let root = self.tree.root();
+        let rect = |r: resvg::usvg::Rect| (r.x(), r.y(), r.width(), r.height());
+        let fill = root.abs_bounding_box();
+        let stroke = root.abs_stroke_bounding_box();
+        (fill.width() >= 0.0 && fill.height() >= 0.0).then(|| ObjectBounds {
+            fill: rect(fill),
+            stroke: rect(stroke),
+        })
+    }
+}
+
 /// Substitutes every literal `currentColor` occurrence in `svg_text` with
 /// `color`'s own `#rrggbb` hex form, before parsing -- `resvg`/`usvg`
 /// 0.48.1 has no built-in override for the keyword (checked directly

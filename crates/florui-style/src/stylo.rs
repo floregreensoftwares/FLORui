@@ -3028,15 +3028,19 @@ fn to_background_layers(
 /// `transform-box`, which the engine's servo build lacks, read back from the
 /// custom property that carries it when this element's own rules declare it.
 fn to_transform_box(values: &ComputedValues) -> crate::TransformBox {
+    use crate::TransformBox as T;
     if !declares_mirrored(values, "transform-box") {
-        return crate::TransformBox::Border;
+        return T::View;
     }
     match mirrored(values, "transform-box")
         .map(|css| css.to_ascii_lowercase())
         .as_deref()
     {
-        Some("content-box" | "fill-box") => crate::TransformBox::Content,
-        _ => crate::TransformBox::Border,
+        Some("border-box") => T::Border,
+        Some("content-box") => T::Content,
+        Some("fill-box") => T::Fill,
+        Some("stroke-box") => T::Stroke,
+        _ => T::View,
     }
 }
 

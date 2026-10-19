@@ -330,8 +330,11 @@ is no size at all), 300 by 150 when it says nothing. It is `display: inline-bloc
 the baseline (or by `vertical-align`), and what is in it takes no room. What the stylesheets give the elements in it reaches the renderer: the SVG properties (`fill`, `stroke`,
 `stop-color`, `mask-type`, ...), `opacity`, `visibility`, an authored `display: none`, the font of the page for
 its text, the `color` that `currentColor` takes, and a `transform` (translate, rotate, scale, skew, matrix, with its
-origin; a percentage is of the viewBox, as for any SVG element). A transform in three dimensions, and
-`transform-box` on a shape inside an SVG, are not read.
+origin, which is the corner of the box by default). `transform-box` names that box: the viewBox (the initial
+value), the box of the shape (`fill-box`, `content-box`) or that box with its stroke (`stroke-box`, `border-box`).
+A transform in three dimensions is drawn as Chromium draws it in an SVG, flat: the matrix with the origin folded in
+and the perspective row dropped, never divided by. A `<style>` is read by the renderer, and `view!` refuses one
+plainly under HTML elements, where it would do nothing.
 
 An inline element (a `span`) with `opacity`, a filter, a `clip-path`, a mask or a blend mode is painted with its
 fragments and what is in it as a unit, and the effects are applied to that. A clip or a mask is of the box of its
