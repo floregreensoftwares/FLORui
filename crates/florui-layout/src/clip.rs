@@ -95,13 +95,19 @@ pub fn clip_admits(
         return resolve_clip_path(style, layout, at.0, at.1, 1.0)
             .is_none_or(|shape| shape.contains(point.0, point.1));
     };
-    let Some(reference) = florui_svg::reference(arena, styles, url) else {
-        return true;
-    };
+    // Coverage is read only inside the box, where it is drawn: elsewhere nothing is
+    // cut, and nothing needs drawing or the document written.
+    let (x, y) = ((point.0 - at.0).floor(), (point.1 - at.1).floor());
     let size = (
         (layout.width.ceil() as u32).max(1),
         (layout.height.ceil() as u32).max(1),
     );
+    if x < 0.0 || y < 0.0 || x >= size.0 as f32 || y >= size.1 as f32 {
+        return true;
+    }
+    let Some(reference) = florui_svg::reference(arena, styles, url) else {
+        return true;
+    };
     let canvas = florui_svg::Canvas {
         size,
         scale: 1.0,
@@ -111,10 +117,6 @@ pub fn clip_admits(
     let Some(coverage) = florui_svg::clip_coverage(&reference, &canvas) else {
         return true;
     };
-    let (x, y) = ((point.0 - at.0).floor(), (point.1 - at.1).floor());
-    if x < 0.0 || y < 0.0 || x >= size.0 as f32 || y >= size.1 as f32 {
-        return true;
-    }
     coverage[y as usize * size.0 as usize + x as usize] >= 128
 }
 
