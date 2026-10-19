@@ -3558,19 +3558,10 @@ pub fn paint_order(
         return nodes.to_vec();
     }
     let mut ordered = nodes.to_vec();
-    ordered.sort_by_key(|id| {
-        let style = styles.get(id);
-        let level = if is_eligible(id) {
-            style.and_then(|s| s.z_index).unwrap_or(0)
-        } else {
-            0
-        };
-        let order = if parent_is_flex_or_grid {
-            style.map_or(0, |s| s.order)
-        } else {
-            0
-        };
-        (level, order)
+    ordered.sort_by_key(|id| match styles.get(id) {
+        Some(style) if parent_is_flex_or_grid => style.item_stacking(),
+        Some(style) if style.position != Position::Static => (style.z_index.unwrap_or(0), 0),
+        _ => (0, 0),
     });
     ordered
 }
