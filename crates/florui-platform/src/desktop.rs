@@ -627,7 +627,7 @@ pub(crate) fn scale_layouts(
                     y: layout.y * factor,
                     width: layout.width * factor,
                     height: layout.height * factor,
-                    margin: florui_layout::BoxMargin::ZERO,
+                    margin: layout.margin,
                 },
             )
         })
@@ -2848,6 +2848,31 @@ mod tests {
         assert_eq!(char_index_at(&glyphs, 0.0), 0);
         assert_eq!(char_index_at(&glyphs, 10.0), 1);
         assert_eq!(char_index_at(&glyphs, 25.0), 3);
+    }
+
+    #[test]
+    fn scale_layouts_keeps_the_resolved_margins_in_logical_pixels() {
+        // `margin-box` reads them and applies the scale itself.
+        let mut layouts = HashMap::new();
+        let margin = florui_layout::BoxMargin {
+            top: 3.0,
+            right: 4.0,
+            bottom: 5.0,
+            left: 6.0,
+        };
+        layouts.insert(
+            0,
+            BoxLayout {
+                x: 10.0,
+                y: 20.0,
+                width: 100.0,
+                height: 50.0,
+                margin,
+            },
+        );
+        let scaled = scale_layouts(&layouts, 2.0);
+        assert_eq!(scaled[&0].width, 200.0);
+        assert_eq!(scaled[&0].margin, margin);
     }
 
     #[test]
