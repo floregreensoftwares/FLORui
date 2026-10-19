@@ -43,12 +43,14 @@ pub(crate) fn mask_coverage(
         MaskMode::Alpha => Some(florui_svg::MaskKind::Alpha),
         MaskMode::Luminance => Some(florui_svg::MaskKind::Luminance),
     };
-    let covered = florui_svg::reference(arena, styles, url).and_then(|reference| {
-        florui_svg::mask_coverage(&reference, &canvas(group, node_abs, layout, scale), kind)
-    });
-    match covered {
+    let pixels = group.pixmap.pixels().len();
+    // A mask that cannot be had hides the box; one that cannot be drawn is left out.
+    let Some(reference) = florui_svg::reference(arena, styles, url) else {
+        return vec![0; pixels];
+    };
+    match florui_svg::mask_coverage(&reference, &canvas(group, node_abs, layout, scale), kind) {
         Some(coverage) => coverage.to_vec(),
-        None => vec![0; group.pixmap.pixels().len()],
+        None => vec![255; pixels],
     }
 }
 

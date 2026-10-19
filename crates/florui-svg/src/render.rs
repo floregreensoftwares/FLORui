@@ -21,8 +21,11 @@ pub struct Canvas {
 
 const KEPT: usize = 24;
 
+const FILTERED_KEPT: usize = 4;
+
 thread_local! {
     static DRAWN: RefCell<HashMap<String, Rc<Vec<u8>>>> = RefCell::new(HashMap::new());
+    static FILTERED: RefCell<Vec<(u64, Rc<Vec<u8>>)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The document a reference is drawn in. Its user space has the box's top left as
@@ -138,6 +141,69 @@ pub fn filter_pixels(
     canvas: &Canvas,
     premultiplied: &[u8],
 ) -> Option<Vec<u8>> {
+    // The same picture through the same filter, as when nothing moves, is the
+    // result of the last time.
+    let key = filter_key(reference, canvas, premultiplied);
+    if let Some(found) = FILTERED.with(|cache| {
+        cache
+            .borrow()
+            .iter()
+            .find(|(kept, _)| *kept == key)
+            .map(|(_, pixels)| Rc::clone(pixels))
+    }) {
+        return Some(found.to_vec());
+    }
+    let filtered = filter_pixels_uncached(reference, canvas, premultiplied)?;
+    FILTERED.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.len() >= FILTERED_KEPT {
+            cache.remove(0);
+        }
+        cache.push((key, Rc::new(filtered.clone())));
+    });
+    Some(filtered)
+}
+
+/// What identifies a filter run: the reference, where it is drawn and the pixels.
+fn filter_key(reference: &Reference, canvas: &Canvas, pixels: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    reference.hash(&mut hasher);
+    canvas.size.hash(&mut hasher);
+    for value in [
+        canvas.scale,
+        canvas.origin.0,
+        canvas.origin.1,
+        canvas.border_box.0,
+        canvas.border_box.1,
+        canvas.border_box.2,
+        canvas.border_box.3,
+    ] {
+        value.to_bits().hash(&mut hasher);
+    }
+    // The pixels, eight bytes at a time.
+    let mut digest: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut chunks = pixels.chunks_exact(8);
+    for chunk in &mut chunks {
+        let word = u64::from_le_bytes([
+            chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+        ]);
+        digest = (digest ^ word)
+            .wrapping_mul(0x0000_0100_0000_01b3)
+            .rotate_left(5);
+    }
+    for &byte in chunks.remainder() {
+        digest = (digest ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    digest.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn filter_pixels_uncached(
+    reference: &Reference,
+    canvas: &Canvas,
+    premultiplied: &[u8],
+) -> Option<Vec<u8>> {
     let (width, height) = canvas.size;
     let mut straight = premultiplied.to_vec();
     for pixel in straight.chunks_exact_mut(4) {
@@ -237,6 +303,44 @@ mod tests {
         );
         let coverage = mask_coverage(&alpha, &canvas(20, 1.0), None).expect("a coverage");
         assert_eq!(at(&coverage, 20, 4, 4), 255);
+    }
+
+    #[test]
+    fn what_cannot_be_drawn_is_none_and_a_missing_definition_is_not_drawn() {
+        let broken = reference("<mask id=\"m\"><rect width=\"2\" height=\"2\"", "m");
+        let size = (9000, 4);
+        let huge = Canvas {
+            size,
+            scale: 1.0,
+            origin: (0.0, 0.0),
+            border_box: (0.0, 0.0, 9000.0, 4.0),
+        };
+        // Over the raster size limit, or an SVG that does not parse, there is nothing.
+        let mask = reference("<mask id=\"m\"/>", "m");
+        assert!(mask_coverage(&mask, &huge, None).is_none());
+        assert!(clip_coverage(&broken, &canvas(20, 1.0)).is_none());
+        // A mask the definitions do not hold is a transparent one; a clip or filter is
+        // simply not found.
+        let none = reference("<g/>", "nope");
+        let coverage = mask_coverage(&none, &canvas(20, 1.0), None).expect("a coverage");
+        assert!(coverage.iter().all(|&cover| cover == 0));
+        assert!(!none.defines("filter"));
+        let pixels = vec![0u8; 20 * 20 * 4];
+        assert!(filter_pixels(&broken, &canvas(20, 1.0), &pixels).is_none());
+    }
+
+    #[test]
+    fn the_same_picture_through_the_same_filter_is_answered_again() {
+        let filter = reference("<filter id=\"f\"><feOffset dx=\"1\"/></filter>", "f");
+        let mut pixels = vec![0u8; 8 * 8 * 4];
+        pixels[0..4].copy_from_slice(&[255, 0, 0, 255]);
+        let first = filter_pixels(&filter, &canvas(8, 1.0), &pixels).expect("pixels");
+        let second = filter_pixels(&filter, &canvas(8, 1.0), &pixels).expect("pixels");
+        assert_eq!(first, second);
+        // Another picture is another answer.
+        pixels[4..8].copy_from_slice(&[0, 255, 0, 255]);
+        let other = filter_pixels(&filter, &canvas(8, 1.0), &pixels).expect("pixels");
+        assert_ne!(first, other);
     }
 
     #[test]

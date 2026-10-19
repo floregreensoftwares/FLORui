@@ -5742,6 +5742,12 @@ mod tests {
             of(".t { filter: blur(1px); filter: url(#f) bogus(2); }"),
             [F::Blur(1.0)]
         );
+        // What a var() comes to is not known when the urls are set aside: no url is kept.
+        assert!(
+            !of(".t { filter: url(#f); } .t { filter: url(#f) var(--x); }")
+                .iter()
+                .any(|function| matches!(function, F::Url(_)))
+        );
         // The backdrop has them too, and neither is inherited.
         assert_eq!(
             computed_of(".t { backdrop-filter: url(#f) blur(2px); }").backdrop_filter,

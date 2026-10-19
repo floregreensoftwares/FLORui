@@ -612,6 +612,16 @@ fn expand_filter(name: &str, value: &str, important: &str) -> Option<String> {
         ));
     }
     let mut native = Vec::new();
+    // What a `var()` comes to is not known here, and no `url()` can come of it for
+    // the engine: the whole list is then the engine's.
+    if items
+        .iter()
+        .any(|item| item.to_ascii_lowercase().contains("var("))
+    {
+        return Some(format!(
+            "{name}: {value}{important}; {mirror}: none{important}"
+        ));
+    }
     let mut shape = Vec::new();
     for item in items {
         if is_url_item(item) {
