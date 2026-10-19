@@ -1,0 +1,738 @@
+{
+    "id":  "svg-references",
+    "description":  "url(#id) references of mask, clip-path and filter to an inline SVG: mask units and types, clip units and rules, filter primitives and regions, in a list, missing ones",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  540,
+                     "height_css_px":  380,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 540px; height: 380px; background-color: #ffffff; } .b { position: absolute; width: 100px; height: 50px; box-sizing: border-box; border: 4px solid #2a3a58; } .p0 { left: 20px; top: 20px; background-color: #d05040; mask: url(#m1); } .p1 { left: 150px; top: 20px; background-color: #40a060; mask: url(#m2); } .p2 { left: 280px; top: 20px; background-color: #4070d0; mask: url(#m3); } .p3 { left: 410px; top: 20px; background-color: #e0b030; mask: url(#nope); } .p4 { left: 20px; top: 110px; background-color: #a050c0; clip-path: url(#c1); } .p5 { left: 150px; top: 110px; background-color: #30a0b0; clip-path: url(#c2); } .p6 { left: 280px; top: 110px; background-color: #d05040; clip-path: url(#c3); } .p7 { left: 410px; top: 110px; background-color: #40a060; clip-path: url(#nope); } .p8 { left: 20px; top: 200px; background-color: #4070d0; filter: url(#f1); } .p9 { left: 150px; top: 200px; background-color: #e0b030; filter: url(#f2); } .p10 { left: 280px; top: 200px; background-color: #a050c0; filter: url(#f3); } .p11 { left: 410px; top: 200px; background-color: #30a0b0; filter: url(#f4); } .p12 { left: 20px; top: 290px; background-color: #d05040; filter: invert(1) url(#f1); } .p13 { left: 150px; top: 290px; background-color: #40a060; filter: url(#f6); } .p14 { left: 280px; top: 290px; background-color: #4070d0; filter: url(#nope); } .p15 { left: 410px; top: 290px; background-color: #e0b030; clip-path: url(#c1); transform: rotate(10deg); opacity: 0.7; }",
+                   "children":  [
+                                    {
+                                        "tag":  "svg",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "defs",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "mask",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "rect",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "y",
+                                                                                                                         "0"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "fill",
+                                                                                                                         "#ffffff"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "width",
+                                                                                                                         "50"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "height",
+                                                                                                                         "50"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "x",
+                                                                                                                         "0"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   },
+                                                                                                   {
+                                                                                                       "tag":  "rect",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "y",
+                                                                                                                         "0"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "fill",
+                                                                                                                         "#808080"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "width",
+                                                                                                                         "25"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "height",
+                                                                                                                         "50"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "x",
+                                                                                                                         "50"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   }
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "id",
+                                                                                                    "m1"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "maskUnits",
+                                                                                                    "userSpaceOnUse"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "width",
+                                                                                                    "100"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "y",
+                                                                                                    "0"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "x",
+                                                                                                    "0"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "height",
+                                                                                                    "50"
+                                                                                                ]
+                                                                                            ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "mask",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "rect",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "y",
+                                                                                                                         "0"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "fill",
+                                                                                                                         "#ffffff"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "width",
+                                                                                                                         "0.5"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "height",
+                                                                                                                         "1"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "x",
+                                                                                                                         "0"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   }
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "id",
+                                                                                                    "m2"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "maskContentUnits",
+                                                                                                    "objectBoundingBox"
+                                                                                                ]
+                                                                                            ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "mask",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "rect",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "width",
+                                                                                                                         "100"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "fill",
+                                                                                                                         "#000000"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "y",
+                                                                                                                         "0"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "fill-opacity",
+                                                                                                                         "0.5"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "x",
+                                                                                                                         "0"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "height",
+                                                                                                                         "50"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   }
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "id",
+                                                                                                    "m3"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "maskUnits",
+                                                                                                    "userSpaceOnUse"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "mask-type",
+                                                                                                    "alpha"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "y",
+                                                                                                    "0"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "height",
+                                                                                                    "50"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "x",
+                                                                                                    "0"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "width",
+                                                                                                    "100"
+                                                                                                ]
+                                                                                            ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "clipPath",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "circle",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "cx",
+                                                                                                                         "50"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "cy",
+                                                                                                                         "25"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "r",
+                                                                                                                         "22"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   }
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "id",
+                                                                                                    "c1"
+                                                                                                ]
+                                                                                            ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "clipPath",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "rect",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "y",
+                                                                                                                         "0"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "width",
+                                                                                                                         "0.5"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "height",
+                                                                                                                         "1"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "x",
+                                                                                                                         "0"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   }
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "id",
+                                                                                                    "c2"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "clipPathUnits",
+                                                                                                    "objectBoundingBox"
+                                                                                                ]
+                                                                                            ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "clipPath",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "path",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "d",
+                                                                                                                         "M10 0 L90 0 L90 50 L10 50 Z M30 10 L70 10 L70 40 L30 40 Z"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "clip-rule",
+                                                                                                                         "evenodd"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   }
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "id",
+                                                                                                    "c3"
+                                                                                                ]
+                                                                                            ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "filter",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "feColorMatrix",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "type",
+                                                                                                                         "matrix"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "values",
+                                                                                                                         "0 0 0 0 0  0 0 0 0 1  0 0 0 0 0  0 0 0 1 0"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   }
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "id",
+                                                                                                    "f1"
+                                                                                                ]
+                                                                                            ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "filter",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "feOffset",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "dx",
+                                                                                                                         "20"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "dy",
+                                                                                                                         "0"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   }
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "id",
+                                                                                                    "f2"
+                                                                                                ]
+                                                                                            ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "filter",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "feGaussianBlur",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "stdDeviation",
+                                                                                                                         "3"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   }
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "id",
+                                                                                                    "f3"
+                                                                                                ]
+                                                                                            ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "filter",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "feDropShadow",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "dx",
+                                                                                                                         "6"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "dy",
+                                                                                                                         "6"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "stdDeviation",
+                                                                                                                         "0"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "flood-color",
+                                                                                                                         "#000000"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   }
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "y",
+                                                                                                    "-0.2"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "width",
+                                                                                                    "1.6"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "id",
+                                                                                                    "f4"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "height",
+                                                                                                    "1.6"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "x",
+                                                                                                    "-0.2"
+                                                                                                ]
+                                                                                            ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "filter",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "feOffset",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ],
+                                                                                                       "attrs":  [
+                                                                                                                     [
+                                                                                                                         "dx",
+                                                                                                                         "10"
+                                                                                                                     ],
+                                                                                                                     [
+                                                                                                                         "dy",
+                                                                                                                         "5"
+                                                                                                                     ]
+                                                                                                                 ]
+                                                                                                   }
+                                                                                               ],
+                                                                                  "attrs":  [
+                                                                                                [
+                                                                                                    "id",
+                                                                                                    "f6"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "filterUnits",
+                                                                                                    "userSpaceOnUse"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "y",
+                                                                                                    "-4"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "height",
+                                                                                                    "60"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "x",
+                                                                                                    "-4"
+                                                                                                ],
+                                                                                                [
+                                                                                                    "width",
+                                                                                                    "120"
+                                                                                                ]
+                                                                                            ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "style",
+                                                          "position:absolute"
+                                                      ],
+                                                      [
+                                                          "width",
+                                                          "0"
+                                                      ],
+                                                      [
+                                                          "height",
+                                                          "0"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p0",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p1",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p2",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p3",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p4",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p5",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p6",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p7",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p8",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p9",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p10",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p11",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p12",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p13",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p14",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p15",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  0.3,
+                           "reason":  "Measured against Chromium 153 on Windows: 0.11% of the pixels differ by more than 8 levels of a channel and every box has the same bounding box. What is left is the antialiasing along the edge of a circular clip and the Gaussian blur, which the SVG renderer approximates. It covers url(#id) of mask (user-space and box units, luminance and alpha, a missing one hiding the box), of clip-path (units, clip-rule, a missing one clipping nothing) and of filter (primitives, default and user-space regions, in a list after a native function, a missing one filtering nothing). With the references ignored the same fixture measures 22.41%, so it fails.",
+                           "channel_tolerance":  8
+                       }
+}
