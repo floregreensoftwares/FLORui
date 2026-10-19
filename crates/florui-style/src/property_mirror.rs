@@ -357,6 +357,12 @@ fn expand(name: &str, value: &str, important: &str) -> Option<String> {
         "background-clip" | "-webkit-background-clip" => expand_background_clip(value, important),
         _ if is_mask_box_image_name(name) => expand_mask_box_image(name, value, important),
         _ if is_mask_name(name) => expand_mask(name, value, important),
+        "mask-mode" | "mask-repeat" | "mask-position" | "mask-size" | "mask-composite"
+        | "mask-origin" | "mask-clip" => expand_mask(name, value, important),
+        "background-blend-mode" => (is_global(value.trim())
+            || value.to_ascii_lowercase().contains("var(")
+            || crate::mask_values::parse_blend_modes(value).is_some())
+        .then(|| format!("{}: {value}{important}", mirror_name(name))),
         _ => Some(format!("{}: {value}{important}", mirror_name(name))),
     }
 }
@@ -984,6 +990,30 @@ fn expand_clip_path(value: &str, important: &str) -> String {
     }
 }
 
+/// Whether `text` is a valid value of the `mask-*` longhand, so that an invalid
+/// declaration is dropped and the one before it stays, as in a browser. Global
+/// keywords and anything with a `var()` are not known here and pass.
+fn mask_longhand_is_valid(longhand: &str, text: &str) -> bool {
+    use crate::mask_values as v;
+    use crate::shape_function::Units;
+    let text = text.trim();
+    if is_global(text) || text.to_ascii_lowercase().contains("var(") {
+        return true;
+    }
+    // Only the syntax is read: no length is resolved.
+    let units = Units::new(16.0, (1.0, 1.0));
+    match longhand {
+        "mask-mode" => v::parse_modes(text).is_some(),
+        "mask-repeat" => v::parse_repeats(text).is_some(),
+        "mask-position" => v::parse_positions(text, units).is_some(),
+        "mask-size" => v::parse_sizes(text, units).is_some(),
+        "mask-composite" => v::parse_composites(text).is_some(),
+        "mask-origin" => v::parse_boxes(text, false).is_some(),
+        "mask-clip" => v::parse_boxes(text, true).is_some(),
+        _ => true,
+    }
+}
+
 /// `mask` and its `-webkit-` forms: the engine's servo build knows `mask-image`
 /// only, so the others are written as the mirrored custom properties
 /// [`crate::mask_values`] reads. The shorthand is split into its layers here,
@@ -991,6 +1021,7 @@ fn expand_clip_path(value: &str, important: &str) -> String {
 /// as a browser's own shorthand resets what it does not name.
 fn expand_mask(name: &str, value: &str, important: &str) -> Option<String> {
     let longhand = name.strip_prefix("-webkit-").unwrap_or(name);
+    let prefixed = longhand.len() != name.len();
     let mirror = |what: &str, text: &str| format!("{}: {text}{important}", mirror_name(what));
     match longhand {
         "mask" => expand_mask_shorthand(value, important),
@@ -1000,31 +1031,31 @@ fn expand_mask(name: &str, value: &str, important: &str) -> Option<String> {
             let text = value
                 .split(',')
                 .map(|word| match word.trim().to_ascii_lowercase().as_str() {
-                    "source-over" => "add".to_owned(),
-                    "source-out" => "subtract".to_owned(),
-                    "source-in" => "intersect".to_owned(),
-                    "xor" => "exclude".to_owned(),
-                    other => other.to_owned(),
+                    "source-over" if prefixed => "add".to_owned(),
+                    "source-out" if prefixed => "subtract".to_owned(),
+                    "source-in" if prefixed => "intersect".to_owned(),
+                    "xor" if prefixed => "exclude".to_owned(),
+                    _ => word.trim().to_owned(),
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            Some(mirror("mask-composite", &text))
+            mask_longhand_is_valid("mask-composite", &text).then(|| mirror("mask-composite", &text))
         }
         "mask-origin" | "mask-clip" => {
             // The prefixed form also takes `border`, `padding` and `content`.
             let text = value
                 .split(',')
                 .map(|word| match word.trim().to_ascii_lowercase().as_str() {
-                    "border" => "border-box".to_owned(),
-                    "padding" => "padding-box".to_owned(),
-                    "content" => "content-box".to_owned(),
-                    other => other.to_owned(),
+                    "border" if prefixed => "border-box".to_owned(),
+                    "padding" if prefixed => "padding-box".to_owned(),
+                    "content" if prefixed => "content-box".to_owned(),
+                    _ => word.trim().to_owned(),
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            Some(mirror(longhand, &text))
+            mask_longhand_is_valid(longhand, &text).then(|| mirror(longhand, &text))
         }
-        _ => Some(mirror(longhand, value)),
+        _ => mask_longhand_is_valid(longhand, value).then(|| mirror(longhand, value)),
     }
 }
 

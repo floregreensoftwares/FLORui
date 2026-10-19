@@ -5440,6 +5440,30 @@ mod tests {
     }
 
     #[test]
+    fn an_invalid_mask_longhand_is_dropped_and_the_earlier_value_stays() {
+        use crate::{BackgroundRepeat as R, MaskComposite, MaskMode};
+        let layer = mask_of(&format!(
+            "mask-image: {FADE}; mask-repeat: no-repeat; mask-repeat: sideways; \
+             mask-mode: alpha; mask-mode: dark; mask-composite: exclude; mask-composite: nope;"
+        ))
+        .remove(0);
+        assert_eq!(layer.layer.repeat, (R::NoRepeat, R::NoRepeat));
+        assert_eq!(layer.mode, MaskMode::Alpha);
+        assert_eq!(layer.composite, MaskComposite::Exclude);
+        // Across rules, too.
+        let across = computed_of(&format!(
+            ".t {{ mask-image: {FADE}; mask-repeat: no-repeat; }} .t.u {{ mask-repeat: bogus; }}"
+        ));
+        assert_eq!(across.mask[0].layer.repeat, (R::NoRepeat, R::NoRepeat));
+        // And for the blend mode of a background.
+        let blend = computed_of(
+            ".t { background-image: linear-gradient(red, blue); background-blend-mode: multiply; \
+             background-blend-mode: bogus; }",
+        );
+        assert_eq!(blend.background_layers[0].blend, crate::BlendMode::Multiply);
+    }
+
+    #[test]
     fn invalid_mask_longhands_fall_back_and_the_mask_does_not_inherit() {
         use crate::{BackgroundRepeat, MaskMode};
         let layer = mask_of(&format!(
