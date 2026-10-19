@@ -122,7 +122,7 @@ fn content(arena: &Tree, styles: &StyleMap, node: NodeId) -> String {
             .map(|(name, value)| format!("{name}:{value}")),
     );
     let mut out = format!("<g style=\"{}\">", escape(&declarations.join(";")));
-    write_children(arena, styles, node, root, &mut out);
+    write_children(arena, styles, node, root, view_of(arena, node), &mut out);
     out.push_str("</g>");
     out
 }
@@ -133,12 +133,15 @@ fn write_children(
     styles: &StyleMap,
     node: NodeId,
     parent: Option<&ComputedStyle>,
+    view: (f32, f32),
     out: &mut String,
 ) {
     for item in arena.inline_items(node) {
         match item {
             InlineItem::Text(text) => escape_into(text, out),
-            InlineItem::Element(child) => write_element(arena, styles, *child, parent, out),
+            InlineItem::Element(child) => {
+                write_element(arena, styles, *child, parent, view, out);
+            }
         }
     }
 }
@@ -176,6 +179,27 @@ pub(crate) fn svg_document(
         keep("preserveAspectRatio"),
         content(arena, styles, node)
     ))
+}
+
+/// The size of the viewport an `<svg>` shows, in its own units: its `viewBox`, or its
+/// size.
+fn view_of(arena: &Tree, node: NodeId) -> (f32, f32) {
+    let numbers = |name: &str| -> Vec<f32> {
+        arena
+            .attr(node, name)
+            .map(|value| {
+                value
+                    .split(|c: char| c.is_whitespace() || c == ',')
+                    .filter_map(|part| part.trim_end_matches("px").parse().ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    if let [_, _, width, height] = numbers("viewBox")[..] {
+        return (width, height);
+    }
+    let length = |name: &str, default: f32| numbers(name).first().copied().unwrap_or(default);
+    (length("width", 300.0), length("height", 150.0))
 }
 
 fn has_svg_ancestor(tree: &Tree, node: NodeId) -> bool {
@@ -264,15 +288,17 @@ fn font_declarations(style: &ComputedStyle, parent: Option<&ComputedStyle>) -> V
 /// the origin in pixels (`0 0` when none was given, as for an element of an
 /// SVG). What needs a box to be resolved (a percentage) or a third dimension is
 /// left out.
-fn transform_attribute(style: &ComputedStyle) -> Option<String> {
+fn transform_attribute(style: &ComputedStyle, view: (f32, f32)) -> Option<String> {
     use florui_style::{LengthPercentage, TransformFunction as F};
     if !style.has_transform() {
         return None;
     }
-    let pixels = |lp: &LengthPercentage| (lp.percentage == 0.0).then_some(lp.length);
+    // A percentage is of the viewport the SVG shows, the box of an SVG element.
+    let across = |lp: &LengthPercentage| Some(lp.length + lp.percentage * view.0);
+    let down = |lp: &LengthPercentage| Some(lp.length + lp.percentage * view.1);
     let mut parts: Vec<String> = Vec::new();
     if let Some((x, y, _)) = &style.translate
-        && let (Some(x), Some(y)) = (pixels(x), pixels(y))
+        && let (Some(x), Some(y)) = (across(x), down(y))
     {
         parts.push(format!("translate({x} {y})"));
     }
@@ -289,7 +315,7 @@ fn transform_attribute(style: &ComputedStyle) -> Option<String> {
     for function in &style.transform {
         match function {
             F::Translate(x, y) => {
-                if let (Some(x), Some(y)) = (pixels(x), pixels(y)) {
+                if let (Some(x), Some(y)) = (across(x), down(y)) {
                     parts.push(format!("translate({x} {y})"));
                 }
             }
@@ -323,8 +349,8 @@ fn transform_attribute(style: &ComputedStyle) -> Option<String> {
         (0.0, 0.0)
     } else {
         (
-            pixels(&style.transform_origin.0).unwrap_or(0.0),
-            pixels(&style.transform_origin.1).unwrap_or(0.0),
+            across(&style.transform_origin.0).unwrap_or(0.0),
+            down(&style.transform_origin.1).unwrap_or(0.0),
         )
     };
     let list = parts.join(" ");
@@ -340,6 +366,7 @@ fn write_element(
     styles: &StyleMap,
     node: NodeId,
     parent: Option<&ComputedStyle>,
+    view: (f32, f32),
     out: &mut String,
 ) {
     let tag = arena.tag(node);
@@ -349,7 +376,7 @@ fn write_element(
     let own = style
         .map(|s| style_declarations(s, parent))
         .unwrap_or_default();
-    let transform = style.and_then(transform_attribute);
+    let transform = style.and_then(|s| transform_attribute(s, view));
     out.push('<');
     out.push_str(tag);
     let mut wrote_style = false;
@@ -380,7 +407,7 @@ fn write_element(
         out.push('"');
     }
     out.push('>');
-    write_children(arena, styles, node, style.or(parent), out);
+    write_children(arena, styles, node, style.or(parent), view, out);
     out.push_str("</");
     out.push_str(tag);
     out.push('>');
@@ -557,9 +584,10 @@ mod tests {
             defs.contains("transform=\"translate(25 25) rotate(30) translate(-25 -25)\""),
             "{defs}"
         );
-        // What needs a box or a third dimension is left out.
+        // A percentage is of the viewport (300 by 150 here), and a third dimension
+        // is left out.
         let third = &defs[defs.find("class=\"c\"").expect("the third")..];
-        assert!(!third.contains("transform="), "{third}");
+        assert!(third.contains("transform=\"translate(150 0)\""), "{third}");
     }
 
     #[test]
