@@ -91,6 +91,14 @@ pub(crate) fn isolates_blend(
 
 /// [`isolates_blend`] for a node whose parent is looked up in `arena`.
 pub(crate) fn isolates(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
+    // Most nodes are no stacking context whatever their parent is: a parent only
+    // matters for a flex or grid item with a `z-index`.
+    let Some(style) = styles.get(&node) else {
+        return false;
+    };
+    if style.z_index.is_none() && !creates_stacking_context(style, None) {
+        return false;
+    }
     let parent_display = arena
         .parent(node)
         .and_then(|parent| styles.get(&parent))

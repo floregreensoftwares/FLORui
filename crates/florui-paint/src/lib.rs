@@ -1692,6 +1692,9 @@ pub(crate) fn node_filter_inflation(
     let Some(style) = styles.get(&node) else {
         return 0.0;
     };
+    if style.filter.is_empty() {
+        return 0.0;
+    }
     let mut pad = filter_inflation(&style.filter, scale_factor);
     if let Some(layout) = layouts.get(&node) {
         for function in &style.filter {
