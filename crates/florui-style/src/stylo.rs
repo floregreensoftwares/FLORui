@@ -1954,6 +1954,7 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
         perspective: to_perspective(&box_style.perspective),
         perspective_origin: to_object_position(&box_style.perspective_origin),
         transform_box: to_transform_box(values),
+        svg_properties: to_svg_properties(values),
         preserve_3d: matches!(
             box_style.transform_style,
             style::values::computed::TransformStyle::Preserve3d
@@ -4256,6 +4257,54 @@ fn declares_mirrored(values: &ComputedValues, name: &str) -> bool {
             })
         })
     })
+}
+
+/// The SVG properties this element's own rules declare (see
+/// [`crate::property_mirror::SVG_PROPERTIES`]), with their values as written; the
+/// rule tree is read once for all of them.
+fn to_svg_properties(values: &ComputedValues) -> Vec<(&'static str, String)> {
+    use style::properties::PropertyDeclaration;
+    // Almost no element has a custom property: nothing to look for then.
+    if values.custom_properties().is_empty() {
+        return Vec::new();
+    }
+    let mirrors = crate::property_mirror::MIRRORED;
+    let wanted: Vec<(&'static str, usize)> = crate::property_mirror::SVG_PROPERTIES
+        .iter()
+        .filter_map(|name| {
+            mirrors
+                .iter()
+                .position(|mirrored| mirrored == name)
+                .map(|index| (*name, index))
+        })
+        .collect();
+    let mut declared = Vec::new();
+    {
+        let guard = shared_lock().read();
+        FLOR_NAMES.with(|names| {
+            for node in values.rules().self_and_ancestors() {
+                let Some(source) = node.style_source() else {
+                    continue;
+                };
+                for declaration in source.read(&guard).declarations() {
+                    let PropertyDeclaration::Custom(custom) = declaration else {
+                        continue;
+                    };
+                    if let Some((name, _)) = wanted
+                        .iter()
+                        .find(|(_, index)| custom.name == names.mirrors[*index])
+                        && !declared.contains(name)
+                    {
+                        declared.push(*name);
+                    }
+                }
+            }
+        });
+    }
+    declared
+        .into_iter()
+        .filter_map(|name| mirrored(values, name).map(|value| (name, value)))
+        .collect()
 }
 
 /// `font-synthesis` and its longhands: the shorthand says which forms are

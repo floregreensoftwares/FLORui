@@ -1094,6 +1094,10 @@ pub struct ComputedStyle {
     pub perspective_origin: (LengthPercentage, LengthPercentage),
     /// `transform-box`.
     pub transform_box: TransformBox,
+    /// The SVG properties (`fill`, `stroke`, `mask-type` ...) this element's own rules
+    /// declare, as written. Only an inline SVG is drawn by them: they reach the
+    /// SVG renderer when a mask, clip or filter made of one is used.
+    pub svg_properties: Vec<(&'static str, String)>,
     /// `transform-style: preserve-3d`.
     pub preserve_3d: bool,
     /// `backface-visibility: hidden`.
@@ -1289,6 +1293,7 @@ impl ComputedStyle {
             perspective: _,
             perspective_origin: _,
             transform_box: _,
+            svg_properties: _,
             preserve_3d: _,
             backface_hidden: _,
             clip_path: _,

@@ -79,14 +79,40 @@ fn box_size(canvas: &Canvas) -> (f32, f32) {
     (canvas.border_box.2, canvas.border_box.3)
 }
 
+/// What a mask is read as, when the layer's `mask-mode` says (`match-source`, the
+/// default, is the mask's own `mask-type`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MaskKind {
+    Luminance,
+    Alpha,
+}
+
 /// How much of each pixel the `<mask>` `reference` leaves of the box: the alpha
 /// of an opaque box drawn through the mask, which carries the mask's own type
 /// (luminance, or alpha with `mask-type`).
-pub fn mask_coverage(reference: &Reference, canvas: &Canvas) -> Option<Rc<Vec<u8>>> {
+pub fn mask_coverage(
+    reference: &Reference,
+    canvas: &Canvas,
+    kind: Option<MaskKind>,
+) -> Option<Rc<Vec<u8>>> {
     // A reference that is no `<mask>` is a transparent black one: nothing shows.
     if !reference.defines("mask") {
         return Some(Rc::new(vec![0; (canvas.size.0 * canvas.size.1) as usize]));
     }
+    let typed;
+    let reference = match kind {
+        Some(kind) => {
+            typed = crate::filter::with_mask_type(
+                reference,
+                match kind {
+                    MaskKind::Alpha => "alpha",
+                    MaskKind::Luminance => "luminance",
+                },
+            );
+            &typed
+        }
+        None => reference,
+    };
     let (w, h) = box_size(canvas);
     let body = format!(
         "<rect x=\"0\" y=\"0\" width=\"{w}\" height=\"{h}\" fill=\"#000\" mask=\"url(#{})\"/>",
@@ -188,12 +214,12 @@ mod tests {
              <rect x=\"2\" y=\"2\" width=\"6\" height=\"6\" fill=\"#fff\"/></mask>",
             "m",
         );
-        let coverage = mask_coverage(&mask, &canvas(20, 1.0)).expect("a coverage");
+        let coverage = mask_coverage(&mask, &canvas(20, 1.0), None).expect("a coverage");
         assert_eq!(at(&coverage, 20, 4, 4), 255);
         assert_eq!(at(&coverage, 20, 12, 12), 0);
         assert_eq!(at(&coverage, 20, 1, 4), 0);
         // At twice the scale the same box covers twice the pixels.
-        let coverage = mask_coverage(&mask, &canvas(40, 2.0)).expect("a coverage");
+        let coverage = mask_coverage(&mask, &canvas(40, 2.0), None).expect("a coverage");
         assert_eq!(at(&coverage, 40, 8, 8), 255);
         assert_eq!(at(&coverage, 40, 3, 8), 0);
         // A luminance mask follows the colour; `mask-type: alpha` follows the alpha.
@@ -202,14 +228,14 @@ mod tests {
              <rect width=\"20\" height=\"20\" fill=\"#000\"/></mask>",
             "m",
         );
-        let coverage = mask_coverage(&grey, &canvas(20, 1.0)).expect("a coverage");
+        let coverage = mask_coverage(&grey, &canvas(20, 1.0), None).expect("a coverage");
         assert_eq!(at(&coverage, 20, 4, 4), 0);
         let alpha = reference(
             "<mask id=\"m\" mask-type=\"alpha\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" \
              width=\"20\" height=\"20\"><rect width=\"20\" height=\"20\" fill=\"#000\"/></mask>",
             "m",
         );
-        let coverage = mask_coverage(&alpha, &canvas(20, 1.0)).expect("a coverage");
+        let coverage = mask_coverage(&alpha, &canvas(20, 1.0), None).expect("a coverage");
         assert_eq!(at(&coverage, 20, 4, 4), 255);
     }
 

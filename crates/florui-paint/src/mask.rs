@@ -9,7 +9,9 @@
 //! border box is cut away, and why an image that cannot be read hides the box.
 
 use florui_layout::BoxLayout;
-use florui_style::{BackgroundImage, ComputedStyle, MaskComposite, MaskMode, RoundedRect, Tree};
+use florui_style::{
+    BackgroundImage, ComputedStyle, MaskComposite, MaskMode, RoundedRect, StyleMap, Tree,
+};
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
 use crate::{Surface, background, mul_div_255, scaled_border, scaled_padding, svg_ref};
@@ -18,6 +20,7 @@ use crate::{Surface, background, mul_div_255, scaled_border, scaled_padding, svg
 pub(crate) fn apply_mask(
     group: &mut Surface,
     arena: &Tree,
+    styles: &StyleMap,
     style: &ComputedStyle,
     layout: &BoxLayout,
     node_abs: (f32, f32),
@@ -51,7 +54,16 @@ pub(crate) fn apply_mask(
             _ => None,
         };
         let source = if let Some(url) = reference {
-            svg_ref::mask_coverage(arena, url, group, node_abs, layout, scale_factor)
+            svg_ref::mask_coverage(
+                arena,
+                styles,
+                url,
+                group,
+                node_abs,
+                layout,
+                scale_factor,
+                layer.mode,
+            )
         } else {
             let Some(mut surface) = Surface::new(width, height, group.origin) else {
                 return;

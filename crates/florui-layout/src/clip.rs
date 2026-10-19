@@ -85,6 +85,7 @@ pub fn resolve_clip_path(
 /// its coverage read at the point; one that does not resolve clips nothing.
 pub fn clip_admits(
     arena: &florui_style::Tree,
+    styles: &florui_style::StyleMap,
     style: &ComputedStyle,
     layout: &BoxLayout,
     at: (f32, f32),
@@ -94,7 +95,7 @@ pub fn clip_admits(
         return resolve_clip_path(style, layout, at.0, at.1, 1.0)
             .is_none_or(|shape| shape.contains(point.0, point.1));
     };
-    let Some(reference) = florui_svg::reference(arena, url) else {
+    let Some(reference) = florui_svg::reference(arena, styles, url) else {
         return true;
     };
     let size = (
