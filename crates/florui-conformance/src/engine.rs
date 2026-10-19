@@ -222,7 +222,7 @@ fn scale_layouts(layouts: &HashMap<NodeId, BoxLayout>, factor: f32) -> HashMap<N
                     y: layout.y * factor,
                     width: layout.width * factor,
                     height: layout.height * factor,
-                    margin: florui_layout::BoxMargin::ZERO,
+                    margin: layout.margin,
                 },
             )
         })
