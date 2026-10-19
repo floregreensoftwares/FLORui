@@ -308,6 +308,10 @@ const CSS: &str = "
         display: none;
     }
 
+    style {
+        display: none;
+    }
+
     .florui-optgroup-label {
         display: block;
         font-weight: bold;
