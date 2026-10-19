@@ -1,0 +1,98 @@
+{
+    "id":  "mask-box-image",
+    "description":  "-webkit-mask-box-image: slices, fill, repeat, round, outset, gradient source, width auto, longhands and with mask layers",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  540,
+                     "height_css_px":  280,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 540px; height: 280px; background-color: #ffffff; } .b { position: absolute; width: 110px; height: 70px; box-sizing: border-box; border: 20px solid #1c2a4a; } .p0 { left: 20px; top: 20px; background-color: #d05040; -webkit-mask-box-image: url(\"data:image/svg+xml;utf8,\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 width=\u002760\u0027 height=\u002760\u0027\u003e\u003crect width=\u002760\u0027 height=\u002760\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.2\u0027/\u003e\u003crect width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002740\u0027 y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect x=\u002720\u0027 y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect y=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect x=\u002740\u0027 y=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003c/svg\u003e\") 20 / 20px stretch; } .p1 { left: 150px; top: 20px; background-color: #40a060; -webkit-mask-box-image: url(\"data:image/svg+xml;utf8,\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 width=\u002760\u0027 height=\u002760\u0027\u003e\u003crect width=\u002760\u0027 height=\u002760\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.2\u0027/\u003e\u003crect width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002740\u0027 y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect x=\u002720\u0027 y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect y=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect x=\u002740\u0027 y=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003c/svg\u003e\") 20 fill / 20px stretch; } .p2 { left: 280px; top: 20px; background-color: #4070d0; -webkit-mask-box-image: url(\"data:image/svg+xml;utf8,\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 width=\u002760\u0027 height=\u002760\u0027\u003e\u003crect width=\u002760\u0027 height=\u002760\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.2\u0027/\u003e\u003crect width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002740\u0027 y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect x=\u002720\u0027 y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect y=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect x=\u002740\u0027 y=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003c/svg\u003e\") 20 / 20px repeat; } .p3 { left: 410px; top: 20px; background-color: #e0b030; -webkit-mask-box-image: url(\"data:image/svg+xml;utf8,\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 width=\u002760\u0027 height=\u002760\u0027\u003e\u003crect width=\u002760\u0027 height=\u002760\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.2\u0027/\u003e\u003crect width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002740\u0027 y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect x=\u002720\u0027 y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect y=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect x=\u002740\u0027 y=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003c/svg\u003e\") 20 / 20px / 6px round; } .p4 { left: 20px; top: 110px; background-color: #a050c0; -webkit-mask-box-image: linear-gradient(#000, transparent) 1 fill; } .p5 { left: 150px; top: 110px; background-color: #30a0b0; border-width: 10px; -webkit-mask-box-image: url(\"data:image/svg+xml;utf8,\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 width=\u002760\u0027 height=\u002760\u0027\u003e\u003crect width=\u002760\u0027 height=\u002760\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.2\u0027/\u003e\u003crect width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002740\u0027 y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect x=\u002720\u0027 y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect y=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect x=\u002740\u0027 y=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003c/svg\u003e\") 20; } .p6 { left: 280px; top: 110px; background-color: #d05040; -webkit-mask-box-image-source: url(\"data:image/svg+xml;utf8,\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 width=\u002760\u0027 height=\u002760\u0027\u003e\u003crect width=\u002760\u0027 height=\u002760\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.2\u0027/\u003e\u003crect width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002740\u0027 y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect x=\u002720\u0027 y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect y=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect x=\u002740\u0027 y=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003c/svg\u003e\"); -webkit-mask-box-image-slice: 20 fill; -webkit-mask-box-image-width: 10px; -webkit-mask-box-image-repeat: space; } .p7 { left: 410px; top: 110px; background-color: #40a060; mask-image: linear-gradient(#000, #000); mask-size: 30px 30px; mask-repeat: no-repeat; -webkit-mask-box-image: url(\"data:image/svg+xml;utf8,\u003csvg xmlns=\u0027http://www.w3.org/2000/svg\u0027 width=\u002760\u0027 height=\u002760\u0027\u003e\u003crect width=\u002760\u0027 height=\u002760\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.2\u0027/\u003e\u003crect width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002740\u0027 y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027/\u003e\u003crect x=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect x=\u002720\u0027 y=\u002740\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect y=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003crect x=\u002740\u0027 y=\u002720\u0027 width=\u002720\u0027 height=\u002720\u0027 fill=\u0027%23000\u0027 fill-opacity=\u00270.5\u0027/\u003e\u003c/svg\u003e\") 20 / 20px; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p0",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p1",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p2",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p3",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p4",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p5",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p6",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b p7",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  0.5,
+                           "reason":  "Measured against Chromium 153 on Windows: 0.11% of the pixels differ by more than 3 levels of a channel and every box has the same bounding box (flat fills, because Chromium dithers gradients). It covers -webkit-mask-box-image with slices, fill (the shorthand fills the middle by itself, the slice longhand does not), repeat, round with an outset, a gradient source, width auto, the longhands, and a mask layer under it. With the box image ignored the same fixture measures 39.01%, so it fails.",
+                           "channel_tolerance":  3
+                       }
+}

@@ -1893,6 +1893,7 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
         text_decoration: to_text_decoration(values, font_size_px),
         outline: to_outline(values, color),
         border_image: to_border_image(border, &text.color),
+        mask_box_image: to_mask_box_image(values, font_size_px, color, viewport_px),
         cursor_pointer: matches!(
             values.get_inherited_ui().cursor.keyword,
             style::values::computed::ui::CursorKind::Pointer
@@ -3348,6 +3349,41 @@ fn to_border_image(
             repeat_of(&border.border_image_repeat.0),
             repeat_of(&border.border_image_repeat.1),
         ),
+    }))
+}
+
+/// `-webkit-mask-box-image` and its parts, read back from the custom properties
+/// that carry them (the engine's servo build lacks them) when this element's
+/// own rules declare them, and computed as the `border-image` parts they are the
+/// twins of.
+fn to_mask_box_image(
+    values: &ComputedValues,
+    font_size_px: f32,
+    color: Rgba,
+    viewport_px: (f32, f32),
+) -> Option<Box<crate::mask_box_image::MaskBoxImageSpec>> {
+    const PARTS: [&str; 5] = [
+        "mask-box-image-source",
+        "mask-box-image-slice",
+        "mask-box-image-width",
+        "mask-box-image-outset",
+        "mask-box-image-repeat",
+    ];
+    if !declares_mirrored(values, PARTS[0]) {
+        return None;
+    }
+    let parts = PARTS.map(|part| {
+        if declares_mirrored(values, part) {
+            mirrored(values, part)
+        } else {
+            None
+        }
+    });
+    Some(Box::new(crate::mask_box_image::MaskBoxImageSpec {
+        parts,
+        font_size: font_size_px,
+        color,
+        viewport: viewport_px,
     }))
 }
 

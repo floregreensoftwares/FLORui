@@ -41,6 +41,7 @@ mod error;
 mod focus;
 mod height_media_adapter;
 mod interaction;
+mod mask_box_image;
 mod mask_values;
 mod property_mirror;
 mod reduced_motion_adapter;
@@ -81,6 +82,7 @@ pub use container_query_adapter::{ContentBoxSize, resolve_container_query_signat
 pub use error::StyleError;
 pub use focus::FocusPath;
 pub use interaction::{FormState, InteractionState};
+pub use mask_box_image::{MaskBoxImageSpec, resolve_mask_box_image};
 pub use rounded::RoundedRect;
 pub use style_map::StyleMap;
 pub use style_session::StyleSession;

@@ -52,6 +52,11 @@ pub(crate) const MIRRORED: &[&str] = &[
     "background-blend-mode",
     "background-clip",
     "transform-box",
+    "mask-box-image-source",
+    "mask-box-image-slice",
+    "mask-box-image-width",
+    "mask-box-image-outset",
+    "mask-box-image-repeat",
 ];
 
 const GLOBAL_KEYWORDS: [&str; 5] = ["inherit", "initial", "unset", "revert", "revert-layer"];
@@ -162,8 +167,18 @@ fn is_mask_name(name: &str) -> bool {
     .any(|mask| name.eq_ignore_ascii_case(mask))
 }
 
+/// `-webkit-mask-box-image` and its parts.
+fn is_mask_box_image_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "-webkit-mask-box-image"
+        || lower
+            .strip_prefix("-webkit-mask-box-image-")
+            .is_some_and(|part| ["source", "slice", "width", "outset", "repeat"].contains(&part))
+}
+
 fn is_handled(name: &str) -> bool {
-    name.eq_ignore_ascii_case("background")
+    is_mask_box_image_name(name)
+        || name.eq_ignore_ascii_case("background")
         || name.eq_ignore_ascii_case("-webkit-background-clip")
         || name.eq_ignore_ascii_case("font-variant")
         || name.eq_ignore_ascii_case("text-decoration")
@@ -277,9 +292,184 @@ fn expand(name: &str, value: &str, important: &str) -> Option<String> {
             valid.then(|| format!("{}: {value}{important}", mirror_name(name)))
         }
         "background-clip" | "-webkit-background-clip" => expand_background_clip(value, important),
+        _ if is_mask_box_image_name(name) => expand_mask_box_image(name, value, important),
         _ if is_mask_name(name) => expand_mask(name, value, important),
         _ => Some(format!("{}: {value}{important}", mirror_name(name))),
     }
+}
+
+/// Whether `word` is a non-negative number.
+fn is_number(word: &str) -> bool {
+    word.parse::<f32>().is_ok_and(|n| n >= 0.0 && n.is_finite())
+        && !word.starts_with(['i', 'I', 'n', 'N'])
+}
+
+/// Whether `word` is a non-negative percentage.
+fn is_percentage(word: &str) -> bool {
+    word.strip_suffix('%').is_some_and(is_number)
+}
+
+/// Whether `value` is a valid value of the part of `-webkit-mask-box-image` named
+/// by `part`, so that an invalid one is left for the engine to drop, as a browser
+/// drops it, and the declaration before it stays.
+fn is_valid_mask_box_image_part(part: &str, value: &str) -> bool {
+    let value = value.trim();
+    if is_global(value) {
+        return true;
+    }
+    let all = words(value);
+    let sides = |count: usize| (1..=4).contains(&count);
+    match part {
+        "source" => {
+            let lower = value.to_ascii_lowercase();
+            lower == "none"
+                || lower.starts_with("url(")
+                || lower.contains("gradient(")
+                || lower.starts_with("image-set(")
+                || lower.starts_with("-webkit-image-set(")
+                || lower.starts_with("cross-fade(")
+        }
+        "slice" => {
+            let fills = all
+                .iter()
+                .filter(|w| w.eq_ignore_ascii_case("fill"))
+                .count();
+            let numbers: Vec<_> = all
+                .iter()
+                .filter(|w| !w.eq_ignore_ascii_case("fill"))
+                .collect();
+            fills <= 1
+                && sides(numbers.len())
+                && numbers.iter().all(|w| is_number(w) || is_percentage(w))
+        }
+        "width" => {
+            sides(all.len())
+                && all.iter().all(|w| {
+                    w.eq_ignore_ascii_case("auto")
+                        || is_number(w)
+                        || is_percentage(w)
+                        || is_length_percentage(w)
+                })
+        }
+        "outset" => sides(all.len()) && all.iter().all(|w| is_number(w) || is_length_percentage(w)),
+        "repeat" => {
+            (1..=2).contains(&all.len())
+                && all.iter().all(|w| {
+                    ["stretch", "repeat", "round", "space"]
+                        .iter()
+                        .any(|keyword| w.eq_ignore_ascii_case(keyword))
+                })
+        }
+        _ => false,
+    }
+}
+/// `-webkit-mask-box-image` and its parts, which the engine's servo build lacks:
+/// each part goes to its custom property, the shorthand setting all five.
+fn expand_mask_box_image(name: &str, value: &str, important: &str) -> Option<String> {
+    let longhand = name.strip_prefix("-webkit-").unwrap_or(name);
+    if longhand != "mask-box-image" {
+        let part = longhand.strip_prefix("mask-box-image-").unwrap_or(longhand);
+        return is_valid_mask_box_image_part(part, value)
+            .then(|| format!("{}: {value}{important}", mirror_name(longhand)));
+    }
+    const PARTS: [&str; 5] = [
+        "mask-box-image-source",
+        "mask-box-image-slice",
+        "mask-box-image-width",
+        "mask-box-image-outset",
+        "mask-box-image-repeat",
+    ];
+    let value = value.trim();
+    if is_global(value) {
+        return Some(
+            PARTS
+                .iter()
+                .map(|part| format!("{}: {value}{important}", mirror_name(part)))
+                .collect::<Vec<_>>()
+                .join("; "),
+        );
+    }
+    let is_image = |word: &str| {
+        let lower = word.to_ascii_lowercase();
+        lower == "none"
+            || lower.starts_with("url(")
+            || lower.contains("gradient(")
+            || lower.starts_with("image-set(")
+            || lower.starts_with("-webkit-image-set(")
+            || lower.starts_with("cross-fade(")
+    };
+    let is_repeat = |word: &str| {
+        ["stretch", "repeat", "round", "space"]
+            .iter()
+            .any(|keyword| word.eq_ignore_ascii_case(keyword))
+    };
+    let spaced = space_slashes(value);
+    let mut source = None;
+    let mut repeat = Vec::new();
+    // Slice, width and outset: what comes before the first `/`, between the
+    // two, and after the second.
+    let mut sections: [Vec<&str>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+    let mut section = 0;
+    for word in words(&spaced) {
+        if word == "/" {
+            section += 1;
+            if section > 2 {
+                return None;
+            }
+        } else if is_image(word) {
+            if source.replace(word).is_some() {
+                return None;
+            }
+        } else if is_repeat(word) {
+            repeat.push(word);
+        } else {
+            sections[section].push(word);
+        }
+    }
+    if repeat.len() > 2 || (section >= 1 && sections[1].is_empty()) {
+        return None;
+    }
+    if section == 2 && sections[2].is_empty() {
+        return None;
+    }
+    let part = |items: &[&str], initial: &str| {
+        if items.is_empty() {
+            initial.to_owned()
+        } else {
+            items.join(" ")
+        }
+    };
+    let values = [
+        source.unwrap_or("none").to_owned(),
+        // The shorthand fills the middle unless told otherwise (Chrome 153), which the
+        // slice longhand does not.
+        if sections[0].is_empty() {
+            "0 fill".to_owned()
+        } else if sections[0].iter().any(|w| w.eq_ignore_ascii_case("fill")) {
+            sections[0].join(" ")
+        } else {
+            format!("{} fill", sections[0].join(" "))
+        },
+        part(&sections[1], "auto"),
+        part(&sections[2], "0"),
+        part(&repeat, "stretch"),
+    ];
+    let names = ["source", "slice", "width", "outset", "repeat"];
+    if !names
+        .iter()
+        .zip(&values)
+        .all(|(name, value)| is_valid_mask_box_image_part(name, value))
+    {
+        return None;
+    }
+    Some(
+        PARTS
+            .iter()
+            .zip(values)
+            .map(|(part, value)| format!("{}: {value}{important}", mirror_name(part)))
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
 }
 
 fn is_box_keyword(word: &str) -> bool {
@@ -918,6 +1108,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn mask_box_image_is_split_into_its_parts_with_their_own_initial_values() {
+        let mirror = |part: &str, value: &str| format!("--florui-mask-box-image-{part}: {value}");
+        assert_eq!(
+            sheet(".a { -webkit-mask-box-image: url(a.png) 20 / 10px / 2 round }"),
+            format!(
+                ".a {{ {}; {}; {}; {}; {} }}",
+                mirror("source", "url(a.png)"),
+                mirror("slice", "20 fill"),
+                mirror("width", "10px"),
+                mirror("outset", "2"),
+                mirror("repeat", "round")
+            )
+        );
+        assert_eq!(
+            sheet(".a { -webkit-mask-box-image: linear-gradient(red, blue) }"),
+            format!(
+                ".a {{ {}; {}; {}; {}; {} }}",
+                mirror("source", "linear-gradient(red, blue)"),
+                mirror("slice", "0 fill"),
+                mirror("width", "auto"),
+                mirror("outset", "0"),
+                mirror("repeat", "stretch")
+            )
+        );
+        assert_eq!(
+            sheet(".a { -webkit-mask-box-image-slice: 10% 20 fill !important }"),
+            ".a { --florui-mask-box-image-slice: 10% 20 fill !important }"
+        );
+        // An invalid part, or a whole invalid shorthand, is left for the engine to drop.
+        assert_eq!(
+            sheet(".a { -webkit-mask-box-image-slice: sideways }"),
+            ".a { -webkit-mask-box-image-slice: sideways }"
+        );
+        assert_eq!(
+            sheet(".a { -webkit-mask-box-image: url(a.png) 20 / bogus }"),
+            ".a { -webkit-mask-box-image: url(a.png) 20 / bogus }"
+        );
+    }
     #[test]
     fn the_background_shorthand_says_which_layers_are_clipped_to_text() {
         assert_eq!(

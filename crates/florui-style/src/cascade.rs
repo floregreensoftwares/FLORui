@@ -1028,6 +1028,9 @@ pub struct ComputedStyle {
     pub outline: Outline,
     /// `border-image` when its source is an image; paint only.
     pub border_image: Option<Box<BorderImage>>,
+    /// `-webkit-mask-box-image`: a nine-slice image that masks the box, in the
+    /// same form a `border-image` has, once [`crate::resolve_mask_box_image`] reads it.
+    pub mask_box_image: Option<Box<crate::mask_box_image::MaskBoxImageSpec>>,
     /// Inherited; see [`TextAlign`].
     pub text_align: TextAlign,
     /// Inherited `text-shadow`, the first layer on top.
@@ -1171,6 +1174,7 @@ impl ComputedStyle {
         !self.filter.is_empty()
             || self.clip_path != ClipPath::None
             || !self.mask.is_empty()
+            || self.mask_box_image.is_some()
             || self.mix_blend_mode != crate::BlendMode::Normal
     }
 
@@ -1286,6 +1290,7 @@ impl ComputedStyle {
             backface_hidden: _,
             clip_path: _,
             mask: _,
+            mask_box_image: _,
             mix_blend_mode: _,
             isolate: _,
             filter: _,
@@ -5634,6 +5639,71 @@ mod tests {
         );
         let child = &computed[&arena.children(arena.roots()[0])[0]];
         assert_eq!(child.transform_box, T::Border);
+    }
+
+    #[test]
+    fn mask_box_image_is_read_like_a_border_image_with_its_own_initial_values() {
+        use crate::{BorderImageOutset as O, BorderImageRepeat as R, BorderImageSlice as S};
+        let of = |css: &str| {
+            computed_of(css)
+                .mask_box_image
+                .and_then(|spec| crate::resolve_mask_box_image(&spec))
+        };
+        assert!(of(".t { }").is_none());
+        assert!(of(".t { -webkit-mask-box-image: none; }").is_none());
+        let image =
+            of(".t { -webkit-mask-box-image: url(a.png) 20 / 10px / 2 round; }").expect("an image");
+        assert_eq!(image.slice, [S::Number(20.0); 4]);
+        // The shorthand fills the middle unless told otherwise (Chrome 153).
+        assert!(image.fill);
+        assert_eq!(image.outset, [O::Number(2.0); 4]);
+        assert_eq!(image.repeat, (R::Round, R::Round));
+        assert!(matches!(
+            image.width[0],
+            crate::BorderImageWidth::Length(lp) if lp.length == 10.0
+        ));
+        // The longhands, and the initial values of what is not given.
+        let image = of(".t { -webkit-mask-box-image-source: linear-gradient(#000, #fff); }")
+            .expect("an image");
+        assert_eq!(image.slice, [S::Number(0.0); 4]);
+        assert!(image.fill);
+        assert_eq!(image.width, [crate::BorderImageWidth::Auto; 4]);
+        assert_eq!(image.outset, [O::Number(0.0); 4]);
+        assert_eq!(image.repeat, (R::Stretch, R::Stretch));
+        // The slice longhand does not fill by itself.
+        let image = of(
+            ".t { -webkit-mask-box-image-source: url(a.png); -webkit-mask-box-image-slice: 20; }",
+        )
+        .expect("an image");
+        assert!(!image.fill);
+        // A part that is invalid leaves the initial one; a later source wins.
+        let image = of(
+            ".t { -webkit-mask-box-image: url(a.png) 20 fill; -webkit-mask-box-image-slice: sideways; \
+             -webkit-mask-box-image-repeat: space; }",
+        )
+        .expect("an image");
+        assert_eq!(image.slice, [S::Number(20.0); 4]);
+        assert!(image.fill);
+        assert_eq!(image.repeat, (R::Space, R::Space));
+        assert!(of(
+            ".t { -webkit-mask-box-image-source: url(a.png); } .t { -webkit-mask-box-image-source: none; }"
+        )
+        .is_none());
+        // It is a group effect, and is not inherited.
+        assert!(
+            computed_of(".t { -webkit-mask-box-image-source: url(a.png); }").has_group_effect()
+        );
+        let tree: Element = view! { <div class="p"><span class="c" /></div> };
+        let (arena, computed) = styles(
+            &tree,
+            ".p { -webkit-mask-box-image-source: url(a.png); }",
+            &InteractionState::new(),
+        );
+        assert!(
+            computed[&arena.children(arena.roots()[0])[0]]
+                .mask_box_image
+                .is_none()
+        );
     }
     #[test]
     fn background_blend_mode_goes_to_each_layer_and_cycles() {
