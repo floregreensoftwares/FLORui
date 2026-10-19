@@ -4,7 +4,8 @@
 .p2 { color: #4070d0; }
 .p6 { width: 100px; }
 .r8 { transform: rotate(30deg); transform-origin: 25px 25px; }
-.r9 { transform: translate(20px, 5px) scale(1.5); }.p0 { left: 20px; top: 20px; }
+.r9 { transform: translate(20px, 5px) scale(1.5); }
+.r10 { transform: translate(40%, 20%) rotate(15deg); transform-origin: 20% 20%; }.p0 { left: 20px; top: 20px; }
 .p1 { left: 150px; top: 20px; }
 .p2 { left: 280px; top: 20px; }
 .p3 { left: 410px; top: 20px; }
@@ -14,3 +15,4 @@
 .p7 { left: 410px; top: 110px; }
 .p8 { left: 20px; top: 200px; }
 .p9 { left: 150px; top: 200px; }
+.p10 { left: 280px; top: 200px; }
