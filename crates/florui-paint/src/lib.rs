@@ -13245,6 +13245,20 @@ mod tests {
     }
 
     #[test]
+    fn a_style_element_in_an_inline_svg_is_read_by_the_svg_renderer() {
+        let tree: Element = view! {
+            <div class="r">
+                <svg width="40" height="20">
+                    <style>{".k { fill: #00aa00; }"}</style>
+                    <rect class="k" width="20" height="20" />
+                </svg>
+            </div>
+        };
+        let canvas = paint_text_css(&tree, "", (50, 30));
+        assert_eq!(pixel_rgb(&canvas, 10, 10), [0, 170, 0]);
+        assert_eq!(pixel_rgb(&canvas, 30, 10), WHITE);
+    }
+    #[test]
     fn an_inline_svg_draws_its_text_and_uses_the_definitions_of_another() {
         let tree: Element = view! {
             <div class="r">

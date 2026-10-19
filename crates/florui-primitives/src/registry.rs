@@ -247,6 +247,11 @@ pub const PRIMITIVES: &[Primitive] = &[
     primitive!("feTile", Content::Normal, "an SVG element"),
     primitive!("feTurbulence", Content::Normal, "an SVG element"),
     primitive!("desc", Content::Normal, "an SVG element"),
+    primitive!(
+        "style",
+        Content::Normal,
+        "a style sheet of an SVG, read by the SVG renderer"
+    ),
     primitive!("title", Content::Normal, "an SVG element"),
     primitive!("textPath", Content::Normal, "an SVG element"),
     primitive!("tspan", Content::Normal, "an SVG element"),
