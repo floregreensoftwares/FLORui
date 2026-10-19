@@ -1,0 +1,28 @@
+.wrap { position: relative; width: 340px; height: 520px; background-color: #ffffff; }
+.g { display: grid; margin: 0 0 8px 10px; background-color: #e4e4e4; width: 300px; }
+.c1 { background-color: #d05040; }
+.c2 { background-color: #40a060; }
+.c3 { background-color: #4070d0; }
+.c4 { background-color: #e0b030; }
+.c5 { background-color: #a050c0; }
+.g1 { grid-template: "a b" 40px "c d" 30px / 80px 1fr; gap: 4px 10px; }
+.g1 .c1 { grid-area: a; }
+.g1 .c2 { grid-area: b; }
+.g1 .c3 { grid-area: c; }
+.g1 .c4 { grid-area: d; }
+.g2 { grid: auto-flow dense 30px / 60px 60px 60px; gap: 6px; }
+.g2 .c1 { grid-column: span 2; }
+.g2 .c3 { grid-column: span 2; }
+.g3 { grid-template-columns: 50px 50px 50px; grid-template-rows: 30px 30px; height: 90px; justify-content: space-between; align-content: space-evenly; }
+.g4 { grid-template-columns: 50px 50px 50px; grid-template-rows: 30px 30px; height: 90px; justify-content: center; align-content: end; gap: 5px; }
+.g5 { grid-template-columns: auto auto auto; grid-template-rows: 30px; justify-content: stretch; }
+.g5 .c2 { width: 40px; }
+.g6 { grid-template-columns: 100px 100px; grid-auto-rows: 40px; }
+.g6 .c1 { width: 30px; height: 20px; margin: auto; }
+.g6 .c2 { width: 30px; height: 20px; margin-left: auto; }
+.g6 .c3 { width: 30px; margin-top: auto; align-self: start; height: 20px; }
+.g6 .c4 { grid-area: 2 / 2 / 3 / 3; width: 30px; height: 20px; margin: 5px 5px 5px auto; }
+.g7 { grid-template-columns: 1fr 2fr; grid-template-rows: 1fr 1fr; height: 100px; gap: 10%; }
+.g8 { grid-template-columns: 60px 60px; grid-auto-rows: 30px; row-gap: 3px; column-gap: 12px; }
+.g8 .c1 { grid-row: 1 / span 2; }
+.g8 .c2 { grid-row: span 2; }

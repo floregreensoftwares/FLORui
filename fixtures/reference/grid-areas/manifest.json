@@ -1,0 +1,198 @@
+{
+    "id":  "grid-areas",
+    "description":  "grid-template-areas with grid-area, named lines in the track lists, the implicit -start and -end lines of an area, and spans to a name.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  420,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 420px; background-color: #ffffff; } .g { display: grid; margin: 0 0 8px 10px; background-color: #e4e4e4; width: 300px; } .c1 { background-color: #d05040; } .c2 { background-color: #40a060; } .c3 { background-color: #4070d0; } .c4 { background-color: #e0b030; } .c5 { background-color: #a050c0; } .g1 { grid-template-areas: \"head head head\" \"nav main main\" \"foot foot foot\"; grid-template-columns: 60px 1fr 1fr; grid-template-rows: 30px 50px 24px; } .g1 .c1 { grid-area: head; } .g1 .c2 { grid-area: nav; } .g1 .c3 { grid-area: main; } .g1 .c4 { grid-area: foot; } .g2 { grid-template-areas: \"a a .\" \". b b\"; grid-template-columns: repeat(3, 80px); grid-template-rows: 40px 40px; gap: 6px; } .g2 .c1 { grid-area: a; } .g2 .c2 { grid-area: b; } .g2 .c3 { grid-column: 3; grid-row: 1; } .g3 { grid-template-columns: [a] 50px [b] 70px [c] 50px [d]; grid-template-rows: [r1] 30px [r2] 30px [r3]; } .g3 .c1 { grid-column: b / d; grid-row: r1 / r2; } .g3 .c2 { grid-column: a / span 2; grid-row: r2 / r3; } .g3 .c3 { grid-column: span 2 / d; grid-row: r2; } .g4 { grid-template-areas: \"head head\" \"side main\"; grid-template-columns: 70px 1fr; grid-template-rows: 28px 56px; } .g4 .c1 { grid-column: head-start / head-end; grid-row: head-start / head-end; } .g4 .c2 { grid-column: side-start / side-end; grid-row: side-start / span 1; } .g4 .c3 { grid-column: main-start / main-end; grid-row: main; } .g5 { grid-template-columns: repeat(2, [x] 40px [y]) 40px; grid-template-rows: 30px 30px; } .g5 .c1 { grid-column: x 2 / y 2; } .g5 .c2 { grid-column: x / span x 2; grid-row: 2; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "g g1",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c1",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c2",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c3",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c4",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "g g2",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c1",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c2",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c3",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "g g3",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c1",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c2",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c3",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "g g4",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c1",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c2",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c3",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "g g5",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c1",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "c2",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "exact"
+                       }
+}
