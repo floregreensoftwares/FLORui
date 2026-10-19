@@ -12591,6 +12591,37 @@ mod tests {
         assert_eq!(pixel_rgb(&layered, 5, 30), [0, 255, 0]);
         assert_eq!(pixel_rgb(&layered, 15, 30), [0, 255, 0]);
     }
+
+    #[test]
+    fn mask_box_image_masks_by_the_alpha_of_its_nine_slice_image() {
+        let source = "-webkit-mask-box-image-source: linear-gradient(#000, #000); \
+                      -webkit-mask-box-image-width: 10px;";
+        // With `fill` the middle is drawn too: the box shows whole.
+        let filled = masked(
+            &format!("{source} -webkit-mask-box-image-slice: 5 fill;"),
+            (110, 60),
+        );
+        assert_g(&filled, &[(50, 25, 0), (3, 3, 0), (96, 46, 0)], 0);
+        // Without it only the ring between the box's edge and 10px in shows.
+        let ring = masked(
+            &format!("{source} -webkit-mask-box-image-slice: 5;"),
+            (110, 60),
+        );
+        assert_g(
+            &ring,
+            &[(3, 25, 0), (50, 3, 0), (50, 25, 255), (96, 25, 0)],
+            0,
+        );
+        // The shorthand fills the middle unless told otherwise.
+        let shorthand = masked(
+            "-webkit-mask-box-image: linear-gradient(#000, #000) 5 / 10px;",
+            (110, 60),
+        );
+        assert_g(&shorthand, &[(50, 25, 0), (3, 3, 0)], 0);
+        // A source that is not an image hides nothing and masks nothing more.
+        let none = masked("-webkit-mask-box-image: none;", (110, 60));
+        assert_g(&none, &[(50, 25, 0)], 0);
+    }
     #[test]
     fn layers_combine_by_their_composite_operator() {
         let box_layer = "linear-gradient(#000, #000)";

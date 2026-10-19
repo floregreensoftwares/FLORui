@@ -22,7 +22,11 @@ pub(crate) fn apply_mask(
     node_abs: (f32, f32),
     scale_factor: f32,
 ) {
-    if style.mask.is_empty() {
+    let box_image = style
+        .mask_box_image
+        .as_deref()
+        .and_then(florui_style::resolve_mask_box_image);
+    if style.mask.is_empty() && box_image.is_none() {
         return;
     }
     let (width, height) = (group.pixmap.width(), group.pixmap.height());
@@ -57,6 +61,19 @@ pub(crate) fn apply_mask(
         below = Some(match below {
             None => source,
             Some(below) => combine(&source, &below, layer.composite),
+        });
+    }
+    // `-webkit-mask-box-image` is painted over the layers, as one more of them.
+    if let Some(image) = box_image {
+        let Some(mut surface) = Surface::new(width, height, group.origin) else {
+            return;
+        };
+        // An image that cannot be read paints nothing, and masks nothing.
+        crate::border_image::paint(&mut surface, &outline, &border, &image, scale_factor, None);
+        let source = coverage(&surface.pixmap, MaskMode::Alpha);
+        below = Some(match below {
+            None => source,
+            Some(below) => combine(&source, &below, MaskComposite::Add),
         });
     }
     let Some(coverage) = below else {
