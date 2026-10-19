@@ -246,6 +246,11 @@ pub const PRIMITIVES: &[Primitive] = &[
     primitive!("feSpotLight", Content::Normal, "an SVG element"),
     primitive!("feTile", Content::Normal, "an SVG element"),
     primitive!("feTurbulence", Content::Normal, "an SVG element"),
+    primitive!("desc", Content::Normal, "an SVG element"),
+    primitive!("title", Content::Normal, "an SVG element"),
+    primitive!("textPath", Content::Normal, "an SVG element"),
+    primitive!("tspan", Content::Normal, "an SVG element"),
+    primitive!("text", Content::Normal, "an SVG element"),
 ];
 
 pub fn find(tag: &str) -> Option<&'static Primitive> {

@@ -1850,6 +1850,7 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
         text_overflow: to_text_overflow(&values.get_text().text_overflow),
         vertical_align: to_vertical_align(&box_style.vertical_align),
         display: to_display(values.get_box().display),
+        author_hidden: authored_display_none(values),
         flex_direction: to_flex_direction(position.flex_direction),
         flex_wrap: to_flex_wrap(position.flex_wrap),
         justify_content: to_content_alignment(position.justify_content.0),
@@ -3581,6 +3582,32 @@ fn to_grid_placement(line: &style::values::computed::GridLine) -> crate::cascade
 /// briefly looked like a bug in this function before nesting it under a
 /// `<div>` (the realistic case) showed `Inline` as expected — Stylo was
 /// already correct.
+/// Whether this element is hidden by `display: none` that an author wrote (in a
+/// stylesheet or a `style` attribute), and not by the default stylesheet, which
+/// hides what is in an inline `<svg>` from layout.
+fn authored_display_none(values: &ComputedValues) -> bool {
+    use style::properties::PropertyDeclaration;
+    use style::stylesheets::Origin;
+    let hidden = values.get_box().display == style::values::computed::Display::None;
+    if !hidden {
+        return false;
+    }
+    let guard = shared_lock().read();
+    values.rules().self_and_ancestors().any(|node| {
+        node.cascade_level().origin() != Origin::UserAgent
+            && node.style_source().is_some_and(|source| {
+                source
+                    .read(&guard)
+                    .declarations()
+                    .iter()
+                    .any(|declaration| {
+                        matches!(declaration, PropertyDeclaration::Display(display)
+                        if *display == style::values::specified::Display::None)
+                    })
+            })
+    })
+}
+
 fn to_display(display: style::values::computed::Display) -> FlorDisplay {
     use style::values::specified::box_::{DisplayInside, DisplayOutside};
     match (display.outside(), display.inside()) {

@@ -2240,6 +2240,121 @@ fn measure_leaf(
     }
 }
 
+/// The Taffy style of an inline `<svg>`: its own, with its `width` and `height`
+/// attributes where the author's CSS says none, and the ratio of its `viewBox` so
+/// that a width alone gives it a height, as for any replaced box.
+pub(crate) fn svg_taffy_style(arena: &Tree, styles: &StyleMap, node: NodeId) -> taffy::Style {
+    let mut style = to_taffy_style(styles.get(&node));
+    // The `width` and `height` attributes are what the author's CSS did not say
+    // (Chrome 153: a rule for the width leaves the height of the attribute).
+    let dimension = |name: &str| {
+        let value = arena.attr(node, name)?.trim();
+        match value.strip_suffix('%') {
+            Some(percent) => percent
+                .trim()
+                .parse::<f32>()
+                .ok()
+                .map(|n| taffy::Dimension::percent(n / 100.0)),
+            None => value
+                .trim_end_matches("px")
+                .trim()
+                .parse::<f32>()
+                .ok()
+                .filter(|n| *n >= 0.0)
+                .map(taffy::Dimension::length),
+        }
+    };
+    if style.size.width == taffy::Dimension::auto()
+        && let Some(width) = dimension("width")
+    {
+        style.size.width = width;
+    }
+    if style.size.height == taffy::Dimension::auto()
+        && let Some(height) = dimension("height")
+    {
+        style.size.height = height;
+    }
+    let (intrinsic, ratio) = svg_intrinsic(arena, node);
+    // What neither says is the intrinsic size, which a block does not stretch (a
+    // replaced box without a width of its own is not as wide as its container).
+    if let Some(size) = intrinsic {
+        if style.size.width == taffy::Dimension::auto() {
+            style.size.width = taffy::Dimension::length(size.width);
+        }
+        if style.size.height == taffy::Dimension::auto() {
+            style.size.height = taffy::Dimension::length(size.height);
+        }
+    }
+    if style.aspect_ratio.is_none() {
+        style.aspect_ratio = ratio.map(|(width, height)| width / height);
+    }
+    style
+}
+
+/// What the measure of an inline `<svg>` needs: a replaced box of the intrinsic
+/// size and ratio its attributes give.
+pub(crate) fn svg_context(arena: &Tree, styles: &StyleMap, node: NodeId) -> LeafContext {
+    let (intrinsic_size, ratio) = svg_intrinsic(arena, node);
+    let mut aspect_ratio = styles
+        .get(&node)
+        .map_or_else(Default::default, |s| s.aspect_ratio);
+    aspect_ratio.ratio = aspect_ratio.ratio.or(ratio);
+    LeafContext::Image(ImageContext {
+        intrinsic_size,
+        aspect_ratio,
+    })
+}
+
+/// The intrinsic size and ratio of an inline `<svg>`, from its `width`, `height`
+/// and `viewBox`: both sizes, or one and the ratio of the box it shows, or the
+/// default object size (300 by 150) when it says nothing; with a `viewBox` alone
+/// there is only the ratio, and the box fills the width as any replaced box
+/// without a size does.
+fn svg_intrinsic(arena: &Tree, node: NodeId) -> (Option<Size<f32>>, Option<(f32, f32)>) {
+    let length = |name: &str| {
+        arena.attr(node, name).and_then(|value| {
+            let number = value.trim().trim_end_matches("px").trim();
+            number.parse::<f32>().ok().filter(|n| *n >= 0.0)
+        })
+    };
+    let ratio = arena.attr(node, "viewBox").and_then(|value| {
+        let numbers: Vec<f32> = value
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|part| !part.is_empty())
+            .filter_map(|part| part.parse().ok())
+            .collect();
+        match numbers[..] {
+            [_, _, width, height] if width > 0.0 && height > 0.0 => Some((width, height)),
+            _ => None,
+        }
+    });
+    let size = match (length("width"), length("height"), ratio) {
+        (Some(width), Some(height), _) => Some(Size { width, height }),
+        (Some(width), None, Some((w, h))) => Some(Size {
+            width,
+            height: width * h / w,
+        }),
+        (None, Some(height), Some((w, h))) => Some(Size {
+            width: height * w / h,
+            height,
+        }),
+        (Some(width), None, None) => Some(Size {
+            width,
+            height: 150.0,
+        }),
+        (None, Some(height), None) => Some(Size {
+            width: 300.0,
+            height,
+        }),
+        (None, None, Some(_)) => None,
+        (None, None, None) => Some(Size {
+            width: 300.0,
+            height: 150.0,
+        }),
+    };
+    (size, ratio)
+}
+
 /// Resolves a replaced element's (e.g. `<img>`) own content size against
 /// `width`/`height`/`aspect-ratio` and its own intrinsic size — real CSS's
 /// replaced-element sizing algorithm, verified directly against Chrome
@@ -2450,19 +2565,26 @@ fn build_node(
         match step {
             BuildStep::Visit(node) => {
                 let arena_children = arena.children(node);
-                let kind = if arena_children.is_empty() {
+                let kind = if arena_children.is_empty() || arena.tag(node) == "svg" {
                     LayoutKind::Blocks
                 } else {
                     layout_kind(arena, styles, node)
                 };
-                let id = if arena_children.is_empty() {
+                // An inline `<svg>` is a replaced box: what is in it is drawn with it.
+                let is_svg = arena.tag(node) == "svg";
+                let id = if arena_children.is_empty() || is_svg {
                     let style = to_taffy_style(styles.get(&node));
                     // `icon` (a themable SVG icon) is the same kind of
                     // replaced element as `img` -- same intrinsic-size
                     // sizing rule, same missing channel into this crate
                     // (see `ImageContext`'s own doc), just a different
                     // registry on the platform side supplies it later.
-                    if matches!(arena.tag(node), "img" | "icon") {
+                    if is_svg {
+                        tree.new_leaf_with_context(
+                            svg_taffy_style(arena, styles, node),
+                            svg_context(arena, styles, node),
+                        )?
+                    } else if matches!(arena.tag(node), "img" | "icon") {
                         tree.new_leaf_with_context(
                             style,
                             LeafContext::Image(ImageContext {
@@ -6102,6 +6224,64 @@ mod tests {
         assert_eq!(bounds_of(&by_xywh), (10.0, 5.0, 80.0, 40.0));
     }
 
+    #[test]
+    fn an_inline_svg_is_sized_as_chrome_sizes_it() {
+        // Chrome 153: the size of each in a 500px container (getBoundingClientRect).
+        let cases: [(&str, &str, (f32, f32)); 10] = [
+            ("<svg width=\"40\" height=\"30\">", "", (40.0, 30.0)),
+            ("<svg width=\"40\">", "", (40.0, 150.0)),
+            ("<svg height=\"30\">", "", (300.0, 30.0)),
+            ("<svg>", "", (300.0, 150.0)),
+            ("<svg viewBox=\"0 0 100 50\">", "", (500.0, 250.0)),
+            (
+                "<svg viewBox=\"0 0 100 50\" width=\"60\">",
+                "",
+                (60.0, 30.0),
+            ),
+            (
+                "<svg viewBox=\"0 0 100 50\" height=\"20\">",
+                "",
+                (40.0, 20.0),
+            ),
+            (
+                "<svg width=\"40\" height=\"40\">",
+                "width: 100px;",
+                (100.0, 40.0),
+            ),
+            (
+                "<svg width=\"40\" height=\"40\">",
+                "width: 100px; border: 3px solid; padding: 2px;",
+                (110.0, 50.0),
+            ),
+            (
+                "<svg viewBox=\"0 0 100 50\">",
+                "width: 200px;",
+                (200.0, 100.0),
+            ),
+        ];
+        for (open, css, (width, height)) in cases {
+            let mut attrs: Vec<(String, String)> = Vec::new();
+            for part in open
+                .trim_start_matches("<svg")
+                .trim_end_matches('>')
+                .split("\" ")
+            {
+                if let Some((name, value)) = part.trim().split_once("=\"") {
+                    attrs.push((name.to_owned(), value.trim_end_matches('"').to_owned()));
+                }
+            }
+            let tree = Element::node(
+                "div",
+                vec![("class".to_owned(), "w".to_owned())],
+                vec![Element::node("svg", attrs, Vec::new())],
+            );
+            let (arena, _styles, layouts) =
+                layout_with_styles(&tree, &format!(".w {{ width: 500px; }} svg {{ {css} }}"));
+            let svg = arena.children(arena.roots()[0])[0];
+            let got = (layouts[&svg].width, layouts[&svg].height);
+            assert_eq!(got, (width, height), "{open} {css}");
+        }
+    }
     #[test]
     fn the_margin_box_uses_the_margins_layout_resolved() {
         let margin_box = |wrapper: &str, own: &str| {

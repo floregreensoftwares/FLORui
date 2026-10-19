@@ -298,9 +298,13 @@ const CSS: &str = "
         display: block;
     }
 
-    /* An inline SVG holds the masks, clips and filters that `url(#id)` points at;
-       it is not drawn itself. */
+    /* An inline SVG is a replaced box, drawn whole by the SVG renderer, so what is
+       in it takes no room of its own. `display: block`, as for `img`. */
     svg {
+        display: block;
+    }
+
+    svg * {
         display: none;
     }
 
