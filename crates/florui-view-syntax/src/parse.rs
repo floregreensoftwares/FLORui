@@ -31,8 +31,51 @@ impl Parse for Nodes {
         if !input.is_empty() {
             return Err(input.error("unexpected trailing tokens in view!"));
         }
+        check_style_placement(&nodes, Placement::Root)?;
         Ok(Nodes(nodes))
     }
+}
+
+/// Where a node sits as far as one `view!` shows: nothing above it, under HTML
+/// elements only, under an `<svg>`, or under a component (which may put it
+/// anywhere).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Placement {
+    Root,
+    Html,
+    Svg,
+    Unknown,
+}
+
+/// A `<style>` is a sheet of an SVG, read only by the SVG renderer: one that is
+/// plainly under HTML elements would be silently ignored, so it is an error. One
+/// at the top of a `view!`, or under a component, may be a piece of an `<svg>`
+/// built elsewhere, and passes.
+fn check_style_placement(nodes: &[Node], placement: Placement) -> Result<()> {
+    for node in nodes {
+        let Node::Element { tag, children, .. } = node else {
+            continue;
+        };
+        let name = tag.to_string();
+        let inside = if Node::is_component(tag) {
+            Placement::Unknown
+        } else if name == "svg" {
+            Placement::Svg
+        } else if placement == Placement::Root {
+            Placement::Html
+        } else {
+            placement
+        };
+        if name == "style" && placement == Placement::Html {
+            return Err(syn::Error::new(
+                tag.span(),
+                "`<style>` is a style sheet of an SVG and is read only inside an `<svg>`; \
+                 put it there, or give the page its CSS through the engine's style sheets",
+            ));
+        }
+        check_style_placement(children, inside)?;
+    }
+    Ok(())
 }
 
 fn parse_nodes(input: ParseStream) -> Result<Vec<Node>> {
@@ -252,6 +295,27 @@ mod tests {
         assert!(attrs[0].0.ident().is_none());
     }
 
+    #[test]
+    fn a_style_is_accepted_in_an_svg_and_refused_plainly_under_html() {
+        let ok = |tokens: proc_macro2::TokenStream| syn::parse2::<Nodes>(tokens).is_ok();
+        assert!(ok(
+            quote! { <svg><style>{".a { fill: red }"}</style></svg> }
+        ));
+        assert!(ok(quote! { <svg><g><style>{"x"}</style></g></svg> }));
+        // At the top, or under a component, it may be part of an svg built elsewhere.
+        assert!(ok(quote! { <style>{"x"}</style> }));
+        assert!(ok(quote! { <Card><div><style>{"x"}</style></div></Card> }));
+        let refused = syn::parse2::<Nodes>(quote! { <div><style>{"x"}</style></div> });
+        assert!(
+            refused
+                .unwrap_err()
+                .to_string()
+                .contains("read only inside an `<svg>`")
+        );
+        assert!(!ok(
+            quote! { <section><div><style>{"x"}</style></div></section> }
+        ));
+    }
     #[test]
     fn svg_elements_are_primitives_and_a_plain_name_is_one_identifier() {
         let result: Result<Nodes> = syn::parse2(quote! {

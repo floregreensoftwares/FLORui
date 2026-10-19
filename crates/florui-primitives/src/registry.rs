@@ -250,7 +250,7 @@ pub const PRIMITIVES: &[Primitive] = &[
     primitive!(
         "style",
         Content::Normal,
-        "a style sheet of an SVG, read by the SVG renderer"
+        "a style sheet of an SVG, read by the SVG renderer; refused under plain HTML elements"
     ),
     primitive!("title", Content::Normal, "an SVG element"),
     primitive!("textPath", Content::Normal, "an SVG element"),
