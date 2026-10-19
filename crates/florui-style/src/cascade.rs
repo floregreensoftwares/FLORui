@@ -816,6 +816,9 @@ pub enum FilterFunction {
         blur: f32,
         color: Rgba,
     },
+    /// `url(#id)` (or `url(file.svg#id)`): the SVG `<filter>` it names, drawn by the
+    /// SVG renderer. The address is kept once and shared, so this stays `Copy`.
+    Url(&'static str),
 }
 
 /// `box-sizing`: what a declared `width` or `height` measures. Not
@@ -4797,10 +4800,13 @@ mod tests {
     }
 
     #[test]
-    fn clip_path_defaults_to_none_and_an_svg_reference_is_none() {
+    fn clip_path_defaults_to_none_and_an_svg_reference_is_a_url() {
         assert_eq!(computed_of(".t { }").clip_path, ClipPath::None);
         assert_eq!(clip_of("none"), ClipPath::None);
-        assert_eq!(clip_of("url(#a)"), ClipPath::None);
+        assert_eq!(
+            clip_of("url(#a)"),
+            ClipPath::Url("about:florui#a".to_owned())
+        );
         // It does not inherit.
         let tree: Element = view! { <div class="p"><span class="c" /></div> };
         let (arena, computed) = styles(
@@ -5703,6 +5709,58 @@ mod tests {
             computed[&arena.children(arena.roots()[0])[0]]
                 .mask_box_image
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn a_filter_url_is_kept_where_it_was_written_among_the_functions() {
+        use crate::FilterFunction as F;
+        let of = |css: &str| computed_of(css).filter;
+        assert_eq!(of(".t { filter: url(#f); }"), [F::Url("#f")]);
+        let mixed = of(".t { filter: blur(2px) url('#g') grayscale(0.5) url(\"a.svg#h\"); }");
+        assert_eq!(mixed.len(), 4);
+        assert_eq!(mixed[0], F::Blur(2.0));
+        assert_eq!(mixed[1], F::Url("#g"));
+        assert_eq!(mixed[2], F::Grayscale(0.5));
+        assert_eq!(mixed[3], F::Url("a.svg#h"));
+        // A later declaration without one takes it back, and a later one with it wins.
+        assert_eq!(
+            of(".t { filter: url(#f); } .t { filter: blur(1px); }"),
+            [F::Blur(1.0)]
+        );
+        assert_eq!(
+            of(".t { filter: blur(1px); } .t { filter: url(#f) blur(3px); }"),
+            [F::Url("#f"), F::Blur(3.0)]
+        );
+        // An invalid list is dropped whole and leaves what was there.
+        assert_eq!(
+            of(".t { filter: blur(1px); filter: url(#f) bogus(2); }"),
+            [F::Blur(1.0)]
+        );
+        // The backdrop has them too, and neither is inherited.
+        assert_eq!(
+            computed_of(".t { backdrop-filter: url(#f) blur(2px); }").backdrop_filter,
+            [F::Url("#f"), F::Blur(2.0)]
+        );
+        let tree: Element = view! { <div class="p"><span class="c" /></div> };
+        let (arena, computed) = styles(&tree, ".p { filter: url(#f); }", &InteractionState::new());
+        assert!(
+            computed[&arena.children(arena.roots()[0])[0]]
+                .filter
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_clip_path_url_is_kept() {
+        use crate::ClipPath;
+        assert_eq!(
+            computed_of(".t { clip-path: url(#c); }").clip_path,
+            ClipPath::Url("about:florui#c".to_owned())
+        );
+        assert_eq!(
+            computed_of(".t { clip-path: url(shapes.svg#c); }").clip_path,
+            ClipPath::Url("shapes.svg#c".to_owned())
         );
     }
     #[test]

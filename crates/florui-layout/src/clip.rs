@@ -65,7 +65,7 @@ pub fn resolve_clip_path(
     scale_factor: f32,
 ) -> Option<ClipGeometry> {
     match &style.clip_path {
-        ClipPath::None => None,
+        ClipPath::None | ClipPath::Url(_) => None,
         ClipPath::Box(reference) => {
             let rounded = reference_box(style, layout, x, y, scale_factor, *reference);
             Some(ClipGeometry {
@@ -78,6 +78,43 @@ pub fn resolve_clip_path(
             Some(resolve_shape(shape, &rect, scale_factor))
         }
     }
+}
+
+/// Whether `point` (in the page) is inside the `clip-path` of the box at `at`,
+/// or the box has none. A `url()` to an SVG `<clipPath>` is drawn for the box and
+/// its coverage read at the point; one that does not resolve clips nothing.
+pub fn clip_admits(
+    arena: &florui_style::Tree,
+    style: &ComputedStyle,
+    layout: &BoxLayout,
+    at: (f32, f32),
+    point: (f32, f32),
+) -> bool {
+    let ClipPath::Url(url) = &style.clip_path else {
+        return resolve_clip_path(style, layout, at.0, at.1, 1.0)
+            .is_none_or(|shape| shape.contains(point.0, point.1));
+    };
+    let Some(reference) = florui_svg::reference(arena, url) else {
+        return true;
+    };
+    let size = (
+        (layout.width.ceil() as u32).max(1),
+        (layout.height.ceil() as u32).max(1),
+    );
+    let canvas = florui_svg::Canvas {
+        size,
+        scale: 1.0,
+        origin: at,
+        border_box: (at.0, at.1, layout.width, layout.height),
+    };
+    let Some(coverage) = florui_svg::clip_coverage(&reference, &canvas) else {
+        return true;
+    };
+    let (x, y) = ((point.0 - at.0).floor(), (point.1 - at.1).floor());
+    if x < 0.0 || y < 0.0 || x >= size.0 as f32 || y >= size.1 as f32 {
+        return true;
+    }
+    coverage[y as usize * size.0 as usize + x as usize] >= 128
 }
 
 /// The reference box as a rounded rectangle: the box's own `border-radius`

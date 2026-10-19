@@ -67,6 +67,9 @@ pub struct FloruiSpec {
     pub css: String,
     #[serde(default)]
     pub children: Vec<FloruiChild>,
+    /// Attributes besides `class`, such as the `width` of an SVG element.
+    #[serde(default)]
+    pub attrs: Vec<(String, String)>,
 }
 
 /// One entry in [`FloruiSpec::children`]: either a literal text run, or a

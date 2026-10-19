@@ -90,10 +90,11 @@ pub enum ClipShape {
 /// `clip-path`.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum ClipPath {
-    /// `none`, and a `url()` to an SVG `<clipPath>`, which this crate has no
-    /// way to define (Chrome too draws an unresolved one unclipped).
     #[default]
     None,
+    /// `url(#id)` (or `url(file.svg#id)`): the SVG `<clipPath>` it names, drawn by
+    /// the SVG renderer. One that does not resolve clips nothing.
+    Url(String),
     /// A box alone: its edge, with its corners rounded as the box's own
     /// `border-radius` makes them.
     Box(ReferenceBox),

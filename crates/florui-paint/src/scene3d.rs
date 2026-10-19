@@ -209,9 +209,7 @@ pub(super) fn scene_extent(
         let Some((x0, y0, x1, y1)) = extent else {
             continue;
         };
-        let pad = styles
-            .get(&boxed.node)
-            .map_or(0.0, |s| filter_inflation(&s.filter, scale_factor));
+        let pad = node_filter_inflation(arena, styles, layouts, boxed.node, scale_factor);
         let Some((a, b, c, d)) =
             boxed
                 .matrix

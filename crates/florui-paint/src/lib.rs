@@ -71,6 +71,7 @@ mod projection;
 mod rounded;
 mod scene3d;
 mod shadow_cache;
+mod svg_ref;
 mod text_shadow;
 
 pub use incremental::{PaintInputs, Repaint, Repainter};
@@ -1672,9 +1673,35 @@ fn filter_inflation(filters: &[FilterFunction], scale_factor: f32) -> f32 {
             | FilterFunction::HueRotate(_)
             | FilterFunction::Invert(_)
             | FilterFunction::Opacity(_)
-            | FilterFunction::Sepia(_) => 0.0,
+            | FilterFunction::Sepia(_)
+            // Its reach depends on the box it is applied to: see [`node_filter_inflation`].
+            | FilterFunction::Url(_) => 0.0,
         })
         .sum()
+}
+
+/// [`filter_inflation`] for the filters of `node`, with the reach of the SVG
+/// `<filter>` regions that its `url()` items name, which depends on its box.
+pub(crate) fn node_filter_inflation(
+    arena: &Tree,
+    styles: &StyleMap,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    node: NodeId,
+    scale_factor: f32,
+) -> f32 {
+    let Some(style) = styles.get(&node) else {
+        return 0.0;
+    };
+    let mut pad = filter_inflation(&style.filter, scale_factor);
+    if let Some(layout) = layouts.get(&node) {
+        for function in &style.filter {
+            if let FilterFunction::Url(url) = function {
+                pad +=
+                    svg_ref::filter_reach(arena, url, (layout.width, layout.height)) * scale_factor;
+            }
+        }
+    }
+    pad
 }
 
 /// Everything `node` paints itself, without its children: its box, the reach of
@@ -1908,8 +1935,7 @@ fn subtree_extent(
                 child_opacity < 1.0 || !child_transform.is_identity() || child_has_effect;
 
             let (cx0, cy0, cx1, cy1) = if child_is_group {
-                let filter_pad =
-                    child_style.map_or(0.0, |s| filter_inflation(&s.filter, scale_factor));
+                let filter_pad = node_filter_inflation(arena, styles, layouts, child, scale_factor);
                 let (fx0, fy0, fx1, fy1) = (
                     child_extent.0 - filter_pad,
                     child_extent.1 - filter_pad,
@@ -2077,8 +2103,7 @@ fn group_extent(
         return record_sizing(GroupSizing::FullTarget(FallbackReason::NothingToPaint));
     };
 
-    let own_filter = styles.get(&node).map_or(&[][..], |s| &s.filter[..]);
-    let pad = filter_inflation(own_filter, scale_factor);
+    let pad = node_filter_inflation(arena, styles, layouts, node, scale_factor);
     let (x0, y0, x1, y1) = (x0 - pad, y0 - pad, x1 + pad, y1 + pad);
 
     // 1c: clamp to what could possibly be seen — `target`'s own visible
@@ -2320,10 +2345,18 @@ fn render_group(
     );
 
     let filter = styles.get(&node).map_or(&[][..], |s| &s.filter[..]);
-    apply_filters(&mut group.pixmap, &scaled_filters(filter, scale_factor));
+    svg_ref::apply_chain(
+        arena,
+        &scaled_filters(filter, scale_factor),
+        &mut group,
+        node_abs,
+        layouts.get(&node),
+        scale_factor,
+        &mut |pixmap, functions| apply_filters(pixmap, functions),
+    );
     if let (Some(style), Some(layout)) = (styles.get(&node), layouts.get(&node)) {
-        apply_clip_path(&mut group, style, layout, node_abs, scale_factor);
-        mask::apply_mask(&mut group, style, layout, node_abs, scale_factor);
+        apply_clip_path(&mut group, arena, style, layout, node_abs, scale_factor);
+        mask::apply_mask(&mut group, arena, style, layout, node_abs, scale_factor);
     }
     Some(group)
 }
@@ -2335,11 +2368,16 @@ fn render_group(
 /// box's own space, so it moves with the box.
 fn apply_clip_path(
     group: &mut Surface,
+    arena: &Tree,
     style: &ComputedStyle,
     layout: &BoxLayout,
     node_abs: (f32, f32),
     scale_factor: f32,
 ) {
+    if let florui_style::ClipPath::Url(url) = &style.clip_path {
+        svg_ref::clip(arena, url, group, node_abs, layout, scale_factor);
+        return;
+    }
     let Some(geometry) =
         florui_layout::resolve_clip_path(style, layout, node_abs.0, node_abs.1, scale_factor)
     else {
@@ -3055,6 +3093,8 @@ fn apply_filters_with(pixmap: &mut Pixmap, functions: &[FilterFunction], fast: b
             FilterFunction::DropShadow { x, y, blur, color } => {
                 drop_shadow_in_place(pixmap, x, y, blur, color)
             }
+            // Drawn by the SVG renderer, not here: see [`svg_ref::apply_chain`].
+            FilterFunction::Url(_) => {}
         }
     }
 }
@@ -12621,6 +12661,130 @@ mod tests {
         // A source that is not an image hides nothing and masks nothing more.
         let none = masked("-webkit-mask-box-image: none;", (110, 60));
         assert_g(&none, &[(50, 25, 0)], 0);
+    }
+
+    #[test]
+    fn a_mask_url_to_an_inline_svg_mask_masks_the_box() {
+        let tree: Element = view! {
+            <div class="r">
+                <svg width="0" height="0">
+                    <defs>
+                        <mask id="m" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="50">
+                            <rect x="0" y="0" width="50" height="50" fill="#ffffff" />
+                            <rect x="50" y="0" width="25" height="50" fill="#808080" />
+                        </mask>
+                    </defs>
+                </svg>
+                <div class="b" />
+            </div>
+        };
+        let canvas = paint_text_css(
+            &tree,
+            ".b { width: 100px; height: 50px; background-color: #ff0000; mask: url(#m); }",
+            (110, 60),
+        );
+        // Chrome 153: the white half shows, the grey a half, the rest is gone.
+        assert_eq!(pixel_rgb(&canvas, 20, 25), [255, 0, 0]);
+        assert_eq!(pixel_rgb(&canvas, 90, 25), WHITE);
+        let half = pixel_rgb(&canvas, 60, 25);
+        assert!(
+            (126..=129).contains(&half[1]) && half[0] == 255,
+            "half: {half:?}"
+        );
+        // The same through `mask-image` and the prefixed form.
+        for declaration in ["mask-image: url(#m)", "-webkit-mask-image: url(#m)"] {
+            let canvas = paint_text_css(
+                &tree,
+                &format!(
+                    ".b {{ width: 100px; height: 50px; background-color: #ff0000; {declaration}; }}"
+                ),
+                (110, 60),
+            );
+            assert_eq!(pixel_rgb(&canvas, 20, 25), [255, 0, 0], "{declaration}");
+            assert_eq!(pixel_rgb(&canvas, 90, 25), WHITE, "{declaration}");
+        }
+        // A reference to nothing hides the box.
+        let missing = paint_text_css(
+            &tree,
+            ".b { width: 100px; height: 50px; background-color: #ff0000; mask: url(#nope); }",
+            (110, 60),
+        );
+        assert_eq!(pixel_rgb(&missing, 20, 25), WHITE);
+    }
+
+    #[test]
+    fn a_clip_path_url_to_an_inline_svg_clip_path_clips_the_box() {
+        let tree: Element = view! {
+            <div class="r">
+                <svg width="0" height="0">
+                    <defs>
+                        <clipPath id="c"><circle cx="50" cy="25" r="20" /></clipPath>
+                        <clipPath id="u" clipPathUnits="objectBoundingBox">
+                            <rect x="0" y="0" width="0.5" height="1" />
+                        </clipPath>
+                    </defs>
+                </svg>
+                <div class="b" />
+            </div>
+        };
+        let paint = |declaration: &str| {
+            paint_text_css(
+                &tree,
+                &format!(
+                    ".b {{ width: 100px; height: 50px; background-color: #ff0000; {declaration}; }}"
+                ),
+                (110, 60),
+            )
+        };
+        let circle = paint("clip-path: url(#c)");
+        assert_eq!(pixel_rgb(&circle, 50, 25), [255, 0, 0]);
+        assert_eq!(pixel_rgb(&circle, 5, 5), WHITE);
+        assert_eq!(pixel_rgb(&circle, 95, 45), WHITE);
+        let half = paint("clip-path: url(#u)");
+        assert_eq!(pixel_rgb(&half, 20, 25), [255, 0, 0]);
+        assert_eq!(pixel_rgb(&half, 70, 25), WHITE);
+        // One that names nothing clips nothing.
+        let missing = paint("clip-path: url(#nope)");
+        assert_eq!(pixel_rgb(&missing, 95, 45), [255, 0, 0]);
+    }
+
+    #[test]
+    fn a_filter_url_to_an_inline_svg_filter_filters_the_box() {
+        let tree: Element = view! {
+            <div class="r">
+                <svg width="0" height="0">
+                    <defs>
+                        <filter id="g">
+                            <feColorMatrix type="matrix"
+                                values="0 0 0 0 0  0 0 0 0 1  0 0 0 0 0  0 0 0 1 0" />
+                        </filter>
+                        <filter id="o" x="0" y="0" width="2" height="1">
+                            <feOffset dx="30" dy="0" />
+                        </filter>
+                    </defs>
+                </svg>
+                <div class="b" />
+            </div>
+        };
+        let paint = |declaration: &str, size: (u32, u32)| {
+            paint_text_css(
+                &tree,
+                &format!(
+                    ".b {{ width: 40px; height: 40px; margin-left: 10px; background-color: #ff0000; {declaration}; }}"
+                ),
+                size,
+            )
+        };
+        let green = paint("filter: url(#g)", (110, 60));
+        assert_eq!(pixel_rgb(&green, 30, 20), [0, 255, 0]);
+        assert_eq!(pixel_rgb(&green, 5, 20), WHITE);
+        // The region of the filter is the box's, here wide enough to hold the move.
+        let moved = paint("filter: url(#o)", (110, 60));
+        assert_eq!(pixel_rgb(&moved, 15, 20), WHITE);
+        assert_eq!(pixel_rgb(&moved, 70, 20), [255, 0, 0]);
+        // In a list, after a native function.
+        let listed = paint("filter: invert(1) url(#g)", (110, 60));
+        assert_eq!(pixel_rgb(&listed, 30, 20), [0, 255, 0]);
     }
     #[test]
     fn layers_combine_by_their_composite_operator() {

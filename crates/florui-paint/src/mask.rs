@@ -9,14 +9,15 @@
 //! border box is cut away, and why an image that cannot be read hides the box.
 
 use florui_layout::BoxLayout;
-use florui_style::{ComputedStyle, MaskComposite, MaskMode, RoundedRect};
+use florui_style::{BackgroundImage, ComputedStyle, MaskComposite, MaskMode, RoundedRect, Tree};
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
-use crate::{Surface, background, mul_div_255, scaled_border, scaled_padding};
+use crate::{Surface, background, mul_div_255, scaled_border, scaled_padding, svg_ref};
 
 /// Multiplies `group`'s pixels by the coverage of `style`'s mask layers.
 pub(crate) fn apply_mask(
     group: &mut Surface,
+    arena: &Tree,
     style: &ComputedStyle,
     layout: &BoxLayout,
     node_abs: (f32, f32),
@@ -43,20 +44,30 @@ pub(crate) fn apply_mask(
     // The coverage of the layers painted so far, from the bottom one up.
     let mut below: Option<Vec<u8>> = None;
     for layer in style.mask.iter().rev() {
-        let Some(mut surface) = Surface::new(width, height, group.origin) else {
-            return;
+        // A `url(#id)` to an SVG `<mask>` is drawn by the SVG renderer, with the
+        // mask's own type; the properties that place an image do not apply to it.
+        let reference = match &layer.layer.image {
+            BackgroundImage::Url(url) if florui_svg::is_reference(url) => Some(url),
+            _ => None,
         };
-        background::paint_layers(
-            &mut surface,
-            &outline,
-            border,
-            padding,
-            std::slice::from_ref(&layer.layer),
-            scale_factor,
-            None,
-            None,
-        );
-        let source = coverage(&surface.pixmap, layer.mode);
+        let source = if let Some(url) = reference {
+            svg_ref::mask_coverage(arena, url, group, node_abs, layout, scale_factor)
+        } else {
+            let Some(mut surface) = Surface::new(width, height, group.origin) else {
+                return;
+            };
+            background::paint_layers(
+                &mut surface,
+                &outline,
+                border,
+                padding,
+                std::slice::from_ref(&layer.layer),
+                scale_factor,
+                None,
+                None,
+            );
+            coverage(&surface.pixmap, layer.mode)
+        };
         // The bottom layer has nothing to combine with: its operator is not used.
         below = Some(match below {
             None => source,
