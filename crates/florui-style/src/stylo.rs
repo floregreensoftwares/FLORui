@@ -1970,11 +1970,11 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
             box_style.isolation,
             style::computed_values::isolation::T::Isolate
         ),
-        filter: with_filter_urls(values, to_filter(&effects.filter.0, color), "filter"),
+        filter: with_filter_urls(values, to_filter(&effects.filter.0, color), "filter-urls"),
         backdrop_filter: with_filter_urls(
             values,
             to_filter(&effects.backdrop_filter.0, color),
-            "backdrop-filter",
+            "backdrop-filter-urls",
         ),
         container_type: to_container_type(box_style.clone_container_type()),
         container_name: to_container_name(&box_style.clone_container_name()),
@@ -2335,13 +2335,12 @@ fn to_container_name(value: &style::values::computed::ContainerName) -> Vec<Stri
 fn with_filter_urls(
     values: &ComputedValues,
     native: Vec<FlorFilterFunction>,
-    property: &str,
+    mirror: &str,
 ) -> Vec<FlorFilterFunction> {
-    let mirror = format!("{property}-urls");
-    if !declares_mirrored(values, &mirror) {
+    if !declares_mirrored(values, mirror) {
         return native;
     }
-    let Some(shape) = mirrored(values, &mirror) else {
+    let Some(shape) = mirrored(values, mirror) else {
         return native;
     };
     let items = crate::property_mirror::split_commas(&shape);
@@ -4242,6 +4241,11 @@ fn declares_mirrored(values: &ComputedValues, name: &str) -> bool {
     else {
         return false;
     };
+    // An element none of whose rules declared a custom property, and that
+    // inherits none, has nothing to find.
+    if values.custom_properties().is_empty() {
+        return false;
+    }
     let guard = shared_lock().read();
     FLOR_NAMES.with(|names| {
         values.rules().self_and_ancestors().any(|node| {
