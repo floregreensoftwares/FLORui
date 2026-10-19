@@ -13206,13 +13206,13 @@ mod tests {
         };
         let canvas = paint_text_css(
             &tree,
-            ".after { width: 10px; height: 10px; background-color: #00aa00; }",
+            ".after { width: 10px; height: 10px; background-color: #00aa00; } svg { display: block; }",
             (60, 100),
         );
         // The first svg is 40x30 at the origin: its rect fills the left half.
         assert_eq!(pixel_rgb(&canvas, 10, 15), [255, 0, 0]);
         assert_eq!(pixel_rgb(&canvas, 30, 15), WHITE);
-        // The second follows it as a block, and its viewBox scales the content.
+        // The second follows it as a block (here), and its viewBox scales the content.
         assert_eq!(pixel_rgb(&canvas, 10, 50), [0, 0, 255]);
         assert_eq!(pixel_rgb(&canvas, 30, 50), WHITE);
         // What follows is after both, so the svgs took the room of their sizes.

@@ -326,8 +326,8 @@ image (`mask-size`, `-position`, `-repeat`, `-origin`, `-clip`) do not apply to 
 
 An inline `<svg>` is a box, drawn whole by the same renderer into its content box. It is sized as Chromium sizes it:
 the `width` and `height` attributes where CSS says none, its `viewBox` for a ratio (and for the width, when there
-is no size at all), 300 by 150 when it says nothing. It is `display: block`, as `img` is, and what is in it takes no
-room. What the stylesheets give the elements in it reaches the renderer: the SVG properties (`fill`, `stroke`,
+is no size at all), 300 by 150 when it says nothing. It is `display: inline-block`, so it sits in a line of text on
+the baseline (or by `vertical-align`), and what is in it takes no room. What the stylesheets give the elements in it reaches the renderer: the SVG properties (`fill`, `stroke`,
 `stop-color`, `mask-type`, ...), `opacity`, `visibility`, an authored `display: none`, the font of the page for
 its text, the `color` that `currentColor` takes, and a `transform` (translate, rotate, scale, skew, matrix, with its
 origin; a percentage is of the viewBox, as for any SVG element). A transform in three dimensions, and

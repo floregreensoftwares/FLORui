@@ -299,9 +299,9 @@ const CSS: &str = "
     }
 
     /* An inline SVG is a replaced box, drawn whole by the SVG renderer, so what is
-       in it takes no room of its own. `display: block`, as for `img`. */
+       in it takes no room of its own. It sits in a line as an inline box does. */
     svg {
-        display: block;
+        display: inline-block;
     }
 
     svg * {

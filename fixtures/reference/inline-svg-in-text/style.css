@@ -1,0 +1,5 @@
+.wrap { position: relative; width: 540px; height: 110px; background-color: #ffffff; }
+.c { position: absolute; width: 150px; font-size: 20px; line-height: 30px; color: #202020; }
+.p0 { left: 20px; top: 20px; }
+.p1 { left: 200px; top: 20px; }
+.p2 { left: 370px; top: 20px; width: 140px; }
