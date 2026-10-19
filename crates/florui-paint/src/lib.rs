@@ -13581,6 +13581,56 @@ mod tests {
     }
 
     #[test]
+    fn an_object_bounding_box_clip_url_takes_the_css_box_on_a_scaled_canvas() {
+        let tree: Element = view! {
+            <div class="r">
+                <svg width="0" height="0">
+                    <defs>
+                        <clipPath id="u" clipPathUnits="objectBoundingBox">
+                            <rect x="0" y="0" width="0.5" height="1" />
+                        </clipPath>
+                    </defs>
+                </svg>
+                <div class="b" />
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(
+            ".b { width: 100px; height: 50px; background-color: #ff0000; clip-path: url(#u); }",
+        )
+        .unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let mut layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        for layout in layouts.values_mut() {
+            layout.x *= 2.0;
+            layout.y *= 2.0;
+            layout.width *= 2.0;
+            layout.height *= 2.0;
+        }
+        let canvas = paint_to_buffer(
+            &mut font,
+            220,
+            120,
+            Rgba::opaque(255, 255, 255),
+            &arena,
+            &styles,
+            &layouts,
+            2.0,
+        );
+        // Half of the box of 200 by 100 device pixels, not all of it.
+        assert_eq!(pixel_rgb(&canvas, 80, 50), [255, 0, 0]);
+        assert_eq!(pixel_rgb(&canvas, 140, 50), WHITE);
+    }
+
+    #[test]
     fn a_filter_url_to_an_inline_svg_filter_filters_the_box() {
         let tree: Element = view! {
             <div class="r">

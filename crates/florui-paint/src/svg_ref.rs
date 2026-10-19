@@ -18,8 +18,8 @@ fn canvas(group: &Surface, node_abs: (f32, f32), layout: &BoxLayout, scale: f32)
         border_box: (
             node_abs.0 / scale,
             node_abs.1 / scale,
-            layout.width,
-            layout.height,
+            layout.width / scale,
+            layout.height / scale,
         ),
     }
 }
