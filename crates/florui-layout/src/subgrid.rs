@@ -345,33 +345,15 @@ pub(crate) fn resolve(
             .collect();
         tops.sort_unstable();
         tops.dedup();
+        // Widths come down from the grid around and heights come up from what is
+        // inside, so a grid inside another is done after it for columns and
+        // before it for rows. Ids follow document order: parents first.
+        if axis == Axis::Row {
+            tops.reverse();
+        }
         if tops.is_empty() {
             continue;
         }
-        for (at, &top) in tops.iter().enumerate() {
-            let Some(top_id) = id_of(top) else {
-                continue;
-            };
-            // A grid with another of these inside it hands that one the width it
-            // has, so it is laid out for it to read.
-            let settle = tops[at + 1..].iter().any(|&inner| {
-                std::iter::successors(layout_parent(arena, inner), |&node| {
-                    layout_parent(arena, node)
-                })
-                .any(|ancestor| ancestor == top)
-            });
-            let ctx = Ctx {
-                styles,
-                owner: &owner,
-                is_subgrid: &|node| is_subgrid(node, axis),
-                roots,
-                available,
-                count,
-                axis,
-            };
-            probe_top(font, tree, &ctx, top_id, settle)?;
-        }
-        // Each grid was laid out alone; the tree around them follows.
         let ctx = Ctx {
             styles,
             owner: &owner,
@@ -381,6 +363,13 @@ pub(crate) fn resolve(
             count,
             axis,
         };
+        for &top in &tops {
+            let Some(top_id) = id_of(top) else {
+                continue;
+            };
+            probe_top(font, tree, &ctx, top_id)?;
+        }
+        // Each grid was laid out alone; the tree around them follows.
         relayout_all(font, tree, &ctx)?;
     }
     Ok(())
@@ -438,7 +427,6 @@ fn probe_top(
     tree: &mut TaffyTree<LeafContext>,
     ctx: &Ctx<'_>,
     top: taffy::NodeId,
-    settle: bool,
 ) -> Result<(), LayoutError> {
     let axis = ctx.axis;
     let other = axis.other();
@@ -813,9 +801,6 @@ fn probe_top(
             axis.set_placement(&mut style, lines.0, lines.1);
             tree.set_style(item, style).map_err(LayoutError)?;
         }
-    }
-    if settle {
-        layout_top(font, tree, top, around)?;
     }
     Ok(())
 }
