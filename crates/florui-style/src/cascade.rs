@@ -3982,6 +3982,27 @@ mod tests {
     }
 
     #[test]
+    fn a_bevel_border_in_the_text_color_is_light_grey_and_the_others_follow_the_color() {
+        let tree: Element = view! {
+            <div class="wrap">
+                <div class="a" /><div class="b" /><div class="c" /><div class="d" />
+            </div>
+        };
+        let css = ".wrap { color: #ff0000; } .wrap > div { border-width: 2px; } \
+                   .a { border-style: inset; } .b { border-style: groove; border-color: #00ff00; } \
+                   .c { border-style: solid; } .d { border-style: outset; border-color: currentcolor; }";
+        let (arena, computed) = styles(&tree, css, &InteractionState::new());
+        let kids = arena.children(arena.roots()[0]);
+        let color = |i: usize| computed[&kids[i]].border.top.color;
+        // Chromium 155, measured: whatever `color` is, `currentcolor` on one of
+        // the four bevel styles paints from #eee.
+        assert_eq!(color(0), Rgba::opaque(0xee, 0xee, 0xee));
+        assert_eq!(color(1), Rgba::opaque(0x00, 0xff, 0x00));
+        assert_eq!(color(2), Rgba::opaque(0xff, 0x00, 0x00));
+        assert_eq!(color(3), Rgba::opaque(0xee, 0xee, 0xee));
+    }
+
+    #[test]
     fn border_resolves_width_and_color_per_side_from_real_css() {
         let tree: Element = view! { <div class="card" /> };
         let (arena, computed) = styles(
