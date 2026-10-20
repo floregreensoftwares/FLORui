@@ -51,7 +51,7 @@ pub mod editing;
 mod editor_core;
 mod ellipsis;
 mod features;
-pub use inline::{InlineElement, InlineItem};
+pub use inline::{InlineElement, InlineItem, LineEnv, LineSlot, LineSource, LineTrace};
 mod inline;
 mod inline_memo;
 mod settings;
