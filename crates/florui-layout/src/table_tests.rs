@@ -1003,3 +1003,113 @@ fn a_caption_centers_the_blocks_in_it_and_a_header_cell_does_not() {
     close(&laid, "d1", (80.0, 0.0, 40.0, 10.0));
     near(laid.rect("d2").0, 3.0, 0.05, "block in a header cell");
 }
+
+fn one_cell_table() -> Element {
+    table("t", vec![tr("", vec![td("c", vec![text("aaa")])])])
+}
+
+#[test]
+fn a_table_that_is_a_flex_item_is_as_wide_as_its_columns_and_stretches_to_the_line() {
+    // Chrome 153.
+    let tree = page(div("f", vec![one_cell_table(), div("d", vec![text("x")])]));
+    let css =
+        format!("{CSS} .f {{ display: flex; height: 100px; width: 300px; }} .d {{ flex: 1; }}");
+    let laid = lay_out(&tree, &css);
+    close(&laid, "t", (0.0, 0.0, 32.67, 100.0));
+    close(&laid, "c", (2.0, 2.0, 28.67, 96.0));
+    close(&laid, "d", (32.67, 0.0, 267.33, 100.0));
+}
+
+#[test]
+fn a_table_in_a_column_flex_container_or_a_grid_cell_takes_the_room() {
+    let tree = page(div("f", vec![one_cell_table()]));
+    let css = format!("{CSS} .f {{ display: flex; flex-direction: column; width: 300px; }}");
+    let laid = lay_out(&tree, &css);
+    close(&laid, "t", (0.0, 0.0, 300.0, 28.0));
+    close(&laid, "c", (2.0, 2.0, 296.0, 24.0));
+    let tree = page(div("g", vec![div("", vec![text("x")]), one_cell_table()]));
+    let css =
+        format!("{CSS} .g {{ display: grid; grid-template-columns: 100px 1fr; width: 300px; }}");
+    let laid = lay_out(&tree, &css);
+    close(&laid, "t", (100.0, 0.0, 200.0, 28.0));
+    close(&laid, "c", (102.0, 2.0, 196.0, 24.0));
+}
+
+#[test]
+fn an_absolute_table_and_one_in_a_padded_block_take_the_room_they_are_given() {
+    let tree = page(div(
+        "r",
+        vec![table(
+            "t",
+            vec![tr(
+                "",
+                vec![td("a", vec![text("aaa")]), td("b", vec![text("bbb")])],
+            )],
+        )],
+    ));
+    let css = format!(
+        "{CSS} .r {{ position: relative; width: 300px; height: 100px; }} \
+         .t {{ position: absolute; right: 10px; top: 5px; }}"
+    );
+    let laid = lay_out(&tree, &css);
+    close(&laid, "t", (223.95, 5.0, 66.05, 28.0));
+    let tree = page(div(
+        "b",
+        vec![table("t", vec![tr("", vec![td("a", vec![text("a")])])])],
+    ));
+    let css = format!(
+        "{CSS} .b {{ width: 300px; padding: 10px; border: 3px solid #000; }} .t {{ width: 100%; }}"
+    );
+    let laid = lay_out(&tree, &css);
+    close(&laid, "t", (13.0, 13.0, 300.0, 28.0));
+    let css = format!("{CSS} .t {{ margin: 0 auto; min-width: 200px; }}");
+    let laid = lay_out(&page(one_cell_table()), &css);
+    close(&laid, "t", (100.0, 0.0, 200.0, 28.0));
+}
+
+#[test]
+fn a_float_in_a_cell_is_part_of_what_the_cell_needs() {
+    let tree = page(table(
+        "t",
+        vec![tr("", vec![td("c", vec![div("fl", vec![]), text("text")])])],
+    ));
+    let css = format!("{CSS} .fl {{ float: left; width: 30px; height: 50px; }}");
+    let laid = lay_out(&tree, &css);
+    close(&laid, "t", (0.0, 0.0, 64.77, 56.0));
+    close(&laid, "c", (2.0, 2.0, 60.77, 52.0));
+}
+
+#[test]
+fn a_floated_table_is_as_wide_as_its_columns() {
+    let tree = page(div(
+        "p",
+        vec![
+            table(
+                "t",
+                vec![tr(
+                    "",
+                    vec![td("a", vec![text("a")]), td("b", vec![text("b")])],
+                )],
+            ),
+            text("Text that wraps beside the table here and there"),
+        ],
+    ));
+    let css = format!(
+        "{CSS} .p {{ width: 200px; font-size: 16px; line-height: 20px; }} .t {{ float: left; }}"
+    );
+    let laid = lay_out(&tree, &css);
+    close(&laid, "t", (0.0, 0.0, 28.69, 26.0));
+    close(&laid, "p", (0.0, 0.0, 200.0, 60.0));
+}
+
+#[test]
+fn a_percentage_height_in_a_cell_is_of_the_height_the_cell_states() {
+    let tree = page(table(
+        "t",
+        vec![tr("", vec![td("c", vec![div("p", vec![text("x")])])])],
+    ));
+    let css = format!("{CSS} td {{ height: 100px; }} .p {{ height: 50%; }}");
+    let laid = lay_out(&tree, &css);
+    close(&laid, "t", (0.0, 0.0, 14.38, 106.0));
+    close(&laid, "p", (3.0, 28.0, 8.38, 50.0));
+}
