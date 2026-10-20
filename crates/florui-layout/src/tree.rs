@@ -23,17 +23,20 @@ use super::{LeafContext, LeafScratch, measure_leaf};
 
 pub(crate) type TreeResult<T> = Result<T, TaffyError>;
 
-struct Node {
-    style: Style,
-    cache: Cache,
-    layout: Layout,
-    children: Vec<NodeId>,
-    parent: Option<NodeId>,
-    context: Option<LeafContext>,
+pub(crate) struct Node {
+    pub(crate) style: Style,
+    pub(crate) cache: Cache,
+    pub(crate) layout: Layout,
+    pub(crate) children: Vec<NodeId>,
+    pub(crate) parent: Option<NodeId>,
+    pub(crate) context: Option<LeafContext>,
     /// What the last grid layout of the node made of its tracks and items.
-    grid_info: Option<Box<DetailedGridInfo>>,
+    pub(crate) grid_info: Option<Box<DetailedGridInfo>>,
     /// The first baseline of the last layout, from the top of the border box.
-    baseline: Option<f32>,
+    pub(crate) baseline: Option<f32>,
+    /// The room of each line of the content, when a float made some lines
+    /// shorter than the box: what laying the content out again needs.
+    pub(crate) slots: Option<std::sync::Arc<[florui_text::LineSlot]>>,
 }
 
 impl Node {
@@ -47,6 +50,7 @@ impl Node {
             context,
             grid_info: None,
             baseline: None,
+            slots: None,
         }
     }
 }
@@ -117,14 +121,18 @@ impl FlorTree {
     }
 
     /// The node of an id that layout itself got from this tree.
-    fn live(&self, id: NodeId) -> &Node {
+    pub(crate) fn node(&self, id: NodeId) -> &Node {
+        self.live(id)
+    }
+
+    pub(crate) fn live(&self, id: NodeId) -> &Node {
         match self.get(id) {
             Ok(node) => node,
             Err(_) => unreachable!("layout asked for a node that is not in the tree"),
         }
     }
 
-    fn live_mut(&mut self, id: NodeId) -> &mut Node {
+    pub(crate) fn live_mut(&mut self, id: NodeId) -> &mut Node {
         match self.get_mut(id) {
             Ok(node) => node,
             Err(_) => unreachable!("layout asked for a node that is not in the tree"),
@@ -231,6 +239,11 @@ impl FlorTree {
         Ok(&self.get(id)?.layout)
     }
 
+    /// The room of each line of the inline content of `id`, if a float narrowed any.
+    pub(crate) fn line_slots(&self, id: NodeId) -> Option<std::sync::Arc<[florui_text::LineSlot]>> {
+        self.get(id).ok()?.slots.clone()
+    }
+
     /// Where the first baseline of `id` lies, from the top of its border box.
     pub(crate) fn first_baseline(&self, id: NodeId) -> Option<f32> {
         self.get(id).ok()?.baseline
@@ -262,6 +275,7 @@ impl FlorTree {
             tree: self,
             font,
             scratch: HashMap::with_capacity(node_count),
+            regions: HashMap::new(),
         };
         compute_root_layout(&mut run, root, available);
         Ok(())
@@ -270,16 +284,18 @@ impl FlorTree {
 
 /// One layout pass over a [`FlorTree`]: the tree, the font the leaves are
 /// measured with, and what the leaves kept from the sizes they were asked.
-struct Run<'a> {
-    tree: &'a mut FlorTree,
-    font: &'a mut florui_text::Font,
+pub(crate) struct Run<'a> {
+    pub(crate) tree: &'a mut FlorTree,
+    pub(crate) font: &'a mut florui_text::Font,
     /// What a text leaf keeps across the many widths Taffy asks it about in
     /// one pass: only text leaves have an entry.
-    scratch: HashMap<NodeId, LeafScratch>,
+    pub(crate) scratch: HashMap<NodeId, LeafScratch>,
+    /// Whether the context a node roots has floats in it; see `region_has_float`.
+    pub(crate) regions: HashMap<NodeId, bool>,
 }
 
 impl Run<'_> {
-    fn child_layout(
+    pub(crate) fn child_layout(
         &mut self,
         node_id: NodeId,
         inputs: LayoutInput,
@@ -292,6 +308,11 @@ impl Run<'_> {
         let output = compute_cached_layout(self, node_id, inputs, |run, node_id, inputs| {
             let node = run.tree.live(node_id);
             let (display, has_children) = (node.style.display, !node.children.is_empty());
+            if matches!(display, Display::Block | Display::FlowRoot)
+                && run.region_has_float(node_id)
+            {
+                return run.flow_region_root(node_id, inputs);
+            }
             match (display, has_children) {
                 (Display::None, _) => compute_hidden_layout(run, node_id),
                 (Display::Block, true) => compute_block_layout(run, node_id, inputs, block_ctx),
@@ -314,6 +335,7 @@ impl Run<'_> {
             tree,
             font,
             scratch,
+            ..
         } = self;
         let Node { style, context, .. } = tree.live_mut(node_id);
         let mut context = context.as_mut();

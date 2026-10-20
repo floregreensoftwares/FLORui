@@ -69,6 +69,8 @@ enum Step {
     Visit(NodeId),
     Build(NodeId),
     BuildMixed(NodeId, Vec<Part>),
+    /// Inline content with floats among it, which are its Taffy children.
+    BuildInline(NodeId, Vec<NodeId>),
 }
 
 impl Default for LayoutCache {
@@ -391,6 +393,14 @@ impl LayoutCache {
                             to_taffy_style(styles.get(&node))
                         };
                         self.place(node, style, context, &[], false)?;
+                    } else if kind == LayoutKind::Inline
+                        && !ifc_floats(arena, styles, node).is_empty()
+                    {
+                        let floats = ifc_floats(arena, styles, node);
+                        stack.push(Step::BuildInline(node, floats.clone()));
+                        for &float in floats.iter().rev() {
+                            stack.push(Step::Visit(float));
+                        }
                     } else if kind == LayoutKind::Inline {
                         let context = build_inline_content_items(font, arena, styles, node, None);
                         self.place(
@@ -410,8 +420,18 @@ impl LayoutCache {
                                 Part::Run(_) | Part::Spot(_) => None,
                             })
                             .collect();
+                        let run_floats: Vec<NodeId> = parts
+                            .iter()
+                            .filter_map(|part| match part {
+                                Part::Run(range) => {
+                                    Some(crate::run_floats(arena, styles, node, range.clone()))
+                                }
+                                _ => None,
+                            })
+                            .flatten()
+                            .collect();
                         stack.push(Step::BuildMixed(node, parts));
-                        for &child in blocks.iter().rev() {
+                        for &child in blocks.iter().chain(run_floats.iter()).rev() {
                             stack.push(Step::Visit(child));
                         }
                     } else {
@@ -456,12 +476,19 @@ impl LayoutCache {
                                     range.clone(),
                                     None,
                                 );
-                                let leaf = self.tree.new_leaf_with_context(
+                                let float_ids: Vec<taffy::NodeId> =
+                                    crate::run_floats(arena, styles, node, range.clone())
+                                        .iter()
+                                        .map(|float| self.id_of(*float))
+                                        .collect();
+                                let leaf = crate::inline_node(
+                                    &mut self.tree,
                                     taffy::Style {
                                         display: Display::Block,
                                         ..Default::default()
                                     },
-                                    LeafContext::Inline(context.clone()),
+                                    context.clone(),
+                                    &float_ids,
                                 )?;
                                 let key = anonymous_id(node, run_number);
                                 run_number += 1;
@@ -482,6 +509,19 @@ impl LayoutCache {
                         &children,
                         false,
                     )?;
+                }
+                Step::BuildInline(node, floats) => {
+                    let context = build_inline_content_items(font, arena, styles, node, None);
+                    let float_ids: Vec<taffy::NodeId> =
+                        floats.iter().map(|float| self.id_of(*float)).collect();
+                    self.place(
+                        node,
+                        to_taffy_style(styles.get(&node)),
+                        Some(LeafContext::Inline(context.clone())),
+                        &float_ids,
+                        false,
+                    )?;
+                    inline_leaves.push((node, context));
                 }
                 Step::Build(node) => {
                     let reorders = reorders_children(styles, node)
@@ -545,6 +585,11 @@ impl LayoutCache {
             // layout, which has no parent yet; any other child goes through
             // `set_children`, which leaves its old parent first.
             let id = match context {
+                Some(context) if !children.is_empty() => {
+                    let id = self.tree.new_leaf_with_context(style, context)?;
+                    self.tree.set_children(id, children)?;
+                    id
+                }
                 Some(context) => self.tree.new_leaf_with_context(style, context)?,
                 None if children_are_new && !children.is_empty() => {
                     self.tree.new_with_children(style, children)?
@@ -935,6 +980,89 @@ mod tests {
         // `b` (order 1) first, then `c`, then the two `a`s (order 3) in source order.
         assert!(layouts[&items[1]].x < layouts[&items[2]].x);
         assert!(layouts[&items[2]].x < layouts[&items[0]].x);
+    }
+
+    #[test]
+    fn a_kept_tree_with_floats_lays_out_as_one_built_anew() {
+        let css = ".p { width: 200px; font-size: 16px; line-height: 20px; } \
+                   .l { float: left; width: 50px; height: 50px; } \
+                   .r { float: right; width: 40px; height: 30px; margin: 5px; } \
+                   .cl { clear: both; height: 4px; } .fr { display: flow-root; }";
+        let sheet = florui_style::parse_stylesheet(css).unwrap();
+        let styled = |arena: &Arena| {
+            florui_style::compute(
+                arena,
+                &sheet,
+                &InteractionState::new(),
+                florui_style::Viewport::default(),
+                &mut florui_style::AnimationTimeline::default(),
+            )
+        };
+        let float =
+            |class: &str| Element::node("div", vec![("class".into(), class.into())], vec![]);
+        let paragraph = |class: &str, children: Vec<Element>| {
+            Element::node("div", vec![("class".into(), class.into())], children)
+        };
+        let tree = |words: usize, with_right: bool| {
+            let text = "alpha beta gamma delta epsilon zeta eta theta iota ".repeat(words);
+            let mut children = vec![float("l")];
+            if with_right {
+                children.push(float("r"));
+            }
+            children.push(Element::text(text));
+            Element::node(
+                "div",
+                vec![],
+                vec![
+                    paragraph("p", children),
+                    float("cl"),
+                    paragraph(
+                        "p fr",
+                        vec![float("l"), Element::text("contained"), float("r")],
+                    ),
+                    paragraph(
+                        "p",
+                        vec![
+                            Element::text("after "),
+                            float("r"),
+                            Element::text("the float"),
+                        ],
+                    ),
+                ],
+            )
+        };
+        let mut font = florui_text::Font::load_embedded();
+        let mut cache = LayoutCache::new();
+        let wide = Size::MAX_CONTENT;
+        let narrow = Size {
+            width: AvailableSpace::Definite(220.0),
+            height: AvailableSpace::MaxContent,
+        };
+        for (words, with_right, available) in [
+            (1, false, wide),
+            (1, false, wide),
+            (3, false, wide),
+            (3, true, wide),
+            (3, true, narrow),
+            (1, true, wide),
+            (5, false, narrow),
+        ] {
+            let arena = Arena::build(&tree(words, with_right));
+            let styles = styled(&arena);
+            let kept = cache
+                .compute(&mut font, &arena, &styles, available)
+                .unwrap();
+            let fresh =
+                compute_layout_with_content_extents(&mut font, &arena, &styles, available).unwrap();
+            assert_eq!(kept.0.len(), fresh.0.len(), "{words} {with_right}: count");
+            for (node, layout) in &fresh.0 {
+                assert_eq!(
+                    kept.0.get(node),
+                    Some(layout),
+                    "{words} {with_right}: node {node}"
+                );
+            }
+        }
     }
 
     #[test]

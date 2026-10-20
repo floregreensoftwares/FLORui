@@ -62,9 +62,14 @@ use taffy::prelude::*;
 
 use tree::FlorTree;
 
+mod blockflow;
+mod blockflow_inline;
+mod blockflow_root;
+mod blockflow_walk;
 mod cache;
 mod clip;
 mod deferred;
+mod floats;
 mod flow;
 mod grid;
 mod subgrid;
@@ -73,6 +78,8 @@ mod tree;
 
 #[cfg(test)]
 mod contents_tests;
+#[cfg(test)]
+mod float_tests;
 #[cfg(test)]
 mod formatting_context_tests;
 #[cfg(test)]
@@ -444,6 +451,15 @@ enum InlineContentItem {
         /// own, which are not Taffy nodes of the container's tree.
         nested: Option<std::sync::Arc<NestedBlock>>,
     },
+    /// A float among the lines, which is placed where they reach it: `child` is
+    /// the arena node, and `index` its place among the floats of the context,
+    /// which are the Taffy children of the node that holds it.
+    Float {
+        child: NodeId,
+        index: usize,
+        /// The inline element it is written in (the container is `0`).
+        element: usize,
+    },
 }
 
 /// What an `inline-block` with children holds, laid out on its own: its
@@ -504,6 +520,9 @@ fn to_inline_items(context: &InlineContext) -> Vec<florui_text::InlineItem<'_>> 
                 element: *element,
                 vertical_align: *vertical_align,
             },
+            InlineContentItem::Float { index, .. } => {
+                florui_text::InlineItem::Float { id: *index as u64 }
+            }
         })
         .collect()
 }
@@ -592,6 +611,18 @@ fn needs_inline_layout(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
     layout_kind(arena, styles, node) == LayoutKind::Inline
 }
 
+/// Whether `child` is a float: a box taken out of the flow that sits at the
+/// side of the lines of its container's content.
+fn is_float_child(styles: &StyleMap, child: NodeId) -> bool {
+    styles.get(&child).is_some_and(|style| {
+        style.float != florui_style::Float::None
+            && !matches!(
+                style.position,
+                StylePosition::Absolute | StylePosition::Fixed
+            )
+    })
+}
+
 /// How a node with children lays them out.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LayoutKind {
@@ -612,6 +643,7 @@ fn layout_kind(arena: &Tree, styles: &StyleMap, node: NodeId) -> LayoutKind {
             StyleInlineItem::Text(text) => inline |= !text.trim().is_empty(),
             StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
                 _ if is_viewport_fixed(arena, styles, *child) => {}
+                _ if is_float_child(styles, *child) => {}
                 Some(StyleDisplay::Inline) if inline_subtree_is_inline(arena, styles, *child) => {
                     inline = true;
                 }
@@ -679,6 +711,7 @@ fn mixed_parts_of(arena: &Tree, styles: &StyleMap, node: NodeId) -> Vec<Part> {
             StyleInlineItem::Text(text) => content |= !text.trim().is_empty(),
             StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
                 _ if fixed(child) => {}
+                _ if is_float_child(styles, *child) => {}
                 Some(StyleDisplay::Inline) if inline_subtree_is_inline(arena, styles, *child) => {
                     content = true;
                 }
@@ -773,6 +806,55 @@ fn baseline_id(node: NodeId) -> NodeId {
     BASELINE | node
 }
 
+/// Marks the id under which the room of one line of an inline context that has
+/// floats beside it is reported: the `x` and the `width` of its entry. Painting
+/// lays the lines out again in these.
+const SLOTS: NodeId = 1 << 58;
+
+fn slot_id(node: NodeId, line: usize) -> NodeId {
+    SLOTS | ((node & ((1 << 42) - 1)) << 14) | line.min(0x3fff)
+}
+
+/// The room of each line of `node`'s inline content, if a float narrowed any, in
+/// the pixels `laid` is in.
+fn slots_of(laid: Laid<'_>, node: NodeId) -> Option<Vec<florui_text::LineSlot>> {
+    let (boxes, scale) = laid?;
+    boxes.get(&slot_id(node, 0))?;
+    Some(
+        (0..)
+            .map_while(|line| boxes.get(&slot_id(node, line)))
+            .map(|slot| florui_text::LineSlot {
+                x: slot.x / scale,
+                width: slot.width / scale,
+                drop: slot.y / scale,
+            })
+            .collect(),
+    )
+}
+
+/// `context` shaped at `width`, in the slots of its lines when floats narrowed
+/// some.
+fn shape_context(
+    font: &mut florui_text::Font,
+    context: &InlineContext,
+    width: f32,
+    slots: Option<&[florui_text::LineSlot]>,
+) -> std::sync::Arc<florui_text::InlineLayout> {
+    let items = to_inline_items(context);
+    match slots {
+        Some(slots) => std::sync::Arc::new(
+            font.shape_inline_tree_in_slots(
+                &context.elements,
+                &items,
+                width,
+                &mut florui_text::LineSource::Replay(slots),
+            )
+            .0,
+        ),
+        None => font.shape_inline_tree_memoized(&context.elements, &items, Some(width)),
+    }
+}
+
 /// What painting knows of the boxes layout placed: their layouts, in physical
 /// pixels at the scale given, so it does not lay an inline-block out again.
 type Laid<'a> = Option<(&'a HashMap<NodeId, BoxLayout>, f32)>;
@@ -787,6 +869,7 @@ fn inline_subtree_is_inline(arena: &Tree, styles: &StyleMap, node: NodeId) -> bo
             StyleInlineItem::Text(_) => true,
             StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
                 _ if is_viewport_fixed(arena, styles, *child) => true,
+                _ if is_float_child(styles, *child) => true,
                 Some(StyleDisplay::Inline) => inline_subtree_is_inline(arena, styles, *child),
                 Some(display) if display.is_atomic_inline() || display == StyleDisplay::None => {
                     true
@@ -1101,6 +1184,77 @@ fn last_line_baseline(
     })
 }
 
+/// The floats among the inline content of `node` in order, those of its inline
+/// elements included: the children of the Taffy node that holds the content.
+fn ifc_floats(arena: &Tree, styles: &StyleMap, node: NodeId) -> Vec<NodeId> {
+    let mut floats = Vec::new();
+    collect_floats(
+        arena,
+        styles,
+        &flow_items(arena, styles, node).items,
+        &mut floats,
+    );
+    floats
+}
+
+/// [`ifc_floats`] for one run of the content of `node`.
+fn run_floats(
+    arena: &Tree,
+    styles: &StyleMap,
+    node: NodeId,
+    run: std::ops::Range<usize>,
+) -> Vec<NodeId> {
+    let mut floats = Vec::new();
+    collect_floats(
+        arena,
+        styles,
+        &flow_items(arena, styles, node).items[run],
+        &mut floats,
+    );
+    floats
+}
+
+fn collect_floats(
+    arena: &Tree,
+    styles: &StyleMap,
+    items: &[StyleInlineItem],
+    floats: &mut Vec<NodeId>,
+) {
+    for item in items {
+        let StyleInlineItem::Element(child) = item else {
+            continue;
+        };
+        if is_viewport_fixed(arena, styles, *child) {
+            continue;
+        }
+        if is_float_child(styles, *child) {
+            floats.push(*child);
+        } else if styles.get(child).map(|s| s.display) == Some(StyleDisplay::Inline) {
+            collect_floats(
+                arena,
+                styles,
+                &flow_items(arena, styles, *child).items,
+                floats,
+            );
+        }
+    }
+}
+
+/// A Taffy node holding inline content, with the floats among it as children.
+fn inline_node(
+    tree: &mut FlorTree,
+    style: taffy::Style,
+    context: InlineContext,
+    floats: &[taffy::NodeId],
+) -> Result<taffy::NodeId, taffy::TaffyError> {
+    if floats.is_empty() {
+        return tree.new_leaf_with_context(style, LeafContext::Inline(context));
+    }
+    let id = tree.new_with_children(style, floats)?;
+    tree.set_node_context(id, Some(LeafContext::Inline(context)))?;
+    Ok(id)
+}
+
 /// Builds `node`'s inline formatting context from [`Arena::inline_items`]:
 /// a bare text item inherits its element's font (real CSS: a text node has no
 /// style of its own), an `Inline` element child is an element of its own with
@@ -1227,6 +1381,18 @@ fn flatten_items(
                 let child_style = styles.get(child);
                 match child_style.map(|s| s.display) {
                     _ if is_viewport_fixed(arena, styles, *child) => {}
+                    _ if is_float_child(styles, *child) => {
+                        let index = context
+                            .items
+                            .iter()
+                            .filter(|item| matches!(item, InlineContentItem::Float { .. }))
+                            .count();
+                        context.items.push(InlineContentItem::Float {
+                            child: *child,
+                            index,
+                            element,
+                        });
+                    }
                     Some(StyleDisplay::None) => context.hidden.push(*child),
                     Some(display) if display.is_atomic_inline() => {
                         let (width, height, baseline, nested) = if arena.children(*child).is_empty()
@@ -1398,9 +1564,9 @@ pub fn shape_anonymous_block(
     };
     let context =
         build_run_content_items(font, arena, styles, container, range.clone(), Some(laid));
-    let items = to_inline_items(&context);
+    let slots = slots_of(Some(laid), block);
     Some(InlineShaped {
-        layout: font.shape_inline_tree_memoized(&context.elements, &items, Some(wrap_width)),
+        layout: shape_context(font, &context, wrap_width, slots.as_deref()),
         nodes: context.nodes.clone(),
         parents: context.elements.iter().map(|e| e.parent).collect(),
     })
@@ -1424,11 +1590,45 @@ pub fn shape_inline_formatting_context(
         return None;
     }
     let context = build_inline_content_items(font, arena, styles, node, Some(laid));
-    let items = to_inline_items(&context);
+    let slots = slots_of(Some(laid), node);
     Some(InlineShaped {
-        layout: font.shape_inline_tree_memoized(&context.elements, &items, Some(wrap_width)),
+        layout: shape_context(font, &context, wrap_width, slots.as_deref()),
         nodes: context.nodes.clone(),
         parents: context.elements.iter().map(|e| e.parent).collect(),
+    })
+}
+
+/// The text of `node`, a block with plain text and a float beside it, shaped in the
+/// room the float leaves each line; `None` when no float narrowed a line.
+pub fn shape_text_in_slots(
+    font: &mut florui_text::Font,
+    arena: &Tree,
+    styles: &StyleMap,
+    laid: (&HashMap<NodeId, BoxLayout>, f32),
+    node: NodeId,
+    wrap_width: f32,
+) -> Option<InlineShaped> {
+    let slots = slots_of(Some(laid), node)?;
+    let text = arena.text_content(node);
+    if text.is_empty() {
+        return None;
+    }
+    let context = InlineContext {
+        elements: vec![florui_text::InlineElement {
+            parent: 0,
+            style: node_text_style(styles.get(&node)),
+        }],
+        items: vec![InlineContentItem::Text {
+            text: text.to_owned(),
+            element: 0,
+        }],
+        nodes: vec![node],
+        hidden: Vec::new(),
+    };
+    Some(InlineShaped {
+        layout: shape_context(font, &context, wrap_width, Some(&slots)),
+        nodes: vec![node],
+        parents: vec![0],
     })
 }
 
@@ -1667,10 +1867,12 @@ fn collect_layouts(
             }
         }
         let nothing_to_place = context.nodes.len() == 1
-            && !context
-                .items
-                .iter()
-                .any(|item| matches!(item, InlineContentItem::Box { .. }));
+            && !context.items.iter().any(|item| {
+                matches!(
+                    item,
+                    InlineContentItem::Box { .. } | InlineContentItem::Float { .. }
+                )
+            });
         if nothing_to_place {
             continue;
         }
@@ -1685,9 +1887,22 @@ fn collect_layouts(
         let content_width =
             (layout.size.width - padding_left - padding_right - border_left - border_right)
                 .max(0.0);
-        let items = to_inline_items(context);
-        let shaped =
-            font.shape_inline_tree_memoized(&context.elements, &items, Some(content_width));
+        let slots = tree.line_slots(tid);
+        let shaped = shape_context(font, context, content_width, slots.as_deref());
+        if let Some(slots) = &slots {
+            for (line, slot) in slots.iter().enumerate() {
+                result.insert(
+                    slot_id(*container, line),
+                    BoxLayout {
+                        x: slot.x,
+                        y: slot.drop,
+                        width: slot.width,
+                        height: 0.0,
+                        margin: BoxMargin::ZERO,
+                    },
+                );
+            }
+        }
         // Where the content starts, in the box of the container: its content
         // box, or where an anonymous block is among its children.
         let origin = if is_anonymous(*container) {
@@ -1835,6 +2050,42 @@ fn collect_layouts(
                 // never overflows itself.
                 content_extents.insert(child, ContentExtent { width, height });
             }
+        }
+
+        // The floats among the lines were placed by layout against the node that
+        // holds them; they belong to the element they are written in.
+        for item in &context.items {
+            let InlineContentItem::Float { child, element, .. } = item else {
+                continue;
+            };
+            let float = *tree.layout(id_of(*child)).map_err(LayoutError)?;
+            let base = if is_anonymous(*container) {
+                (layout.location.x, layout.location.y)
+            } else {
+                (0.0, 0.0)
+            };
+            let at = (base.0 + float.location.x, base.1 + float.location.y);
+            let (x, y) = if *element == 0 {
+                at
+            } else {
+                let parent = origin_of(*element, &rects);
+                (at.0 - origin.0 - parent.0, at.1 - origin.1 - parent.1)
+            };
+            result.insert(
+                *child,
+                BoxLayout {
+                    x,
+                    y,
+                    width: float.size.width,
+                    height: float.size.height,
+                    margin: BoxMargin {
+                        top: float.margin.top,
+                        right: float.margin.right,
+                        bottom: float.margin.bottom,
+                        left: float.margin.left,
+                    },
+                },
+            );
         }
     }
 
@@ -2590,6 +2841,9 @@ enum BuildStep {
     /// A container with anonymous blocks among its children, which `Build`
     /// cannot find in the arena.
     BuildMixed(NodeId, Vec<Part>),
+    /// A container of inline content that has floats among it: the floats are
+    /// its Taffy children.
+    BuildInline(NodeId, Vec<NodeId>),
 }
 
 /// Builds `root`'s whole subtree into `tree`, returning its own
@@ -2660,6 +2914,14 @@ fn build_node(
                             }),
                         )?
                     }
+                } else if kind == LayoutKind::Inline && !ifc_floats(arena, styles, node).is_empty()
+                {
+                    let floats = ifc_floats(arena, styles, node);
+                    stack.push(BuildStep::BuildInline(node, floats.clone()));
+                    for &float in floats.iter().rev() {
+                        stack.push(BuildStep::Visit(float));
+                    }
+                    continue;
                 } else if kind == LayoutKind::Inline {
                     let style = to_taffy_style(styles.get(&node));
                     let context = build_inline_content_items(font, arena, styles, node, None);
@@ -2676,8 +2938,18 @@ fn build_node(
                             Part::Run(_) | Part::Spot(_) => None,
                         })
                         .collect();
+                    let run_floats: Vec<NodeId> = parts
+                        .iter()
+                        .filter_map(|part| match part {
+                            Part::Run(range) => {
+                                Some(run_floats(arena, styles, node, range.clone()))
+                            }
+                            _ => None,
+                        })
+                        .flatten()
+                        .collect();
                     stack.push(BuildStep::BuildMixed(node, parts));
-                    for &child in blocks.iter().rev() {
+                    for &child in blocks.iter().chain(run_floats.iter()).rev() {
                         stack.push(BuildStep::Visit(child));
                     }
                     continue;
@@ -2725,12 +2997,19 @@ fn build_node(
                                 range.clone(),
                                 None,
                             );
-                            let leaf = tree.new_leaf_with_context(
+                            let float_ids: Vec<taffy::NodeId> =
+                                run_floats(arena, styles, node, range.clone())
+                                    .iter()
+                                    .map(|float| taffy_ids[float])
+                                    .collect();
+                            let leaf = inline_node(
+                                tree,
                                 taffy::Style {
                                     display: Display::Block,
                                     ..Default::default()
                                 },
-                                LeafContext::Inline(context.clone()),
+                                context.clone(),
+                                &float_ids,
                             )?;
                             let key = anonymous_id(node, run_number);
                             run_number += 1;
@@ -2745,6 +3024,19 @@ fn build_node(
                 }
                 sort_by_order(&mut children, &orders);
                 let id = tree.new_with_children(to_taffy_style(styles.get(&node)), &children)?;
+                taffy_ids.insert(node, id);
+            }
+            BuildStep::BuildInline(node, floats) => {
+                let context = build_inline_content_items(font, arena, styles, node, None);
+                let float_ids: Vec<taffy::NodeId> =
+                    floats.iter().map(|float| taffy_ids[float]).collect();
+                let id = inline_node(
+                    tree,
+                    to_taffy_style(styles.get(&node)),
+                    context.clone(),
+                    &float_ids,
+                )?;
+                inline_leaves.push((node, context));
                 taffy_ids.insert(node, id);
             }
             BuildStep::Build(node) => {
@@ -2864,6 +3156,23 @@ fn layout_fixed_group(
     Ok(Some(root))
 }
 
+fn to_taffy_float(value: florui_style::Float) -> taffy::Float {
+    match value {
+        florui_style::Float::None => taffy::Float::None,
+        florui_style::Float::Left => taffy::Float::Left,
+        florui_style::Float::Right => taffy::Float::Right,
+    }
+}
+
+fn to_taffy_clear(value: florui_style::Clear) -> taffy::Clear {
+    match value {
+        florui_style::Clear::None => taffy::Clear::None,
+        florui_style::Clear::Left => taffy::Clear::Left,
+        florui_style::Clear::Right => taffy::Clear::Right,
+        florui_style::Clear::Both => taffy::Clear::Both,
+    }
+}
+
 fn to_taffy_overflow(makes_context: bool) -> taffy::Overflow {
     if makes_context {
         taffy::Overflow::Hidden
@@ -2918,6 +3227,16 @@ fn to_taffy_style(style: Option<&ComputedStyle>) -> taffy::Style {
             bottom: to_length_percentage_auto(style.margin.bottom),
         },
         position: to_taffy_position(style.position),
+        // A box taken out of the flow by its position is not floated, whatever `float` says.
+        float: if matches!(
+            style.position,
+            StylePosition::Absolute | StylePosition::Fixed
+        ) {
+            taffy::Float::None
+        } else {
+            to_taffy_float(style.float)
+        },
+        clear: to_taffy_clear(style.clear),
         // Not applied to a static box, and to a sticky one only once scrolled.
         inset: if matches!(
             style.position,
@@ -3161,7 +3480,7 @@ pub fn absolute_position(
 pub fn layout_parent(arena: &Tree, id: NodeId) -> Option<NodeId> {
     if is_anonymous(id) {
         Some(anonymous_container(id))
-    } else if id & (PIECE | BASELINE) != 0 {
+    } else if id & (PIECE | BASELINE | SLOTS) != 0 {
         None
     } else {
         arena.parent(id)
@@ -3172,7 +3491,7 @@ pub fn layout_parent(arena: &Tree, id: NodeId) -> Option<NodeId> {
 /// node is placed in, which is what its scroll offset and its sticky bounds
 /// come from.
 pub fn layout_parent_in(arena: &Tree, styles: &StyleMap, id: NodeId) -> Option<NodeId> {
-    if id & (ANONYMOUS | PIECE | BASELINE) != 0 {
+    if id & (ANONYMOUS | PIECE | BASELINE | SLOTS) != 0 {
         layout_parent(arena, id)
     } else {
         flow_parent(arena, styles, id)
@@ -3432,8 +3751,8 @@ struct HitVisit {
     leaf: bool,
 }
 /// The children of `node` in the order they are drawn: a flex or grid
-/// container's by [`ComputedStyle::item_stacking`], any other box's as they
-/// come. Borrowed unless something has to move.
+/// container's by [`ComputedStyle::item_stacking`], any other box's by
+/// [`ComputedStyle::block_stacking`]. Borrowed unless something has to move.
 fn children_by_paint<'a>(
     arena: &'a Arena,
     styles: &StyleMap,
@@ -3443,8 +3762,16 @@ fn children_by_paint<'a>(
     let stacks = styles
         .get(&node)
         .is_some_and(|style| style.display.is_flex_or_grid());
-    let key = |child: &NodeId| styles.get(child).map_or((0, 0), |s| s.item_stacking());
-    if !stacks || children.iter().all(|child| key(child) == (0, 0)) {
+    let key = |child: &NodeId| {
+        styles.get(child).map_or((0, 0), |s| {
+            if stacks {
+                s.item_stacking()
+            } else {
+                s.block_stacking()
+            }
+        })
+    };
+    if children.iter().all(|child| key(child) == (0, 0)) {
         return children;
     }
     let mut sorted = children.into_owned();
@@ -4007,7 +4334,7 @@ mod tests {
                     admits_children = admitted && padding_box.contains(point.0, point.1);
                 }
             }
-            for &child in arena.children(node).iter().rev() {
+            for &child in children_by_paint(arena, styles, node).iter().rev() {
                 stack.push((child, point, admits_children));
             }
         }
@@ -6577,6 +6904,37 @@ mod tests {
         // b is later in the source and overlaps a from x = 30, but a is above it.
         let overlap = super::hit_test(&arena, &layouts, &styles, 45.0, 5.0);
         assert_eq!(overlap, Some(a));
+    }
+
+    #[test]
+    fn a_float_is_hit_above_the_blocks_that_follow_it_and_a_positioned_box_above_both() {
+        let tree: Element = view! {
+            <div class="r">
+                <div class="f" />
+                <div class="b" />
+                <div class="p" />
+            </div>
+        };
+        let (arena, styles, layouts) = layout_with_styles(
+            &tree,
+            ".r { width: 100px; } .f { float: left; width: 40px; height: 40px; } \n             .b { height: 40px; } \n             .p { position: absolute; left: 30px; top: 0; width: 20px; height: 10px; }",
+        );
+        let [f, b, p] = arena.children(arena.roots()[0])[..] else {
+            panic!("three children");
+        };
+        // The block is under the float, which Chrome draws and hits above it.
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 20.0, 20.0),
+            Some(f)
+        );
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 60.0, 30.0),
+            Some(b)
+        );
+        assert_eq!(
+            super::hit_test(&arena, &layouts, &styles, 35.0, 5.0),
+            Some(p)
+        );
     }
 
     #[test]
