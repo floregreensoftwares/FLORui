@@ -62,6 +62,8 @@ use taffy::prelude::*;
 
 use tree::FlorTree;
 
+#[cfg(test)]
+mod block_align_tests;
 mod blockflow;
 mod blockflow_inline;
 mod blockflow_root;
@@ -2041,6 +2043,86 @@ fn compute_layout_in_place(
         |node| taffy_ids[&node],
     )
 }
+/// Moves the blocks that the `text-align` of their container aligns (`-webkit-center`,
+/// `-webkit-left`, `-webkit-right`) to where it puts them: the room left beside the
+/// margin box of a block in the flow, never less than none, goes on its left (all of it
+/// for the end, half of it for the middle). A block with an auto margin is as it is.
+fn align_blocks(
+    styles: &StyleMap,
+    tree: &FlorTree,
+    nodes: &[(NodeId, taffy::NodeId)],
+    boxes: &mut HashMap<NodeId, BoxLayout>,
+) -> Result<(), LayoutError> {
+    use florui_style::BlockAlign;
+    let by_tid: HashMap<taffy::NodeId, NodeId> =
+        nodes.iter().map(|&(node, tid)| (tid, node)).collect();
+    for &(node, tid) in nodes {
+        let Some(style) = styles.get(&node) else {
+            continue;
+        };
+        if !matches!(
+            style.display,
+            StyleDisplay::Block
+                | StyleDisplay::FlowRoot
+                | StyleDisplay::ListItem
+                | StyleDisplay::Table
+                | StyleDisplay::Flex
+                | StyleDisplay::Grid
+        ) || style.float != florui_style::Float::None
+            || matches!(
+                style.position,
+                StylePosition::Absolute | StylePosition::Fixed
+            )
+        {
+            continue;
+        }
+        let own = tree.node(tid);
+        let Some(parent_tid) = own.parent else {
+            continue;
+        };
+        let Some(parent_style) = by_tid
+            .get(&parent_tid)
+            .and_then(|parent| styles.get(parent))
+        else {
+            continue;
+        };
+        if parent_style.block_align == BlockAlign::None
+            || !matches!(
+                parent_style.display,
+                StyleDisplay::Block
+                    | StyleDisplay::FlowRoot
+                    | StyleDisplay::InlineBlock
+                    | StyleDisplay::ListItem
+                    | StyleDisplay::TableCell
+                    | StyleDisplay::TableCaption
+            )
+            || own.style.margin.left.is_auto()
+            || own.style.margin.right.is_auto()
+        {
+            continue;
+        }
+        let layout = tree.layout(tid).map_err(LayoutError)?;
+        let container = tree.layout(parent_tid).map_err(LayoutError)?;
+        let room = container.size.width
+            - container.padding.left
+            - container.padding.right
+            - container.border.left
+            - container.border.right
+            - container.scrollbar_size.width;
+        let free = (room - layout.size.width - layout.margin.left - layout.margin.right).max(0.0);
+        let shift = match parent_style.block_align {
+            BlockAlign::Center => free / 2.0,
+            BlockAlign::Right => free,
+            BlockAlign::Left | BlockAlign::None => 0.0,
+        };
+        if shift != 0.0
+            && let Some(placed) = boxes.get_mut(&node)
+        {
+            placed.x += shift;
+        }
+    }
+    Ok(())
+}
 
 /// Reads every node's box and content extent back out of a laid-out `tree`,
 /// then places the boxes of each inline formatting context's own items (see
@@ -2060,7 +2142,12 @@ fn collect_layouts(
     let mut result = HashMap::with_capacity(node_count);
     let mut content_extents = HashMap::with_capacity(node_count);
     let mut list_items: Vec<(NodeId, taffy::NodeId)> = Vec::new();
+    let keep = styles.may_have_block_align();
+    let mut seen: Vec<(NodeId, taffy::NodeId)> = Vec::new();
     for (node_id, tid) in nodes {
+        if keep {
+            seen.push((node_id, tid));
+        }
         let layout = tree.layout(tid).map_err(LayoutError)?;
         if styles
             .get(&node_id)
@@ -2128,6 +2215,11 @@ fn collect_layouts(
                 },
             );
         }
+    }
+
+    // Blocks aligned by `text-align: -webkit-center`, `-webkit-left` or `-webkit-right`.
+    if styles.may_have_block_align() {
+        align_blocks(styles, tree, &seen, &mut result)?;
     }
 
     // The markers of the list items: where they are placed by, and their numbers.
@@ -2863,7 +2955,7 @@ fn measure_leaf(
 /// attributes where the author's CSS says none, and the ratio of its `viewBox` so
 /// that a width alone gives it a height, as for any replaced box.
 pub(crate) fn svg_taffy_style(arena: &Tree, styles: &StyleMap, node: NodeId) -> taffy::Style {
-    let mut style = taffy_style_in(arena, styles, node);
+    let mut style = to_taffy_style(styles.get(&node));
     // The `width` and `height` attributes are what the author's CSS did not say
     // (Chrome 153: a rule for the width leaves the height of the attribute).
     let dimension = |name: &str| {
@@ -3199,7 +3291,7 @@ fn build_node(
                 let id = if (arena.children(node).is_empty() && !has_inside_marker(styles, node))
                     || is_svg
                 {
-                    let style = taffy_style_in(arena, styles, node);
+                    let style = to_taffy_style(styles.get(&node));
                     // `icon` (a themable SVG icon) is the same kind of
                     // replaced element as `img` -- same intrinsic-size
                     // sizing rule, same missing channel into this crate
@@ -3249,7 +3341,7 @@ fn build_node(
                     }
                     continue;
                 } else if kind == LayoutKind::Inline {
-                    let style = taffy_style_in(arena, styles, node);
+                    let style = to_taffy_style(styles.get(&node));
                     let context = build_inline_content_items(font, arena, styles, node, None);
                     let id =
                         tree.new_leaf_with_context(style, LeafContext::Inline(context.clone()))?;
@@ -3349,7 +3441,7 @@ fn build_node(
                     }
                 }
                 sort_by_order(&mut children, &orders);
-                let id = tree.new_with_children(taffy_style_in(arena, styles, node), &children)?;
+                let id = tree.new_with_children(to_taffy_style(styles.get(&node)), &children)?;
                 register(tree, arena, styles, taffy_ids, node, id)?;
             }
             BuildStep::BuildInline(node, floats) => {
@@ -3358,7 +3450,7 @@ fn build_node(
                     floats.iter().map(|float| taffy_ids[float]).collect();
                 let id = inline_node(
                     tree,
-                    taffy_style_in(arena, styles, node),
+                    to_taffy_style(styles.get(&node)),
                     context.clone(),
                     &float_ids,
                 )?;
@@ -3366,7 +3458,7 @@ fn build_node(
                 register(tree, arena, styles, taffy_ids, node, id)?;
             }
             BuildStep::Build(node) => {
-                let style = taffy_style_in(arena, styles, node);
+                let style = to_taffy_style(styles.get(&node));
                 let reorders = reorders_children(styles, node)
                     && flow_children(arena, styles, node)
                         .iter()
@@ -3526,42 +3618,6 @@ fn to_taffy_box_sizing(value: StyleBoxSizing) -> BoxSizing {
         StyleBoxSizing::ContentBox => BoxSizing::ContentBox,
         StyleBoxSizing::BorderBox => BoxSizing::BorderBox,
     }
-}
-
-/// The Taffy style of `node`: its own, and where its parent aligns the blocks in it
-/// (`text-align: -webkit-center`, `-webkit-left`, `-webkit-right`) a block in the flow
-/// with no margin at that side has an auto one instead, which puts it there.
-fn taffy_style_in(arena: &Tree, styles: &StyleMap, node: NodeId) -> taffy::Style {
-    let mut style = to_taffy_style(styles.get(&node));
-    if !styles.may_have_block_align() {
-        return style;
-    }
-    let (Some(own), Some(parent)) = (styles.get(&node), flow_parent(arena, styles, node)) else {
-        return style;
-    };
-    let align = styles
-        .get(&parent)
-        .map_or(florui_style::BlockAlign::None, |s| s.block_align);
-    if align == florui_style::BlockAlign::None
-        || !matches!(
-            own.display,
-            StyleDisplay::Block | StyleDisplay::ListItem | StyleDisplay::Table
-        )
-        || own.float != florui_style::Float::None
-        || matches!(own.position, StylePosition::Absolute | StylePosition::Fixed)
-    {
-        return style;
-    }
-    let none = LengthPercentageAuto::length(0.0);
-    let auto = LengthPercentageAuto::auto();
-    use florui_style::BlockAlign;
-    if matches!(align, BlockAlign::Center | BlockAlign::Left) && style.margin.right == none {
-        style.margin.right = auto;
-    }
-    if matches!(align, BlockAlign::Center | BlockAlign::Right) && style.margin.left == none {
-        style.margin.left = auto;
-    }
-    style
 }
 
 fn to_taffy_style(style: Option<&ComputedStyle>) -> taffy::Style {
