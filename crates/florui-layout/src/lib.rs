@@ -7656,6 +7656,22 @@ mod tests {
     }
 
     #[test]
+    fn a_calc_track_and_a_fit_content_column_in_one_grid_sized_by_its_content() {
+        // Chrome 153: 170px, the calc() being 10px and half of that.
+        let columns = "grid-template-columns: fit-content(30px) calc(10px + 50%) 1fr;";
+        let big = ["big", "big", "big"];
+        let want = (170.0, vec![30.0, 95.0, 45.0]);
+        assert_eq!(
+            fit_content_grid("", &format!("width: fit-content; {columns}"), &big, true),
+            want
+        );
+        assert_eq!(
+            fit_content_grid("display: flex;", columns, &big, true),
+            want
+        );
+    }
+
+    #[test]
     fn a_subgrid_that_is_not_in_a_grid_is_none() {
         let tree: Element = view! {
             <div class="flex">
