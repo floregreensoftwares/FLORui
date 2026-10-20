@@ -1292,6 +1292,9 @@ fn last_line_baseline(
 /// The floats among the inline content of `node` in order, those of its inline
 /// elements included: the children of the Taffy node that holds the content.
 fn ifc_floats(arena: &Tree, styles: &StyleMap, node: NodeId) -> Vec<NodeId> {
+    if !styles.may_have_floats() {
+        return Vec::new();
+    }
     let mut floats = Vec::new();
     collect_floats(
         arena,
@@ -1309,6 +1312,9 @@ fn run_floats(
     node: NodeId,
     run: std::ops::Range<usize>,
 ) -> Vec<NodeId> {
+    if !styles.may_have_floats() {
+        return Vec::new();
+    }
     let mut floats = Vec::new();
     collect_floats(
         arena,
@@ -1378,10 +1384,11 @@ impl Drop for NumberingGuard {
 
 /// Numbers the list items of the document, if one of them has its marker inside.
 fn install_numbering(arena: &Tree, styles: &StyleMap) -> NumberingGuard {
-    let inside = styles.values().any(|style| {
-        style.display == StyleDisplay::ListItem
-            && style.list_style_position == florui_style::ListStylePosition::Inside
-    });
+    let inside = styles.may_have_list_items()
+        && styles.values().any(|style| {
+            style.display == StyleDisplay::ListItem
+                && style.list_style_position == florui_style::ListStylePosition::Inside
+        });
     NUMBERING.with(|numbers| {
         *numbers.borrow_mut() = if inside {
             list::numbering(arena, styles)
@@ -3517,6 +3524,9 @@ fn to_taffy_box_sizing(value: StyleBoxSizing) -> BoxSizing {
 /// with no margin at that side has an auto one instead, which puts it there.
 fn taffy_style_in(arena: &Tree, styles: &StyleMap, node: NodeId) -> taffy::Style {
     let mut style = to_taffy_style(styles.get(&node));
+    if !styles.may_have_block_align() {
+        return style;
+    }
     let (Some(own), Some(parent)) = (styles.get(&node), flow_parent(arena, styles, node)) else {
         return style;
     };
