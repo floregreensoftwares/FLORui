@@ -59,8 +59,7 @@ use florui_style::{
     NodeId, Position as StylePosition, RoundedRect, Rule, Tree, Viewport,
 };
 use taffy::prelude::*;
-use taffy::util::ResolveOrZero;
-use taffy::{Baselines, compute_leaf_layout};
+use tree::FlorTree;
 
 mod cache;
 mod clip;
@@ -68,6 +67,7 @@ mod deferred;
 mod grid;
 mod subgrid;
 mod transform;
+mod tree;
 
 pub use cache::LayoutCache;
 pub use clip::{ClipGeometry, clip_admits, resolve_clip_path};
@@ -932,8 +932,7 @@ fn nested_block(
         Vec<(NodeId, InlineContext)>,
     );
     let lay = |font: &mut florui_text::Font, width: AvailableSpace| -> Result<Laid, LayoutError> {
-        let mut tree: TaffyTree<LeafContext> = TaffyTree::new();
-        tree.disable_rounding();
+        let mut tree = FlorTree::new();
         let mut ids = HashMap::new();
         let mut leaves = Vec::new();
         let id = build_node(font, arena, styles, node, &mut tree, &mut ids, &mut leaves)
@@ -1448,12 +1447,11 @@ fn compute_layout_in_place(
     styles: &StyleMap,
     available: Size<AvailableSpace>,
 ) -> Result<LayoutsAndContentExtents, LayoutError> {
-    let mut tree: TaffyTree<LeafContext> = TaffyTree::with_capacity(styles.len() + 2);
+    let mut tree = FlorTree::with_capacity(styles.len() + 2);
     // Text is measured at its exact width and paint reshapes it at the laid
     // out width, so a width rounded down (a 36.26px label laid out at 36px)
     // wraps it at its only break opportunity. Browsers lay out in
     // fractional units and snap at paint; paint here already snaps fills.
-    tree.disable_rounding();
     let mut taffy_ids: HashMap<NodeId, taffy::NodeId> = HashMap::with_capacity(styles.len());
     // Every inline-formatting-context leaf built below, so the second pass
     // after layout can derive its `Box` items' own `BoxLayout` entries —
@@ -1544,7 +1542,7 @@ fn collect_layouts(
     font: &mut florui_text::Font,
     arena: &Tree,
     styles: &StyleMap,
-    tree: &TaffyTree<LeafContext>,
+    tree: &FlorTree,
     nodes: impl Iterator<Item = (NodeId, taffy::NodeId)>,
     inline_leaves: &[(NodeId, InlineContext)],
     fixed: &[NodeId],
@@ -1854,7 +1852,7 @@ fn layout_root_group(
     styles: &StyleMap,
     roots: &[NodeId],
     available: Size<AvailableSpace>,
-    tree: &mut TaffyTree<LeafContext>,
+    tree: &mut FlorTree,
     taffy_ids: &mut HashMap<NodeId, taffy::NodeId>,
     inline_leaves: &mut Vec<(NodeId, InlineContext)>,
 ) -> Result<taffy::NodeId, LayoutError> {
@@ -1890,124 +1888,18 @@ fn layout_root_group(
 /// kept from the last layout (see [`LayoutCache`]).
 fn run_layout(
     font: &mut florui_text::Font,
-    tree: &mut TaffyTree<LeafContext>,
+    tree: &mut FlorTree,
     synthetic_root: taffy::NodeId,
     available: Size<AvailableSpace>,
     node_count: usize,
 ) -> Result<(), LayoutError> {
-    // Taffy queries a leaf's intrinsic size multiple times during one
-    // layout pass (an intrinsic min/max-content query, then a final
-    // definite pass), often landing on more than one width and sometimes
-    // the identical one more than once — keyed by the leaf's own Taffy
-    // node id since that's what `compute_layout_with_measure` hands the
-    // closure below on every call, this lets `measure_leaf` reuse the one
-    // Parley layout each leaf actually needs across every one of those
-    // calls instead of reshaping from scratch each time. Scoped to this
-    // one call: a fresh, empty map every call, nothing persisted across
-    // renders or between this group and any other.
-    let mut shaping_caches: HashMap<taffy::NodeId, LeafScratch> =
-        HashMap::with_capacity(node_count);
-
     // Taffy's own block/flex/grid algorithms recurse once per tree depth
     // internally — third-party code this crate doesn't control, and deep
     // enough to overflow the default stack well under 1,000 levels.
     stacker::maybe_grow(RECURSION_RED_ZONE, RECURSION_STACK_SIZE, || {
-        tree.compute_layout_with_measure(
-            synthetic_root,
-            available,
-            |inputs, node_id, mut context, style| {
-                let mut measured_baseline = None;
-                // Only a real `LeafContext::Text` leaf ever reads or writes
-                // a slot in `shaping_caches` — touching the map (hashing
-                // `node_id`, inserting an entry) for every other leaf too
-                // would tax the common case (an explicitly-sized `<div>`
-                // with no text, needing no shaping cache at all) for a
-                // cache it never uses. `throwaway_cache` is a cheap
-                // stack-local stand-in for that common case; it's read and
-                // discarded, never reused across calls, since there's
-                // nothing to reuse.
-                let mut throwaway_cache = LeafScratch::default();
-                let shaping_cache = match context.as_deref() {
-                    Some(LeafContext::Text(_)) => shaping_caches.entry(node_id).or_default(),
-                    _ => &mut throwaway_cache,
-                };
-                // Taffy hands the measure the size the box is known to have, border
-                // box and all, where text wraps in what is left of it.
-                let across = style.padding.left.resolve_or_zero(None, |_, _| 0.0)
-                    + style.padding.right.resolve_or_zero(None, |_, _| 0.0)
-                    + style.border.left.resolve_or_zero(None, |_, _| 0.0)
-                    + style.border.right.resolve_or_zero(None, |_, _| 0.0);
-                let down = style.padding.top.resolve_or_zero(None, |_, _| 0.0)
-                    + style.padding.bottom.resolve_or_zero(None, |_, _| 0.0)
-                    + style.border.top.resolve_or_zero(None, |_, _| 0.0)
-                    + style.border.bottom.resolve_or_zero(None, |_, _| 0.0);
-                let mut output = compute_leaf_layout(
-                    inputs,
-                    style,
-                    |_, _| 0.0,
-                    |known_dimensions, available_space| {
-                        let known_dimensions = Size {
-                            width: known_dimensions.width.map(|w| (w - across).max(0.0)),
-                            height: known_dimensions.height.map(|h| (h - down).max(0.0)),
-                        };
-                        measure_leaf(
-                            font,
-                            shaping_cache,
-                            context.as_deref_mut(),
-                            known_dimensions,
-                            available_space,
-                            &mut measured_baseline,
-                        )
-                    },
-                );
-
-                // `measure_leaf` already shaped this text once above and,
-                // via `measured_baseline`, handed back the baseline that
-                // came out of that same shaping — reused here instead of
-                // shaping the identical text a second time just to read
-                // `.baseline` off it. Only falls back to a fresh (unwrapped)
-                // measurement when `compute_leaf_layout` never called the
-                // closure above at all: it skips calling its own measure
-                // closure when both dimensions are already known (an
-                // explicit width *and* height), but a baseline is still
-                // meaningful there — real CSS still aligns an
-                // explicitly-sized text box by its text's baseline, not by
-                // treating it as baseline-less. Wrap width is irrelevant
-                // either way: see `florui_text::TextMetrics::baseline`'s own
-                // doc for why.
-                let baseline = measured_baseline.or_else(|| match context.as_deref() {
-                    Some(LeafContext::Text(t)) => Some(
-                        shaping_cache
-                            .answer(None, |shaping| {
-                                font.measure_memoized(shaping, t.style, &t.text, None)
-                            })
-                            .baseline,
-                    ),
-                    Some(LeafContext::Inline(context)) => {
-                        let items = to_inline_items(context);
-                        Some(
-                            font.shape_inline_tree_memoized(&context.elements, &items, None)
-                                .baseline,
-                        )
-                    }
-                    // A replaced element has no text baseline to recover,
-                    // and neither does a fixed-size control.
-                    _ => None,
-                });
-                if let Some(baseline) = baseline {
-                    // Measured from the content box; a box's baseline lies below
-                    // its own padding and border.
-                    let inset = style.padding.top.resolve_or_zero(None, |_, _| 0.0)
-                        + style.border.top.resolve_or_zero(None, |_, _| 0.0);
-                    output.baselines = Baselines::from_first(Some(baseline + inset));
-                }
-                output
-            },
-        )
+        tree.compute_layout(synthetic_root, available, font, node_count)
     })
-    .map_err(LayoutError)?;
-
-    Ok(())
+    .map_err(LayoutError)
 }
 
 /// Same job as calling [`florui_style::compute`] then [`compute_layout`] in
@@ -2620,7 +2512,7 @@ fn build_node(
     arena: &Tree,
     styles: &StyleMap,
     root: NodeId,
-    tree: &mut TaffyTree<LeafContext>,
+    tree: &mut FlorTree,
     taffy_ids: &mut HashMap<NodeId, taffy::NodeId>,
     inline_leaves: &mut Vec<(NodeId, InlineContext)>,
 ) -> Result<taffy::NodeId, taffy::TaffyError> {
@@ -2863,7 +2755,7 @@ fn layout_fixed_group(
     styles: &StyleMap,
     fixed: &[NodeId],
     available: Size<AvailableSpace>,
-    tree: &mut TaffyTree<LeafContext>,
+    tree: &mut FlorTree,
     taffy_ids: &mut HashMap<NodeId, taffy::NodeId>,
     inline_leaves: &mut Vec<(NodeId, InlineContext)>,
 ) -> Result<Option<taffy::NodeId>, LayoutError> {
