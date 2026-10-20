@@ -111,6 +111,8 @@ struct NodeSlot {
     /// number have the same state in every ancestor. See
     /// [`StyloTree::number_contexts`].
     context: Cell<u32>,
+    /// [`NodeSlot::identity`], worked out once: the elements do not change in a kept tree.
+    identity_hash: std::cell::OnceCell<u64>,
     data: AtomicRefCell<ElementData>,
     dirty_descendants: Cell<bool>,
     local_name: BorrowedLocalName,
@@ -325,6 +327,7 @@ impl StyloTree {
                 style_pdb: arena.style_attr(id).map(parse_inline_style),
                 state: Cell::new(node_state),
                 context: Cell::new(0),
+                identity_hash: std::cell::OnceCell::new(),
                 data: AtomicRefCell::new(ElementData::default()),
                 dirty_descendants: Cell::new(false),
                 local_name: arena.tag(id).into(),
@@ -5183,6 +5186,10 @@ impl NodeSlot {
     /// A hash of what a selector with an ancestor in it can tell this node by: its tag,
     /// its id, its classes and its attributes.
     fn identity(&self) -> u64 {
+        *self.identity_hash.get_or_init(|| self.hash_identity())
+    }
+
+    fn hash_identity(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.tag.hash(&mut hasher);
