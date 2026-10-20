@@ -1917,6 +1917,7 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
         font_variations: to_font_variations(values),
         text_transform: to_text_transform(text.text_transform),
         text_align: to_text_align(text.text_align),
+        block_align: to_block_align(text.text_align),
         text_shadow: to_text_shadows(&text.text_shadow.0, &text.color),
         glass: to_glass(values),
         backdrop_blur: to_backdrop_blur(values),
@@ -4219,6 +4220,16 @@ fn to_vertical_align(value: &style::values::computed::VerticalAlign) -> crate::V
         Value::Keyword(Keyword::Bottom) => crate::VerticalAlign::Bottom,
         Value::Keyword(_) => crate::VerticalAlign::Baseline,
         Value::Length(length) => crate::VerticalAlign::Raise(to_length_percentage(length)),
+    }
+}
+
+fn to_block_align(value: style::values::computed::text::TextAlign) -> crate::BlockAlign {
+    use style::values::specified::text::TextAlignKeyword as Keyword;
+    match value {
+        Keyword::MozCenter => crate::BlockAlign::Center,
+        Keyword::MozLeft => crate::BlockAlign::Left,
+        Keyword::MozRight => crate::BlockAlign::Right,
+        _ => crate::BlockAlign::None,
     }
 }
 

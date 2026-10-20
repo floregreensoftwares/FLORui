@@ -95,6 +95,17 @@ pub enum GlassSpec {
     Invalid(&'static str),
 }
 
+/// Where `text-align: -webkit-center`, `-webkit-left` and `-webkit-right` put the
+/// blocks of a box, as the lines are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BlockAlign {
+    #[default]
+    None,
+    Left,
+    Center,
+    Right,
+}
+
 /// `text-align` for left-to-right text: `left` and `right` are `Start` and
 /// `End`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -429,6 +440,20 @@ impl Display {
                 | Display::TableColumnGroup
                 | Display::TableCell
                 | Display::TableCaption
+        )
+    }
+
+    /// A row, a group of rows, a column or a group of columns: parts of a table that
+    /// are boxes of their cells' and not something a pointer can be over.
+    pub fn is_table_row_like(self) -> bool {
+        matches!(
+            self,
+            Display::TableRowGroup
+                | Display::TableHeaderGroup
+                | Display::TableFooterGroup
+                | Display::TableRow
+                | Display::TableColumn
+                | Display::TableColumnGroup
         )
     }
 
@@ -1173,6 +1198,9 @@ pub struct ComputedStyle {
     pub mask_box_image: Option<Box<crate::mask_box_image::MaskBoxImageSpec>>,
     /// Inherited; see [`TextAlign`].
     pub text_align: TextAlign,
+    /// Inherited: `text-align: -webkit-center` (and `-webkit-left`, `-webkit-right`)
+    /// aligns the blocks in a box as well as its lines.
+    pub block_align: BlockAlign,
     /// Inherited `text-shadow`, the first layer on top.
     pub text_shadow: Vec<TextShadow>,
     /// The opt-in glass material, read from `--florui-glass` and its
@@ -1418,6 +1446,7 @@ impl ComputedStyle {
             outline,
             border_image,
             text_align,
+            block_align: _,
             text_shadow,
             glass,
             backdrop_blur,
