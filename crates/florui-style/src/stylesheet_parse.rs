@@ -220,6 +220,14 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
         std::borrow::Cow::Owned(rewritten) => std::borrow::Cow::Owned(rewritten),
         std::borrow::Cow::Borrowed(_) => css,
     };
+    let css = if origin == Origin::Author {
+        match crate::placeholder_adapter::rewrite_stylesheet(&css) {
+            std::borrow::Cow::Owned(rewritten) => std::borrow::Cow::Owned(rewritten),
+            std::borrow::Cow::Borrowed(_) => css,
+        }
+    } else {
+        css
+    };
     let css = css.as_ref();
     let container_blocks = container_query_adapter::extract_container_queries(css);
     let lower_css = css.to_ascii_lowercase();
