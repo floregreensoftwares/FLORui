@@ -3552,12 +3552,15 @@ fn to_grid_template_of(
     name: &str,
     component: &style::values::computed::GridTemplateComponent,
 ) -> GridTemplate {
-    if declares_mirrored(values, name)
+    // Only a grid container can be a subgrid.
+    let is_grid = matches!(to_display(values.get_box().display), FlorDisplay::Grid);
+    if is_grid
+        && declares_mirrored(values, name)
         && let Some(css) = mirrored(values, name)
         && let Some(names) = crate::grid::parse_subgrid(&css)
     {
         return GridTemplate {
-            subgrid: Some(names),
+            subgrid: Some(Box::new(names)),
             ..GridTemplate::default()
         };
     }
