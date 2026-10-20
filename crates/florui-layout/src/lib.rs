@@ -73,6 +73,10 @@ mod floats;
 mod flow;
 mod grid;
 mod subgrid;
+mod table;
+mod table_layout;
+#[cfg(test)]
+mod table_tests;
 mod transform;
 mod tree;
 
@@ -180,7 +184,7 @@ impl std::error::Error for LayoutError {
 /// A leaf's own text plus what's needed to measure it — see
 /// [`florui_text`]'s own scope notes for what "measure" does and doesn't
 /// cover yet (no rasterization).
-#[derive(PartialEq)]
+#[derive(Clone, PartialEq)]
 struct TextContext {
     text: String,
     style: florui_text::TextStyle,
@@ -815,6 +819,38 @@ fn slot_id(node: NodeId, line: usize) -> NodeId {
     SLOTS | ((node & ((1 << 42) - 1)) << 14) | line.min(0x3fff)
 }
 
+/// Marks the id under which how far a table cell pushed its content down, to sit
+/// where `vertical-align` says, is reported (as the `y` of its entry).
+const SHIFT: NodeId = 1 << 57;
+
+fn shift_id(node: NodeId) -> NodeId {
+    SHIFT | node
+}
+
+/// Marks the id under which the part of a table that has its border and background
+/// is reported (as `y` and `height`): the grid, without the captions around it.
+const GRID: NodeId = 1 << 56;
+
+fn grid_id(node: NodeId) -> NodeId {
+    GRID | node
+}
+
+/// Where the grid of the table `node` is in its box, as how far down it starts and
+/// how tall it is, when captions take up some of the box. In the pixels `layouts`
+/// is in.
+pub fn table_grid(layouts: &HashMap<NodeId, BoxLayout>, node: NodeId) -> Option<(f32, f32)> {
+    layouts
+        .get(&grid_id(node))
+        .map(|entry| (entry.y, entry.height))
+}
+
+/// How far below the top of its content box the content of `node` starts, over
+/// what its padding says: a table cell with room to spare puts it there. In the
+/// pixels `layouts` is in.
+pub fn cell_shift(layouts: &HashMap<NodeId, BoxLayout>, node: NodeId) -> f32 {
+    layouts.get(&shift_id(node)).map_or(0.0, |entry| entry.y)
+}
+
 /// The room of each line of `node`'s inline content, if a float narrowed any, in
 /// the pixels `laid` is in.
 fn slots_of(laid: Laid<'_>, node: NodeId) -> Option<Vec<florui_text::LineSlot>> {
@@ -1091,11 +1127,11 @@ fn nested_block(
         .iter()
         .map(|(node, context)| (*node, context))
         .collect();
-    // A flex or grid container sits on the first baseline of its items, a block
-    // on the last line of its text.
+    // A flex or grid container sits on the first baseline of its items and a
+    // table on that of its first row, a block on the last line of its text.
     let baseline = if styles
         .get(&node)
-        .is_some_and(|s| s.display.is_flex_or_grid())
+        .is_some_and(|s| s.display.is_flex_or_grid() || s.display.is_table())
     {
         first_baseline
     } else {
@@ -1837,6 +1873,31 @@ fn collect_layouts(
                     - layout.scrollable_overflow_rect.top,
             },
         );
+        if let Some((top, height)) = tree.node(tid).grid {
+            result.insert(
+                grid_id(node_id),
+                BoxLayout {
+                    x: 0.0,
+                    y: top,
+                    width: 0.0,
+                    height,
+                    margin: BoxMargin::ZERO,
+                },
+            );
+        }
+        let shift = tree.node(tid).shift;
+        if shift != 0.0 {
+            result.insert(
+                shift_id(node_id),
+                BoxLayout {
+                    x: 0.0,
+                    y: shift,
+                    width: 0.0,
+                    height: 0.0,
+                    margin: BoxMargin::ZERO,
+                },
+            );
+        }
     }
 
     // Second pass: the boxes of an inline formatting context's elements and
@@ -1908,7 +1969,10 @@ fn collect_layouts(
         let origin = if is_anonymous(*container) {
             (layout.location.x, layout.location.y)
         } else {
-            (border_left + padding_left, border_top + padding_top)
+            (
+                border_left + padding_left,
+                border_top + padding_top + tree.node(tid).shift,
+            )
         };
 
         // Each element's border box in content coordinates: its fragments'
@@ -2962,7 +3026,7 @@ fn build_node(
                     }
                     continue;
                 };
-                taffy_ids.insert(node, id);
+                register(tree, arena, styles, taffy_ids, node, id)?;
             }
             BuildStep::BuildMixed(node, parts) => {
                 let reorders = reorders_children(styles, node)
@@ -3024,7 +3088,7 @@ fn build_node(
                 }
                 sort_by_order(&mut children, &orders);
                 let id = tree.new_with_children(to_taffy_style(styles.get(&node)), &children)?;
-                taffy_ids.insert(node, id);
+                register(tree, arena, styles, taffy_ids, node, id)?;
             }
             BuildStep::BuildInline(node, floats) => {
                 let context = build_inline_content_items(font, arena, styles, node, None);
@@ -3037,7 +3101,7 @@ fn build_node(
                     &float_ids,
                 )?;
                 inline_leaves.push((node, context));
-                taffy_ids.insert(node, id);
+                register(tree, arena, styles, taffy_ids, node, id)?;
             }
             BuildStep::Build(node) => {
                 let style = to_taffy_style(styles.get(&node));
@@ -3065,12 +3129,26 @@ fn build_node(
                 }
                 sort_by_order(&mut children, &orders);
                 let id = tree.new_with_children(style, &children)?;
-                taffy_ids.insert(node, id);
+                register(tree, arena, styles, taffy_ids, node, id)?;
             }
         }
     }
 
     Ok(taffy_ids[&root])
+}
+
+/// Makes `id` the Taffy node of `node`, with what it is in a table.
+fn register(
+    tree: &mut FlorTree,
+    arena: &Tree,
+    styles: &StyleMap,
+    taffy_ids: &mut HashMap<NodeId, taffy::NodeId>,
+    node: NodeId,
+    id: taffy::NodeId,
+) -> Result<(), taffy::TaffyError> {
+    tree.set_role(id, table::role_of(arena, styles, node))?;
+    taffy_ids.insert(node, id);
+    Ok(())
 }
 
 /// The `order` of a flex or grid item.
@@ -3198,6 +3276,10 @@ fn to_taffy_style(style: Option<&ComputedStyle>) -> taffy::Style {
 
     taffy::Style {
         display: to_display(style.display),
+        item_is_table: matches!(
+            style.display,
+            StyleDisplay::Table | StyleDisplay::InlineTable
+        ),
         // Real CSS's default is content-box: padding and border add to a
         // declared width/height rather than being carved out of it. Taffy's
         // own default is border-box, so this is always set explicitly.
@@ -3383,7 +3465,10 @@ fn to_display(value: StyleDisplay) -> Display {
     match value {
         StyleDisplay::Flex | StyleDisplay::InlineFlex => Display::Flex,
         StyleDisplay::Grid | StyleDisplay::InlineGrid => Display::Grid,
-        StyleDisplay::FlowRoot => Display::FlowRoot,
+        // A cell and a caption are each the root of a context of their own.
+        StyleDisplay::FlowRoot | StyleDisplay::TableCell | StyleDisplay::TableCaption => {
+            Display::FlowRoot
+        }
         StyleDisplay::None => Display::None,
         // The rest lay their children out as blocks. An inline box reaches
         // here when it did not qualify for `needs_inline_layout` (it sits at
@@ -3400,8 +3485,6 @@ fn to_display(value: StyleDisplay) -> Display {
         | StyleDisplay::TableRow
         | StyleDisplay::TableColumn
         | StyleDisplay::TableColumnGroup
-        | StyleDisplay::TableCell
-        | StyleDisplay::TableCaption
         | StyleDisplay::ListItem
         | StyleDisplay::Contents => Display::Block,
     }
@@ -3480,7 +3563,7 @@ pub fn absolute_position(
 pub fn layout_parent(arena: &Tree, id: NodeId) -> Option<NodeId> {
     if is_anonymous(id) {
         Some(anonymous_container(id))
-    } else if id & (PIECE | BASELINE | SLOTS) != 0 {
+    } else if id & (PIECE | BASELINE | SLOTS | SHIFT | GRID) != 0 {
         None
     } else {
         arena.parent(id)
@@ -3491,7 +3574,7 @@ pub fn layout_parent(arena: &Tree, id: NodeId) -> Option<NodeId> {
 /// node is placed in, which is what its scroll offset and its sticky bounds
 /// come from.
 pub fn layout_parent_in(arena: &Tree, styles: &StyleMap, id: NodeId) -> Option<NodeId> {
-    if id & (ANONYMOUS | PIECE | BASELINE | SLOTS) != 0 {
+    if id & (ANONYMOUS | PIECE | BASELINE | SLOTS | SHIFT | GRID) != 0 {
         layout_parent(arena, id)
     } else {
         flow_parent(arena, styles, id)

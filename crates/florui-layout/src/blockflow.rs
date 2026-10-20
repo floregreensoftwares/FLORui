@@ -55,6 +55,7 @@ impl Run<'_> {
         } else if style.float != taffy::Float::None {
             Part::Float
         } else if style.display != Display::Block
+            || self.tree.node(id).role.is_table()
             || style.overflow.x.is_scroll_container()
             || style.overflow.y.is_scroll_container()
             || matches!(
