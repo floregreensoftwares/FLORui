@@ -54,6 +54,7 @@ pub mod limits;
 mod raster;
 mod source;
 mod svg;
+pub mod url_image;
 #[cfg(feature = "watch")]
 mod watch;
 
