@@ -4243,6 +4243,40 @@ mod tests {
     }
 
     #[test]
+    fn the_grid_shorthand_carries_a_subgrid_and_every_shorthand_clears_an_earlier_one() {
+        let tree: Element = view! { <div class="g" /> };
+        let style_of = |css: &str| {
+            let (arena, computed) = styles(&tree, css, &InteractionState::new());
+            computed[&arena.roots()[0]].clone()
+        };
+        let style = style_of(".g { display: grid; grid: subgrid / auto-flow 40px; }");
+        assert!(style.grid_template_rows.is_subgrid());
+        assert!(!style.grid_template_columns.is_subgrid());
+        assert_eq!(style.grid_auto_columns, vec![GridTrackSize::length(40.0)]);
+        assert_eq!(style.grid_auto_flow, GridAutoFlow::Column);
+        let style = style_of(".g { display: grid; grid: auto-flow dense 20px / subgrid [x]; }");
+        assert!(style.grid_template_columns.is_subgrid());
+        assert_eq!(style.grid_auto_flow, GridAutoFlow::RowDense);
+        // A later shorthand, with or without a subgrid, takes over from an earlier one.
+        for later in ["grid-template: 10px / 20px", "grid: 10px / 20px"] {
+            let style = style_of(&format!(
+                ".g {{ display: grid; grid-template-rows: subgrid; \
+                 grid-template-columns: subgrid; {later}; }}"
+            ));
+            assert!(!style.grid_template_rows.is_subgrid(), "{later}");
+            assert!(!style.grid_template_columns.is_subgrid(), "{later}");
+            assert_eq!(
+                style.grid_template_rows.explicit_tracks(),
+                vec![GridTrackSize::length(10.0)]
+            );
+        }
+        let style = style_of(
+            ".g { display: grid; grid-template: 10px / 20px; grid-template-rows: subgrid; }",
+        );
+        assert!(style.grid_template_rows.is_subgrid());
+    }
+
+    #[test]
     fn a_gap_that_is_normal_is_told_from_one_of_zero() {
         let tree: Element = view! { <div class="g" /> };
         let normal = |css: &str| {

@@ -151,6 +151,8 @@ fn mentions(css: &str) -> bool {
         || lower.contains("background")
         || lower.contains("filter")
         || lower.contains("grid-template")
+        || lower.contains("grid:")
+        || lower.contains("grid :")
         || MIRRORED.iter().any(|name| lower.contains(name))
 }
 
@@ -248,6 +250,7 @@ fn is_handled(name: &str) -> bool {
         || name.eq_ignore_ascii_case("font-variant")
         || name.eq_ignore_ascii_case("text-decoration")
         || name.eq_ignore_ascii_case("grid-template")
+        || name.eq_ignore_ascii_case("grid")
         || is_mask_name(name)
         || MIRRORED
             .iter()
@@ -348,7 +351,7 @@ fn expand(name: &str, value: &str, important: &str) -> Option<String> {
             (!crate::grid::is_subgrid_value(value) || crate::grid::parse_subgrid(value).is_some())
                 .then(|| expand_grid_template(name, value, important))
         }
-        "grid-template" => expand_grid_template_shorthand(value, important),
+        "grid-template" | "grid" => expand_grid_shorthand(name, value, important),
         "background" => Some(expand_background(value, important)),
         "filter" | "backdrop-filter" => expand_filter(name, value, important),
         "transform-box" => {
@@ -1014,24 +1017,43 @@ fn expand_grid_template(name: &str, value: &str, important: &str) -> String {
     }
 }
 
-/// `grid-template: <rows> / <columns>` when either side is a `subgrid`, which is
-/// written as its longhands so that [`expand_grid_template`] carries it; any
-/// other value is left to the engine.
-fn expand_grid_template_shorthand(value: &str, important: &str) -> Option<String> {
-    let (rows, columns) = value.split_once('/')?;
-    if !crate::grid::is_subgrid_value(rows) && !crate::grid::is_subgrid_value(columns) {
-        return None;
-    }
-    let parses = |side: &str| {
-        !crate::grid::is_subgrid_value(side) || crate::grid::parse_subgrid(side).is_some()
+/// `grid` and `grid-template`. The engine's build refuses `subgrid`, so a side
+/// that is one is carried in the custom property for
+/// [`crate::grid::parse_subgrid`] and written as `none`; every other value
+/// clears what an earlier `subgrid` carried, so the last declaration wins. A
+/// `subgrid` that does not parse is left for the engine to drop.
+fn expand_grid_shorthand(name: &str, value: &str, important: &str) -> Option<String> {
+    let rows_mirror = mirror_name("grid-template-rows");
+    let columns_mirror = mirror_name("grid-template-columns");
+    let plain = || {
+        Some(format!(
+            "{name}: {value}{important}; {rows_mirror}: initial{important}; \
+             {columns_mirror}: initial{important}"
+        ))
     };
-    if !parses(rows) || !parses(columns) {
+    let Some((rows, columns)) = value.split_once('/') else {
+        return plain();
+    };
+    let (rows, columns) = (rows.trim(), columns.trim());
+    let is_sub = crate::grid::is_subgrid_value;
+    if !is_sub(rows) && !is_sub(columns) {
+        return plain();
+    }
+    let valid = |side: &str| !is_sub(side) || crate::grid::parse_subgrid(side).is_some();
+    if !valid(rows) || !valid(columns) {
         return None;
     }
+    let side = |text: &str, mirror: &str| {
+        if is_sub(text) {
+            ("none".to_owned(), format!("{mirror}: {text}{important}"))
+        } else {
+            (text.to_owned(), format!("{mirror}: initial{important}"))
+        }
+    };
+    let (rows, rows_carried) = side(rows, &rows_mirror);
+    let (columns, columns_carried) = side(columns, &columns_mirror);
     Some(format!(
-        "{}; {}; grid-template-areas: none{important}",
-        expand_grid_template("grid-template-rows", rows.trim(), important),
-        expand_grid_template("grid-template-columns", columns.trim(), important),
+        "{name}: {rows} / {columns}{important}; {rows_carried}; {columns_carried}"
     ))
 }
 
@@ -1332,11 +1354,33 @@ mod tests {
             out.contains("--florui-grid-template-rows: subgrid"),
             "{out}"
         );
-        assert!(out.contains("grid-template-columns: 20px 30px"), "{out}");
-        // A shorthand with no subgrid stays as it is.
+        assert!(out.contains("grid-template: none / 20px 30px"), "{out}");
+        assert!(
+            out.contains("--florui-grid-template-columns: initial"),
+            "{out}"
+        );
+        // A shorthand with no subgrid is as it is, and clears what an earlier
+        // subgrid carried.
         assert_eq!(
             sheet(".g { grid-template: 40px 50px / 60px; }"),
-            ".g { grid-template: 40px 50px / 60px; }"
+            ".g { grid-template: 40px 50px / 60px; --florui-grid-template-rows: initial; \
+             --florui-grid-template-columns: initial; }"
+        );
+        let out = sheet(".g { grid: subgrid / auto-flow 40px; }");
+        assert!(out.contains("grid: none / auto-flow 40px"), "{out}");
+        assert!(
+            out.contains("--florui-grid-template-rows: subgrid"),
+            "{out}"
+        );
+        let out = sheet(".g { grid: auto-flow 30px / subgrid [x]; }");
+        assert!(out.contains("grid: auto-flow 30px / none"), "{out}");
+        assert!(
+            out.contains("--florui-grid-template-columns: subgrid [x]"),
+            "{out}"
+        );
+        assert_eq!(
+            sheet(".g { grid: subgrid foo / 20px; }"),
+            ".g { grid: subgrid foo / 20px; }"
         );
     }
 
