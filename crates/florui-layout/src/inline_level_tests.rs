@@ -120,3 +120,17 @@ fn a_flex_or_grid_box_of_wrapped_text_sits_on_its_first_line_and_a_block_on_its_
         rect_near(laid.rect("i"), (53.47, 0.0, 60.0, 66.0), display);
     }
 }
+
+#[test]
+fn a_line_of_atomic_boxes_alone_is_as_tall_as_its_strut_makes_it() {
+    for display in ["inline-block", "inline-flex"] {
+        let tree = div("o", vec![span("i", vec![])]);
+        let css = format!(
+            ".o {{ width: 200px; font-size: 16px; }} \
+             .i {{ display: {display}; width: 40px; height: 20px; }}"
+        );
+        let laid = lay_out(&tree, &css);
+        rect_near(laid.rect("o"), (0.0, 0.0, 200.0, 25.0), display);
+        rect_near(laid.rect("i"), (0.0, 0.0, 40.0, 20.0), display);
+    }
+}

@@ -615,11 +615,9 @@ fn place_line(
     };
 
     let mut present = vec![false; count];
-    let mut has_text = false;
     for span in spans {
         if span.range.start < visible_end && span.range.end > range.start {
             present[span.element] = true;
-            has_text = true;
         }
     }
 
@@ -702,9 +700,9 @@ fn place_line(
             }
         }
     }
-    // A line of atomic boxes alone has no strut here: a box's baseline is its
-    // own text's, which is not known, and the strut's depth would add a gap.
-    present[0] = has_text || line_boxes.is_empty();
+    // The strut is on every line, a line of atomic boxes alone included: the
+    // boxes sit on its baseline and its depth shows below them.
+    present[0] = true;
     for element in (1..count).rev() {
         if present[element] {
             present[elements[element].parent] = true;
