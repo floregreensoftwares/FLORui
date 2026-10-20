@@ -15,7 +15,9 @@ use taffy::{
 };
 
 use crate::blockflow::{Own, layout_of, margins_of, or_zero, own_of};
-use crate::table::{CellAlign, GroupKind, Role, TableRole};
+use crate::collapse::{BOTTOM, Borders, Edge, LEFT, RIGHT, Sides, TOP, resolve_grid};
+use crate::table::{CellAlign, Role, TableRole};
+use crate::table_structure::{Content, Structure, TableSource, structure};
 use crate::tree::Run;
 use crate::{LeafContext, TextContext};
 
@@ -82,6 +84,8 @@ struct Group {
 
 #[derive(Default)]
 struct Model {
+    /// The structure the rest of the model was made from.
+    shape: Structure<NodeId>,
     /// Where the grid is in the box of the table when captions take up some of it.
     grid: Option<(f32, f32)>,
     captions: Vec<(NodeId, bool)>,
@@ -94,28 +98,6 @@ struct Model {
 }
 
 /// A row of a section as the children of the table gave it.
-struct RowSource {
-    node: Option<NodeId>,
-    collapsed: bool,
-    /// Real cells, or children that are not cells to wrap in one.
-    cells: Vec<Piece>,
-}
-
-enum Piece {
-    Cell(NodeId),
-    Wrap(Vec<NodeId>),
-    /// The text of the table itself, which a cell is made around.
-    Own(LeafContext),
-}
-
-struct Section {
-    kind: GroupKind,
-    node: Option<NodeId>,
-    collapsed: bool,
-    rows: Vec<RowSource>,
-}
-
-/// What a column asks of the table.
 #[derive(Clone, Copy, Default)]
 struct Constraint {
     min: f32,
@@ -152,370 +134,148 @@ fn share(values: &mut [f32], weights: &[f32], extra: f32, take: &[bool]) {
     }
 }
 
-impl Run<'_> {
-    fn role_of(&self, id: NodeId) -> Role {
+/// The boxes of a table, read from the tree layout keeps.
+struct TreeSource<'a> {
+    tree: &'a crate::tree::FlorTree,
+}
+
+impl TableSource for TreeSource<'_> {
+    type Id = NodeId;
+
+    fn role(&self, id: NodeId) -> Role {
         self.tree.node(id).role
     }
 
-    fn is_hidden_display(&self, id: NodeId) -> bool {
+    fn children(&self, id: NodeId) -> Vec<NodeId> {
+        self.tree.node(id).children.clone()
+    }
+
+    fn is_hidden(&self, id: NodeId) -> bool {
         self.tree.node(id).style.display == taffy::Display::None
     }
+}
 
-    /// The cells of a row, from the children of a box: the cells themselves,
-    /// and a cell made around each run of children that are not cells.
-    fn pieces_of(&mut self, children: &[NodeId], hidden: &mut Vec<NodeId>) -> Vec<Piece> {
-        let mut pieces = Vec::new();
-        let mut run: Vec<NodeId> = Vec::new();
-        for &child in children {
-            match self.role_of(child) {
-                Role::Cell(_) => {
-                    if !run.is_empty() {
-                        pieces.push(Piece::Wrap(std::mem::take(&mut run)));
-                    }
-                    pieces.push(Piece::Cell(child));
-                }
-                _ if self.is_hidden_display(child) => hidden.push(child),
-                _ => run.push(child),
-            }
-        }
-        if !run.is_empty() {
-            pieces.push(Piece::Wrap(run));
-        }
-        pieces
-    }
-
-    /// The rows of a section, from its children: the rows themselves, and a row
-    /// made around each run of the others.
-    fn rows_of(&mut self, children: &[NodeId], hidden: &mut Vec<NodeId>) -> Vec<RowSource> {
-        let mut rows = Vec::new();
-        let mut run: Vec<NodeId> = Vec::new();
-        for &child in children {
-            match self.role_of(child) {
-                Role::Row { collapsed } => {
-                    self.close_row(&mut rows, &mut run, hidden);
-                    let inner = self.tree.node(child).children.clone();
-                    let cells = self.pieces_of(&inner, hidden);
-                    rows.push(RowSource {
-                        node: Some(child),
-                        collapsed,
-                        cells,
-                    });
-                }
-                _ if self.is_hidden_display(child) => hidden.push(child),
-                _ => run.push(child),
-            }
-        }
-        self.close_row(&mut rows, &mut run, hidden);
-        rows
-    }
-
-    fn close_row(
-        &mut self,
-        rows: &mut Vec<RowSource>,
-        run: &mut Vec<NodeId>,
-        hidden: &mut Vec<NodeId>,
-    ) {
-        if run.is_empty() {
-            return;
-        }
-        let children = std::mem::take(run);
-        let cells = self.pieces_of(&children, hidden);
-        rows.push(RowSource {
-            node: None,
-            collapsed: false,
-            cells,
-        });
-    }
-
-    /// The structure of the table `id`: sections (header first, footer last),
-    /// the grid of its cells, its columns and its captions.
+impl Run<'_> {
+    /// The structure of the table `id`, with what the boxes in it state.
     fn gather(&mut self, id: NodeId) -> Model {
-        let children = self.tree.node(id).children.clone();
-        let mut model = Model::default();
-        let mut sections: Vec<Section> = Vec::new();
         // A table with text and nothing else has a cell around its text.
-        if children.is_empty() {
-            let own = match &self.tree.node(id).context {
+        let mut own = if self.tree.node(id).children.is_empty() {
+            match &self.tree.node(id).context {
                 Some(LeafContext::Text(text)) => Some(LeafContext::Text(TextContext {
                     text: text.text.clone(),
                     style: text.style,
                 })),
                 Some(LeafContext::Inline(context)) => Some(LeafContext::Inline(context.clone())),
                 _ => None,
-            };
-            if let Some(context) = own {
-                sections.push(Section {
-                    kind: GroupKind::Body,
-                    node: None,
-                    collapsed: false,
-                    rows: vec![RowSource {
-                        node: None,
-                        collapsed: false,
-                        cells: vec![Piece::Own(context)],
-                    }],
-                });
             }
-        }
-        // Rows and other boxes between groups make a group of their own.
-        let mut loose: Vec<NodeId> = Vec::new();
-        let mut header_seen = false;
-        let mut footer_seen = false;
-        for &child in &children {
-            match self.role_of(child) {
-                Role::Caption { bottom } => model.captions.push((child, bottom)),
-                Role::ColumnGroup { span, collapsed } => {
-                    let inner = self.tree.node(child).children.clone();
-                    let first = model.columns.len();
-                    let mut any = false;
-                    for col in inner {
-                        if let Role::Column {
-                            span,
-                            collapsed: own,
-                        } = self.role_of(col)
-                        {
-                            any = true;
-                            for _ in 0..span {
-                                model.columns.push(Column {
-                                    node: Some(col),
-                                    collapsed: collapsed || own,
-                                    fixed: None,
-                                    percent: None,
-                                });
-                            }
-                        } else if self.is_hidden_display(col) {
-                            model.hidden.push(col);
-                        }
-                    }
-                    if !any {
-                        for _ in 0..span {
-                            model.columns.push(Column {
-                                node: Some(child),
-                                collapsed,
-                                fixed: None,
-                                percent: None,
-                            });
-                        }
-                    }
-                    model.column_groups.push(ColumnGroup {
-                        node: child,
-                        first,
-                        count: model.columns.len() - first,
-                    });
-                }
-                Role::Column { span, collapsed } => {
-                    for _ in 0..span {
-                        model.columns.push(Column {
-                            node: Some(child),
-                            collapsed,
-                            fixed: None,
-                            percent: None,
-                        });
-                    }
-                }
-                Role::RowGroup { kind, collapsed } => {
-                    self.close_loose(&mut sections, &mut loose, &mut model.hidden);
-                    // Only the first header and the first footer are those.
-                    let kind = match kind {
-                        GroupKind::Header if !header_seen => {
-                            header_seen = true;
-                            GroupKind::Header
-                        }
-                        GroupKind::Footer if !footer_seen => {
-                            footer_seen = true;
-                            GroupKind::Footer
-                        }
-                        _ => GroupKind::Body,
-                    };
-                    let inner = self.tree.node(child).children.clone();
-                    let rows = self.rows_of(&inner, &mut model.hidden);
-                    sections.push(Section {
-                        kind,
-                        node: Some(child),
-                        collapsed,
-                        rows,
-                    });
-                }
-                _ if self.is_hidden_display(child) => model.hidden.push(child),
-                _ => loose.push(child),
-            }
-        }
-        self.close_loose(&mut sections, &mut loose, &mut model.hidden);
-
-        // Header first, footer last, the rest as they came.
-        let mut ordered: Vec<Section> = Vec::with_capacity(sections.len());
-        let mut footer: Option<Section> = None;
-        let mut header: Option<Section> = None;
-        for section in sections {
-            match section.kind {
-                GroupKind::Header => header = Some(section),
-                GroupKind::Footer => footer = Some(section),
-                GroupKind::Body => ordered.push(section),
-            }
-        }
-        if let Some(header) = header {
-            ordered.insert(0, header);
-        }
-        if let Some(footer) = footer {
-            ordered.push(footer);
-        }
-
-        // Place the cells: the next free column of the row, spanning rows down
-        // to the end of the section.
-        let mut occupied: Vec<Vec<bool>> = Vec::new();
-        let mut column_count = model.columns.len();
-        for section in ordered {
-            let first_row = model.rows.len();
-            let section_rows = section.rows.len();
-            let group = section.node.map(|_| model.groups.len());
-            for (offset, row) in section.rows.into_iter().enumerate() {
-                let row_index = model.rows.len();
-                let mut row_cells = Vec::new();
-                let mut col = 0usize;
-                if occupied.len() <= row_index {
-                    occupied.resize_with(row_index + 1, Vec::new);
-                }
-                for piece in row.cells {
-                    while occupied[row_index].get(col).copied().unwrap_or(false) {
-                        col += 1;
-                    }
-                    let mut temporary = false;
-                    let (id, wrapped, colspan, rowspan, align) = match piece {
-                        Piece::Cell(node) => {
-                            let Role::Cell(role) = self.role_of(node) else {
-                                continue;
-                            };
-                            (
-                                node,
-                                Vec::new(),
-                                role.colspan.max(1) as usize,
-                                role.rowspan as usize,
-                                role.align,
-                            )
-                        }
-                        Piece::Wrap(nodes) => {
-                            let wrapper = self.tree.new_detached(
-                                Style {
-                                    display: taffy::Display::FlowRoot,
-                                    ..Default::default()
-                                },
-                                &nodes,
-                            );
-                            temporary = true;
-                            (wrapper, nodes, 1, 1, CellAlign::Top)
-                        }
-                        Piece::Own(context) => {
-                            temporary = true;
-                            let wrapper = self.tree.new_detached_leaf(
-                                Style {
-                                    display: taffy::Display::FlowRoot,
-                                    ..Default::default()
-                                },
-                                context,
-                            );
-                            (wrapper, Vec::new(), 1, 1, CellAlign::Top)
-                        }
-                    };
-                    let left = section_rows - offset;
-                    let rowspan = if rowspan == 0 {
-                        left
-                    } else {
-                        rowspan.min(left)
-                    };
-                    for r in row_index..row_index + rowspan {
-                        if occupied.len() <= r {
-                            occupied.resize_with(r + 1, Vec::new);
-                        }
-                        if occupied[r].len() < col + colspan {
-                            occupied[r].resize(col + colspan, false);
-                        }
-                        for slot in &mut occupied[r][col..col + colspan] {
-                            *slot = true;
-                        }
-                    }
-                    column_count = column_count.max(col + colspan);
-                    row_cells.push(model.cells.len());
-                    model.cells.push(Cell {
-                        id,
-                        wrapped,
-                        temporary,
-                        row: row_index,
-                        col,
-                        rows: rowspan,
-                        cols: colspan,
-                        align,
-                        min: 0.0,
-                        max: 0.0,
-                        fixed: None,
-                        percent: None,
-                        least_height: 0.0,
-                        height: 0.0,
-                        baseline: None,
-                    });
-                    col += colspan;
-                }
-                let least_height = row.node.map_or(0.0, |node| {
-                    let height = self.tree.node(node).style.size.height;
-                    if height.tag() == CompactLength::LENGTH_TAG {
-                        height.value()
-                    } else {
-                        0.0
-                    }
-                });
-                model.rows.push(Row {
-                    node: row.node,
-                    group,
-                    cells: row_cells,
-                    collapsed: row.collapsed || section.collapsed,
-                    least_height,
-                });
-            }
-            if let Some(node) = section.node {
-                model.groups.push(Group {
-                    node,
-                    first: first_row,
-                    end: model.rows.len(),
-                });
-            }
-        }
-        while model.columns.len() < column_count {
-            model.columns.push(Column {
-                node: None,
-                collapsed: false,
-                fixed: None,
-                percent: None,
-            });
-        }
-        // What the columns state.
-        for column in &mut model.columns {
+        } else {
+            None
+        };
+        let source = structure(&TreeSource { tree: &*self.tree }, id, own.is_some());
+        let mut model = Model {
+            captions: source.captions.clone(),
+            hidden: source.hidden.clone(),
+            ..Default::default()
+        };
+        for column in &source.columns {
+            let (mut fixed, mut percent) = (None, None);
             if let Some(node) = column.node {
                 let size = self.tree.node(node).style.size.width;
                 match size.tag() {
-                    CompactLength::LENGTH_TAG => column.fixed = Some(size.value()),
-                    CompactLength::PERCENT_TAG => column.percent = Some(size.value()),
+                    CompactLength::LENGTH_TAG => fixed = Some(size.value()),
+                    CompactLength::PERCENT_TAG => percent = Some(size.value()),
                     _ => {}
                 }
             }
+            model.columns.push(Column {
+                node: column.node,
+                collapsed: column.collapsed,
+                fixed,
+                percent,
+            });
         }
+        model.column_groups = source
+            .column_groups
+            .iter()
+            .map(|group| ColumnGroup {
+                node: group.node,
+                first: group.first,
+                count: group.count,
+            })
+            .collect();
+        for cell in &source.cells {
+            let (id, wrapped, temporary) = match &cell.content {
+                Content::Cell(node) => (*node, Vec::new(), false),
+                Content::Wrap(nodes) => {
+                    let wrapper = self.tree.new_detached(
+                        Style {
+                            display: taffy::Display::FlowRoot,
+                            ..Default::default()
+                        },
+                        nodes,
+                    );
+                    (wrapper, nodes.clone(), true)
+                }
+                Content::Own => {
+                    let wrapper = match own.take() {
+                        Some(context) => self.tree.new_detached_leaf(
+                            Style {
+                                display: taffy::Display::FlowRoot,
+                                ..Default::default()
+                            },
+                            context,
+                        ),
+                        None => self.tree.new_detached(Style::default(), &[]),
+                    };
+                    (wrapper, Vec::new(), true)
+                }
+            };
+            model.cells.push(Cell {
+                id,
+                wrapped,
+                temporary,
+                row: cell.row,
+                col: cell.col,
+                rows: cell.rows,
+                cols: cell.cols,
+                align: cell.align,
+                min: 0.0,
+                max: 0.0,
+                fixed: None,
+                percent: None,
+                least_height: 0.0,
+                height: 0.0,
+                baseline: None,
+            });
+        }
+        for row in &source.rows {
+            let least_height = row.node.map_or(0.0, |node| {
+                let height = self.tree.node(node).style.size.height;
+                if height.tag() == CompactLength::LENGTH_TAG {
+                    height.value()
+                } else {
+                    0.0
+                }
+            });
+            model.rows.push(Row {
+                node: row.node,
+                group: row.group,
+                cells: row.cells.clone(),
+                collapsed: row.collapsed,
+                least_height,
+            });
+        }
+        model.groups = source
+            .groups
+            .iter()
+            .map(|group| Group {
+                node: group.node,
+                first: group.first,
+                end: group.end,
+            })
+            .collect();
+        model.shape = source;
         model
-    }
-
-    fn close_loose(
-        &mut self,
-        sections: &mut Vec<Section>,
-        loose: &mut Vec<NodeId>,
-        hidden: &mut Vec<NodeId>,
-    ) {
-        if loose.is_empty() {
-            return;
-        }
-        let children = std::mem::take(loose);
-        let rows = self.rows_of(&children, hidden);
-        sections.push(Section {
-            kind: GroupKind::Body,
-            node: None,
-            collapsed: false,
-            rows,
-        });
     }
 
     /// What a cell asks of a column.
@@ -626,13 +386,30 @@ impl Run<'_> {
     }
 
     pub(crate) fn compute_table(&mut self, id: NodeId, inputs: LayoutInput) -> LayoutOutput {
-        let Role::Table(role) = self.role_of(id) else {
+        let Role::Table(role) = self.tree.node(id).role else {
             unreachable!("only a table is laid out as one");
         };
         let style = self.tree.node(id).style.clone();
         let own = own_of(&style, inputs.parent_size);
+        let mut own = own;
         let mut model = self.gather(id);
+        let patched = if role.collapse {
+            self.collapse_borders(id, role, &mut own, &model)
+        } else {
+            self.tree.live_mut(id).border = None;
+            for cell in &model.cells {
+                if !cell.temporary {
+                    self.tree.live_mut(cell.id).border = None;
+                }
+            }
+            Vec::new()
+        };
         let output = self.lay_out_table(inputs, role, &own, &mut model);
+        for (node, style) in patched {
+            let node = self.tree.live_mut(node);
+            node.style = style;
+            node.cache.clear();
+        }
         if inputs.run_mode == RunMode::PerformLayout {
             self.tree.live_mut(id).grid = model.grid;
         }
@@ -648,6 +425,101 @@ impl Run<'_> {
             }
         }
         output
+    }
+
+    /// Makes the borders of the cells and of the table those of the edges that
+    /// collapse: half of each edge on each side of it, the table's the outer half of
+    /// the outer edges, and no padding. Returns the styles the cells had, to put back.
+    fn collapse_borders(
+        &mut self,
+        id: NodeId,
+        role: TableRole,
+        own: &mut Own,
+        model: &Model,
+    ) -> Vec<(NodeId, Style)> {
+        let none = [Edge::default(); 4];
+        let sides_of_node = |this: &Self, node: Option<NodeId>| -> Sides {
+            match node.map(|node| this.tree.node(node).role) {
+                Some(Role::Cell(role)) => role.sides,
+                Some(Role::Row { sides, .. })
+                | Some(Role::RowGroup { sides, .. })
+                | Some(Role::Column { sides, .. })
+                | Some(Role::ColumnGroup { sides, .. }) => sides,
+                _ => none,
+            }
+        };
+        let shape = &model.shape;
+        let borders = Borders {
+            table: role.sides,
+            cells: model
+                .cells
+                .iter()
+                .map(|cell| {
+                    if cell.temporary {
+                        none
+                    } else {
+                        sides_of_node(self, Some(cell.id))
+                    }
+                })
+                .collect(),
+            rows: shape
+                .rows
+                .iter()
+                .map(|row| sides_of_node(self, row.node))
+                .collect(),
+            groups: shape
+                .groups
+                .iter()
+                .map(|group| sides_of_node(self, Some(group.node)))
+                .collect(),
+            columns: shape
+                .columns
+                .iter()
+                .map(|column| sides_of_node(self, column.node))
+                .collect(),
+            column_groups: shape
+                .column_groups
+                .iter()
+                .map(|group| sides_of_node(self, Some(group.node)))
+                .collect(),
+        };
+        let grid = resolve_grid(shape, &borders);
+        let mut saved = Vec::new();
+        for (index, cell) in model.cells.iter().enumerate() {
+            let halves = grid.cell_border(&shape.cells[index]);
+            if cell.temporary {
+                continue;
+            }
+            let original = self.tree.node(cell.id).style.clone();
+            let mut patched = original.clone();
+            patched.border = Rect {
+                left: LengthPercentage::length(halves[LEFT]),
+                right: LengthPercentage::length(halves[RIGHT]),
+                top: LengthPercentage::length(halves[TOP]),
+                bottom: LengthPercentage::length(halves[BOTTOM]),
+            };
+            let node = self.tree.live_mut(cell.id);
+            node.style = patched;
+            node.cache.clear();
+            node.border = Some(halves);
+            saved.push((cell.id, original));
+        }
+        let table = [
+            grid.table_border(TOP),
+            grid.table_border(RIGHT),
+            grid.table_border(BOTTOM),
+            grid.table_border(LEFT),
+        ];
+        own.border = Rect {
+            left: table[LEFT],
+            right: table[RIGHT],
+            top: table[TOP],
+            bottom: table[BOTTOM],
+        };
+        own.padding = Rect::ZERO;
+        own.pb = own.border;
+        self.tree.live_mut(id).border = Some(table);
+        saved
     }
 
     /// What each cell asks of its columns, then what the columns ask.

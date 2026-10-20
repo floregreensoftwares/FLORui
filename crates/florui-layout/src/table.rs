@@ -2,6 +2,7 @@
 //! columns and the cells that fill the grid between them. The algorithm that
 //! sizes the grid is in [`crate::table_layout`].
 
+use crate::collapse::{Sides, sides_of};
 use florui_style::{
     BorderCollapse, CaptionSide, ComputedStyle, Display, NodeId, StyleMap, TableLayout, Tree,
     VerticalAlign, Visibility,
@@ -36,6 +37,8 @@ pub(crate) struct TableRole {
     pub(crate) collapse: bool,
     /// `border-spacing`, horizontal and vertical.
     pub(crate) spacing: (f32, f32),
+    /// The borders of the table, which collapse into those of its cells.
+    pub(crate) sides: Sides,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -46,6 +49,7 @@ pub(crate) struct CellRole {
     pub(crate) align: CellAlign,
     /// `empty-cells: hide`.
     pub(crate) hide_empty: bool,
+    pub(crate) sides: Sides,
 }
 
 /// What a node is in a table, from its `display` (and the `colspan`, `rowspan`
@@ -61,17 +65,21 @@ pub(crate) enum Role {
     ColumnGroup {
         span: u32,
         collapsed: bool,
+        sides: Sides,
     },
     Column {
         span: u32,
         collapsed: bool,
+        sides: Sides,
     },
     RowGroup {
         kind: GroupKind,
         collapsed: bool,
+        sides: Sides,
     },
     Row {
         collapsed: bool,
+        sides: Sides,
     },
     Cell(CellRole),
 }
@@ -106,6 +114,7 @@ pub(crate) fn role_of(arena: &Tree, styles: &StyleMap, node: NodeId) -> Role {
         return Role::None;
     };
     let collapsed = style.visibility == Visibility::Collapse;
+    let sides = sides_of(style);
     match style.display {
         Display::Table | Display::InlineTable => Role::Table(table_role(style)),
         Display::TableCaption => Role::Caption {
@@ -114,24 +123,29 @@ pub(crate) fn role_of(arena: &Tree, styles: &StyleMap, node: NodeId) -> Role {
         Display::TableColumnGroup => Role::ColumnGroup {
             span: span_of(arena, node, "span", 1, 1000),
             collapsed,
+            sides,
         },
         Display::TableColumn => Role::Column {
             span: span_of(arena, node, "span", 1, 1000),
             collapsed,
+            sides,
         },
         Display::TableRowGroup => Role::RowGroup {
             kind: GroupKind::Body,
             collapsed,
+            sides,
         },
         Display::TableHeaderGroup => Role::RowGroup {
             kind: GroupKind::Header,
             collapsed,
+            sides,
         },
         Display::TableFooterGroup => Role::RowGroup {
             kind: GroupKind::Footer,
             collapsed,
+            sides,
         },
-        Display::TableRow => Role::Row { collapsed },
+        Display::TableRow => Role::Row { collapsed, sides },
         Display::TableCell => {
             // Only the cells of HTML take the attributes.
             let html = matches!(arena.tag(node), "td" | "th");
@@ -151,6 +165,7 @@ pub(crate) fn role_of(arena: &Tree, styles: &StyleMap, node: NodeId) -> Role {
                 },
                 align: cell_align(style.vertical_align),
                 hide_empty: style.empty_cells == florui_style::EmptyCells::Hide,
+                sides,
             })
         }
         _ => Role::None,
@@ -162,5 +177,6 @@ fn table_role(style: &ComputedStyle) -> TableRole {
         fixed: style.table_layout == TableLayout::Fixed,
         collapse: style.border_collapse == BorderCollapse::Collapse,
         spacing: style.border_spacing,
+        sides: sides_of(style),
     }
 }

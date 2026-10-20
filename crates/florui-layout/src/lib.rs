@@ -68,6 +68,7 @@ mod blockflow_root;
 mod blockflow_walk;
 mod cache;
 mod clip;
+mod collapse;
 mod deferred;
 mod floats;
 mod flow;
@@ -75,6 +76,7 @@ mod grid;
 mod subgrid;
 mod table;
 mod table_layout;
+mod table_structure;
 #[cfg(test)]
 mod table_tests;
 mod transform;
@@ -93,6 +95,7 @@ mod test_support;
 
 pub use cache::LayoutCache;
 pub use clip::{ClipGeometry, clip_admits, resolve_clip_path};
+pub use collapse::{BorderSegment, collapsed_border_segments};
 pub use flow::{flow_children, flow_items, flow_parent, is_contents};
 pub use transform::{
     ContextPlane, Matrix4, NEAR_W, context_planes, hides_its_back, node_screen_bounds,
@@ -842,6 +845,24 @@ pub fn table_grid(layouts: &HashMap<NodeId, BoxLayout>, node: NodeId) -> Option<
     layouts
         .get(&grid_id(node))
         .map(|entry| (entry.y, entry.height))
+}
+
+/// Marks the id under which the border a part of a table has where its borders
+/// collapse is reported: its width on each side, as the `y` (top), `width` (right),
+/// `height` (bottom) and `x` (left) of its entry.
+const BORDER: NodeId = 1 << 55;
+
+fn border_id(node: NodeId) -> NodeId {
+    BORDER | node
+}
+
+/// How wide the border of `node`, a part of a table whose borders collapse, is on
+/// each side (top, right, bottom, left): half of the edges it is on, which is all
+/// of it that is inside the box. In the pixels `layouts` is in.
+pub fn collapsed_border(layouts: &HashMap<NodeId, BoxLayout>, node: NodeId) -> Option<[f32; 4]> {
+    layouts
+        .get(&border_id(node))
+        .map(|entry| [entry.y, entry.width, entry.height, entry.x])
 }
 
 /// How far below the top of its content box the content of `node` starts, over
@@ -1873,6 +1894,18 @@ fn collect_layouts(
                     - layout.scrollable_overflow_rect.top,
             },
         );
+        if let Some([top, right, bottom, left]) = tree.node(tid).border {
+            result.insert(
+                border_id(node_id),
+                BoxLayout {
+                    x: left,
+                    y: top,
+                    width: right,
+                    height: bottom,
+                    margin: BoxMargin::ZERO,
+                },
+            );
+        }
         if let Some((top, height)) = tree.node(tid).grid {
             result.insert(
                 grid_id(node_id),
@@ -3563,7 +3596,7 @@ pub fn absolute_position(
 pub fn layout_parent(arena: &Tree, id: NodeId) -> Option<NodeId> {
     if is_anonymous(id) {
         Some(anonymous_container(id))
-    } else if id & (PIECE | BASELINE | SLOTS | SHIFT | GRID) != 0 {
+    } else if id & (PIECE | BASELINE | SLOTS | SHIFT | GRID | BORDER) != 0 {
         None
     } else {
         arena.parent(id)
@@ -3574,7 +3607,7 @@ pub fn layout_parent(arena: &Tree, id: NodeId) -> Option<NodeId> {
 /// node is placed in, which is what its scroll offset and its sticky bounds
 /// come from.
 pub fn layout_parent_in(arena: &Tree, styles: &StyleMap, id: NodeId) -> Option<NodeId> {
-    if id & (ANONYMOUS | PIECE | BASELINE | SLOTS | SHIFT | GRID) != 0 {
+    if id & (ANONYMOUS | PIECE | BASELINE | SLOTS | SHIFT | GRID | BORDER) != 0 {
         layout_parent(arena, id)
     } else {
         flow_parent(arena, styles, id)

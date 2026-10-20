@@ -731,3 +731,219 @@ fn the_rows_and_cells_of_a_group_are_placed_from_the_group() {
     close(&laid, "b2", (15.81, 28.0, 11.8, 24.0));
     close(&laid, "r3", (2.0, 54.0, 25.61, 24.0));
 }
+
+fn two_cells(css: &str) -> Laid {
+    let tree = page(table(
+        "t",
+        vec![tr(
+            "r",
+            vec![td("a", vec![text("a")]), td("b", vec![text("b")])],
+        )],
+    ));
+    lay_out(
+        &tree,
+        &format!("{CSS} .t {{ border-collapse: collapse; }} .a, .b {{ padding: 1px; }} {css}"),
+    )
+}
+
+#[test]
+fn collapsed_borders_give_each_cell_half_of_each_edge_and_the_cells_touch() {
+    // Chrome: 2px borders, the cells abut and the table has the outer halves.
+    let laid = two_cells(".a, .b { border: 2px solid #000; }");
+    close(&laid, "t", (0.0, 0.0, 28.69, 28.0));
+    close(&laid, "a", (1.0, 1.0, 12.89, 26.0));
+    close(&laid, "b", (13.89, 1.0, 13.8, 26.0));
+}
+
+#[test]
+fn collapsed_edges_take_the_widest_border_and_halves_may_be_fractions() {
+    // 3px: 1.5 on each side.
+    let laid = two_cells(".a, .b { border: 3px solid #000; }");
+    close(&laid, "t", (0.0, 0.0, 31.69, 30.0));
+    close(&laid, "a", (1.5, 1.5, 13.89, 27.0));
+    close(&laid, "b", (15.39, 1.5, 14.8, 27.0));
+    // The table's border wins the outer edge and gives its half to the cell.
+    let laid = two_cells(".t { border: 6px solid #000; } .a, .b { border: 2px solid #f00; }");
+    close(&laid, "t", (0.0, 0.0, 36.69, 36.0));
+    close(&laid, "a", (3.0, 3.0, 14.89, 30.0));
+    close(&laid, "b", (17.89, 3.0, 15.8, 30.0));
+    // The wider of two cells wins the edge between them.
+    let laid = two_cells(".a { border: 4px solid #000; } .b { border: 2px solid #f00; }");
+    close(&laid, "t", (0.0, 0.0, 32.69, 32.0));
+    close(&laid, "a", (2.0, 2.0, 14.89, 28.0));
+    close(&laid, "b", (16.89, 2.0, 14.8, 28.0));
+}
+
+#[test]
+fn a_hidden_border_wins_over_all_and_none_loses_to_all() {
+    let tree = page(table(
+        "t",
+        vec![
+            tr(
+                "r1",
+                vec![
+                    td("a1", vec![text("a")]),
+                    td("b1", vec![text("b")]),
+                    td("a3", vec![text("c")]),
+                ],
+            ),
+            tr(
+                "r2",
+                vec![
+                    td("a2", vec![text("d")]),
+                    td("c", vec![text("e")]),
+                    td("a4", vec![text("f")]),
+                ],
+            ),
+        ],
+    ));
+    let css = format!(
+        "{CSS} .t {{ border-collapse: collapse; }} td {{ padding: 1px; }} \
+         .a1, .a2, .a3, .a4 {{ border: 4px solid #000; }} .b1 {{ border: 4px hidden #f00; }} \
+         .c {{ border: 4px none; }}"
+    );
+    let laid = lay_out(&tree, &css);
+    close(&laid, "t", (0.0, 0.0, 46.45, 60.0));
+    close(&laid, "a1", (2.0, 2.0, 15.8, 28.0));
+    close(&laid, "b1", (17.8, 2.0, 14.98, 28.0));
+    close(&laid, "a3", (32.78, 2.0, 11.67, 28.0));
+}
+
+#[test]
+fn collapsing_borders_ignore_the_spacing_and_the_padding_of_the_table() {
+    let laid = two_cells(".t { border-spacing: 10px; padding: 7px; border: 2px solid #000; }");
+    close(&laid, "t", (0.0, 0.0, 26.69, 28.0));
+    close(&laid, "a", (1.0, 1.0, 11.89, 26.0));
+    close(&laid, "b", (12.89, 1.0, 12.8, 26.0));
+}
+
+#[test]
+fn a_cell_across_columns_takes_the_widest_edge_along_each_side() {
+    // Chrome: a 5px border on the cell across both columns, 2px on the others.
+    let tree = page(table(
+        "t",
+        vec![
+            tr(
+                "r1",
+                vec![td("a", vec![text("a")]), td("b", vec![text("b")])],
+            ),
+            tr(
+                "r2",
+                vec![with_attr("td", "w", &[("colspan", "2")], vec![text("c")])],
+            ),
+        ],
+    ));
+    let css = format!(
+        "{CSS} .t {{ border-collapse: collapse; }} td {{ padding: 1px; border: 2px solid #000; }} \
+         .w {{ border: 5px solid #f00; }}"
+    );
+    let laid = lay_out(&tree, &css);
+    close(&laid, "t", (0.0, 0.0, 31.69, 60.0));
+    close(&laid, "a", (2.5, 1.0, 12.89, 27.5));
+    close(&laid, "b", (15.39, 1.0, 13.8, 27.5));
+    close(&laid, "w", (2.5, 28.5, 26.69, 29.0));
+}
+
+#[test]
+fn the_borders_of_rows_and_columns_collapse_with_those_of_the_cells() {
+    let tree = page(table(
+        "t",
+        vec![
+            tr(
+                "r1",
+                vec![td("a", vec![text("a")]), td("b", vec![text("b")])],
+            ),
+            tr(
+                "r2",
+                vec![td("c", vec![text("c")]), td("d", vec![text("d")])],
+            ),
+        ],
+    ));
+    let css = format!(
+        "{CSS} .t {{ border-collapse: collapse; }} td {{ padding: 1px; }} \
+         tr {{ border-bottom: 6px solid #00f; }}"
+    );
+    let laid = lay_out(&tree, &css);
+    close(&laid, "t", (0.0, 0.0, 22.69, 60.0));
+    close(&laid, "r1", (0.0, 0.0, 22.69, 27.0));
+    close(&laid, "r2", (0.0, 27.0, 22.69, 30.0));
+    close(&laid, "c", (0.0, 27.0, 10.89, 30.0));
+    // Borders on the columns.
+    let tree = page(table(
+        "t",
+        vec![
+            element(
+                "colgroup",
+                "",
+                vec![element("col", "c1", vec![]), element("col", "c2", vec![])],
+            ),
+            tr(
+                "r",
+                vec![td("a", vec![text("a")]), td("b", vec![text("b")])],
+            ),
+        ],
+    ));
+    let css = format!(
+        "{CSS} .t {{ border-collapse: collapse; }} td {{ padding: 1px; }} \
+         .c1, .c2 {{ border: 4px solid #0f0; }}"
+    );
+    let laid = lay_out(&tree, &css);
+    close(&laid, "t", (0.0, 0.0, 34.69, 32.0));
+    close(&laid, "a", (2.0, 2.0, 14.89, 28.0));
+    close(&laid, "b", (16.89, 2.0, 15.8, 28.0));
+}
+
+#[test]
+fn a_fixed_table_with_collapsing_borders_shares_what_is_left_of_the_width() {
+    let tree = page(table(
+        "t",
+        vec![tr(
+            "r",
+            vec![td("a", vec![text("a")]), td("b", vec![text("b")])],
+        )],
+    ));
+    let css = format!(
+        "{CSS} .t {{ border-collapse: collapse; table-layout: fixed; width: 200px; }} \
+         td {{ border: 4px solid #000; }}"
+    );
+    let laid = lay_out(&tree, &css);
+    close(&laid, "t", (0.0, 0.0, 200.0, 32.0));
+    close(&laid, "a", (2.0, 2.0, 98.0, 28.0));
+    close(&laid, "b", (100.0, 2.0, 98.0, 28.0));
+}
+
+#[test]
+fn the_collapsed_borders_of_a_table_are_lines_between_its_cells() {
+    // Two cells with 2px borders: three vertical lines (the middle one shared)
+    // and a top and a bottom line over each cell, centered on the edges.
+    let laid = two_cells(".a, .b { border: 2px solid #000; }");
+    let table = laid.node("t");
+    let segments =
+        crate::collapsed_border_segments(&laid.arena, &laid.styles, &laid.layouts, table);
+    let vertical: Vec<_> = segments.iter().filter(|s| !s.horizontal).collect();
+    assert_eq!(vertical.len(), 3, "{segments:?}");
+    assert!(segments.iter().all(|s| (s.width - 2.0).abs() < 0.01));
+    let mut xs: Vec<f32> = vertical.iter().map(|s| s.x0).collect();
+    xs.sort_by(f32::total_cmp);
+    for (x, expected) in xs.iter().zip([1.0, 13.89, 27.69]) {
+        near(*x, expected, 0.05, "line");
+    }
+    // A table that does not collapse has none.
+    let tree = page(table_with_cells());
+    let laid = lay_out(&tree, CSS);
+    let table = laid.node("t");
+    assert!(
+        crate::collapsed_border_segments(&laid.arena, &laid.styles, &laid.layouts, table)
+            .is_empty()
+    );
+}
+
+fn table_with_cells() -> Element {
+    table(
+        "t",
+        vec![tr(
+            "r",
+            vec![td("a", vec![text("a")]), td("b", vec![text("b")])],
+        )],
+    )
+}
