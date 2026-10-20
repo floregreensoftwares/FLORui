@@ -1792,6 +1792,7 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
     let position = values.get_position();
     let effects = values.get_effects();
     let box_style = values.get_box();
+    let inherited_table = values.get_inherited_table();
     let font = values.get_font();
     let margin = values.get_margin();
     let padding = values.get_padding();
@@ -1966,6 +1967,39 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
         justify_items: to_item_alignment(position.justify_items.computed.0),
         justify_self: to_item_alignment(position.justify_self.0.0),
         order: position.order,
+        float: to_float(box_style.float),
+        clear: to_clear(box_style.clear),
+        border_collapse: if inherited_table.border_collapse
+            == style::computed_values::border_collapse::T::Collapse
+        {
+            crate::cascade::BorderCollapse::Collapse
+        } else {
+            crate::cascade::BorderCollapse::Separate
+        },
+        border_spacing: (
+            inherited_table.border_spacing.0.width.px(),
+            inherited_table.border_spacing.0.height.px(),
+        ),
+        table_layout: if values.get_table().table_layout
+            == style::computed_values::table_layout::T::Fixed
+        {
+            crate::cascade::TableLayout::Fixed
+        } else {
+            crate::cascade::TableLayout::Auto
+        },
+        caption_side: if inherited_table.caption_side
+            == style::values::computed::table::CaptionSide::Bottom
+        {
+            crate::cascade::CaptionSide::Bottom
+        } else {
+            crate::cascade::CaptionSide::Top
+        },
+        empty_cells: if inherited_table.empty_cells == style::computed_values::empty_cells::T::Hide
+        {
+            crate::cascade::EmptyCells::Hide
+        } else {
+            crate::cascade::EmptyCells::Show
+        },
         grid_column: (
             to_grid_placement(&position.grid_column_start),
             to_grid_placement(&position.grid_column_end),
@@ -3759,14 +3793,50 @@ fn authored_display_none(values: &ComputedValues) -> bool {
 }
 
 fn to_display(display: style::values::computed::Display) -> FlorDisplay {
-    use style::values::specified::box_::{DisplayInside, DisplayOutside};
+    use style::values::specified::box_::{DisplayInside as I, DisplayOutside as O};
     match (display.outside(), display.inside()) {
-        (DisplayOutside::None, _) => FlorDisplay::None,
-        (DisplayOutside::Inline, DisplayInside::FlowRoot) => FlorDisplay::InlineBlock,
-        (DisplayOutside::Inline, _) => FlorDisplay::Inline,
-        (_, DisplayInside::Flex) => FlorDisplay::Flex,
-        (_, DisplayInside::Grid) => FlorDisplay::Grid,
+        (_, I::Contents) => FlorDisplay::Contents,
+        (O::None, _) => FlorDisplay::None,
+        (O::Inline, I::FlowRoot) => FlorDisplay::InlineBlock,
+        (O::Inline, I::Flex) => FlorDisplay::InlineFlex,
+        (O::Inline, I::Grid) => FlorDisplay::InlineGrid,
+        (O::Inline, I::Table) => FlorDisplay::InlineTable,
+        (O::Inline, _) => FlorDisplay::Inline,
+        (O::TableCaption, _) => FlorDisplay::TableCaption,
+        (_, I::Flex) => FlorDisplay::Flex,
+        (_, I::Grid) => FlorDisplay::Grid,
+        (_, I::FlowRoot) => FlorDisplay::FlowRoot,
+        (_, I::Table) => FlorDisplay::Table,
+        (_, I::TableRowGroup) => FlorDisplay::TableRowGroup,
+        (_, I::TableHeaderGroup) => FlorDisplay::TableHeaderGroup,
+        (_, I::TableFooterGroup) => FlorDisplay::TableFooterGroup,
+        (_, I::TableRow) => FlorDisplay::TableRow,
+        (_, I::TableColumn) => FlorDisplay::TableColumn,
+        (_, I::TableColumnGroup) => FlorDisplay::TableColumnGroup,
+        (_, I::TableCell) => FlorDisplay::TableCell,
+        _ if display.is_list_item() => FlorDisplay::ListItem,
         _ => FlorDisplay::Block,
+    }
+}
+
+fn to_float(value: style::values::computed::Float) -> crate::cascade::Float {
+    use crate::cascade::Float;
+    use style::values::computed::Float as F;
+    match value {
+        F::Left | F::InlineStart => Float::Left,
+        F::Right | F::InlineEnd => Float::Right,
+        F::None => Float::None,
+    }
+}
+
+fn to_clear(value: style::values::computed::Clear) -> crate::cascade::Clear {
+    use crate::cascade::Clear;
+    use style::values::computed::Clear as C;
+    match value {
+        C::None => Clear::None,
+        C::Left | C::InlineStart => Clear::Left,
+        C::Right | C::InlineEnd => Clear::Right,
+        C::Both => Clear::Both,
     }
 }
 

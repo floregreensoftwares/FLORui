@@ -337,16 +337,11 @@ pub enum LineHeight {
     Length(f32),
 }
 
-/// How this node participates in its parent's formatting context
-/// (`Block`/`Inline`/`InlineBlock`, real CSS's `display-outside` plus
-/// `inline-block`'s special case), *and*, for `Block`/`Flex`/`Grid`, which
-/// algorithm lays out its own children (real CSS's `display-inside`) —
-/// this crate conflates the two into one field rather than splitting them
-/// the way real CSS's two-value `display` syntax does, since nothing here
-/// yet needs an `outside`/`inside` combination beyond the five this enum
-/// already names. `Inline`'s own children (if it somehow has element
-/// children, not just text) and `InlineBlock`'s own children both use the
-/// same `Block` algorithm real CSS itself uses for both.
+/// How a node takes part in its parent's formatting context and which
+/// algorithm lays out its own children. Real CSS keeps those two apart
+/// (`display: inline flex`); this crate names the combinations it lays out in
+/// one field, and [`Self::is_inline_level`], [`Self::is_atomic_inline`] and
+/// [`Self::generates_box`] answer the outside questions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Display {
     #[default]
@@ -355,9 +350,7 @@ pub enum Display {
     /// `display: inline` — participates in a surrounding inline formatting
     /// context (mixed with text and other inline-level siblings, wrapping
     /// at the container's available width) rather than stacking as its own
-    /// block. See `florui-layout`'s own module docs for this slice's
-    /// documented bounds (one level of mixed inline content, no bidi, no
-    /// `vertical-align` beyond baseline).
+    /// block.
     Inline,
     /// `display: inline-block` — participates inline like [`Self::Inline`],
     /// but as a single opaque box sized from its own content (like a block
@@ -367,6 +360,134 @@ pub enum Display {
     /// `display: none` — generates no box: no layout space, no painting, no
     /// hit-testing, for the node and its whole subtree.
     None,
+    /// `display: flow-root`: a block box that is the root of a new block
+    /// formatting context.
+    FlowRoot,
+    /// `display: inline-flex`: a flex container that is one atomic box in a line.
+    InlineFlex,
+    /// `display: inline-grid`: a grid container that is one atomic box in a line.
+    InlineGrid,
+    /// `display: table`.
+    Table,
+    /// `display: inline-table`: a table that is one atomic box in a line.
+    InlineTable,
+    TableRowGroup,
+    TableHeaderGroup,
+    TableFooterGroup,
+    TableRow,
+    TableColumn,
+    TableColumnGroup,
+    TableCell,
+    TableCaption,
+    /// `display: list-item`: a block box with a marker.
+    ListItem,
+    /// `display: contents`: the element generates no box, and its children
+    /// take part in the formatting context of its parent as if they were its
+    /// own.
+    Contents,
+}
+
+impl Display {
+    /// One atomic box in a line of its parent: `inline-block`, `inline-flex`,
+    /// `inline-grid` or `inline-table`.
+    pub fn is_atomic_inline(self) -> bool {
+        matches!(
+            self,
+            Display::InlineBlock | Display::InlineFlex | Display::InlineGrid | Display::InlineTable
+        )
+    }
+
+    /// Flows in the lines of its parent, whole or in pieces.
+    pub fn is_inline_level(self) -> bool {
+        self == Display::Inline || self.is_atomic_inline()
+    }
+
+    /// A flex or grid container, inline-level or not.
+    pub fn is_flex_or_grid(self) -> bool {
+        matches!(
+            self,
+            Display::Flex | Display::Grid | Display::InlineFlex | Display::InlineGrid
+        )
+    }
+
+    /// Whether the node has a box of its own: `none` has none, and `contents`
+    /// leaves only its children.
+    pub fn generates_box(self) -> bool {
+        !matches!(self, Display::None | Display::Contents)
+    }
+
+    /// A part of a table: a row, a group of rows or columns, a column or a
+    /// cell, which need the table around them (or one made for them).
+    pub fn is_table_part(self) -> bool {
+        matches!(
+            self,
+            Display::TableRowGroup
+                | Display::TableHeaderGroup
+                | Display::TableFooterGroup
+                | Display::TableRow
+                | Display::TableColumn
+                | Display::TableColumnGroup
+                | Display::TableCell
+                | Display::TableCaption
+        )
+    }
+
+    /// A table, inline-level or not.
+    pub fn is_table(self) -> bool {
+        matches!(self, Display::Table | Display::InlineTable)
+    }
+}
+
+/// `float`. The logical values `inline-start` and `inline-end` are read as the
+/// left and right side: layout runs left to right.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Float {
+    #[default]
+    None,
+    Left,
+    Right,
+}
+
+/// `clear`, with the logical values read as sides as for [`Float`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Clear {
+    #[default]
+    None,
+    Left,
+    Right,
+    Both,
+}
+
+/// `border-collapse`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BorderCollapse {
+    #[default]
+    Separate,
+    Collapse,
+}
+
+/// `table-layout`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TableLayout {
+    #[default]
+    Auto,
+    Fixed,
+}
+
+/// `caption-side`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaptionSide {
+    #[default]
+    Top,
+    Bottom,
+}
+
+/// `empty-cells`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmptyCells {
+    #[default]
+    Show,
+    Hide,
 }
 
 /// `transform-box`: what `transform-origin` and the percentages of `translate`
@@ -978,6 +1099,22 @@ pub struct ComputedStyle {
     /// `order` of a flex or grid item: items lay out and paint by it, then by
     /// document order.
     pub order: i32,
+    /// `float`: takes the box out of the flow to one side, with the lines of
+    /// the content after it shortened beside it.
+    pub float: Float,
+    /// `clear`: moves the box down below the floats on the sides it names.
+    pub clear: Clear,
+    /// Inherited `border-collapse`; see [`BorderCollapse`].
+    pub border_collapse: BorderCollapse,
+    /// Inherited `border-spacing` of a table with separate borders: the
+    /// horizontal and the vertical gap between cells.
+    pub border_spacing: (f32, f32),
+    /// `table-layout`; see [`TableLayout`].
+    pub table_layout: TableLayout,
+    /// Inherited `caption-side`; see [`CaptionSide`].
+    pub caption_side: CaptionSide,
+    /// Inherited `empty-cells`; see [`EmptyCells`].
+    pub empty_cells: EmptyCells,
     /// `position`. `Absolute`'s real containing-block rule (the *nearest
     /// explicitly* `relative`/`absolute` ancestor) is simplified:
     /// this crate's own [`Position::Static`] still counts as a valid
@@ -1268,6 +1405,7 @@ impl ComputedStyle {
             backdrop_blur,
             cursor_pointer,
             placeholder_color,
+            empty_cells,
             // Everything else may change layout, hit testing, stacking or what a
             // registry reads, so it is not copied.
             width: _,
@@ -1317,6 +1455,12 @@ impl ComputedStyle {
             justify_items: _,
             justify_self: _,
             order: _,
+            float: _,
+            clear: _,
+            border_collapse: _,
+            border_spacing: _,
+            table_layout: _,
+            caption_side: _,
             grid_column: _,
             grid_row: _,
             position: _,
@@ -1382,6 +1526,7 @@ impl ComputedStyle {
         self.backdrop_blur = *backdrop_blur;
         self.cursor_pointer = *cursor_pointer;
         self.placeholder_color = *placeholder_color;
+        self.empty_cells = *empty_cells;
     }
 
     /// Whether `other` differs from `self` only in what
@@ -2894,6 +3039,77 @@ mod tests {
             Display::Block,
             "a flex container's own display must not leak onto its children"
         );
+    }
+
+    #[test]
+    fn every_display_value_resolves_from_real_css() {
+        let cases = [
+            ("block", Display::Block),
+            ("inline", Display::Inline),
+            ("inline-block", Display::InlineBlock),
+            ("flow-root", Display::FlowRoot),
+            ("flex", Display::Flex),
+            ("inline-flex", Display::InlineFlex),
+            ("grid", Display::Grid),
+            ("inline-grid", Display::InlineGrid),
+            ("table", Display::Table),
+            ("inline-table", Display::InlineTable),
+            ("table-row-group", Display::TableRowGroup),
+            ("table-header-group", Display::TableHeaderGroup),
+            ("table-footer-group", Display::TableFooterGroup),
+            ("table-row", Display::TableRow),
+            ("table-column", Display::TableColumn),
+            ("table-column-group", Display::TableColumnGroup),
+            ("table-cell", Display::TableCell),
+            ("table-caption", Display::TableCaption),
+            ("list-item", Display::ListItem),
+            ("contents", Display::Contents),
+            ("none", Display::None),
+        ];
+        for (keyword, expected) in cases {
+            let tree: Element = view! { <div><div class="x" /></div> };
+            let css = format!(".x {{ display: {keyword}; }}");
+            let (arena, computed) = styles(&tree, &css, &InteractionState::new());
+            let node = arena.children(arena.roots()[0])[0];
+            assert_eq!(computed[&node].display, expected, "display: {keyword}");
+        }
+    }
+
+    #[test]
+    fn float_clear_and_the_table_properties_resolve_from_real_css() {
+        let tree: Element = view! { <div class="t"><div class="c" /></div> };
+        let (arena, computed) = styles(
+            &tree,
+            ".t { border-collapse: collapse; border-spacing: 3px 5px; caption-side: bottom; \
+                 empty-cells: hide; table-layout: fixed; } \
+             .c { float: right; clear: both; }",
+            &InteractionState::new(),
+        );
+        let table = arena.roots()[0];
+        let child = arena.children(table)[0];
+        assert_eq!(computed[&table].table_layout, TableLayout::Fixed);
+        // These inherit.
+        assert_eq!(computed[&child].border_collapse, BorderCollapse::Collapse);
+        assert_eq!(computed[&child].border_spacing, (3.0, 5.0));
+        assert_eq!(computed[&child].caption_side, CaptionSide::Bottom);
+        assert_eq!(computed[&child].empty_cells, EmptyCells::Hide);
+        assert_eq!(computed[&child].table_layout, TableLayout::Auto);
+        assert_eq!(computed[&child].float, Float::Right);
+        assert_eq!(computed[&child].clear, Clear::Both);
+        assert_eq!(computed[&table].float, Float::None);
+    }
+
+    #[test]
+    fn a_float_makes_an_inline_box_a_block() {
+        let tree: Element = view! { <div><span class="f" /></div> };
+        let (arena, computed) = styles(
+            &tree,
+            ".f { float: left; display: inline; }",
+            &InteractionState::new(),
+        );
+        let span = arena.children(arena.roots()[0])[0];
+        assert_eq!(computed[&span].display, Display::Block);
+        assert_eq!(computed[&span].float, Float::Left);
     }
 
     #[test]

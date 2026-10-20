@@ -290,9 +290,7 @@ pub fn text_style_of(style: &ComputedStyle) -> florui_text::TextStyle {
     // The text of a flex or grid container is an anonymous item as wide as the
     // text, so there is nothing for `text-align` to align in it.
     let align = match style.text_align {
-        _ if matches!(style.display, StyleDisplay::Flex | StyleDisplay::Grid) => {
-            florui_text::TextAlign::Start
-        }
+        _ if style.display.is_flex_or_grid() => florui_text::TextAlign::Start,
         florui_style::TextAlign::Start => florui_text::TextAlign::Start,
         florui_style::TextAlign::End => florui_text::TextAlign::End,
         florui_style::TextAlign::Center => florui_text::TextAlign::Center,
@@ -2702,7 +2700,7 @@ fn order_of(styles: &StyleMap, node: NodeId) -> i32 {
 fn reorders_children(styles: &StyleMap, parent: NodeId) -> bool {
     styles
         .get(&parent)
-        .is_some_and(|style| matches!(style.display, StyleDisplay::Flex | StyleDisplay::Grid))
+        .is_some_and(|style| style.display.is_flex_or_grid())
 }
 
 /// `children` by their `orders`, then by document order (the sort is stable);
@@ -2960,20 +2958,29 @@ fn to_taffy_position(value: StylePosition) -> Position {
 
 fn to_display(value: StyleDisplay) -> Display {
     match value {
-        StyleDisplay::Block => Display::Block,
-        StyleDisplay::Flex => Display::Flex,
-        StyleDisplay::Grid => Display::Grid,
+        StyleDisplay::Flex | StyleDisplay::InlineFlex => Display::Flex,
+        StyleDisplay::Grid | StyleDisplay::InlineGrid => Display::Grid,
+        StyleDisplay::FlowRoot => Display::FlowRoot,
         StyleDisplay::None => Display::None,
-        // Reached only for a node that did *not* qualify for
-        // `needs_inline_layout` (e.g. it sits at the tree root, where real
-        // CSS also blockifies `display: inline` — see `florui_style`'s own
-        // `to_display`/blockification doc — or a bound this slice doesn't
-        // yet cover, like a mixed block+inline sibling). Falling back to
-        // Taffy's block algorithm for its own children matches what real
-        // CSS does for `inline-block`'s own children too; a plain `inline`
-        // node reaching here is rarer (mainly the blockified-root case)
-        // and gets the same fallback rather than a crash.
-        StyleDisplay::Inline | StyleDisplay::InlineBlock => Display::Block,
+        // The rest lay their children out as blocks. An inline box reaches
+        // here when it did not qualify for `needs_inline_layout` (it sits at
+        // the tree root, where CSS blockifies it, or beside block siblings);
+        // the algorithm of a table, a list item or a table part is its own.
+        StyleDisplay::Block
+        | StyleDisplay::Inline
+        | StyleDisplay::InlineBlock
+        | StyleDisplay::Table
+        | StyleDisplay::InlineTable
+        | StyleDisplay::TableRowGroup
+        | StyleDisplay::TableHeaderGroup
+        | StyleDisplay::TableFooterGroup
+        | StyleDisplay::TableRow
+        | StyleDisplay::TableColumn
+        | StyleDisplay::TableColumnGroup
+        | StyleDisplay::TableCell
+        | StyleDisplay::TableCaption
+        | StyleDisplay::ListItem
+        | StyleDisplay::Contents => Display::Block,
     }
 }
 
@@ -3319,7 +3326,7 @@ fn children_by_paint<'a>(
     let children = arena.children(node);
     let stacks = styles
         .get(&node)
-        .is_some_and(|style| matches!(style.display, StyleDisplay::Flex | StyleDisplay::Grid));
+        .is_some_and(|style| style.display.is_flex_or_grid());
     let key = |child: &NodeId| styles.get(child).map_or((0, 0), |s| s.item_stacking());
     if !stacks || children.iter().all(|child| key(child) == (0, 0)) {
         return std::borrow::Cow::Borrowed(children);
@@ -3627,7 +3634,9 @@ pub fn compute_size_causes(
         }
 
         match parent_style.display {
-            StyleDisplay::Flex if is_row(parent_style.flex_direction) => {
+            StyleDisplay::Flex | StyleDisplay::InlineFlex
+                if is_row(parent_style.flex_direction) =>
+            {
                 flex_main_axis_causes(
                     &mut font,
                     arena,
@@ -3640,7 +3649,7 @@ pub fn compute_size_causes(
                     true,
                 );
             }
-            StyleDisplay::Flex => {
+            StyleDisplay::Flex | StyleDisplay::InlineFlex => {
                 flex_main_axis_causes(
                     &mut font,
                     arena,
@@ -3653,7 +3662,7 @@ pub fn compute_size_causes(
                     false,
                 );
             }
-            StyleDisplay::Grid => {
+            StyleDisplay::Grid | StyleDisplay::InlineGrid => {
                 for &child in children {
                     let (Some(child_style), Some(child_layout)) =
                         (styles.get(&child), layouts.get(&child))
@@ -3671,10 +3680,7 @@ pub fn compute_size_causes(
                     }
                 }
             }
-            StyleDisplay::Block
-            | StyleDisplay::Inline
-            | StyleDisplay::InlineBlock
-            | StyleDisplay::None => {}
+            _ => {}
         }
     }
 
