@@ -43,6 +43,7 @@ mod grid;
 mod height_media_adapter;
 mod interaction;
 mod intern;
+mod list;
 mod mask_box_image;
 mod mask_values;
 mod matrix;
@@ -89,6 +90,7 @@ pub use grid::{
     GridTemplate, GridTemplateAreas, GridTemplateComponent, GridTrackSize, SubgridNames,
 };
 pub use interaction::{FormState, InteractionState};
+pub use list::{ListStylePosition, ListStyleType, parse_counters, parse_list_style_type};
 pub use mask_box_image::{MaskBoxImageSpec, resolve_mask_box_image};
 pub use matrix::{Matrix4, NEAR_W, transform_matrix};
 pub use rounded::RoundedRect;

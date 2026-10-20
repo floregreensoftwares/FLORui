@@ -404,6 +404,19 @@ const CSS: &str = "
 
     p { margin-top: 1em; margin-bottom: 1em; }
 
+    ul, ol {
+        display: block;
+        margin-top: 1em;
+        margin-bottom: 1em;
+        padding-left: 40px;
+    }
+    ul { list-style-type: disc; }
+    ol { list-style-type: decimal; }
+    ul ul, ol ul { list-style-type: circle; }
+    ul ul ul, ul ol ul, ol ul ul, ol ol ul { list-style-type: square; }
+    ul ul, ul ol, ol ul, ol ol { margin-top: 0; margin-bottom: 0; }
+    li { display: list-item; }
+
     table {
         display: table;
         box-sizing: border-box;
