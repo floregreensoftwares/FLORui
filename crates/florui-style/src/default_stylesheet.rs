@@ -403,6 +403,24 @@ const CSS: &str = "
     h6 { font-size: 0.67em; margin-top: 2.33em; margin-bottom: 2.33em; }
 
     p { margin-top: 1em; margin-bottom: 1em; }
+
+    table {
+        display: table;
+        box-sizing: border-box;
+        border-collapse: separate;
+        border-spacing: 2px;
+        border-color: gray;
+    }
+    caption { display: table-caption; text-align: -webkit-center; }
+    colgroup { display: table-column-group; }
+    col { display: table-column; }
+    thead { display: table-header-group; vertical-align: middle; border-color: inherit; }
+    tbody { display: table-row-group; vertical-align: middle; border-color: inherit; }
+    tfoot { display: table-footer-group; vertical-align: middle; border-color: inherit; }
+    tr { display: table-row; vertical-align: inherit; border-color: inherit; }
+    table > tr { vertical-align: middle; }
+    td, th { display: table-cell; vertical-align: inherit; padding: 1px; }
+    th { font-weight: bold; text-align: center; }
 ";
 
 /// The parsed default stylesheet, built once and reused — `Rule` wraps a
