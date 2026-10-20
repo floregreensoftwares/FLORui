@@ -3535,13 +3535,24 @@ fn to_border_side(
             style: Default::default(),
         };
     }
+    let line = to_border_line_style(style);
+    // Chromium paints a groove, ridge, inset or outset border whose colour is
+    // `currentcolor` from a fixed light grey, whatever `color` is.
+    let current = if matches!(
+        line,
+        BorderLineStyle::Groove
+            | BorderLineStyle::Ridge
+            | BorderLineStyle::Inset
+            | BorderLineStyle::Outset
+    ) {
+        Rgba::opaque(0xee, 0xee, 0xee)
+    } else {
+        inherited_color
+    };
     FlorBorderSide {
-        style: to_border_line_style(style),
+        style: line,
         width: width.to_f32_px(),
-        color: color
-            .as_absolute()
-            .map(to_absolute_rgba)
-            .unwrap_or(inherited_color),
+        color: color.as_absolute().map(to_absolute_rgba).unwrap_or(current),
     }
 }
 
