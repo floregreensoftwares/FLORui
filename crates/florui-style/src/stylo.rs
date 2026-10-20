@@ -371,7 +371,8 @@ impl StyloTree {
         (tree, primary_root)
     }
 
-    /// Numbers each node by the state of the nodes above it. A selector such as
+    /// Numbers each node by the state of the nodes above it. and by what
+    /// the selectors that name an ancestor read of it: its tag, its id and its classes. A selector such as
     /// `.row:hover .cell` matches two cells that are alike in everything else, under
     /// rows that differ only in their state, differently; Stylo's style sharing
     /// looks at the nodes and at the style of their parents, which is the same for
@@ -380,13 +381,17 @@ impl StyloTree {
     /// ancestor, and share. (What a sibling before a node has is covered by
     /// Stylo's own check of the selectors with a sibling combinator.)
     fn number_contexts(&self, arena: &Arena) {
-        let mut numbers: HashMap<(u32, u64), u32> = HashMap::new();
+        let mut numbers: HashMap<(u32, u64, u64), u32> = HashMap::new();
         let mut of_slot: Vec<u32> = vec![0; self.slots.len()];
         for (index, &id) in self.order.iter().enumerate() {
             // What is above: the number of the parent, and the parent's own state.
             let above = match arena.parent(id).map(|parent| self.index_of[parent]) {
-                Some(parent) => (of_slot[parent], self.slots[parent].state.get().bits()),
-                None => (0, 0),
+                Some(parent) => (
+                    of_slot[parent],
+                    self.slots[parent].state.get().bits(),
+                    self.slots[parent].identity(),
+                ),
+                None => (0, 0, 0),
             };
             let next = numbers.len() as u32 + 1;
             let number = match numbers.get(&above) {
@@ -1962,6 +1967,12 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
                 &border.border_left_color,
                 color,
             ),
+        },
+        border_hidden: Edges {
+            top: is_hidden(border.border_top_style),
+            right: is_hidden(border.border_right_style),
+            bottom: is_hidden(border.border_bottom_style),
+            left: is_hidden(border.border_left_style),
         },
         border_radius: Corners {
             top_left: to_corner_radius(&border.border_top_left_radius),
@@ -3575,6 +3586,10 @@ fn to_border_line_style(style: style::values::computed::BorderStyle) -> BorderLi
 /// every other style. `currentcolor` resolves against `inherited_color`
 /// (this element's own already-resolved `color`), the same fallback
 /// `background-color` already uses.
+fn is_hidden(style: style::values::computed::BorderStyle) -> bool {
+    style == style::values::computed::BorderStyle::Hidden
+}
+
 fn to_border_side(
     style: style::values::computed::BorderStyle,
     width: app_units::Au,
@@ -5123,5 +5138,19 @@ mod style_sharing_tests {
                 "hovering card {position}"
             );
         }
+    }
+}
+
+impl NodeSlot {
+    /// A hash of what a selector with an ancestor in it can tell this node by: its tag,
+    /// its id, its classes and its attributes.
+    fn identity(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.tag.hash(&mut hasher);
+        self.id_attr.hash(&mut hasher);
+        self.classes.hash(&mut hasher);
+        self.attrs.hash(&mut hasher);
+        hasher.finish()
     }
 }

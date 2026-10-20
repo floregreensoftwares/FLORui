@@ -1092,6 +1092,10 @@ pub struct ComputedStyle {
     /// `border-*-width`/`-style`/`-color` per side — see [`BorderSide`]'s
     /// own doc for the solid-only scope and the `none`/`hidden` collapse.
     pub border: Edges<BorderSide>,
+    /// Which sides are `border-style: hidden`, which is a zero width like `none`
+    /// but, where the borders of table cells collapse, wins over every other
+    /// border on the edge.
+    pub border_hidden: Edges<bool>,
     /// `border-*-radius` per corner as a (horizontal, vertical) pair, still
     /// carrying any percentage unresolved: it resolves against this node's
     /// own border box (width for horizontal, height for vertical), which
@@ -1493,6 +1497,7 @@ impl ComputedStyle {
             row_gap: _,
             gap_normal: _,
             border_radius: _,
+            border_hidden: _,
             grid_template_columns: _,
             grid_template_rows: _,
             grid_auto_columns: _,
@@ -3055,6 +3060,30 @@ mod tests {
         );
         let button = arena.find(|a, id| a.tag(id) == "button").unwrap();
         assert_eq!(computed[&button].background_color, Rgba::TRANSPARENT);
+    }
+
+    #[test]
+    fn a_descendant_selector_tells_cousins_under_differently_classed_parents_apart() {
+        // The parents compute the same style, so a style shared between their
+        // children would be the first one's.
+        let tree: Element = view! {
+            <section>
+                <div><button class="go">{"A"}</button></div>
+                <div class="card"><button class="go">{"B"}</button></div>
+                <div class="card"><button class="go">{"C"}</button></div>
+            </section>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".go { width: 5px; } .card .go { width: 20px; }",
+            &InteractionState::new(),
+        );
+        let widths: Vec<_> = arena
+            .find_all(|a, id| a.tag(id) == "button")
+            .into_iter()
+            .map(|button| computed[&button].width)
+            .collect();
+        assert_eq!(widths, vec![Some(5.0), Some(20.0), Some(20.0)]);
     }
 
     #[test]
