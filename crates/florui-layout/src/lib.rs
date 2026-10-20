@@ -6763,6 +6763,29 @@ mod tests {
     }
 
     #[test]
+    fn a_percentage_gap_does_not_widen_a_container_sized_by_its_content() {
+        let tree: Element = view! {
+            <div class="outer">
+                <div class="g">
+                    <div class="a" />
+                    <div class="b" />
+                </div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            ".outer { width: 300px; } \
+             .g { display: flex; width: fit-content; height: 20px; gap: 10%; } \
+             .a, .b { width: 50px; flex: none; }",
+        );
+        let g = arena.children(arena.roots()[0])[0];
+        let b = arena.children(g)[1];
+        // Chrome 153: the width is the items' alone, and the gap is a tenth of that.
+        assert_eq!(layouts[&g].width, 100.0);
+        assert_eq!(layouts[&b].x, 60.0);
+    }
+
+    #[test]
     fn the_baseline_of_a_box_lies_below_its_padding() {
         // Chrome 153: the row is 26px tall, `c1` sits 8px down and `c3`, whose
         // padding-top of 8px is above its text, is not pushed down at all.
