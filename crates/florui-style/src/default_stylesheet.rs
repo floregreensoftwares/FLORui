@@ -404,17 +404,17 @@ const CSS: &str = "
 
     p { margin-top: 1em; margin-bottom: 1em; }
 
-    ul, ol {
+    ul, ol, menu {
         display: block;
         margin-top: 1em;
         margin-bottom: 1em;
         padding-left: 40px;
     }
-    ul { list-style-type: disc; }
+    ul, menu { list-style-type: disc; }
     ol { list-style-type: decimal; }
-    ul ul, ol ul { list-style-type: circle; }
-    ul ul ul, ul ol ul, ol ul ul, ol ol ul { list-style-type: square; }
-    ul ul, ul ol, ol ul, ol ol { margin-top: 0; margin-bottom: 0; }
+    :is(ul, ol, menu) :is(ul, menu) { list-style-type: circle; }
+    :is(ul, ol, menu) :is(ul, ol, menu) :is(ul, menu) { list-style-type: square; }
+    :is(ul, ol, menu) :is(ul, ol, menu) { margin-top: 0; margin-bottom: 0; }
     li { display: list-item; }
 
     table {
@@ -959,6 +959,7 @@ mod tests {
             "dd",
             "figure",
             "figcaption",
+            "menu",
             "hr",
         ] {
             assert_eq!(nested_style(tag, &[]).display, Display::Block, "{tag}");
@@ -1081,6 +1082,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_menu_is_set_out_as_an_unordered_list() {
+        let menu = nested_style("menu", &[]);
+        assert_eq!(menu.display, Display::Block);
+        assert_eq!(
+            (menu.margin.top, menu.margin.bottom),
+            (Some(16.0), Some(16.0))
+        );
+        assert_eq!(menu.padding.left, 40.0);
+        assert_eq!(
+            menu.list_style_type,
+            nested_style("ul", &[]).list_style_type
+        );
+        assert_ne!(
+            menu.list_style_type,
+            nested_style("ol", &[]).list_style_type
+        );
+    }
     #[test]
     fn a_rule_is_a_block_with_an_inset_border_and_auto_side_margins() {
         let hr = nested_style("hr", &[]);

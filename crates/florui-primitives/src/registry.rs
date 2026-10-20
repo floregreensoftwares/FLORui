@@ -224,6 +224,11 @@ pub const PRIMITIVES: &[Primitive] = &[
     // Lists.
     primitive!("ul", Content::Normal, "an unordered list"),
     primitive!("ol", Content::Normal, "an ordered list"),
+    primitive!(
+        "menu",
+        Content::Normal,
+        "a list of commands, laid out as an unordered list"
+    ),
     primitive!("li", Content::Normal, "a list item"),
     // Tables.
     primitive!("table", Content::Normal, "tabular data in rows and columns"),
