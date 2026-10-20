@@ -1169,9 +1169,14 @@ pub struct ComputedStyle {
 
 impl ComputedStyle {
     /// Where a flex or grid item stacks among its siblings: by `z-index`, then
-    /// by `order`, with document order left to break any tie.
+    /// by `order`, with document order left to break any tie. An absolutely
+    /// positioned child is no item and stacks as `order: 0`.
     pub fn item_stacking(&self) -> (i32, i32) {
-        (self.z_index.unwrap_or(0), self.order)
+        let out_of_flow = matches!(self.position, Position::Absolute | Position::Fixed);
+        (
+            self.z_index.unwrap_or(0),
+            if out_of_flow { 0 } else { self.order },
+        )
     }
 
     /// Whether a column of the node is a `fit-content()`, which Taffy leaves
