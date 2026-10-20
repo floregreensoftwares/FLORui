@@ -1,0 +1,4 @@
+.wrap { position: relative; width: 340px; height: 560px; background-color: #ffffff; color: #101010; font-size: 14px; line-height: 18px; }
+.wrap > * { background-color: #e8e8e8; }
+.wrap > :nth-child(even) { background-color: #d8e4f4; }
+pre { font-family: "Fira Mono", monospace; font-size: 13px; }
