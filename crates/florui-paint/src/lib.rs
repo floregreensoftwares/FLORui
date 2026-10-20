@@ -1161,7 +1161,7 @@ fn ink_is_outside_clip(
         scale_factor,
     );
     let content_x = x + border.left.width + padding.left;
-    let content_y = y + border.top.width + padding.top + florui_layout::cell_shift(layouts, node);
+    let content_y = y + border.top.width + padding.top + cell_shift_of(layouts, style, node);
     let content_width =
         (layout.width - border.left.width - border.right.width - padding.left - padding.right)
             .max(0.0);
@@ -1296,8 +1296,44 @@ fn self_wrap(content_width: f32, scale_factor: f32) -> f32 {
     wrap_width(content_width, scale_factor)
 }
 
-/// `border` with its widths in painted pixels: they are authored in logical
-/// pixels, like every length, and the boxes they sit in are already scaled.
+/// Whether layout reports measures of its own for the box with `style`: only the boxes
+/// of a table do, so no other box has them looked up.
+fn reports_table_measures(style: Option<&ComputedStyle>) -> bool {
+    style.is_none_or(|s| s.display.is_table() || s.display.is_table_part())
+}
+
+fn cell_shift_of(
+    layouts: &HashMap<NodeId, BoxLayout>,
+    style: Option<&ComputedStyle>,
+    node: NodeId,
+) -> f32 {
+    if reports_table_measures(style) {
+        florui_layout::cell_shift(layouts, node)
+    } else {
+        0.0
+    }
+}
+
+fn table_grid_of(
+    layouts: &HashMap<NodeId, BoxLayout>,
+    style: Option<&ComputedStyle>,
+    node: NodeId,
+) -> Option<(f32, f32)> {
+    reports_table_measures(style)
+        .then(|| florui_layout::table_grid(layouts, node))
+        .flatten()
+}
+
+fn collapsed_border_of(
+    layouts: &HashMap<NodeId, BoxLayout>,
+    style: Option<&ComputedStyle>,
+    node: NodeId,
+) -> Option<[f32; 4]> {
+    reports_table_measures(style)
+        .then(|| florui_layout::collapsed_border(layouts, node))
+        .flatten()
+}
+
 /// The border `node` has to be laid out and painted with: its own, except in a table
 /// whose borders collapse, where the table draws them and what is left of a cell's
 /// and of the table's is the half of each edge that is inside its box.
@@ -1308,7 +1344,7 @@ fn border_of(
     scale_factor: f32,
 ) -> florui_style::Edges<florui_style::BorderSide> {
     let mut border = style.map_or(NO_BORDER, |s| s.border);
-    if let Some([top, right, bottom, left]) = florui_layout::collapsed_border(layouts, node) {
+    if let Some([top, right, bottom, left]) = collapsed_border_of(layouts, style, node) {
         for (side, width) in [
             (&mut border.top, top),
             (&mut border.right, right),
@@ -1322,6 +1358,8 @@ fn border_of(
     border
 }
 
+/// `border` with its widths in painted pixels: they are authored in logical
+/// pixels, like every length, and the boxes they sit in are already scaled.
 fn scaled_border(
     mut border: florui_style::Edges<florui_style::BorderSide>,
     scale_factor: f32,
@@ -1828,8 +1866,7 @@ fn own_extent(
     };
     let padding = scaled_padding(style.map_or(no_padding, |s| s.padding), scale_factor);
     let content_x = abs_x + border.left.width + padding.left;
-    let content_y =
-        abs_y + border.top.width + padding.top + florui_layout::cell_shift(layouts, node);
+    let content_y = abs_y + border.top.width + padding.top + cell_shift_of(layouts, style, node);
     let content_width =
         (layout.width - border.left.width - border.right.width - padding.left - padding.right)
             .max(0.0);
@@ -3625,12 +3662,21 @@ pub fn paint_order(
     parent_display: Option<Display>,
     nodes: &[NodeId],
 ) -> Vec<NodeId> {
+    paint_sorted(styles, parent_display, nodes).unwrap_or_else(|| nodes.to_vec())
+}
+
+/// [`paint_order`] when it is not the order the nodes are in.
+fn paint_sorted(
+    styles: &StyleMap,
+    parent_display: Option<Display>,
+    nodes: &[NodeId],
+) -> Option<Vec<NodeId>> {
     let parent_is_flex_or_grid = parent_display.is_some_and(Display::is_flex_or_grid);
     let is_eligible = |id: &NodeId| {
         parent_is_flex_or_grid || styles.get(id).is_some_and(|s| s.block_stacking() != (0, 0))
     };
     if !nodes.iter().any(is_eligible) {
-        return nodes.to_vec();
+        return None;
     }
     let mut ordered = nodes.to_vec();
     ordered.sort_by_key(|id| match styles.get(id) {
@@ -3638,7 +3684,7 @@ pub fn paint_order(
         Some(style) => style.block_stacking(),
         None => (0, 0),
     });
-    ordered
+    Some(ordered)
 }
 
 /// The nodes of a set of siblings, in the order they are painted, each with the
@@ -3653,10 +3699,10 @@ fn frames_in_order(
     nodes: &[NodeId],
 ) -> Vec<(NodeId, Turn)> {
     if !parent_display.is_some_and(Display::is_table) {
-        return paint_order(styles, parent_display, nodes)
-            .into_iter()
-            .map(|id| (id, Turn::First))
-            .collect();
+        return match paint_sorted(styles, parent_display, nodes) {
+            Some(sorted) => sorted.into_iter().map(|id| (id, Turn::First)).collect(),
+            None => nodes.iter().map(|&id| (id, Turn::First)).collect(),
+        };
     }
     let display = |id: &NodeId| styles.get(id).map(|s| s.display);
     let mut captions: Vec<NodeId> = Vec::new();
@@ -4215,7 +4261,7 @@ fn paint_node(
         let (x, y) = absolute_position(arena, layouts, node);
         // The border and the background of a table are those of its grid, not of the
         // captions around it.
-        let (layout, y) = match florui_layout::table_grid(layouts, node) {
+        let (layout, y) = match table_grid_of(layouts, style, node) {
             Some((top, height)) => (BoxLayout { height, ..layout }, y + top),
             None => (layout, y),
         };
@@ -4448,8 +4494,7 @@ fn paint_node(
         // content-box math `florui_layout`'s own `to_taffy_style` doc
         // describes for sizing applies to painting's own offset too.
         let content_x = x + border.left.width + padding.left;
-        let content_y =
-            y + border.top.width + padding.top + florui_layout::cell_shift(layouts, node);
+        let content_y = y + border.top.width + padding.top + cell_shift_of(layouts, style, node);
         // The box's own final content width, whatever layout resolved it
         // to (wrapped or not) — shaping at exactly this width always
         // reproduces what layout already measured: an intrinsically
