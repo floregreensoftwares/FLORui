@@ -1,0 +1,27 @@
+.wrap { position: relative; width: 340px; height: 760px; background-color: #ffffff; }
+.p { display: grid; margin: 0 0 8px 10px; background-color: #e4e4e4; }
+.card { background-color: #c8d4e8; }
+.t { background-color: #d05040; }
+.b { background-color: #40a060; }
+.f { background-color: #4070d0; }
+.i { background-color: #e0b030; height: 14px; }
+.h10 { height: 10px; } .h16 { height: 16px; } .h20 { height: 20px; } .h24 { height: 24px; } .h36 { height: 36px; } .h40 { height: 40px; } .h60 { height: 60px; }
+.w10 { width: 10px; } .w20 { width: 20px; } .w30 { width: 30px; } .w40 { width: 40px; } .w50 { width: 50px; } .w60 { width: 60px; }
+.s1 { grid-template-columns: repeat(3, 80px); grid-template-rows: auto auto auto; gap: 8px 10px; width: 260px; }
+.s1 .card { grid-row: span 3; display: grid; grid-template-rows: subgrid; }
+.s2 { grid-template-columns: auto 1fr auto; gap: 4px 6px; width: 300px; }
+.s2 .row { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; background-color: #c8d4e8; }
+.s3 { grid-template-columns: 90px 90px; grid-template-rows: auto auto auto; gap: 6px; width: 200px; }
+.s3 .card { grid-row: span 3; display: grid; grid-template-rows: subgrid; padding: 6px 4px; border: 2px solid #3a4a68; }
+.s4 { grid-template-columns: 90px 90px; grid-template-rows: auto auto auto; gap: 8px; width: 200px; }
+.s4 .card { grid-row: span 3; display: grid; grid-template-rows: subgrid; row-gap: 2px; }
+.s5 { grid-template-columns: repeat(3, auto); grid-template-rows: auto auto; gap: 4px; width: 240px; }
+.s5 .sg { grid-column: 1 / span 2; grid-row: 1 / span 2; display: grid; grid-template-columns: subgrid; grid-template-rows: subgrid; background-color: #c8d4e8; }
+.s5 .o { background-color: #a050c0; }
+.s6 { grid-template-columns: 120px; grid-template-rows: repeat(4, auto); gap: 6px; width: 120px; }
+.s6 .card { grid-row: span 4; display: grid; grid-template-rows: subgrid; }
+.s6 .nest { grid-row: 2 / span 2; display: grid; grid-template-rows: subgrid; background-color: #a8c0f0; }
+.s7 { grid-template-columns: 90px 90px; grid-template-rows: [a] auto [b] auto [c]; gap: 6px; width: 200px; }
+.s7 .card { grid-row: a / c; display: grid; grid-template-rows: subgrid [x] [y] [z]; }
+.s7 .t { grid-row: x / y; }
+.s7 .b { grid-row: y / z; }

@@ -1,0 +1,32 @@
+.wrap { position: relative; width: 340px; height: 880px; background-color: #ffffff; font-size: 13px; line-height: 16px; color: #101010; }
+.p { display: grid; margin: 0 0 8px 10px; background-color: #e4e4e4; }
+.card { background-color: #c8d4e8; }
+.t { background-color: #d05040; }
+.b { background-color: #40a060; }
+.f { background-color: #4070d0; }
+.i { background-color: #e0b030; }
+.h10 { height: 10px; } .h14 { height: 14px; } .h16 { height: 16px; } .h20 { height: 20px; } .h24 { height: 24px; } .h30 { height: 30px; } .h36 { height: 36px; } .h40 { height: 40px; }
+.w20 { width: 20px; } .w30 { width: 30px; } .w40 { width: 40px; } .w50 { width: 50px; }
+.a1 { grid-template-columns: 70px 70px; grid-template-rows: auto auto auto; gap: 6px; width: 146px; }
+.a1 .card { grid-row: 1 / span 3; grid-column: 1 / span 2; display: grid; grid-template-rows: subgrid; grid-template-columns: 1fr 1fr; gap: 3px; }
+.a2 { grid-template-columns: 90px 90px; grid-template-rows: auto auto auto auto; gap: 6px; width: 190px; }
+.a2 .card { grid-row: span 4; display: grid; grid-template-rows: subgrid; }
+.a2 .span2 { grid-row: span 2; }
+.a3 { grid-template-columns: 90px 90px; grid-template-rows: auto auto auto; gap: 6px; width: 190px; }
+.a3 .card { grid-row: span 3; display: grid; grid-template-rows: subgrid; }
+.a3 .mid { align-self: center; }
+.a3 .end { align-self: end; }
+.a4 { grid-template-columns: 90px 90px; grid-template-rows: auto 1fr auto; gap: 6px; width: 190px; height: 140px; }
+.a4 .card { grid-row: span 3; display: grid; grid-template-rows: subgrid; }
+.a5 { grid-template-columns: 100px 100px; grid-template-rows: auto auto auto; gap: 6px; width: 210px; }
+.a5 .card { grid-row: span 3; display: grid; grid-template-rows: subgrid; margin: 4px 6px; }
+.a6 { grid-template-columns: 90px 90px; grid-template-rows: auto auto; gap: 6px; width: 190px; }
+.a6 .card { grid-row: span 2; display: grid; grid-template-rows: subgrid; grid-auto-rows: 12px; }
+.a7 { display: flex; gap: 6px; width: 200px; }
+.a7 .card { display: grid; grid-template-rows: subgrid; }
+.a8 { grid-template-columns: 90px 90px; grid-template-rows: auto auto auto; gap: 6px; width: 190px; }
+.a8 .card { grid-row: span 3; display: grid; grid-template-rows: subgrid; }
+.a9 { grid-template-columns: auto auto auto; gap: 4px; width: 260px; }
+.a9 .row { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; background-color: #c8d4e8; }
+.a9 .wide { grid-column: span 2; }
+.a9 .end { justify-self: end; }
