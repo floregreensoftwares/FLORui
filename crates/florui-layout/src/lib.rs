@@ -76,6 +76,8 @@ mod deferred;
 mod floats;
 mod flow;
 mod grid;
+#[cfg(test)]
+mod line_break_tests;
 mod list;
 #[cfg(test)]
 mod odd_tree_tests;
@@ -1685,9 +1687,17 @@ fn flatten_items(
                         });
                     }
                     _ => {
+                        let mut text_style = node_text_style(child_style);
+                        let is_break = arena.tag(*child) == "br";
+                        if is_break
+                            && text_style.collapse == florui_text::WhiteSpaceCollapse::Collapse
+                        {
+                            // The break it stands for is kept, and the spaces around it go.
+                            text_style.collapse = florui_text::WhiteSpaceCollapse::PreserveBreaks;
+                        }
                         context.elements.push(florui_text::InlineElement {
                             parent: element,
-                            style: node_text_style(child_style),
+                            style: text_style,
                         });
                         let own = context.elements.len() - 1;
                         context.nodes.push(*child);
@@ -1714,6 +1724,12 @@ fn flatten_items(
                                     end: false,
                                 });
                             }
+                        }
+                        if is_break {
+                            context.items.push(InlineContentItem::Text {
+                                text: "\n".to_owned(),
+                                element: own,
+                            });
                         }
                         flatten_inline(font, arena, styles, *child, own, context, laid);
                         if let Some(style) = child_style {
