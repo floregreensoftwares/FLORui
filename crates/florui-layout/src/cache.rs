@@ -380,8 +380,7 @@ impl LayoutCache {
                 Step::Visit(node) => {
                     let arena_children = flow_children(arena, styles, node);
                     // An inline `<svg>` is a leaf: what is in it is drawn with it.
-                    let leaf = (arena.children(node).is_empty()
-                        && !has_inside_marker(styles, node))
+                    let leaf = (arena.children(node).is_empty() && !has_line_marker(styles, node))
                         || arena.tag(node) == "svg";
                     let kind = if leaf {
                         LayoutKind::Blocks
@@ -397,7 +396,7 @@ impl LayoutCache {
                         };
                         self.place(
                             node,
-                            table::role_of(arena, styles, node),
+                            (table::role_of(arena, styles, node), None),
                             style,
                             context,
                             &[],
@@ -415,7 +414,7 @@ impl LayoutCache {
                         let context = build_inline_content_items(font, arena, styles, node, None);
                         self.place(
                             node,
-                            table::role_of(arena, styles, node),
+                            (table::role_of(arena, styles, node), None),
                             to_taffy_style(styles.get(&node)),
                             Some(LeafContext::Inline(context.clone())),
                             &[],
@@ -515,7 +514,10 @@ impl LayoutCache {
                     sort_by_order(&mut children, &orders);
                     self.place(
                         node,
-                        table::role_of(arena, styles, node),
+                        (
+                            table::role_of(arena, styles, node),
+                            crate::marker_rise(font, arena, styles, node),
+                        ),
                         to_taffy_style(styles.get(&node)),
                         None,
                         &children,
@@ -528,7 +530,10 @@ impl LayoutCache {
                         floats.iter().map(|float| self.id_of(*float)).collect();
                     self.place(
                         node,
-                        table::role_of(arena, styles, node),
+                        (
+                            table::role_of(arena, styles, node),
+                            crate::marker_rise(font, arena, styles, node),
+                        ),
                         to_taffy_style(styles.get(&node)),
                         Some(LeafContext::Inline(context.clone())),
                         &float_ids,
@@ -566,7 +571,10 @@ impl LayoutCache {
                     sort_by_order(&mut children, &orders);
                     self.place(
                         node,
-                        table::role_of(arena, styles, node),
+                        (
+                            table::role_of(arena, styles, node),
+                            crate::marker_rise(font, arena, styles, node),
+                        ),
                         to_taffy_style(styles.get(&node)),
                         None,
                         &children,
@@ -583,7 +591,7 @@ impl LayoutCache {
     fn place(
         &mut self,
         node: NodeId,
-        role: table::Role,
+        (role, marker): (table::Role, Option<crate::tree::MarkerRise>),
         style: taffy::Style,
         context: Option<LeafContext>,
         children: &[taffy::NodeId],
@@ -618,6 +626,7 @@ impl LayoutCache {
                 }
             };
             self.tree.set_role(id, role)?;
+            self.tree.set_marker(id, marker)?;
             self.slots[node] = Some(Slot {
                 id,
                 children: children.to_vec(),
@@ -629,6 +638,7 @@ impl LayoutCache {
         slot.epoch = epoch;
         let id = slot.id;
         self.tree.set_role(id, role)?;
+        self.tree.set_marker(id, marker)?;
         if *self.tree.style(id)? != style {
             self.tree.set_style(id, style)?;
         }
@@ -1265,6 +1275,84 @@ mod tests {
                     kept.0.get(node),
                     Some(layout),
                     "{rows} {inside} {words}: node {node}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_kept_tree_with_image_markers_lays_out_as_one_built_anew() {
+        let svg = |side: u32| {
+            format!(
+                "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='{side}' height='{side}'%3E%3Crect width='{side}' height='{side}'/%3E%3C/svg%3E\")"
+            )
+        };
+        let css = format!(
+            "ul {{ margin: 0; padding-left: 20px; }} p {{ margin: 0; }} .big {{ list-style-image: {}; }} \
+             .small {{ list-style-image: {}; }} .in {{ list-style-position: inside; }}",
+            svg(40),
+            svg(12)
+        );
+        let sheet = florui_style::parse_stylesheet(&css).unwrap();
+        let styled = |arena: &Arena| {
+            florui_style::compute(
+                arena,
+                &sheet,
+                &InteractionState::new(),
+                florui_style::Viewport::default(),
+                &mut florui_style::AnimationTimeline::default(),
+            )
+        };
+        let item = |class: &str, content: Vec<Element>| {
+            Element::node("li", vec![("class".into(), class.into())], content)
+        };
+        let tree = |first: &str, second: &str, blocks: bool| {
+            let content = |text: &str| {
+                if blocks {
+                    vec![Element::node("p", vec![], vec![Element::text(text)])]
+                } else {
+                    vec![Element::text(text)]
+                }
+            };
+            Element::node(
+                "ul",
+                vec![],
+                vec![
+                    item(first, content("first")),
+                    item(second, content("second")),
+                    item(first, vec![]),
+                ],
+            )
+        };
+        let mut font = florui_text::Font::load_embedded();
+        let mut cache = LayoutCache::new();
+        let available = Size::MAX_CONTENT;
+        for (first, second, blocks) in [
+            ("big", "small in", false),
+            ("big", "small in", false),
+            ("big", "small in", true),
+            ("big in", "small", true),
+            ("small", "big in", false),
+            ("", "big", true),
+            ("big", "", false),
+        ] {
+            let arena = Arena::build(&tree(first, second, blocks));
+            let styles = styled(&arena);
+            let kept = cache
+                .compute(&mut font, &arena, &styles, available)
+                .unwrap();
+            let fresh =
+                compute_layout_with_content_extents(&mut font, &arena, &styles, available).unwrap();
+            assert_eq!(
+                kept.0.len(),
+                fresh.0.len(),
+                "{first} {second} {blocks}: count"
+            );
+            for (node, layout) in &fresh.0 {
+                assert_eq!(
+                    kept.0.get(node),
+                    Some(layout),
+                    "{first} {second} {blocks}: node {node}"
                 );
             }
         }

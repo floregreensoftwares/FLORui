@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use taffy::util::ResolveOrZero;
+use taffy::util::{MaybeResolve, ResolveOrZero};
 use taffy::{
     AvailableSpace, BlockContext, Cache, CacheTree, ClearState, DetailedGridInfo, Display, Layout,
     LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer, LayoutInput, LayoutOutput,
@@ -50,6 +50,20 @@ pub(crate) struct Node {
     /// For a part of a table with collapsing borders: how wide its border is on each
     /// side (top, right, bottom, left), which is half of the edges it is on.
     pub(crate) border: Option<[f32; 4]>,
+    /// What the image marker outside the item puts above the first baseline of its content.
+    pub(crate) marker: Option<MarkerRise>,
+}
+
+/// The image marker outside a list item whose content is blocks. It stands on the baseline of
+/// the first line, which comes down until the marker is above it, and with no line the item
+/// is as tall as the line the marker is on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct MarkerRise {
+    /// How high the image is above the baseline.
+    pub(crate) height: f32,
+    /// What the strut of the item has above and below the baseline.
+    pub(crate) ascent: f32,
+    pub(crate) descent: f32,
 }
 
 impl Node {
@@ -68,6 +82,7 @@ impl Node {
             shift: 0.0,
             grid: None,
             border: None,
+            marker: None,
         }
     }
 }
@@ -268,6 +283,15 @@ impl FlorTree {
         Ok(())
     }
 
+    pub(crate) fn set_marker(&mut self, id: NodeId, marker: Option<MarkerRise>) -> TreeResult<()> {
+        let node = self.get_mut(id)?;
+        if node.marker != marker {
+            node.marker = marker;
+            self.mark_dirty(id)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn style(&self, id: NodeId) -> TreeResult<&Style> {
         Ok(&self.get(id)?.style)
     }
@@ -376,22 +400,79 @@ impl Run<'_> {
             if node.role.is_table() {
                 return run.compute_table(node_id, inputs);
             }
-            if matches!(display, Display::Block | Display::FlowRoot)
+            let output = if matches!(display, Display::Block | Display::FlowRoot)
                 && run.region_has_float(node_id)
             {
-                return run.flow_region_root(node_id, inputs);
-            }
-            match (display, has_children) {
-                (Display::None, _) => compute_hidden_layout(run, node_id),
-                (Display::Block, true) => compute_block_layout(run, node_id, inputs, block_ctx),
-                (Display::FlowRoot, true) => compute_block_layout(run, node_id, inputs, None),
-                (Display::Flex, true) => compute_flexbox_layout(run, node_id, inputs),
-                (Display::Grid, true) => compute_grid_layout(run, node_id, inputs),
-                (_, false) => run.measure(node_id, inputs),
-            }
+                run.flow_region_root(node_id, inputs)
+            } else {
+                match (display, has_children) {
+                    (Display::None, _) => compute_hidden_layout(run, node_id),
+                    (Display::Block, true) => compute_block_layout(run, node_id, inputs, block_ctx),
+                    (Display::FlowRoot, true) => compute_block_layout(run, node_id, inputs, None),
+                    (Display::Flex, true) => compute_flexbox_layout(run, node_id, inputs),
+                    (Display::Grid, true) => compute_grid_layout(run, node_id, inputs),
+                    (_, false) => run.measure(node_id, inputs),
+                }
+            };
+            run.raise_for_marker(node_id, &inputs, output)
         });
         if inputs.run_mode == RunMode::PerformLayout {
             self.tree.live_mut(node_id).baseline = output.baselines.first;
+        }
+        output
+    }
+
+    /// What a list item with an image marker outside it is, which the marker puts down: the
+    /// content comes down until its first baseline is below the top of the image, and with
+    /// no baseline the item is as tall as the line the marker is on.
+    fn raise_for_marker(
+        &mut self,
+        node_id: NodeId,
+        inputs: &LayoutInput,
+        mut output: LayoutOutput,
+    ) -> LayoutOutput {
+        let node = self.tree.live(node_id);
+        let Some(marker) = node.marker else {
+            return output;
+        };
+        let style = &node.style;
+        let basis = inputs.parent_size.width;
+        let edge = |side: taffy::LengthPercentage| side.resolve_or_zero(basis, |_, _| 0.0);
+        let above = edge(style.border.top) + edge(style.padding.top);
+        let below = edge(style.border.bottom) + edge(style.padding.bottom);
+        let definite = inputs.known_dimensions.height.is_some()
+            || style
+                .size
+                .height
+                .maybe_resolve(inputs.parent_size.height, |_, _| 0.0)
+                .is_some();
+        let Some(baseline) = output.baselines.first else {
+            let line = marker.height.max(marker.ascent) + marker.descent;
+            if !definite && output.size.height < above + line + below {
+                output.size.height = above + line + below;
+                output.margins_can_collapse_through = false;
+            }
+            return output;
+        };
+        let delta = (marker.height - (baseline - above)).max(0.0);
+        if delta == 0.0 {
+            return output;
+        }
+        if !definite {
+            output.size.height += delta;
+        }
+        output.scrollable_overflow_rect.bottom += delta;
+        output.baselines.first = Some(baseline + delta);
+        if inputs.run_mode == RunMode::PerformLayout {
+            for child in self.tree.live(node_id).children.clone() {
+                if matches!(
+                    self.part_of(child),
+                    crate::blockflow::Part::Hidden | crate::blockflow::Part::Absolute
+                ) {
+                    continue;
+                }
+                self.tree.live_mut(child).layout.location.y += delta;
+            }
         }
         output
     }
