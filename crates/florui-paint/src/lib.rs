@@ -890,10 +890,8 @@ fn paint_nodes(
         {
             continue;
         }
-        if styles
-            .get(&node)
-            .is_some_and(|s| s.display == florui_style::Display::None)
-        {
+        let style = styles.get(&node);
+        if style.is_some_and(|s| s.display == florui_style::Display::None) {
             continue;
         }
         if florui_layout::is_flowed_inline(arena, styles, node) {
@@ -912,7 +910,7 @@ fn paint_nodes(
             );
             continue;
         }
-        let opacity = styles.get(&node).map_or(1.0, |s| s.opacity);
+        let opacity = style.map_or(1.0, |s| s.opacity);
         if opacity <= 0.0 {
             // Real CSS: a fully transparent subtree still occupies its
             // own layout box and stays hit-testable, but paints nothing
@@ -938,7 +936,7 @@ fn paint_nodes(
             }
             continue;
         }
-        if styles.get(&node).is_some_and(florui_layout::preserves_3d) {
+        if style.is_some_and(florui_layout::preserves_3d) {
             scene3d::paint_scene(
                 buffer,
                 arena,
@@ -959,9 +957,7 @@ fn paint_nodes(
             continue;
         }
         let has_effect = blend::isolates(arena, styles, node)
-            || styles
-                .get(&node)
-                .is_some_and(ComputedStyle::has_group_effect);
+            || style.is_some_and(ComputedStyle::has_group_effect);
         if opacity < 1.0 || !transform.is_identity() || has_effect {
             paint_group(
                 buffer,
@@ -1028,12 +1024,12 @@ fn paint_nodes(
                 images,
             );
         }
-        if styles.get(&node).is_some_and(border_style::has_outline) {
+        if style.is_some_and(border_style::has_outline) {
             stack.push((node, node_clip.clone(), Turn::Outline));
         }
         let child_clip = clip_for_children(arena, styles, layouts, node, node_clip, scale_factor);
-        let child_display = styles.get(&node).map(|s| s.display);
-        if styles.get(&node).is_some_and(|s| {
+        let child_display = style.map(|s| s.display);
+        if style.is_some_and(|s| {
             s.display.is_table() && s.border_collapse == florui_style::BorderCollapse::Collapse
         }) {
             stack.push((node, child_clip.clone(), Turn::Borders));
