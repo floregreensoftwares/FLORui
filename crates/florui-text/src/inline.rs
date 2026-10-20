@@ -671,7 +671,15 @@ impl Font {
         let mut cursor = 0.0f32;
         let mut first_baseline = None;
         let mut last_baseline = 0.0;
-        for (line_number, line) in layout.lines().enumerate() {
+        // A line break at the very end ends the line it is in, and no line comes after it.
+        let ends_in_break = text.ends_with('\n')
+            && layout
+                .lines()
+                .last()
+                .is_some_and(|line| line.text_range().is_empty());
+        let line_count =
+            layout.lines().count() - usize::from(ends_in_break && layout.lines().count() > 1);
+        for (line_number, line) in layout.lines().enumerate().take(line_count) {
             cursor += trace.slots.get(line_number).map_or(0.0, |slot| slot.drop);
             let placed = place_line(
                 &line,
