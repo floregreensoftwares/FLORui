@@ -61,7 +61,11 @@ pub(crate) fn resolve(
         let (Some(tid), Some(style)) = (id_of(node), styles.get(&node)) else {
             continue;
         };
-        if !style.has_fit_content_columns() {
+        // A grid with a width of its own is not sized by its content.
+        if !style.has_fit_content_columns()
+            || style.width.is_some()
+            || style.width_percent.is_some()
+        {
             continue;
         }
         if let Some(fit) = measure_fit_content(font, tree, tid, count)? {
@@ -154,11 +158,18 @@ fn measure_fit_content(
             },
         }
     }
-    if limits.iter().all(Option::is_none) {
+    // The columns past the explicit ones go by `grid-auto-columns`, over and over.
+    let implicit: Vec<Option<f32>> = original.grid_auto_columns.iter().map(fit_limit).collect();
+    if limits.iter().chain(&implicit).all(Option::is_none) {
         return Ok(None);
     }
     // The same grid with those columns as `auto`.
     let mut probe = original.clone();
+    probe.grid_auto_columns.iter_mut().for_each(|track| {
+        if track.max.is_fit_content() {
+            track.max = taffy::MaxTrackSizingFunction::auto();
+        }
+    });
     let unlimited = |track: &mut taffy::TrackSizingFunction| {
         if track.max.is_fit_content() {
             track.max = taffy::MaxTrackSizingFunction::auto();
@@ -173,7 +184,7 @@ fn measure_fit_content(
         }
     }
     tree.set_style(id, probe).map_err(LayoutError)?;
-    let mut measure = |space: AvailableSpace| -> Result<(f32, Vec<f32>), LayoutError> {
+    let mut measure = |space: AvailableSpace| -> Result<(f32, Vec<f32>, usize), LayoutError> {
         run_layout(
             font,
             tree,
@@ -185,21 +196,30 @@ fn measure_fit_content(
             count,
         )?;
         let width = tree.layout(id).map_err(LayoutError)?.size.width;
-        let sizes = match tree.detailed_layout_info(id) {
-            taffy::DetailedLayoutInfo::Grid(info) => info
-                .columns
-                .positions
-                .iter()
-                .map(|track| track.end - track.start)
-                .collect(),
-            _ => Vec::new(),
+        let (sizes, explicit) = match tree.detailed_layout_info(id) {
+            taffy::DetailedLayoutInfo::Grid(info) => (
+                info.columns
+                    .positions
+                    .iter()
+                    .map(|track| track.end - track.start)
+                    .collect(),
+                info.columns.explicit_tracks as usize,
+            ),
+            _ => (Vec::new(), 0),
         };
-        Ok((width, sizes))
+        Ok((width, sizes, explicit))
     };
-    let (max_width, contents) = measure(AvailableSpace::MaxContent)?;
+    let (max_width, contents, explicit) = measure(AvailableSpace::MaxContent)?;
     // With no room the columns keep what they cannot go under.
-    let (_, minimums) = measure(AvailableSpace::Definite(0.0))?;
+    let (_, minimums, _) = measure(AvailableSpace::Definite(0.0))?;
     tree.set_style(id, original).map_err(LayoutError)?;
+    if !implicit.is_empty() {
+        limits.truncate(explicit);
+        limits.resize(explicit, None);
+        for index in explicit..contents.len() {
+            limits.push(implicit[(index - explicit) % implicit.len()]);
+        }
+    }
     let mut surplus = 0.0;
     for (index, limit) in limits.iter().enumerate() {
         if let (Some(limit), Some(&content), Some(&minimum)) =

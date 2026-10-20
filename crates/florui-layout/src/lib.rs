@@ -7516,6 +7516,34 @@ mod tests {
     }
 
     #[test]
+    fn implicit_fit_content_columns_count_at_their_limit_too() {
+        // Chrome 153: `grid-auto-columns` goes round past the explicit columns.
+        let case = |grid: &str, items: usize| {
+            fit_content_grid(
+                "",
+                &format!("width: fit-content; grid-auto-flow: column; {grid}"),
+                &vec!["big"; items],
+                true,
+            )
+        };
+        assert_eq!(
+            case("grid-auto-columns: fit-content(30px);", 3),
+            (90.0, vec![30.0, 30.0, 30.0])
+        );
+        assert_eq!(
+            case(
+                "grid-template-columns: 50px; grid-auto-columns: fit-content(30px);",
+                3
+            ),
+            (110.0, vec![50.0, 30.0, 30.0])
+        );
+        assert_eq!(
+            case("grid-auto-columns: fit-content(20px) fit-content(40px);", 4),
+            (120.0, vec![20.0, 40.0, 20.0, 40.0])
+        );
+    }
+
+    #[test]
     fn a_grid_that_is_a_flex_item_with_a_fit_content_column_is_as_wide_as_the_limits_make_it() {
         assert_eq!(
             fit_content_grid(
