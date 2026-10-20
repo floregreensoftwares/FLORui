@@ -715,6 +715,9 @@ mod marker_tests {
             ".q { height: 30px; }",
         );
         assert_eq!((laid.rect("i").3, down(&laid)), (45.0, 0.0));
+        // The height the item may have is still the most it has.
+        let laid = image_item(vec![paragraph("q")], &format!("max-height: 30px; {marker}"));
+        assert_eq!(laid.rect("i").3, 30.0);
         // A box of its own is no different.
         let laid = image_item(vec![paragraph("q")], &format!("overflow: hidden; {marker}"));
         assert_eq!((laid.rect("i").3, down(&laid)), (45.0, 23.0));

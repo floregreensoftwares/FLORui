@@ -446,10 +446,25 @@ impl Run<'_> {
                 .height
                 .maybe_resolve(inputs.parent_size.height, |_, _| 0.0)
                 .is_some();
+        let natural = output.size.height;
+        let clamped = |height: f32| {
+            let max = style
+                .max_size
+                .height
+                .maybe_resolve(inputs.parent_size.height, |_, _| 0.0);
+            match max {
+                Some(max) if style.box_sizing == taffy::BoxSizing::ContentBox => {
+                    height.min((max + above + below).max(natural))
+                }
+                Some(max) => height.min(max.max(natural)),
+                None => height,
+            }
+        };
         let Some(baseline) = output.baselines.first else {
             let line = marker.height.max(marker.ascent) + marker.descent;
-            if !definite && output.size.height < above + line + below {
-                output.size.height = above + line + below;
+            let needed = clamped(above + line + below);
+            if !definite && output.size.height < needed {
+                output.size.height = needed;
                 output.margins_can_collapse_through = false;
             }
             return output;
@@ -459,7 +474,7 @@ impl Run<'_> {
             return output;
         }
         if !definite {
-            output.size.height += delta;
+            output.size.height = clamped(output.size.height + delta);
         }
         output.scrollable_overflow_rect.bottom += delta;
         output.baselines.first = Some(baseline + delta);
