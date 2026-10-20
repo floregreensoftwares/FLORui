@@ -139,8 +139,8 @@ pub fn render_fixture(
     // own body-equivalent, not part of the fixture's own declared markup.
     let tree = Element::node("div", vec![], vec![element]);
 
-    let arena = Arena::build(&tree);
     let rules = parse_stylesheet(css).expect("fixture CSS must be valid");
+    let mut arena = Arena::build_with(&tree, &florui_style::PseudoSlots::from_rules(&rules));
     let available = Size {
         width: AvailableSpace::Definite(width_css_px as f32),
         height: AvailableSpace::Definite(height_css_px as f32),
@@ -150,7 +150,7 @@ pub fn render_fixture(
         styles, layouts, ..
     } = florui_layout::compute_with_style(
         &mut font,
-        &arena,
+        &mut arena,
         &rules,
         &InteractionState::new(),
         florui_style::Viewport {
