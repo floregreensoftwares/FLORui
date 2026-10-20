@@ -1,0 +1,164 @@
+{
+    "id":  "default-menu-list",
+    "description":  "A menu is laid out as an unordered list: block with 1em above and below and 40px of padding, disc markers, circle in a nested one and square in a third, nested inside the other list tags too.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  250,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 250px; background-color: #ffffff; color: #101010; font-size: 14px; line-height: 18px; }",
+                   "children":  [
+                                    {
+                                        "tag":  "menu",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "one",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "two",
+                                                                              {
+                                                                                  "tag":  "menu",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "li",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "inner",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   },
+                                                                                                   {
+                                                                                                       "tag":  "li",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+                                                                                                                        "deeper",
+                                                                                                                        {
+                                                                                                                            "tag":  "menu",
+                                                                                                                            "class":  "",
+                                                                                                                            "css":  "",
+                                                                                                                            "text":  "",
+                                                                                                                            "children":  [
+                                                                                                                                             {
+                                                                                                                                                 "tag":  "li",
+                                                                                                                                                 "class":  "",
+                                                                                                                                                 "css":  "",
+                                                                                                                                                 "text":  "deepest",
+                                                                                                                                                 "children":  [
+
+                                                                                                                                                              ]
+                                                                                                                                             }
+                                                                                                                                         ]
+                                                                                                                        }
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "a",
+                                                                              {
+                                                                                  "tag":  "menu",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "li",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "in menu",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ol",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "a",
+                                                                              {
+                                                                                  "tag":  "menu",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "li",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "in ol",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  2.6,
+                           "geometry_tolerance_px":  0.5,
+                           "channel_tolerance":  0,
+                           "reason":  "Measured against Chromium 155 on Windows: every box and marker is where Chromium puts it and 2.2% of the pixels differ, the anti-aliasing of the text. Without the menu rules the same fixture is 14px off in a box and measures 3.9%, so it fails."
+                       }
+}
