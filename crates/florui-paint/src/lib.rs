@@ -759,6 +759,9 @@ enum Turn {
     First,
     Fixed,
     Outline,
+    /// The box of a part of a table (a row, a group, a column), drawn under every
+    /// cell of the table whatever the order they are written in.
+    Part,
 }
 
 /// Paints `nodes` (a set of siblings — document roots when
@@ -808,10 +811,10 @@ fn paint_nodes(
 ) {
     // The flag is set for a box fixed to the viewport once its turn has come.
     let mut stack: Vec<(NodeId, Option<ClipRect>, Turn)> =
-        paint_order(styles, parent_display, nodes)
+        frames_in_order(arena, styles, parent_display, nodes)
             .into_iter()
             .rev()
-            .map(|id| (id, clip.clone(), Turn::First))
+            .map(|(id, turn)| (id, clip.clone(), turn))
             .collect();
     // Boxes fixed to the viewport go over everything else in their scope, in
     // `z-index` order, and nothing above them clips them.
@@ -837,6 +840,22 @@ fn paint_nodes(
         };
         if turn == Turn::First && florui_layout::is_viewport_fixed(arena, styles, node) {
             fixed.push(node);
+            continue;
+        }
+        if turn == Turn::Part {
+            let in_view = view.as_ref().is_none_or(|view| view.own.contains(&node));
+            if in_view {
+                paint_table_part(
+                    buffer,
+                    arena,
+                    styles,
+                    layouts,
+                    font,
+                    node,
+                    scale_factor,
+                    node_clip.as_ref(),
+                );
+            }
             continue;
         }
         if turn == Turn::Outline {
@@ -1005,14 +1024,15 @@ fn paint_nodes(
         let child_clip = clip_for_children(arena, styles, layouts, node, node_clip, scale_factor);
         let child_display = styles.get(&node).map(|s| s.display);
         stack.extend(
-            paint_order(
+            frames_in_order(
+                arena,
                 styles,
                 child_display,
                 &florui_layout::flow_children(arena, styles, node),
             )
             .into_iter()
             .rev()
-            .map(|id| (id, child_clip.clone(), Turn::First)),
+            .map(|(id, turn)| (id, child_clip.clone(), turn)),
         );
     }
     // The mask this described goes away with `mask_cache`.
@@ -1126,7 +1146,7 @@ fn ink_is_outside_clip(
         scale_factor,
     );
     let content_x = x + border.left.width + padding.left;
-    let content_y = y + border.top.width + padding.top;
+    let content_y = y + border.top.width + padding.top + florui_layout::cell_shift(layouts, node);
     let content_width =
         (layout.width - border.left.width - border.right.width - padding.left - padding.right)
             .max(0.0);
@@ -1769,7 +1789,8 @@ fn own_extent(
     };
     let padding = scaled_padding(style.map_or(no_padding, |s| s.padding), scale_factor);
     let content_x = abs_x + border.left.width + padding.left;
-    let content_y = abs_y + border.top.width + padding.top;
+    let content_y =
+        abs_y + border.top.width + padding.top + florui_layout::cell_shift(layouts, node);
     let content_width =
         (layout.width - border.left.width - border.right.width - padding.left - padding.right)
             .max(0.0);
@@ -3569,6 +3590,214 @@ pub fn paint_order(
     ordered
 }
 
+/// The nodes of a set of siblings, in the order they are painted, each with the
+/// turn it has. That is [`paint_order`], except among the children of a table:
+/// the boxes of its column groups, columns, row groups and rows go under every
+/// cell, whichever row a cell is written in, so that a cell across rows is not
+/// covered by the background of a row below its own.
+fn frames_in_order(
+    arena: &Tree,
+    styles: &StyleMap,
+    parent_display: Option<Display>,
+    nodes: &[NodeId],
+) -> Vec<(NodeId, Turn)> {
+    if !parent_display.is_some_and(Display::is_table) {
+        return paint_order(styles, parent_display, nodes)
+            .into_iter()
+            .map(|id| (id, Turn::First))
+            .collect();
+    }
+    let display = |id: &NodeId| styles.get(id).map(|s| s.display);
+    let mut captions: Vec<NodeId> = Vec::new();
+    let (mut column_groups, mut columns, mut groups, mut rows) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut content: Vec<NodeId> = Vec::new();
+    for &child in nodes {
+        match display(&child) {
+            Some(Display::TableCaption) => captions.push(child),
+            Some(Display::TableColumnGroup) => {
+                column_groups.push(child);
+                for &column in florui_layout::flow_children(arena, styles, child).iter() {
+                    if display(&column) == Some(Display::TableColumn) {
+                        columns.push(column);
+                    }
+                }
+            }
+            Some(Display::TableColumn) => columns.push(child),
+            Some(
+                Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup,
+            ) => {
+                groups.push(child);
+                for &row in florui_layout::flow_children(arena, styles, child).iter() {
+                    if display(&row) == Some(Display::TableRow) {
+                        rows.push(row);
+                        content.extend(florui_layout::flow_children(arena, styles, row).iter());
+                    } else {
+                        content.push(row);
+                    }
+                }
+            }
+            Some(Display::TableRow) => {
+                rows.push(child);
+                content.extend(florui_layout::flow_children(arena, styles, child).iter());
+            }
+            _ => content.push(child),
+        }
+    }
+    let hides = |cell: &NodeId| {
+        styles.get(cell).is_some_and(|s| {
+            s.display == Display::TableCell
+                && s.empty_cells == florui_style::EmptyCells::Hide
+                && s.border_collapse == florui_style::BorderCollapse::Separate
+        }) && arena.children(*cell).is_empty()
+            && arena.text_content(*cell).trim().is_empty()
+    };
+    captions
+        .into_iter()
+        .map(|id| (id, Turn::First))
+        .chain(
+            column_groups
+                .into_iter()
+                .chain(columns)
+                .chain(groups)
+                .chain(rows)
+                .map(|id| (id, Turn::Part)),
+        )
+        .chain(
+            content
+                .into_iter()
+                .filter(|cell| !hides(cell))
+                .map(|id| (id, Turn::First)),
+        )
+        .collect()
+}
+
+/// The cells a row, a row group, a column or a column group paints its
+/// background in: the boxes of its cells, in the pixels `layouts` is in.
+fn part_cells(
+    arena: &Tree,
+    styles: &StyleMap,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    part: NodeId,
+) -> Vec<NodeId> {
+    let Some(display) = styles.get(&part).map(|s| s.display) else {
+        return Vec::new();
+    };
+    let is_cell = |id: &NodeId| styles.get(id).is_some_and(|s| s.display != Display::None);
+    let row_cells = |row: NodeId| -> Vec<NodeId> {
+        florui_layout::flow_children(arena, styles, row)
+            .iter()
+            .copied()
+            .filter(is_cell)
+            .collect()
+    };
+    match display {
+        Display::TableRow => row_cells(part),
+        Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup => {
+            florui_layout::flow_children(arena, styles, part)
+                .iter()
+                .filter(|row| styles.get(row).map(|s| s.display) == Some(Display::TableRow))
+                .flat_map(|&row| row_cells(row))
+                .collect()
+        }
+        Display::TableColumn | Display::TableColumnGroup => {
+            // The cells that start in the columns, found by where they are.
+            let Some(own) = layouts.get(&part) else {
+                return Vec::new();
+            };
+            let mut table = arena.parent(part);
+            while let Some(ancestor) = table {
+                if styles.get(&ancestor).is_some_and(|s| s.display.is_table()) {
+                    break;
+                }
+                table = arena.parent(ancestor);
+            }
+            let Some(table) = table else {
+                return Vec::new();
+            };
+            let (left, _) = absolute_position(arena, layouts, part);
+            let right = left + own.width;
+            let mut cells = Vec::new();
+            let mut stack: Vec<NodeId> =
+                florui_layout::flow_children(arena, styles, table).to_vec();
+            while let Some(node) = stack.pop() {
+                match styles.get(&node).map(|s| s.display) {
+                    Some(Display::TableCell) => {
+                        let (x, _) = absolute_position(arena, layouts, node);
+                        if x >= left - 0.01 && x < right - 0.01 {
+                            cells.push(node);
+                        }
+                    }
+                    Some(
+                        Display::TableRowGroup
+                        | Display::TableHeaderGroup
+                        | Display::TableFooterGroup
+                        | Display::TableRow,
+                    ) => stack.extend(florui_layout::flow_children(arena, styles, node).iter()),
+                    _ => {}
+                }
+            }
+            cells
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Draws the box of a part of a table (what it stands on: its background, not
+/// the borders and shadows a cell has and a row does not).
+#[allow(clippy::too_many_arguments)]
+fn paint_table_part(
+    buffer: &mut Surface,
+    arena: &Tree,
+    styles: &StyleMap,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    font: &mut Font,
+    node: NodeId,
+    scale_factor: f32,
+    clip: Option<&ClipRect>,
+) {
+    let Some(style) = styles.get(&node) else {
+        return;
+    };
+    if style.background_color.a == 0 && style.background_layers.is_empty() {
+        return;
+    }
+    let mut bare = style.clone();
+    bare.border = NO_BORDER;
+    bare.border_image = None;
+    bare.box_shadow.clear();
+    bare.outline = Default::default();
+    let mut only = StyleMap::new();
+    only.insert(node, bare);
+    // Only where its cells are: the gaps between them are the table's.
+    for cell in part_cells(arena, styles, layouts, node) {
+        let Some(layout) = layouts.get(&cell) else {
+            continue;
+        };
+        let (x, y) = absolute_position(arena, layouts, cell);
+        // Where a box is filled: each edge at the nearest pixel.
+        let (x0, y0) = (x.round(), y.round());
+        let (x1, y1) = ((x + layout.width).round(), (y + layout.height).round());
+        let rect = ClipRect::from_xywh(x0, y0, x1 - x0, y1 - y0);
+        let rect = clip.map_or_else(|| rect.clone(), |clip| rect.intersect(clip));
+        let mask = rect.to_mask(buffer);
+        if mask.is_some() {
+            paint_node(
+                buffer,
+                arena,
+                &only,
+                layouts,
+                font,
+                node,
+                scale_factor,
+                mask.as_ref(),
+                None,
+                None,
+            );
+        }
+    }
+}
+
 /// Paints `node`'s own background and text — document-order painting
 /// (an overlapping later node always wins) comes from the caller's own
 /// pre-order walk over the whole tree, not from this function recursing.
@@ -3597,6 +3826,12 @@ fn paint_node(
         florui_profile::count(florui_profile::Counter::NodesPainted, 1);
         let style = styles.get(&node);
         let (x, y) = absolute_position(arena, layouts, node);
+        // The border and the background of a table are those of its grid, not of the
+        // captions around it.
+        let (layout, y) = match florui_layout::table_grid(layouts, node) {
+            Some((top, height)) => (BoxLayout { height, ..layout }, y + top),
+            None => (layout, y),
+        };
 
         let outline = style.map_or(
             RoundedRect::square(x, y, layout.width, layout.height),
@@ -3814,7 +4049,8 @@ fn paint_node(
         // content-box math `florui_layout`'s own `to_taffy_style` doc
         // describes for sizing applies to painting's own offset too.
         let content_x = x + border.left.width + padding.left;
-        let content_y = y + border.top.width + padding.top;
+        let content_y =
+            y + border.top.width + padding.top + florui_layout::cell_shift(layouts, node);
         // The box's own final content width, whatever layout resolved it
         // to (wrapped or not) — shaping at exactly this width always
         // reproduces what layout already measured: an intrinsically
@@ -7114,6 +7350,25 @@ mod tests {
         // Far left, where a select's own label text sits -- must stay
         // the plain canvas background, not painted over by the chevron.
         assert_eq!(pixel_rgb(&buffer, 10, 10), [0, 0, 0], "left of the chevron");
+    }
+
+    #[test]
+    fn a_cell_across_rows_is_not_covered_by_the_background_of_the_row_below_it() {
+        let tree: Element = view! {
+            <table class="t">
+                <tr class="r1"><td class="big" rowspan="2" /><td class="a" /></tr>
+                <tr class="r2"><td class="b" /></tr>
+            </table>
+        };
+        let css = ".t { border-spacing: 0; } td { padding: 0; width: 20px; height: 20px; } \
+                   .r2 { background-color: #0000ff; } .big { background-color: #ff0000; }";
+        let canvas = paint_text_css(&tree, css, (60, 50));
+        // The cell is over the second row at x = 10, y = 30; the second row's own cell is
+        // transparent, so the row shows at x = 30.
+        assert_eq!(pixel_rgb(&canvas, 10, 30), [255, 0, 0]);
+        assert_eq!(pixel_rgb(&canvas, 30, 30), [0, 0, 255]);
+        // And the row shows only where its cells are: nothing in the first row.
+        assert_eq!(pixel_rgb(&canvas, 30, 10), WHITE);
     }
 
     #[test]
@@ -13702,7 +13957,7 @@ mod tests {
             paint_text_css(
                 &tree,
                 &format!(
-                    ".b {{ width: 100px; height: 50px; background-color: #ff0000; {declaration}; }}"
+                    "svg {{ position: absolute; }} .b {{ width: 100px; height: 50px; background-color: #ff0000; {declaration}; }}"
                 ),
                 (110, 60),
             )
@@ -13791,7 +14046,7 @@ mod tests {
             paint_text_css(
                 &tree,
                 &format!(
-                    ".b {{ width: 40px; height: 40px; margin-left: 10px; background-color: #ff0000; {declaration}; }}"
+                    "svg {{ position: absolute; }} .b {{ width: 40px; height: 40px; margin-left: 10px; background-color: #ff0000; {declaration}; }}"
                 ),
                 size,
             )
