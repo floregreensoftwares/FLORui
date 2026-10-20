@@ -12,10 +12,8 @@
 //! Values below are Chromium's own well-established defaults (its `html.css`
 //! / the WHATWG HTML "suggested rendering" defaults both browsers converge
 //! on), not invented — `h1`–`h6`'s font-size/margin scale and `p`'s margin
-//! are exact matches. Scoped to the tags the product scope already names as
-//! having "contracts defined by Florui" (`div`, `span`, `h2`, `button`),
-//! extended to the rest of `h1`–`h6` and `p` for a coherent element set,
-//! rather than attempting every HTML element up front.
+//! are exact matches. Each rule below was checked against Chromium's
+//! computed style for the tag.
 //!
 //! `span { display: inline; }` and `button { display: inline-block; }`
 //! resolve to [`crate::cascade::Display::Inline`]/`InlineBlock` (added
@@ -126,12 +124,83 @@ const CSS: &str = "
         font-family: sans-serif;
     }
 
-    div, p, h1, h2, h3, h4, h5, h6, img, icon, form, fieldset, legend {
+    article, aside, footer, header, hgroup, main, nav, section, search, div, p,
+    h1, h2, h3, h4, h5, h6, address, blockquote, pre, dl, dt, dd, figure, figcaption,
+    hr, img, icon, form, fieldset, legend {
         display: block;
     }
 
-    span, a {
+    span, a, b, i, u, s, del, ins, mark, sub, sup, kbd, samp, var, cite, dfn, abbr,
+    time, data, code, em, strong, small {
         display: inline;
+    }
+
+    em, i, cite, dfn, var, address {
+        font-style: italic;
+    }
+
+    strong, b {
+        font-weight: bolder;
+    }
+
+    small {
+        font-size: smaller;
+    }
+
+    sub, sup {
+        font-size: smaller;
+    }
+
+    sub {
+        vertical-align: sub;
+    }
+
+    sup {
+        vertical-align: super;
+    }
+
+    s, del {
+        text-decoration: line-through;
+    }
+
+    u, ins {
+        text-decoration: underline;
+    }
+
+    abbr[title] {
+        text-decoration: underline dotted;
+    }
+
+    code, kbd, samp {
+        font-family: monospace;
+    }
+
+    mark {
+        background-color: #ffff00;
+        color: #000000;
+    }
+
+    blockquote, figure {
+        margin: 1em 40px;
+    }
+
+    dl {
+        margin-top: 1em;
+        margin-bottom: 1em;
+    }
+
+    dd {
+        margin-left: 40px;
+    }
+
+    hr {
+        margin-top: 0.5em;
+        margin-bottom: 0.5em;
+        margin-left: auto;
+        margin-right: auto;
+        border: 1px inset;
+        color: #808080;
+        overflow: hidden;
     }
 
     a:link, a:visited {
@@ -271,6 +340,9 @@ const CSS: &str = "
     }
 
     pre {
+        margin-top: 1em;
+        margin-bottom: 1em;
+        font-family: monospace;
         white-space: pre;
     }
 
@@ -813,5 +885,193 @@ mod tests {
             crate::Rgba::opaque(255, 0, 0),
             "an author border wins"
         );
+    }
+
+    /// The style of `<tag>` inside a plain `<div>`, with no author CSS.
+    fn nested_style(tag: &'static str, attrs: &[(&str, &str)]) -> crate::cascade::ComputedStyle {
+        let attrs = attrs
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        let tree = Element::node("div", vec![], vec![Element::node(tag, attrs, vec![])]);
+        let arena = Arena::build(&tree);
+        let rules = parse_stylesheet("").unwrap();
+        let computed = compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            Viewport::default(),
+            &mut crate::AnimationTimeline::default(),
+        );
+        computed[&arena.children(arena.roots()[0])[0]].clone()
+    }
+
+    // The tests below pin what Chromium 155 computes for each tag.
+
+    #[test]
+    fn the_sectioning_and_grouping_tags_are_blocks() {
+        for tag in [
+            "article",
+            "aside",
+            "footer",
+            "header",
+            "hgroup",
+            "main",
+            "nav",
+            "section",
+            "search",
+            "address",
+            "blockquote",
+            "pre",
+            "dl",
+            "dt",
+            "dd",
+            "figure",
+            "figcaption",
+            "hr",
+        ] {
+            assert_eq!(nested_style(tag, &[]).display, Display::Block, "{tag}");
+        }
+    }
+
+    #[test]
+    fn the_text_level_tags_are_inline() {
+        for tag in [
+            "b", "i", "u", "s", "del", "ins", "mark", "sub", "sup", "kbd", "samp", "var", "cite",
+            "dfn", "abbr", "time", "data", "code", "em", "strong", "small",
+        ] {
+            assert_eq!(nested_style(tag, &[]).display, Display::Inline, "{tag}");
+        }
+    }
+
+    #[test]
+    fn emphasis_tags_are_italic_and_importance_tags_are_bold() {
+        use crate::cascade::FontStyle;
+        for tag in ["em", "i", "cite", "dfn", "var", "address"] {
+            assert_eq!(
+                nested_style(tag, &[]).font_style,
+                FontStyle::Italic,
+                "{tag}"
+            );
+        }
+        assert_eq!(nested_style("span", &[]).font_style, FontStyle::Normal);
+        for tag in ["strong", "b"] {
+            assert_close(nested_style(tag, &[]).font_weight, 700.0, tag);
+        }
+    }
+
+    #[test]
+    fn a_bold_tag_inside_bold_text_is_bolder_still() {
+        let tree = Element::node("strong", vec![], vec![Element::node("b", vec![], vec![])]);
+        let arena = Arena::build(&tree);
+        let rules = parse_stylesheet("").unwrap();
+        let computed = compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            Viewport::default(),
+            &mut crate::AnimationTimeline::default(),
+        );
+        let inner = arena.children(arena.roots()[0])[0];
+        assert_close(computed[&inner].font_weight, 900.0, "b in strong");
+    }
+
+    #[test]
+    fn small_sub_and_sup_are_smaller_and_sub_and_sup_leave_the_baseline() {
+        use crate::cascade::VerticalAlign;
+        for tag in ["small", "sub", "sup"] {
+            assert_close(nested_style(tag, &[]).font_size, 13.3333, tag);
+        }
+        assert_eq!(nested_style("sub", &[]).vertical_align, VerticalAlign::Sub);
+        assert_eq!(
+            nested_style("sup", &[]).vertical_align,
+            VerticalAlign::Super
+        );
+        assert_eq!(
+            nested_style("small", &[]).vertical_align,
+            VerticalAlign::Baseline
+        );
+    }
+
+    #[test]
+    fn the_edit_and_strike_tags_draw_their_line_and_an_abbr_with_a_title_dots_it() {
+        use crate::cascade::DecorationStyle;
+        for tag in ["s", "del"] {
+            let lines = nested_style(tag, &[]).text_decoration.lines;
+            assert!(lines.line_through && !lines.underline, "{tag}");
+        }
+        for tag in ["u", "ins"] {
+            let lines = nested_style(tag, &[]).text_decoration.lines;
+            assert!(lines.underline && !lines.line_through, "{tag}");
+        }
+        assert!(!nested_style("abbr", &[]).text_decoration.lines.any());
+        let titled = nested_style("abbr", &[("title", "x")]).text_decoration;
+        assert!(titled.lines.underline);
+        assert_eq!(titled.style, DecorationStyle::Dotted);
+    }
+
+    #[test]
+    fn mark_is_black_on_yellow_and_the_code_tags_are_monospace_at_thirteen_pixels() {
+        use crate::cascade::FontFamily;
+        let mark = nested_style("mark", &[]);
+        assert_eq!(mark.background_color, crate::Rgba::opaque(255, 255, 0));
+        assert_eq!(mark.color, crate::Rgba::opaque(0, 0, 0));
+        for tag in ["code", "kbd", "samp", "pre"] {
+            let style = nested_style(tag, &[]);
+            assert_eq!(style.font_family, FontFamily::Monospace, "{tag}");
+            assert_close(style.font_size, 13.0, tag);
+        }
+    }
+
+    #[test]
+    fn quotations_lists_and_preformatted_text_get_their_margins() {
+        for tag in ["blockquote", "figure"] {
+            let margin = nested_style(tag, &[]).margin;
+            assert_eq!(
+                (margin.top, margin.right, margin.bottom, margin.left),
+                (Some(16.0), Some(40.0), Some(16.0), Some(40.0)),
+                "{tag}"
+            );
+        }
+        let dl = nested_style("dl", &[]).margin;
+        assert_eq!(
+            (dl.top, dl.bottom, dl.left),
+            (Some(16.0), Some(16.0), Some(0.0))
+        );
+        assert_eq!(nested_style("dd", &[]).margin.left, Some(40.0));
+        let pre = nested_style("pre", &[]);
+        assert_eq!(
+            (pre.margin.top, pre.margin.bottom),
+            (Some(13.0), Some(13.0))
+        );
+        assert_eq!(
+            pre.white_space_collapse,
+            crate::cascade::WhiteSpaceCollapse::Preserve
+        );
+    }
+
+    #[test]
+    fn a_rule_is_a_block_with_an_inset_border_and_auto_side_margins() {
+        let hr = nested_style("hr", &[]);
+        assert_eq!(hr.display, Display::Block);
+        assert_eq!(
+            (
+                hr.margin.top,
+                hr.margin.bottom,
+                hr.margin.left,
+                hr.margin.right
+            ),
+            (Some(8.0), Some(8.0), None, None)
+        );
+        for side in [
+            hr.border.top,
+            hr.border.right,
+            hr.border.bottom,
+            hr.border.left,
+        ] {
+            assert_eq!(side.width, 1.0);
+            assert_eq!(side.style, crate::cascade::BorderLineStyle::Inset);
+        }
+        assert!(hr.overflow_clips);
     }
 }
