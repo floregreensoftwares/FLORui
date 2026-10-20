@@ -2698,17 +2698,28 @@ fn build_node(
                 taffy_ids.insert(node, id);
             }
             BuildStep::BuildMixed(node, parts) => {
-                let mut children: Vec<(i32, taffy::NodeId)> = Vec::with_capacity(parts.len());
+                let reorders = reorders_children(styles, node)
+                    && parts.iter().any(
+                        |part| matches!(part, Part::Block(child) if order_of(styles, *child) != 0),
+                    );
+                let mut children: Vec<taffy::NodeId> = Vec::with_capacity(parts.len());
+                let mut orders: Vec<i32> = Vec::new();
                 let mut run_number = 0;
                 for part in &parts {
                     match part {
                         Part::Block(child) => {
-                            children.push((order_of(styles, *child), taffy_ids[child]));
+                            children.push(taffy_ids[child]);
+                            if reorders {
+                                orders.push(order_of(styles, *child));
+                            }
                         }
                         Part::Spot(fixed) => {
                             let spot = tree.new_leaf(static_spot_style())?;
                             taffy_ids.insert(static_spot_id(*fixed), spot);
-                            children.push((0, spot));
+                            children.push(spot);
+                            if reorders {
+                                orders.push(0);
+                            }
                         }
                         Part::Run(range) => {
                             let context = build_run_content_items(
@@ -2730,30 +2741,44 @@ fn build_node(
                             run_number += 1;
                             taffy_ids.insert(key, leaf);
                             inline_leaves.push((key, context));
-                            children.push((0, leaf));
+                            children.push(leaf);
+                            if reorders {
+                                orders.push(0);
+                            }
                         }
                     }
                 }
-                let id = tree.new_with_children(
-                    to_taffy_style(styles.get(&node)),
-                    &in_order(styles, node, children),
-                )?;
+                sort_by_order(&mut children, &orders);
+                let id = tree.new_with_children(to_taffy_style(styles.get(&node)), &children)?;
                 taffy_ids.insert(node, id);
             }
             BuildStep::Build(node) => {
                 let style = to_taffy_style(styles.get(&node));
-                let mut children: Vec<(i32, taffy::NodeId)> =
+                let reorders = reorders_children(styles, node)
+                    && arena
+                        .children(node)
+                        .iter()
+                        .any(|&child| order_of(styles, child) != 0);
+                let mut children: Vec<taffy::NodeId> =
                     Vec::with_capacity(arena.children(node).len());
+                let mut orders: Vec<i32> = Vec::new();
                 for &child in arena.children(node) {
                     if is_viewport_fixed(arena, styles, child) {
                         let spot = tree.new_leaf(static_spot_style())?;
                         taffy_ids.insert(static_spot_id(child), spot);
-                        children.push((0, spot));
+                        children.push(spot);
+                        if reorders {
+                            orders.push(0);
+                        }
                     } else {
-                        children.push((order_of(styles, child), taffy_ids[&child]));
+                        children.push(taffy_ids[&child]);
+                        if reorders {
+                            orders.push(order_of(styles, child));
+                        }
                     }
                 }
-                let id = tree.new_with_children(style, &in_order(styles, node, children))?;
+                sort_by_order(&mut children, &orders);
+                let id = tree.new_with_children(style, &children)?;
                 taffy_ids.insert(node, id);
             }
         }
@@ -2767,21 +2792,23 @@ fn order_of(styles: &StyleMap, node: NodeId) -> i32 {
     styles.get(&node).map_or(0, |style| style.order)
 }
 
-/// The children of a flex or grid container by `order`, then by document
-/// order (the sort is stable); the children of any other box as they are. An
-/// anonymous item made from text, and a spot, count as `0`.
-fn in_order(
-    styles: &StyleMap,
-    parent: NodeId,
-    mut children: Vec<(i32, taffy::NodeId)>,
-) -> Vec<taffy::NodeId> {
-    let reorders = styles
+/// Whether the children of `parent` go by `order`: it is a flex or grid container.
+fn reorders_children(styles: &StyleMap, parent: NodeId) -> bool {
+    styles
         .get(&parent)
-        .is_some_and(|style| matches!(style.display, StyleDisplay::Flex | StyleDisplay::Grid));
-    if reorders {
-        children.sort_by_key(|&(order, _)| order);
+        .is_some_and(|style| matches!(style.display, StyleDisplay::Flex | StyleDisplay::Grid))
+}
+
+/// `children` by their `orders`, then by document order (the sort is stable);
+/// as they are when there are none. An anonymous item made from text, and a
+/// spot, count as `0`.
+fn sort_by_order(children: &mut Vec<taffy::NodeId>, orders: &[i32]) {
+    if orders.is_empty() {
+        return;
     }
-    children.into_iter().map(|(_, id)| id).collect()
+    let mut at: Vec<usize> = (0..children.len()).collect();
+    at.sort_by_key(|&index| orders[index]);
+    *children = at.into_iter().map(|index| children[index]).collect();
 }
 
 /// A zero-sized box in the flow of a fixed box's parent, which Taffy gives
