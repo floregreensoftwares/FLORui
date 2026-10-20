@@ -1,0 +1,15 @@
+.wrap { position: relative; width: 340px; height: 330px; background-color: #ffffff; }
+.g { display: grid; margin: 0 0 8px 10px; background-color: #e4e4e4; grid-auto-rows: 22px; }
+.k { min-width: 0; }
+.big { width: 70px; height: 10px; background-color: #222222; }
+.c1 { background-color: #f0b0a0; }
+.c2 { background-color: #a0dcb0; }
+.s1 { width: fit-content; grid-template-columns: calc(10px + 50%) 1fr; }
+.s2 { width: max-content; grid-template-columns: 50% 1fr; }
+.s3 { width: fit-content; grid-template-columns: calc(10px + 25%) 40px; }
+.s4 { width: fit-content; grid-template-columns: minmax(20px, calc(50% - 10px)) auto; }
+.s5 { width: fit-content; grid-template-columns: fit-content(calc(10px + 50%)) 1fr; }
+.s6 { width: fit-content; grid-template-columns: fit-content(50%) 1fr; }
+.f { display: flex; margin: 0 0 8px 10px; }
+.f .g { margin: 0; grid-template-columns: calc(20px + 50%) 1fr; }
+.s7 { width: fit-content; grid-template-columns: calc(10px + 50%) 1fr; padding: 4px 6px; border: 2px solid #3a4a68; box-sizing: border-box; }
