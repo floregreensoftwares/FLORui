@@ -257,16 +257,27 @@ impl LayoutCache {
         }
         let roots: Vec<taffy::NodeId> = self.groups.iter().flatten().map(|g| g.id).collect();
         let kept = &self.slots;
+        let id_of = |node: NodeId| {
+            kept.get(node)
+                .and_then(|slot| slot.as_ref())
+                .map(|slot| slot.id)
+        };
         deferred::resolve(
             font,
             arena,
             styles,
             &mut self.tree,
-            &|node| {
-                kept.get(node)
-                    .and_then(|slot| slot.as_ref())
-                    .map(|slot| slot.id)
-            },
+            &id_of,
+            &roots,
+            available,
+            node_count,
+        )?;
+        subgrid::resolve(
+            font,
+            arena,
+            styles,
+            &mut self.tree,
+            &id_of,
             &roots,
             available,
             node_count,
@@ -415,15 +426,28 @@ impl LayoutCache {
                     }
                 }
                 Step::BuildMixed(node, parts) => {
-                    let mut children = Vec::with_capacity(parts.len());
+                    let reorders = reorders_children(styles, node)
+                        && parts.iter().any(|part| {
+                            matches!(part, Part::Block(child) if order_of(styles, *child) != 0)
+                        });
+                    let mut children: Vec<taffy::NodeId> = Vec::with_capacity(parts.len());
+                    let mut orders: Vec<i32> = Vec::new();
                     let mut run_number = 0;
                     for part in &parts {
                         match part {
-                            Part::Block(child) => children.push(self.id_of(*child)),
+                            Part::Block(child) => {
+                                children.push(self.id_of(*child));
+                                if reorders {
+                                    orders.push(order_of(styles, *child));
+                                }
+                            }
                             Part::Spot(fixed) => {
                                 let spot = self.tree.new_leaf(static_spot_style())?;
                                 self.anonymous.insert(static_spot_id(*fixed), spot);
                                 children.push(spot);
+                                if reorders {
+                                    orders.push(0);
+                                }
                             }
                             Part::Run(range) => {
                                 let context = build_run_content_items(
@@ -446,9 +470,13 @@ impl LayoutCache {
                                 self.anonymous.insert(key, leaf);
                                 inline_leaves.push((key, context));
                                 children.push(leaf);
+                                if reorders {
+                                    orders.push(0);
+                                }
                             }
                         }
                     }
+                    sort_by_order(&mut children, &orders);
                     self.place(
                         node,
                         to_taffy_style(styles.get(&node)),
@@ -458,21 +486,34 @@ impl LayoutCache {
                     )?;
                 }
                 Step::Build(node) => {
+                    let reorders = reorders_children(styles, node)
+                        && arena
+                            .children(node)
+                            .iter()
+                            .any(|&child| order_of(styles, child) != 0);
                     let mut children: Vec<taffy::NodeId> =
                         Vec::with_capacity(arena.children(node).len());
+                    let mut orders: Vec<i32> = Vec::new();
                     let mut children_are_new = true;
                     for &child in arena.children(node) {
                         if is_viewport_fixed(arena, styles, child) {
                             let spot = self.tree.new_leaf(static_spot_style())?;
                             self.anonymous.insert(static_spot_id(child), spot);
                             children.push(spot);
+                            if reorders {
+                                orders.push(0);
+                            }
                             continue;
                         }
                         children.push(self.id_of(child));
+                        if reorders {
+                            orders.push(order_of(styles, child));
+                        }
                         children_are_new &= self.slots[child]
                             .as_ref()
                             .is_some_and(|slot| slot.created == self.epoch);
                     }
+                    sort_by_order(&mut children, &orders);
                     self.place(
                         node,
                         to_taffy_style(styles.get(&node)),
@@ -763,6 +804,140 @@ mod tests {
                 &format!("seed {seed} wide again"),
             );
         }
+    }
+
+    /// [`assert_same`] with a stylesheet of its own.
+    fn assert_same_with(
+        css: &str,
+        cache: &mut LayoutCache,
+        font: &mut florui_text::Font,
+        arena: &Arena,
+        available: Size<AvailableSpace>,
+        what: &str,
+    ) {
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let kept = cache.compute(font, arena, &styles, available).unwrap();
+        let fresh = compute_layout_with_content_extents(font, arena, &styles, available).unwrap();
+        assert_eq!(kept.0.len(), fresh.0.len(), "{what}: node count");
+        for (node, layout) in &fresh.0 {
+            assert_eq!(kept.0.get(node), Some(layout), "{what}: box of node {node}");
+        }
+    }
+
+    #[test]
+    fn order_subgrid_and_fit_content_lay_out_in_a_kept_tree_as_in_one_built_anew() {
+        let css = ".flex { display: flex; width: 200px; gap: 4px; } \
+             .flex > div { width: 30px; height: 10px; } \
+             .a { order: 3; } .b { order: 1; } .c { order: 2; } \
+             .p { display: grid; grid-template-columns: 80px 80px; grid-template-rows: auto auto; \
+                  gap: 6px; width: 170px; } \
+             .card { grid-row: span 2; display: grid; grid-template-rows: subgrid; padding: 3px; } \
+             .t { height: 20px; } .u { height: 40px; } \
+             .g { display: grid; width: fit-content; grid-template-columns: fit-content(30px) 1fr; } \
+             .big { width: 70px; height: 10px; }";
+        let flex = |extra: &str| {
+            Element::node(
+                "div",
+                vec![("class".into(), "flex".into())],
+                ["a", "b", "c", extra]
+                    .iter()
+                    .map(|class| {
+                        Element::node("div", vec![("class".into(), (*class).into())], vec![])
+                    })
+                    .collect(),
+            )
+        };
+        let card = |first: &str| {
+            Element::node(
+                "div",
+                vec![("class".into(), "card".into())],
+                vec![
+                    Element::node("div", vec![("class".into(), first.into())], vec![]),
+                    Element::node("div", vec![("class".into(), "u".into())], vec![]),
+                ],
+            )
+        };
+        let page = |extra: &str, tall: &str| {
+            Element::node(
+                "div",
+                vec![],
+                vec![
+                    flex(extra),
+                    Element::node(
+                        "div",
+                        vec![("class".into(), "p".into())],
+                        vec![card(tall), card("t")],
+                    ),
+                    Element::node(
+                        "div",
+                        vec![("class".into(), "g".into())],
+                        vec![
+                            Element::node(
+                                "div",
+                                vec![],
+                                vec![Element::node(
+                                    "div",
+                                    vec![("class".into(), "big".into())],
+                                    vec![],
+                                )],
+                            ),
+                            Element::node(
+                                "div",
+                                vec![],
+                                vec![Element::node(
+                                    "div",
+                                    vec![("class".into(), "big".into())],
+                                    vec![],
+                                )],
+                            ),
+                        ],
+                    ),
+                ],
+            )
+        };
+        let mut font = florui_text::Font::load_embedded();
+        let mut cache = LayoutCache::new();
+        let available = Size::MAX_CONTENT;
+        // Several trees in turn, so the kept tree is changed under the subgrids.
+        for (step, (extra, tall)) in [("a", "t"), ("b", "u"), ("c", "t"), ("a", "u")]
+            .iter()
+            .enumerate()
+        {
+            let arena = Arena::build(&page(extra, tall));
+            assert_same_with(
+                css,
+                &mut cache,
+                &mut font,
+                &arena,
+                available,
+                &format!("step {step}"),
+            );
+        }
+        // And the order it gave is the one asked for.
+        let arena = Arena::build(&page("a", "t"));
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let layouts = cache
+            .compute(&mut font, &arena, &styles, available)
+            .unwrap()
+            .0;
+        let items = arena.children(arena.children(arena.roots()[0])[0]).to_vec();
+        // `b` (order 1) first, then `c`, then the two `a`s (order 3) in source order.
+        assert!(layouts[&items[1]].x < layouts[&items[2]].x);
+        assert!(layouts[&items[2]].x < layouts[&items[0]].x);
     }
 
     #[test]
