@@ -74,8 +74,8 @@ mod deferred;
 mod floats;
 mod flow;
 mod grid;
-mod subgrid;
 mod list;
+mod subgrid;
 mod table;
 mod table_layout;
 mod table_structure;
@@ -2845,7 +2845,7 @@ fn measure_leaf(
 /// attributes where the author's CSS says none, and the ratio of its `viewBox` so
 /// that a width alone gives it a height, as for any replaced box.
 pub(crate) fn svg_taffy_style(arena: &Tree, styles: &StyleMap, node: NodeId) -> taffy::Style {
-    let mut style = to_taffy_style(styles.get(&node));
+    let mut style = taffy_style_in(arena, styles, node);
     // The `width` and `height` attributes are what the author's CSS did not say
     // (Chrome 153: a rule for the width leaves the height of the attribute).
     let dimension = |name: &str| {
@@ -3181,7 +3181,7 @@ fn build_node(
                 let id = if (arena.children(node).is_empty() && !has_inside_marker(styles, node))
                     || is_svg
                 {
-                    let style = to_taffy_style(styles.get(&node));
+                    let style = taffy_style_in(arena, styles, node);
                     // `icon` (a themable SVG icon) is the same kind of
                     // replaced element as `img` -- same intrinsic-size
                     // sizing rule, same missing channel into this crate
@@ -3231,7 +3231,7 @@ fn build_node(
                     }
                     continue;
                 } else if kind == LayoutKind::Inline {
-                    let style = to_taffy_style(styles.get(&node));
+                    let style = taffy_style_in(arena, styles, node);
                     let context = build_inline_content_items(font, arena, styles, node, None);
                     let id =
                         tree.new_leaf_with_context(style, LeafContext::Inline(context.clone()))?;
@@ -3331,7 +3331,7 @@ fn build_node(
                     }
                 }
                 sort_by_order(&mut children, &orders);
-                let id = tree.new_with_children(to_taffy_style(styles.get(&node)), &children)?;
+                let id = tree.new_with_children(taffy_style_in(arena, styles, node), &children)?;
                 register(tree, arena, styles, taffy_ids, node, id)?;
             }
             BuildStep::BuildInline(node, floats) => {
@@ -3340,7 +3340,7 @@ fn build_node(
                     floats.iter().map(|float| taffy_ids[float]).collect();
                 let id = inline_node(
                     tree,
-                    to_taffy_style(styles.get(&node)),
+                    taffy_style_in(arena, styles, node),
                     context.clone(),
                     &float_ids,
                 )?;
@@ -3348,7 +3348,7 @@ fn build_node(
                 register(tree, arena, styles, taffy_ids, node, id)?;
             }
             BuildStep::Build(node) => {
-                let style = to_taffy_style(styles.get(&node));
+                let style = taffy_style_in(arena, styles, node);
                 let reorders = reorders_children(styles, node)
                     && flow_children(arena, styles, node)
                         .iter()
@@ -3508,6 +3508,39 @@ fn to_taffy_box_sizing(value: StyleBoxSizing) -> BoxSizing {
         StyleBoxSizing::ContentBox => BoxSizing::ContentBox,
         StyleBoxSizing::BorderBox => BoxSizing::BorderBox,
     }
+}
+
+/// The Taffy style of `node`: its own, and where its parent aligns the blocks in it
+/// (`text-align: -webkit-center`, `-webkit-left`, `-webkit-right`) a block in the flow
+/// with no margin at that side has an auto one instead, which puts it there.
+fn taffy_style_in(arena: &Tree, styles: &StyleMap, node: NodeId) -> taffy::Style {
+    let mut style = to_taffy_style(styles.get(&node));
+    let (Some(own), Some(parent)) = (styles.get(&node), flow_parent(arena, styles, node)) else {
+        return style;
+    };
+    let align = styles
+        .get(&parent)
+        .map_or(florui_style::BlockAlign::None, |s| s.block_align);
+    if align == florui_style::BlockAlign::None
+        || !matches!(
+            own.display,
+            StyleDisplay::Block | StyleDisplay::ListItem | StyleDisplay::Table
+        )
+        || own.float != florui_style::Float::None
+        || matches!(own.position, StylePosition::Absolute | StylePosition::Fixed)
+    {
+        return style;
+    }
+    let none = LengthPercentageAuto::length(0.0);
+    let auto = LengthPercentageAuto::auto();
+    use florui_style::BlockAlign;
+    if matches!(align, BlockAlign::Center | BlockAlign::Left) && style.margin.right == none {
+        style.margin.right = auto;
+    }
+    if matches!(align, BlockAlign::Center | BlockAlign::Right) && style.margin.left == none {
+        style.margin.left = auto;
+    }
+    style
 }
 
 fn to_taffy_style(style: Option<&ComputedStyle>) -> taffy::Style {
@@ -4198,8 +4231,9 @@ fn hit_walk(
             let admitted = admitted
                 && style.is_none_or(|s| clip_admits(arena, styles, s, &layout, (ax, ay), point));
             admits_children = admitted;
-            let pointer_events_none =
-                style.is_some_and(|s| s.pointer_events_none || !s.visibility.is_visible());
+            let pointer_events_none = style.is_some_and(|s| {
+                s.pointer_events_none || !s.visibility.is_visible() || s.display.is_table_row_like()
+            });
             // An inline element that wraps over lines is hit only inside its
             // piece of each (see [`piece_id`]).
             let in_a_piece = !layouts.contains_key(&piece_id(node, 0))
@@ -4643,8 +4677,11 @@ mod tests {
                     }
                 }
                 let outline = border_box_outline(styles, node, ax, ay, layout);
-                let pointer_events_none =
-                    style.is_some_and(|s| s.pointer_events_none || !s.visibility.is_visible());
+                let pointer_events_none = style.is_some_and(|s| {
+                    s.pointer_events_none
+                        || !s.visibility.is_visible()
+                        || s.display.is_table_row_like()
+                });
                 if admitted && !pointer_events_none && outline.contains(point.0, point.1) {
                     hit = Some(node);
                 }
