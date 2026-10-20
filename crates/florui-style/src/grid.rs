@@ -79,6 +79,32 @@ pub enum GridTemplateComponent {
     Repeat(GridRepeat),
 }
 
+/// The line names of `grid-template-columns: subgrid <line-name-list>`: the
+/// names written before and after a `repeat(auto-fill, ...)` and the lines it
+/// repeats, as one list of names for each line.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SubgridNames {
+    pub before: Vec<Vec<String>>,
+    pub fill: Vec<Vec<String>>,
+    pub after: Vec<Vec<String>>,
+}
+
+impl SubgridNames {
+    /// The names of each of `lines` lines: what is written, with the
+    /// `auto-fill` repeated into the lines the lists before and after leave.
+    pub fn for_lines(&self, lines: usize) -> Vec<Vec<String>> {
+        let mut names = self.before.clone();
+        if !self.fill.is_empty() {
+            let room = lines.saturating_sub(self.before.len() + self.after.len());
+            let whole = room - room % self.fill.len();
+            names.extend(self.fill.iter().cycle().take(whole).cloned());
+        }
+        names.extend(self.after.iter().cloned());
+        names.resize(lines, Vec::new());
+        names
+    }
+}
+
 /// `grid-template-columns` or `grid-template-rows`.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct GridTemplate {
@@ -86,9 +112,15 @@ pub struct GridTemplate {
     /// The names of the lines before each component and after the last one,
     /// or empty when no line is named.
     pub line_names: Vec<Vec<String>>,
+    /// `subgrid`: the lines are the parent grid's, with these names added.
+    pub subgrid: Option<SubgridNames>,
 }
 
 impl GridTemplate {
+    pub fn is_subgrid(&self) -> bool {
+        self.subgrid.is_some()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.components.is_empty()
     }
@@ -216,4 +248,100 @@ impl GridTemplate {
         }
         resolved
     }
+}
+
+/// Whether a `grid-template-columns`/`-rows` value is a `subgrid`: the style
+/// engine's build refuses it, so it is carried apart and read by
+/// [`parse_subgrid`].
+pub(crate) fn is_subgrid_value(value: &str) -> bool {
+    let value = value.trim_start();
+    value.len() >= 7
+        && value.is_char_boundary(7)
+        && value[..7].eq_ignore_ascii_case("subgrid")
+        && value[7..]
+            .chars()
+            .next()
+            .is_none_or(|c| c.is_whitespace() || c == '[' || c == '/')
+}
+
+/// `subgrid [a] [b c] repeat(2, [d]) repeat(auto-fill, [x])`: the names of its
+/// lines. `None` when it is not valid.
+pub(crate) fn parse_subgrid(text: &str) -> Option<SubgridNames> {
+    use cssparser::{Parser, ParserInput, Token};
+
+    fn names<'i>(p: &mut Parser<'i, '_>) -> Result<Vec<String>, cssparser::ParseError<'i, ()>> {
+        p.parse_nested_block(|inner| {
+            let mut out = Vec::new();
+            while let Ok(token) = inner.next() {
+                match token {
+                    Token::Ident(name) => out.push(name.to_string()),
+                    _ => return Err(inner.new_custom_error(())),
+                }
+            }
+            Ok(out)
+        })
+    }
+
+    let mut input = ParserInput::new(text);
+    let mut parser = Parser::new(&mut input);
+    let parsed: Result<SubgridNames, cssparser::ParseError<'_, ()>> = (|| {
+        parser.expect_ident_matching("subgrid")?;
+        let mut out = SubgridNames::default();
+        let mut after_fill = false;
+        while let Ok(token) = parser.next().cloned() {
+            match token {
+                Token::SquareBracketBlock => {
+                    let line = names(&mut parser)?;
+                    if after_fill {
+                        &mut out.after
+                    } else {
+                        &mut out.before
+                    }
+                    .push(line);
+                }
+                Token::Function(name) if name.eq_ignore_ascii_case("repeat") => {
+                    let (count, lines) = parser.parse_nested_block(|inner| {
+                        let count = match inner.next()?.clone() {
+                            Token::Number {
+                                int_value: Some(n), ..
+                            } if n > 0 => Some(n as usize),
+                            Token::Ident(word) if word.eq_ignore_ascii_case("auto-fill") => None,
+                            _ => return Err(inner.new_custom_error(())),
+                        };
+                        inner.expect_comma()?;
+                        let mut lines = Vec::new();
+                        while let Ok(token) = inner.next().cloned() {
+                            match token {
+                                Token::SquareBracketBlock => lines.push(names(inner)?),
+                                _ => return Err(inner.new_custom_error(())),
+                            }
+                        }
+                        if lines.is_empty() {
+                            return Err(inner.new_custom_error(()));
+                        }
+                        Ok((count, lines))
+                    })?;
+                    match count {
+                        Some(count) => {
+                            let target = if after_fill {
+                                &mut out.after
+                            } else {
+                                &mut out.before
+                            };
+                            for _ in 0..count.min(10_000) {
+                                target.extend(lines.iter().cloned());
+                            }
+                        }
+                        None => {
+                            out.fill = lines;
+                            after_fill = true;
+                        }
+                    }
+                }
+                _ => return Err(parser.new_custom_error(())),
+            }
+        }
+        Ok(out)
+    })();
+    parsed.ok()
 }

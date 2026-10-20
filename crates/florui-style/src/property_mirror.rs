@@ -42,6 +42,8 @@ pub(crate) const MIRRORED: &[&str] = &[
     "text-underline-position",
     "text-decoration-skip-ink",
     "clip-path",
+    "grid-template-columns",
+    "grid-template-rows",
     "mask-mode",
     "mask-repeat",
     "mask-position",
@@ -148,6 +150,7 @@ fn mentions(css: &str) -> bool {
         || lower.contains("mask")
         || lower.contains("background")
         || lower.contains("filter")
+        || lower.contains("grid-template")
         || MIRRORED.iter().any(|name| lower.contains(name))
 }
 
@@ -244,6 +247,7 @@ fn is_handled(name: &str) -> bool {
         || name.eq_ignore_ascii_case("-webkit-background-clip")
         || name.eq_ignore_ascii_case("font-variant")
         || name.eq_ignore_ascii_case("text-decoration")
+        || name.eq_ignore_ascii_case("grid-template")
         || is_mask_name(name)
         || MIRRORED
             .iter()
@@ -339,6 +343,10 @@ fn expand(name: &str, value: &str, important: &str) -> Option<String> {
         "font-variant" => expand_font_variant(value, important),
         "text-decoration" => expand_text_decoration(value, important),
         "clip-path" => Some(expand_clip_path(value, important)),
+        "grid-template-columns" | "grid-template-rows" => {
+            Some(expand_grid_template(name, value, important))
+        }
+        "grid-template" => expand_grid_template_shorthand(value, important),
         "background" => Some(expand_background(value, important)),
         "filter" | "backdrop-filter" => expand_filter(name, value, important),
         "transform-box" => {
@@ -990,6 +998,35 @@ fn expand_clip_path(value: &str, important: &str) -> String {
     }
 }
 
+/// `grid-template-columns`/`-rows`: the engine's build refuses `subgrid`, so
+/// that value is carried in a custom property for [`crate::grid::parse_subgrid`]
+/// and the property itself is `none`; any other value is written as itself and
+/// the custom property reset, so the last declaration wins whichever form it
+/// has.
+fn expand_grid_template(name: &str, value: &str, important: &str) -> String {
+    let mirror = mirror_name(name);
+    if crate::grid::is_subgrid_value(value) {
+        format!("{name}: none{important}; {mirror}: {value}{important}")
+    } else {
+        format!("{name}: {value}{important}; {mirror}: initial{important}")
+    }
+}
+
+/// `grid-template: <rows> / <columns>` when either side is a `subgrid`, which is
+/// written as its longhands so that [`expand_grid_template`] carries it; any
+/// other value is left to the engine.
+fn expand_grid_template_shorthand(value: &str, important: &str) -> Option<String> {
+    let (rows, columns) = value.split_once('/')?;
+    if !crate::grid::is_subgrid_value(rows) && !crate::grid::is_subgrid_value(columns) {
+        return None;
+    }
+    Some(format!(
+        "{}; {}; grid-template-areas: none{important}",
+        expand_grid_template("grid-template-rows", rows.trim(), important),
+        expand_grid_template("grid-template-columns", columns.trim(), important),
+    ))
+}
+
 /// Whether `text` is a valid value of the `mask-*` longhand, so that an invalid
 /// declaration is dropped and the one before it stays, as in a browser. Global
 /// keywords and anything with a `var()` are not known here and pass.
@@ -1263,6 +1300,28 @@ mod tests {
 
     fn sheet(css: &str) -> String {
         rewrite_stylesheet(css).into_owned()
+    }
+
+    #[test]
+    fn a_grid_template_with_a_subgrid_is_carried_and_the_rest_is_left_alone() {
+        let out = sheet(".g { grid-template-rows: subgrid [a]; grid-template-columns: 10px 1fr; }");
+        assert!(out.contains("grid-template-rows: none; --florui-grid-template-rows: subgrid [a]"));
+        assert!(
+            out.contains(
+                "grid-template-columns: 10px 1fr; --florui-grid-template-columns: initial"
+            )
+        );
+        let out = sheet(".g { grid-template: subgrid / 20px 30px; }");
+        assert!(
+            out.contains("--florui-grid-template-rows: subgrid"),
+            "{out}"
+        );
+        assert!(out.contains("grid-template-columns: 20px 30px"), "{out}");
+        // A shorthand with no subgrid stays as it is.
+        assert_eq!(
+            sheet(".g { grid-template: 40px 50px / 60px; }"),
+            ".g { grid-template: 40px 50px / 60px; }"
+        );
     }
 
     #[test]

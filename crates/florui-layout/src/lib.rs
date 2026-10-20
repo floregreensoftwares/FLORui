@@ -66,6 +66,7 @@ mod cache;
 mod clip;
 mod deferred;
 mod grid;
+mod subgrid;
 mod transform;
 
 pub use cache::LayoutCache;
@@ -1502,6 +1503,17 @@ fn compute_layout_in_place(
     )?);
 
     deferred::resolve(
+        font,
+        arena,
+        styles,
+        &mut tree,
+        &|node| taffy_ids.get(&node).copied(),
+        &group_roots,
+        available,
+        taffy_ids.len(),
+    )?;
+
+    subgrid::resolve(
         font,
         arena,
         styles,
@@ -6856,6 +6868,431 @@ mod tests {
             (140.0, vec![70.0, 70.0])
         );
         assert_eq!(case("fit-content(50%) 1fr"), (140.0, vec![70.0, 70.0]));
+    }
+
+    /// `(x, y, width, height)` of every descendant of the first root, in
+    /// document order, each relative to its parent.
+    fn descendant_boxes(
+        arena: &Arena,
+        layouts: &HashMap<NodeId, BoxLayout>,
+    ) -> Vec<(f32, f32, f32, f32)> {
+        fn walk(
+            arena: &Arena,
+            layouts: &HashMap<NodeId, BoxLayout>,
+            node: NodeId,
+            out: &mut Vec<(f32, f32, f32, f32)>,
+        ) {
+            for &child in arena.children(node) {
+                let b = layouts[&child];
+                out.push((b.x, b.y, b.width, b.height));
+                walk(arena, layouts, child, out);
+            }
+        }
+        let mut out = Vec::new();
+        walk(arena, layouts, arena.roots()[0], &mut out);
+        out
+    }
+
+    const SUBGRID_CSS: &str = ".p { display: grid; } \
+         .h10 { height: 10px; } .h12 { height: 12px; } .h14 { height: 14px; } .h16 { height: 16px; } \
+         .h20 { height: 20px; } .h24 { height: 24px; } .h30 { height: 30px; } .h36 { height: 36px; } \
+         .h26 { height: 26px; } .h40 { height: 40px; } .h60 { height: 60px; } \
+         .w10 { width: 10px; } .w20 { width: 20px; } .w30 { width: 30px; } .w40 { width: 40px; } \
+         .w50 { width: 50px; } .w60 { width: 60px; }";
+
+    fn subgrid_cards() -> Element {
+        view! {
+            <div class="p">
+                <div class="card">
+                    <div class="t h20" />
+                    <div class="b h40" />
+                    <div class="f h16" />
+                </div>
+                <div class="card">
+                    <div class="t h36" />
+                    <div class="b h24" />
+                    <div class="f h16" />
+                </div>
+                <div class="card">
+                    <div class="t h20" />
+                    <div class="b h60" />
+                    <div class="f h10" />
+                </div>
+            </div>
+        }
+    }
+
+    #[test]
+    fn a_subgrid_of_rows_takes_the_row_tracks_of_the_grid_it_is_in() {
+        // Chrome 153: the three rows are as tall as the tallest item in each
+        // across the cards, 36, 60 and 16, with 8px between.
+        let (arena, layouts) = layout_for(
+            &subgrid_cards(),
+            &format!(
+                "{SUBGRID_CSS} .p {{ grid-template-columns: repeat(3, 80px); \
+                 grid-template-rows: auto auto auto; gap: 8px 10px; width: 260px; }} \
+                 .card {{ grid-row: span 3; display: grid; grid-template-rows: subgrid; }}"
+            ),
+        );
+        let boxes = descendant_boxes(&arena, &layouts);
+        assert_eq!(layouts[&arena.roots()[0]].height, 128.0);
+        // Card, then its three items; the cards are 90px apart.
+        assert_eq!(boxes[0], (0.0, 0.0, 80.0, 128.0));
+        assert_eq!(boxes[1], (0.0, 0.0, 80.0, 20.0));
+        assert_eq!(boxes[2], (0.0, 44.0, 80.0, 40.0));
+        assert_eq!(boxes[3], (0.0, 112.0, 80.0, 16.0));
+        assert_eq!(boxes[5], (0.0, 0.0, 80.0, 36.0));
+        assert_eq!(boxes[10], (0.0, 44.0, 80.0, 60.0));
+        assert_eq!(boxes[11], (0.0, 112.0, 80.0, 10.0));
+    }
+
+    #[test]
+    fn a_subgrid_of_columns_takes_the_column_tracks_of_the_grid_it_is_in() {
+        let tree: Element = view! {
+            <div class="p">
+                <div class="row">
+                    <div class="i w30 h14" />
+                    <div class="i w50 h14" />
+                    <div class="i w20 h14" />
+                </div>
+                <div class="row">
+                    <div class="i w40 h14" />
+                    <div class="i w10 h14" />
+                    <div class="i w60 h14" />
+                </div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            &format!(
+                "{SUBGRID_CSS} .p {{ grid-template-columns: auto 1fr auto; gap: 4px 6px; width: 300px; }} \
+                 .row {{ grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; }}"
+            ),
+        );
+        let xs: Vec<f32> = descendant_boxes(&arena, &layouts)
+            .iter()
+            .map(|b| b.0)
+            .collect();
+        // The outer columns are 40 and 60 wide, the middle one what is left.
+        assert_eq!(xs, vec![0.0, 0.0, 46.0, 240.0, 0.0, 0.0, 46.0, 240.0]);
+    }
+
+    #[test]
+    fn a_subgrid_takes_its_padding_and_border_off_the_tracks_at_its_edges() {
+        let tree: Element = view! {
+            <div class="p">
+                <div class="card">
+                    <div class="t h20" />
+                    <div class="b h40" />
+                    <div class="f h16" />
+                </div>
+                <div class="card">
+                    <div class="t h36" />
+                    <div class="b h24" />
+                    <div class="f h16" />
+                </div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            &format!(
+                "{SUBGRID_CSS} .p {{ grid-template-columns: 90px 90px; \
+                 grid-template-rows: auto auto auto; gap: 6px; width: 200px; }} \
+                 .card {{ grid-row: span 3; display: grid; grid-template-rows: subgrid; \
+                 padding: 6px 4px; border: 2px solid #000; }}"
+            ),
+        );
+        let boxes = descendant_boxes(&arena, &layouts);
+        // The first and last items sit 8px in from the card's edge, and the
+        // rows of the grid are 44, 40 and 24 tall.
+        assert_eq!(boxes[0].3, 120.0, "the card");
+        assert_eq!((boxes[1].1, boxes[1].3), (8.0, 20.0));
+        assert_eq!((boxes[2].1, boxes[2].3), (50.0, 40.0));
+        assert_eq!((boxes[3].1, boxes[3].3), (96.0, 16.0));
+        assert_eq!((boxes[5].1, boxes[5].3), (8.0, 36.0));
+        assert_eq!((boxes[6].1, boxes[6].3), (50.0, 24.0));
+    }
+
+    #[test]
+    fn a_subgrid_with_a_gap_of_its_own_keeps_it_between_its_items() {
+        let tree: Element = view! {
+            <div class="p">
+                <div class="card">
+                    <div class="t h20" />
+                    <div class="b h40" />
+                    <div class="f h16" />
+                </div>
+                <div class="card">
+                    <div class="t h36" />
+                    <div class="b h24" />
+                    <div class="f h16" />
+                </div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            &format!(
+                "{SUBGRID_CSS} .p {{ grid-template-columns: 90px 90px; \
+                 grid-template-rows: auto auto auto; gap: 8px; width: 200px; }} \
+                 .card {{ grid-row: span 3; display: grid; grid-template-rows: subgrid; row-gap: 2px; }}"
+            ),
+        );
+        let boxes = descendant_boxes(&arena, &layouts);
+        // 2px between the items; the grid still has its 8px between the tracks.
+        assert_eq!(boxes[0].3, 96.0, "the card");
+        assert_eq!(boxes[1].1, 0.0);
+        assert_eq!(boxes[2].1, 38.0);
+        assert_eq!(boxes[3].1, 80.0);
+    }
+
+    #[test]
+    fn an_item_a_subgrid_cannot_place_in_its_tracks_goes_in_the_last_one() {
+        // Chrome 153: the third item shares the second row.
+        let tree: Element = view! {
+            <div class="p">
+                <div class="card">
+                    <div class="t h20" />
+                    <div class="b h24" />
+                    <div class="f h30" />
+                </div>
+                <div class="card">
+                    <div class="t h14" />
+                    <div class="b h10" />
+                </div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            &format!(
+                "{SUBGRID_CSS} .p {{ grid-template-columns: 90px 90px; \
+                 grid-template-rows: auto auto; gap: 6px; width: 190px; }} \
+                 .card {{ grid-row: span 2; display: grid; grid-template-rows: subgrid; \
+                 grid-auto-rows: 12px; }}"
+            ),
+        );
+        let boxes = descendant_boxes(&arena, &layouts);
+        assert_eq!(layouts[&arena.roots()[0]].height, 56.0);
+        assert_eq!((boxes[1].1, boxes[1].3), (0.0, 20.0));
+        assert_eq!((boxes[2].1, boxes[2].3), (26.0, 24.0));
+        assert_eq!((boxes[3].1, boxes[3].3), (26.0, 30.0));
+    }
+
+    #[test]
+    fn a_subgrid_in_both_axes_shares_the_rows_and_the_columns() {
+        let tree: Element = view! {
+            <div class="p">
+                <div class="sg">
+                    <div class="t w30 h20" />
+                    <div class="b w50 h12" />
+                    <div class="f w60 h26" />
+                    <div class="i w20 h10" />
+                </div>
+                <div class="o w40 h30" />
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            &format!(
+                "{SUBGRID_CSS} .p {{ grid-template-columns: repeat(3, auto); \
+                 grid-template-rows: auto auto; gap: 4px; width: 240px; \
+                 justify-content: start; }} \
+                 .sg {{ grid-column: 1 / span 2; grid-row: 1 / span 2; display: grid; \
+                 grid-template-columns: subgrid; grid-template-rows: subgrid; }}"
+            ),
+        );
+        let boxes = descendant_boxes(&arena, &layouts);
+        // Columns 60 and 50 (the widest in each); rows 30 (the item beside, in
+        // the third column, is the tallest in the first) and 26.
+        assert_eq!((boxes[0].2, boxes[0].3), (114.0, 60.0), "the subgrid");
+        assert_eq!((boxes[1].0, boxes[1].1), (0.0, 0.0));
+        assert_eq!((boxes[2].0, boxes[2].1), (64.0, 0.0));
+        assert_eq!((boxes[3].0, boxes[3].1), (0.0, 34.0));
+        assert_eq!((boxes[4].0, boxes[4].1), (64.0, 34.0));
+        assert_eq!(boxes[5].0, 118.0, "the item in the third column");
+    }
+
+    #[test]
+    fn a_subgrid_inside_a_subgrid_shares_the_same_tracks() {
+        let tree: Element = view! {
+            <div class="p">
+                <div class="card">
+                    <div class="t h20" />
+                    <div class="nest">
+                        <div class="b h24" />
+                        <div class="f h36" />
+                    </div>
+                    <div class="i h16" />
+                </div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            &format!(
+                "{SUBGRID_CSS} .p {{ grid-template-columns: 120px; \
+                 grid-template-rows: repeat(4, auto); gap: 6px; width: 120px; }} \
+                 .card {{ grid-row: span 4; display: grid; grid-template-rows: subgrid; }} \
+                 .nest {{ grid-row: 2 / span 2; display: grid; grid-template-rows: subgrid; }}"
+            ),
+        );
+        let boxes = descendant_boxes(&arena, &layouts);
+        // Rows 20, 24, 36 and 16 with 6px between (114): the nested one spans the
+        // middle two and its items are in them.
+        assert_eq!(boxes[0].3, 114.0);
+        assert_eq!((boxes[2].1, boxes[2].3), (26.0, 66.0), "the nested subgrid");
+        assert_eq!((boxes[3].1, boxes[3].3), (0.0, 24.0));
+        assert_eq!((boxes[4].1, boxes[4].3), (30.0, 36.0));
+        assert_eq!((boxes[5].1, boxes[5].3), (98.0, 16.0));
+    }
+
+    #[test]
+    fn a_subgrid_is_placed_by_the_line_names_of_the_grid_and_its_own() {
+        let tree: Element = view! {
+            <div class="p">
+                <div class="card">
+                    <div class="t h20" />
+                    <div class="b h40" />
+                </div>
+                <div class="card">
+                    <div class="t h36" />
+                    <div class="b h24" />
+                </div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            &format!(
+                "{SUBGRID_CSS} .p {{ grid-template-columns: 90px 90px; \
+                 grid-template-rows: [a] auto [b] auto [c]; gap: 6px; width: 200px; }} \
+                 .card {{ grid-row: a / c; display: grid; \
+                 grid-template-rows: subgrid [x] [y] [z]; }} \
+                 .t {{ grid-row: x / y; }} .b {{ grid-row: y / z; }}"
+            ),
+        );
+        let boxes = descendant_boxes(&arena, &layouts);
+        assert_eq!((boxes[1].1, boxes[1].3), (0.0, 20.0));
+        assert_eq!((boxes[2].1, boxes[2].3), (42.0, 40.0));
+        assert_eq!((boxes[4].1, boxes[4].3), (0.0, 36.0));
+        assert_eq!((boxes[5].1, boxes[5].3), (42.0, 24.0));
+    }
+
+    #[test]
+    fn a_subgrid_in_a_grid_with_a_height_and_an_fr_row_fills_it() {
+        // Chrome 153: the middle row takes what is left of the 140px, so the
+        // last row, and the footers in it, are at the bottom.
+        let tree: Element = view! {
+            <div class="p">
+                <div class="card">
+                    <div class="t h20" />
+                    <div class="b h20" />
+                    <div class="f h10" />
+                </div>
+                <div class="card">
+                    <div class="t h14" />
+                    <div class="b h30" />
+                    <div class="f h24" />
+                </div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            &format!(
+                "{SUBGRID_CSS} .p {{ grid-template-columns: 90px 90px; \
+                 grid-template-rows: auto 1fr auto; gap: 6px; width: 190px; height: 140px; }} \
+                 .card {{ grid-row: span 3; display: grid; grid-template-rows: subgrid; }}"
+            ),
+        );
+        let boxes = descendant_boxes(&arena, &layouts);
+        assert_eq!(layouts[&arena.roots()[0]].height, 140.0);
+        assert_eq!(boxes[0].3, 140.0, "the card");
+        assert_eq!(boxes[2].1, 26.0);
+        assert_eq!(boxes[3].1, 116.0, "the footer, in the last row");
+        assert_eq!(boxes[6].1, 26.0);
+        assert_eq!(boxes[7].1, 116.0);
+    }
+
+    #[test]
+    fn a_nested_subgrid_at_the_edge_of_another_takes_its_padding_too() {
+        // Chrome 153: the nested subgrid is inset by the card's 6px at the top,
+        // and its items by its own 4px on top of that.
+        let tree: Element = view! {
+            <div class="p">
+                <div class="card">
+                    <div class="nest">
+                        <div class="b h20" />
+                        <div class="f h20" />
+                    </div>
+                    <div class="i h10" />
+                </div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            &format!(
+                "{SUBGRID_CSS} .p {{ grid-template-columns: 120px; \
+                 grid-template-rows: auto auto auto; width: 120px; }} \
+                 .card {{ grid-row: span 3; display: grid; grid-template-rows: subgrid; \
+                 padding: 6px 0; }} \
+                 .nest {{ grid-row: 1 / span 2; display: grid; grid-template-rows: subgrid; \
+                 padding: 4px 0; }}"
+            ),
+        );
+        let boxes = descendant_boxes(&arena, &layouts);
+        assert_eq!(boxes[0].3, 70.0, "the card");
+        assert_eq!((boxes[1].1, boxes[1].3), (6.0, 48.0), "the nested subgrid");
+        assert_eq!((boxes[2].1, boxes[2].3), (4.0, 20.0));
+        assert_eq!((boxes[3].1, boxes[3].3), (24.0, 20.0));
+        assert_eq!((boxes[4].1, boxes[4].3), (54.0, 10.0));
+    }
+
+    #[test]
+    fn a_subgrid_keeps_the_space_the_grid_spreads_its_tracks_with() {
+        // Chrome 153: the 50px columns of the grid are 95px apart under
+        // `space-between` in 240px, and so are the subgrid's.
+        let tree: Element = view! {
+            <div class="p">
+                <div class="row">
+                    <div class="i w30 h14" />
+                    <div class="i w40 h14" />
+                    <div class="i w20 h14" />
+                </div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            &format!(
+                "{SUBGRID_CSS} .p {{ grid-template-columns: 50px 50px 50px; width: 240px; \
+                 justify-content: space-between; }} \
+                 .row {{ grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; }}"
+            ),
+        );
+        let boxes = descendant_boxes(&arena, &layouts);
+        assert_eq!(boxes[0].2, 240.0, "the subgrid spans the whole width");
+        assert_eq!(boxes[1].0, 0.0);
+        assert_eq!(boxes[2].0, 95.0);
+        assert_eq!(boxes[3].0, 190.0);
+    }
+
+    #[test]
+    fn a_subgrid_that_is_not_in_a_grid_is_none() {
+        let tree: Element = view! {
+            <div class="flex">
+                <div class="card">
+                    <div class="t w30 h20" />
+                    <div class="b w30 h30" />
+                </div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            &format!(
+                "{SUBGRID_CSS} .flex {{ display: flex; width: 200px; }} \
+                 .card {{ display: grid; grid-template-rows: subgrid; }}"
+            ),
+        );
+        let boxes = descendant_boxes(&arena, &layouts);
+        // Its own rows, one under the other.
+        assert_eq!((boxes[1].1, boxes[1].3), (0.0, 20.0));
+        assert_eq!((boxes[2].1, boxes[2].3), (20.0, 30.0));
     }
 
     #[test]

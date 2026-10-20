@@ -85,7 +85,7 @@ pub use error::StyleError;
 pub use focus::FocusPath;
 pub use grid::{
     GridArea, GridAutoFlow, GridBreadth, GridLimit, GridPlacement, GridRepeat, GridRepeatCount,
-    GridTemplate, GridTemplateAreas, GridTemplateComponent, GridTrackSize,
+    GridTemplate, GridTemplateAreas, GridTemplateComponent, GridTrackSize, SubgridNames,
 };
 pub use interaction::{FormState, InteractionState};
 pub use mask_box_image::{MaskBoxImageSpec, resolve_mask_box_image};
