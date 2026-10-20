@@ -417,7 +417,7 @@ fn probe_top(
             let lines = axis.lines(placement);
             let written = ctx
                 .style_of(*child)
-                .and_then(|style| axis.template(style).subgrid.as_ref());
+                .and_then(|style| axis.template(style).subgrid.as_deref());
             subs.push(Sub {
                 id: *child,
                 parent: None,
@@ -491,7 +491,7 @@ fn probe_top(
             for (child, lines) in nested {
                 let written = ctx
                     .style_of(child)
-                    .and_then(|style| axis.template(style).subgrid.as_ref());
+                    .and_then(|style| axis.template(style).subgrid.as_deref());
                 let names = merge_names(
                     &subs[index].names,
                     lines.0 as usize - 1,

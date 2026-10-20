@@ -113,7 +113,7 @@ pub struct GridTemplate {
     /// or empty when no line is named.
     pub line_names: Vec<Vec<String>>,
     /// `subgrid`: the lines are the parent grid's, with these names added.
-    pub subgrid: Option<SubgridNames>,
+    pub subgrid: Option<Box<SubgridNames>>,
 }
 
 impl GridTemplate {
