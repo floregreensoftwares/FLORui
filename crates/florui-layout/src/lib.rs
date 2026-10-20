@@ -7350,6 +7350,63 @@ mod tests {
     }
 
     #[test]
+    fn the_rows_of_a_subgrid_are_sized_from_items_with_padding_at_the_width_they_have() {
+        // Chrome 153: the title wraps to four lines in 110px less its padding
+        // and border, 84px; the body in the other card to four lines, 72px;
+        // with a border-box item the same.
+        for sizing in ["content-box", "border-box"] {
+            let tree: Element = view! {
+                <div class="p">
+                    <div class="card">
+                        <div class="t">"A padded title that has to wrap across lines"</div>
+                        <div class="b">"Body text here"</div>
+                    </div>
+                    <div class="card">
+                        <div class="t">"Short"</div>
+                        <div class="b">"Another body that wraps over a couple of lines"</div>
+                    </div>
+                </div>
+            };
+            let (arena, layouts) = layout_for(
+                &tree,
+                &format!(
+                    ".p {{ display: grid; grid-template-columns: 110px 110px; \
+                     grid-template-rows: auto auto; gap: 6px; width: 226px; \
+                     font-size: 13px; line-height: 16px; }} \
+                     .card {{ grid-row: span 2; display: grid; grid-template-rows: subgrid; }} \
+                     .t {{ padding: 8px; border: 2px solid #000; box-sizing: {sizing}; }} \
+                     .b {{ padding: 4px 10px; box-sizing: {sizing}; }}"
+                ),
+            );
+            let boxes = descendant_boxes(&arena, &layouts);
+            assert_eq!(boxes[0].3, 162.0, "{sizing}: the card");
+            assert_eq!((boxes[1].1, boxes[1].3), (0.0, 84.0), "{sizing}: the title");
+            assert_eq!((boxes[2].1, boxes[2].3), (90.0, 72.0), "{sizing}: the body");
+            assert_eq!(
+                (boxes[5].1, boxes[5].3),
+                (90.0, 72.0),
+                "{sizing}: the other body"
+            );
+        }
+    }
+
+    #[test]
+    fn the_grid_template_shorthand_with_a_subgrid_lays_out_like_the_longhand() {
+        let (arena, layouts) = layout_for(
+            &subgrid_cards(),
+            &format!(
+                "{SUBGRID_CSS} .p {{ grid-template-columns: repeat(3, 80px); \
+                 grid-template-rows: auto auto auto; gap: 8px 10px; width: 260px; }} \
+                 .card {{ grid-row: span 3; display: grid; grid-template: subgrid / 1fr; }}"
+            ),
+        );
+        let boxes = descendant_boxes(&arena, &layouts);
+        assert_eq!(layouts[&arena.roots()[0]].height, 128.0);
+        assert_eq!(boxes[2].1, 44.0);
+        assert_eq!(boxes[3].1, 112.0);
+    }
+
+    #[test]
     fn a_subgrid_that_is_not_in_a_grid_is_none() {
         let tree: Element = view! {
             <div class="flex">

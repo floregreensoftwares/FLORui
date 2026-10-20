@@ -102,6 +102,26 @@ impl Axis {
         }
     }
 
+    /// What padding and border take, both sides together.
+    fn padding_border(self, style: &taffy::Style) -> f32 {
+        let zero = |_: *const (), _: f32| 0.0;
+        let (padding, border) = (style.padding, style.border);
+        match self {
+            Axis::Column => {
+                padding.left.resolve_or_zero(None, zero)
+                    + padding.right.resolve_or_zero(None, zero)
+                    + border.left.resolve_or_zero(None, zero)
+                    + border.right.resolve_or_zero(None, zero)
+            }
+            Axis::Row => {
+                padding.top.resolve_or_zero(None, zero)
+                    + padding.bottom.resolve_or_zero(None, zero)
+                    + border.top.resolve_or_zero(None, zero)
+                    + border.bottom.resolve_or_zero(None, zero)
+            }
+        }
+    }
+
     fn add_margins(self, style: &mut taffy::Style, start: f32, end: f32) {
         let zero = |_: *const (), _: f32| 0.0;
         let bump = |margin: &mut taffy::LengthPercentageAuto, by: f32| {
@@ -567,7 +587,14 @@ fn probe_top(
             leaf_styles.push((item, style.clone()));
             axis.set_placement(&mut style, sub.top.0 + lines.0 - 1, sub.top.0 + lines.1 - 1);
             other.set_placement(&mut style, span_across.0, span_across.1);
-            other.set_size(&mut style, other.size_of(&layout));
+            // The border box it has, written as the style takes it.
+            let border_box = other.size_of(&layout);
+            let size = if style.box_sizing == taffy::BoxSizing::ContentBox {
+                (border_box - other.padding_border(&style)).max(0.0)
+            } else {
+                border_box
+            };
+            other.set_size(&mut style, size);
             let start = if lines.0 == 1 {
                 sub.edge.0
             } else {
@@ -601,15 +628,7 @@ fn probe_top(
     relayout(font, tree, ctx)?;
 
     // 4. What the probe sized.
-    let Probed {
-        sizes,
-        spans,
-        explicit,
-        names,
-    } = {
-        let Some(info) = grid_info(tree, top) else {
-            return Ok(());
-        };
+    let probed = grid_info(tree, top).map(|info| {
         let tracks = axis.tracks(info);
         let sizes = tracks.positions.iter().map(|p| p.end - p.start).collect();
         let spans = tracks.positions.iter().map(|p| (p.start, p.end)).collect();
@@ -629,7 +648,7 @@ fn probe_top(
             explicit,
             names,
         }
-    };
+    });
 
     // 5. Back as it was, with the sizes in.
     for (id, children) in &saved_children {
@@ -638,6 +657,15 @@ fn probe_top(
     for (id, style) in leaf_styles.into_iter().chain(original.iter().cloned()) {
         tree.set_style(id, style).map_err(LayoutError)?;
     }
+    let Some(Probed {
+        sizes,
+        spans,
+        explicit,
+        names,
+    }) = probed
+    else {
+        return relayout(font, tree, ctx);
+    };
     let mut patched = top_style;
     axis.set_template(
         &mut patched,
