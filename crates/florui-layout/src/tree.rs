@@ -47,6 +47,9 @@ pub(crate) struct Node {
     /// For a table with captions: how far down its box the grid starts, and how tall
     /// it is, which is where its border and its background are.
     pub(crate) grid: Option<(f32, f32)>,
+    /// For a part of a table with collapsing borders: how wide its border is on each
+    /// side (top, right, bottom, left), which is half of the edges it is on.
+    pub(crate) border: Option<[f32; 4]>,
 }
 
 impl Node {
@@ -64,6 +67,7 @@ impl Node {
             slots: None,
             shift: 0.0,
             grid: None,
+            border: None,
         }
     }
 }
