@@ -748,6 +748,10 @@ fn is_very_dark(color: Rgba) -> bool {
     0.299 * f32::from(color.r) + 0.587 * f32::from(color.g) + 0.114 * f32::from(color.b) <= 32.5
 }
 
+fn is_very_light(color: Rgba) -> bool {
+    0.299 * f32::from(color.r) + 0.587 * f32::from(color.g) + 0.114 * f32::from(color.b) > 235.5
+}
+
 fn scaled(color: Rgba, multiplier: impl Fn(f32) -> f32) -> Rgba {
     let top = f32::from(color.r.max(color.g).max(color.b)) / 255.0;
     let factor = multiplier(top);
@@ -790,10 +794,14 @@ fn darker(color: Rgba) -> Rgba {
     scaled(color, |top| ((top - 0.33) / top).max(0.0))
 }
 
-/// The color of the lit side of a bevel.
+/// The color of the lit side of a bevel. A color already as light as `#ececec`
+/// is left as it is.
 fn lighter(color: Rgba) -> Rgba {
     if is_very_dark(color) {
         return lifted(color, 168.15);
+    }
+    if is_very_light(color) {
+        return color;
     }
     scaled(color, |top| (top + 0.33).min(1.0) / top)
 }
@@ -813,6 +821,20 @@ mod tests {
         let peach = Rgba::opaque(0xff, 0xcc, 0x99);
         assert_eq!(darker(peach), Rgba::opaque(0xab, 0x89, 0x66));
         assert_eq!(lighter(peach), peach);
+    }
+
+    #[test]
+    fn a_color_as_light_as_ececec_keeps_its_lit_side() {
+        // Chromium 155, measured: #ebebeb lightens to white, #ececec does not.
+        assert_eq!(
+            lighter(Rgba::opaque(0xeb, 0xeb, 0xeb)),
+            Rgba::opaque(0xff, 0xff, 0xff)
+        );
+        let paler = Rgba::opaque(0xec, 0xec, 0xec);
+        assert_eq!(lighter(paler), paler);
+        assert_eq!(darker(paler), Rgba::opaque(0x98, 0x98, 0x98));
+        let cream = Rgba::opaque(0xf8, 0xf0, 0xe0);
+        assert_eq!(lighter(cream), cream);
     }
 
     #[test]
