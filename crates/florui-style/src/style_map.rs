@@ -3,7 +3,7 @@ use std::collections::hash_map;
 use std::ops::Index;
 use std::sync::Arc;
 
-use crate::cascade::{ComputedStyle, Display, Float};
+use crate::cascade::{BlockAlign, ComputedStyle, Display, Float};
 use crate::tree::NodeId;
 
 /// The style of every node of a tree.
@@ -30,6 +30,7 @@ struct Kinds {
     contents: bool,
     floats: bool,
     list_items: bool,
+    block_align: bool,
 }
 
 impl PartialEq for Kinds {
@@ -43,6 +44,7 @@ impl Kinds {
         self.contents |= style.display == Display::Contents;
         self.floats |= style.float != Float::None;
         self.list_items |= style.display == Display::ListItem;
+        self.block_align |= style.block_align != BlockAlign::None;
     }
 
     fn any(&mut self) {
@@ -50,6 +52,7 @@ impl Kinds {
             contents: true,
             floats: true,
             list_items: true,
+            block_align: true,
         };
     }
 }
@@ -74,6 +77,11 @@ impl StyleMap {
     /// Whether a style may be a float.
     pub fn may_have_floats(&self) -> bool {
         self.kinds.floats
+    }
+
+    /// Whether a style may align the blocks in it (`text-align: -webkit-center` and the like).
+    pub fn may_have_block_align(&self) -> bool {
+        self.kinds.block_align
     }
 
     /// Whether a style may be a list item.
@@ -260,6 +268,11 @@ mod tests {
         contents.display = Display::Contents;
         map.insert_shared(3, Arc::new(contents));
         assert!(map.may_have_contents());
+
+        let mut aligned = plain.clone();
+        aligned.block_align = BlockAlign::Center;
+        map.insert(4, aligned);
+        assert!(map.may_have_block_align());
 
         let mut item = plain;
         item.display = Display::ListItem;

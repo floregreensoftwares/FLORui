@@ -113,6 +113,9 @@ pub(crate) fn role_of(arena: &Tree, styles: &StyleMap, node: NodeId) -> Role {
     let Some(style) = styles.get(&node) else {
         return Role::None;
     };
+    if !style.display.is_table() && !style.display.is_table_part() {
+        return Role::None;
+    }
     let collapsed = style.visibility == Visibility::Collapse;
     let sides = sides_of(style);
     match style.display {
