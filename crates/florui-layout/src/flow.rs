@@ -10,9 +10,10 @@ use florui_style::{Display, InlineItem, NodeId, StyleMap, Tree};
 
 /// Whether `node` generates no box and leaves only its children.
 pub fn is_contents(styles: &StyleMap, node: NodeId) -> bool {
-    styles
-        .get(&node)
-        .is_some_and(|style| style.display == Display::Contents)
+    styles.may_have_contents()
+        && styles
+            .get(&node)
+            .is_some_and(|style| style.display == Display::Contents)
 }
 
 /// The children of `node` that have a box, in order, with those of a
