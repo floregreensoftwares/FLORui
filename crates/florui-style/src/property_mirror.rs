@@ -344,7 +344,9 @@ fn expand(name: &str, value: &str, important: &str) -> Option<String> {
         "text-decoration" => expand_text_decoration(value, important),
         "clip-path" => Some(expand_clip_path(value, important)),
         "grid-template-columns" | "grid-template-rows" => {
-            Some(expand_grid_template(name, value, important))
+            // A `subgrid` that does not parse is left for the engine to drop.
+            (!crate::grid::is_subgrid_value(value) || crate::grid::parse_subgrid(value).is_some())
+                .then(|| expand_grid_template(name, value, important))
         }
         "grid-template" => expand_grid_template_shorthand(value, important),
         "background" => Some(expand_background(value, important)),
@@ -1020,6 +1022,12 @@ fn expand_grid_template_shorthand(value: &str, important: &str) -> Option<String
     if !crate::grid::is_subgrid_value(rows) && !crate::grid::is_subgrid_value(columns) {
         return None;
     }
+    let parses = |side: &str| {
+        !crate::grid::is_subgrid_value(side) || crate::grid::parse_subgrid(side).is_some()
+    };
+    if !parses(rows) || !parses(columns) {
+        return None;
+    }
     Some(format!(
         "{}; {}; grid-template-areas: none{important}",
         expand_grid_template("grid-template-rows", rows.trim(), important),
@@ -1300,6 +1308,14 @@ mod tests {
 
     fn sheet(css: &str) -> String {
         rewrite_stylesheet(css).into_owned()
+    }
+
+    #[test]
+    fn a_subgrid_that_does_not_parse_is_left_for_the_engine_to_drop() {
+        let css = ".g { grid-template-rows: subgrid foo; }";
+        assert_eq!(sheet(css), css);
+        let css = ".g { grid-template: subgrid foo / 20px; }";
+        assert_eq!(sheet(css), css);
     }
 
     #[test]
