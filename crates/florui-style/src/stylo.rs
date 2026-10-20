@@ -1358,6 +1358,7 @@ fn with_style_context<'t, R>(
         &mut AnimationTimeline,
     ) -> R,
 ) -> R {
+    let _counter_styles = crate::counter_style::install(crate::counter_style::collect(rules));
     let prefers_color_scheme = if timeline.prefers_dark_color_scheme() {
         PrefersColorScheme::Dark
     } else {
@@ -1978,7 +1979,9 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
             left: is_hidden(border.border_left_style),
         },
         list_style_type: mirrored(values, "list-style-type")
-            .map(|value| crate::list::parse_list_style_type(&value))
+            .map(|value| {
+                crate::list::parse_list_style_type_with(&value, &crate::counter_style::lookup)
+            })
             .unwrap_or_default(),
         list_style_position: to_list_style_position(values),
         list_style_image: to_background_image(&values.get_list().list_style_image, &text.color),

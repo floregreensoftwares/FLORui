@@ -36,6 +36,7 @@ mod cascade;
 pub mod clip;
 mod color;
 mod container_query_adapter;
+mod counter_style;
 mod default_stylesheet;
 mod error;
 mod focus;
@@ -83,6 +84,9 @@ pub use cascade::{
 pub use clip::{ClipPath, ClipShape, PathSegment, ReferenceBox, ShapeRadius};
 pub use color::{ColorParseError, Rgba, parse_hex_color};
 pub use container_query_adapter::{ContentBoxSize, resolve_container_query_signatures};
+pub use counter_style::{
+    CounterRef, CounterStyle, CounterStyles, CounterSystem, extract_rules as extract_counter_styles,
+};
 pub use error::StyleError;
 pub use focus::FocusPath;
 pub use grid::{
@@ -90,7 +94,10 @@ pub use grid::{
     GridTemplate, GridTemplateAreas, GridTemplateComponent, GridTrackSize, SubgridNames,
 };
 pub use interaction::{FormState, InteractionState};
-pub use list::{ListStylePosition, ListStyleType, parse_counters, parse_list_style_type};
+pub use list::{
+    ListStylePosition, ListStyleType, parse_counters, parse_list_style_type,
+    parse_list_style_type_with,
+};
 pub use mask_box_image::{MaskBoxImageSpec, resolve_mask_box_image};
 pub use matrix::{Matrix4, NEAR_W, transform_matrix};
 pub use rounded::RoundedRect;

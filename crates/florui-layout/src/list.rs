@@ -305,6 +305,10 @@ pub fn marker_of(style: &florui_style::ComputedStyle, number: i64) -> Option<Mar
             MarkerKind::Text(format!("{}{}", counted.text, counted.suffix))
         }
         ListStyleType::String(text) => MarkerKind::Text(text.clone()),
+        ListStyleType::Custom(style) => {
+            let counted = crate::counter_style_custom::format_custom(style, number);
+            MarkerKind::Text(format!("{}{}", counted.text, counted.suffix))
+        }
     })
 }
 
