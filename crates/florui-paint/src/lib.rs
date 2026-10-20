@@ -8140,6 +8140,32 @@ mod tests {
     }
 
     #[test]
+    fn an_absolutely_positioned_child_of_a_flex_container_stacks_as_order_zero() {
+        let tree: Element = view! {
+            <div class="row">
+                <div class="abs" />
+                <div class="item" />
+            </div>
+        };
+        // Chromium paints the item over the absolute child whatever the
+        // child's `order`: the child counts as 0, below the item at 1.
+        let css = ".row { display: flex; } .abs { position: absolute; order: 10; } \
+                   .item { position: relative; order: 1; }";
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(css).unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let children = arena.children(arena.roots()[0]).to_vec();
+        let ordered = paint_order(&styles, Some(florui_style::Display::Flex), &children);
+        assert_eq!(ordered, children);
+    }
+
+    #[test]
     fn paint_order_sorts_flex_children_by_z_index_ascending_with_stable_ties() {
         let tree: Element = view! {
             <div class="row">
