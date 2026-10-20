@@ -45,6 +45,7 @@ mod first_letter_adapter;
 mod focus;
 mod generated;
 mod grid;
+mod has_adapter;
 mod height_media_adapter;
 mod interaction;
 mod intern;
