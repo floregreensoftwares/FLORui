@@ -412,9 +412,10 @@ pub fn extract_rules(css: &str) -> (std::borrow::Cow<'_, str>, Vec<CounterStyle>
     let mut at = 0;
     while let Some(relative) = lower[at..].find(AT) {
         let begin = at + relative;
-        // Not in a comment or a string: the cheap check is that the text before it on its
+        // Not in a comment or a string, nor in the block of an at-rule (a condition that is not
+        // evaluated here): the cheap check is that the text before it on its
         // line is no unfinished comment or quote.
-        if in_comment_or_string(&css[..begin]) {
+        if in_comment_or_string(&css[..begin]) || inside_block(&css[..begin]) {
             left.push_str(&css[at..begin + AT.len()]);
             at = begin + AT.len();
             continue;
@@ -483,6 +484,38 @@ fn in_comment_or_string(before: &str) -> bool {
         }
     }
     in_comment || quote.is_some()
+}
+
+/// Whether `before` leaves a `{` unclosed, outside comments and strings.
+fn inside_block(before: &str) -> bool {
+    let mut depth = 0usize;
+    let mut in_comment = false;
+    let mut quote: Option<char> = None;
+    let mut chars = before.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_comment {
+            if c == '*' && chars.peek() == Some(&'/') {
+                chars.next();
+                in_comment = false;
+            }
+        } else if let Some(open) = quote {
+            if c == '\\' {
+                chars.next();
+            } else if c == open {
+                quote = None;
+            }
+        } else if c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            in_comment = true;
+        } else if c == '"' || c == '\'' {
+            quote = Some(c);
+        } else if c == '{' {
+            depth += 1;
+        } else if c == '}' {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    depth > 0
 }
 
 /// The counter styles of a set of rules, by name; one written later takes the place of one
@@ -632,6 +665,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_rule_in_the_block_of_another_at_rule_is_left_alone() {
+        let css = "@media (min-width: 900px) { @counter-style a { symbols: x; } } \
+                   @counter-style b { symbols: y; }";
+        let (left, found) = extract_rules(css);
+        assert_eq!(
+            found.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            ["b"]
+        );
+        assert!(left.contains("@media") && left.contains("@counter-style a"));
+    }
     #[test]
     fn extends_and_fallback_are_turned_into_the_styles_they_name() {
         let (_, found) = extract_rules(
