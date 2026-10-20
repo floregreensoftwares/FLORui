@@ -1384,20 +1384,10 @@ impl Drop for NumberingGuard {
     }
 }
 
-/// Numbers the list items of the document, if one of them has its marker inside.
+/// Numbers the list items of the document: the width of a marker inside is needed while the
+/// lines are built, and the number of every marker when the boxes are collected.
 fn install_numbering(arena: &Tree, styles: &StyleMap) -> NumberingGuard {
-    let inside = styles.may_have_list_items()
-        && styles.values().any(|style| {
-            style.display == StyleDisplay::ListItem
-                && style.list_style_position == florui_style::ListStylePosition::Inside
-        });
-    NUMBERING.with(|numbers| {
-        *numbers.borrow_mut() = if inside {
-            list::numbering(arena, styles)
-        } else {
-            HashMap::new()
-        };
-    });
+    NUMBERING.with(|numbers| *numbers.borrow_mut() = list::numbering(arena, styles));
     NumberingGuard
 }
 
@@ -2125,7 +2115,7 @@ fn collect_layouts(
 
     // The markers of the list items: where they are placed by, and their numbers.
     if !list_items.is_empty() {
-        let numbers = list::numbering(arena, styles);
+        let numbers = NUMBERING.with(|numbers| numbers.borrow().clone());
         for (node_id, tid) in list_items {
             let (Some(style), Some(&number)) = (styles.get(&node_id), numbers.get(&node_id)) else {
                 continue;

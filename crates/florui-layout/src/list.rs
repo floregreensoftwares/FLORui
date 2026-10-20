@@ -71,9 +71,10 @@ const ROOT: NodeId = usize::MAX;
 /// `counter-increment`, `counter-set`, `<ol start reversed>`, `<li value>`).
 pub(crate) fn numbering(arena: &Tree, styles: &StyleMap) -> HashMap<NodeId, i64> {
     let mut numbers = HashMap::new();
-    if !styles
-        .values()
-        .any(|style| style.display == Display::ListItem)
+    if !styles.may_have_list_items()
+        || !styles
+            .values()
+            .any(|style| style.display == Display::ListItem)
     {
         return numbers;
     }
