@@ -1,0 +1,494 @@
+{
+    "id":  "table-row-effects",
+    "description":  "A row or a row group that is not opaque, moved, filtered or blended is one box with its cells: opacity, a transform, a filter and mix-blend-mode of a row act on its background and on its cells together and put it over the cells of the rows that are not, and a hidden row shows the cells that are visible.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  330,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 330px; background-color: #ffffff; } table { margin: 0 0 8px 10px; border-spacing: 4px; background-color: #e4e4e4; } td { padding: 0; background-color: #c8d8f0; } .d { width: 40px; height: 12px; background-color: #d05040; } .row { background-color: #40a060; } .op { opacity: 0.5; } .op4 { opacity: 0.4; } .tf { transform: translate(14px, 3px); } .fl { filter: invert(1); } .bl { mix-blend-mode: multiply; } .hid { visibility: hidden; } .show { visibility: visible; } .y { background-color: #e0b030; } .cop { opacity: 0.5; background-color: #8050c0; } .ov { position: relative; top: -6px; left: 30px; width: 40px; height: 20px; background-color: #202020; }",
+                   "children":  [
+                                    {
+                                        "tag":  "table",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "tr",
+                                                             "class":  "row op",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "td",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "d",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "td",
+                                                                                  "class":  "y",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "d",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "tr",
+                                                             "class":  "row",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "td",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "d",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "td",
+                                                                                  "class":  "y",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "d",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "table",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "tbody",
+                                                             "class":  "row op4",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "tr",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "td",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+                                                                                                                        {
+                                                                                                                            "tag":  "div",
+                                                                                                                            "class":  "d",
+                                                                                                                            "css":  "",
+                                                                                                                            "text":  "",
+                                                                                                                            "children":  [
+
+                                                                                                                                         ]
+                                                                                                                        }
+                                                                                                                    ]
+                                                                                                   },
+                                                                                                   {
+                                                                                                       "tag":  "td",
+                                                                                                       "class":  "y",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+                                                                                                                        {
+                                                                                                                            "tag":  "div",
+                                                                                                                            "class":  "d",
+                                                                                                                            "css":  "",
+                                                                                                                            "text":  "",
+                                                                                                                            "children":  [
+
+                                                                                                                                         ]
+                                                                                                                        }
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "tr",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "td",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+                                                                                                                        {
+                                                                                                                            "tag":  "div",
+                                                                                                                            "class":  "d",
+                                                                                                                            "css":  "",
+                                                                                                                            "text":  "",
+                                                                                                                            "children":  [
+
+                                                                                                                                         ]
+                                                                                                                        }
+                                                                                                                    ]
+                                                                                                   },
+                                                                                                   {
+                                                                                                       "tag":  "td",
+                                                                                                       "class":  "y",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+                                                                                                                        {
+                                                                                                                            "tag":  "div",
+                                                                                                                            "class":  "d",
+                                                                                                                            "css":  "",
+                                                                                                                            "text":  "",
+                                                                                                                            "children":  [
+
+                                                                                                                                         ]
+                                                                                                                        }
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "table",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "tr",
+                                                             "class":  "row tf",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "td",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "d",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "td",
+                                                                                  "class":  "y",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "d",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "tr",
+                                                             "class":  "row",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "td",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "d",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "td",
+                                                                                  "class":  "y",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "d",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "table",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "tr",
+                                                             "class":  "row fl",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "td",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "d",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "td",
+                                                                                  "class":  "y",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "d",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "tr",
+                                                             "class":  "row bl",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "td",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "d",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "td",
+                                                                                  "class":  "y",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "d",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "table",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "tr",
+                                                             "class":  "row hid",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "td",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "d",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "td",
+                                                                                  "class":  "y show",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "d",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "tr",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "td",
+                                                                                  "class":  "cop",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "d",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "td",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "d",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  0.5,
+                           "channel_tolerance":  2,
+                           "reason":  "Measured against Chromium 153: every box and every flat colour is the same but for one level of a channel where a row of a given opacity or blended is composited (tiny-skia and Chromium round the blend differently), which the channel tolerance of 2 takes in; with the effects of the rows ignored the same fixture differs by 4.99%, so it fails."
+                       }
+}
