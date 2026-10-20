@@ -624,13 +624,14 @@ fn needs_inline_layout(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
 /// Whether `child` is a float: a box taken out of the flow that sits at the
 /// side of the lines of its container's content.
 fn is_float_child(styles: &StyleMap, child: NodeId) -> bool {
-    styles.get(&child).is_some_and(|style| {
-        style.float != florui_style::Float::None
-            && !matches!(
-                style.position,
-                StylePosition::Absolute | StylePosition::Fixed
-            )
-    })
+    styles.may_have_floats()
+        && styles.get(&child).is_some_and(|style| {
+            style.float != florui_style::Float::None
+                && !matches!(
+                    style.position,
+                    StylePosition::Absolute | StylePosition::Fixed
+                )
+        })
 }
 
 /// How a node with children lays them out.
@@ -1393,12 +1394,13 @@ fn install_numbering(arena: &Tree, styles: &StyleMap) -> NumberingGuard {
 
 /// Whether `node` is a list item whose marker is the first thing in its first line.
 fn has_inside_marker(styles: &StyleMap, node: NodeId) -> bool {
-    styles.get(&node).is_some_and(|style| {
-        style.display == StyleDisplay::ListItem
-            && style.list_style_position == florui_style::ListStylePosition::Inside
-            && (style.list_style_type != florui_style::ListStyleType::None
-                || style.list_style_image.is_some())
-    })
+    styles.may_have_list_items()
+        && styles.get(&node).is_some_and(|style| {
+            style.display == StyleDisplay::ListItem
+                && style.list_style_position == florui_style::ListStylePosition::Inside
+                && (style.list_style_type != florui_style::ListStyleType::None
+                    || style.list_style_image.is_some())
+        })
 }
 
 /// How much room the marker of the list item `node` takes in its first line when it

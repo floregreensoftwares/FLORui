@@ -3,7 +3,7 @@ use std::collections::hash_map;
 use std::ops::Index;
 use std::sync::Arc;
 
-use crate::cascade::ComputedStyle;
+use crate::cascade::{ComputedStyle, Display, Float};
 use crate::tree::NodeId;
 
 /// The style of every node of a tree.
@@ -17,6 +17,41 @@ use crate::tree::NodeId;
 #[derive(Clone, Default, PartialEq)]
 pub struct StyleMap {
     styles: HashMap<NodeId, Arc<ComputedStyle>>,
+    kinds: Kinds,
+}
+
+/// Which rare kinds of box the styles of a map may hold, so that code which asks of
+/// every child whether it is one can skip the question when none can be. A kind is set
+/// when a style that is one is put in, and by any write through [`StyleMap::get_mut`],
+/// which cannot be told apart; it is never cleared. Two maps are equal whatever they
+/// hint.
+#[derive(Clone, Copy, Default)]
+struct Kinds {
+    contents: bool,
+    floats: bool,
+    list_items: bool,
+}
+
+impl PartialEq for Kinds {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Kinds {
+    fn note(&mut self, style: &ComputedStyle) {
+        self.contents |= style.display == Display::Contents;
+        self.floats |= style.float != Float::None;
+        self.list_items |= style.display == Display::ListItem;
+    }
+
+    fn any(&mut self) {
+        *self = Kinds {
+            contents: true,
+            floats: true,
+            list_items: true,
+        };
+    }
 }
 
 impl StyleMap {
@@ -27,7 +62,23 @@ impl StyleMap {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             styles: HashMap::with_capacity(capacity),
+            kinds: Kinds::default(),
         }
+    }
+
+    /// Whether a style may be `display: contents`.
+    pub fn may_have_contents(&self) -> bool {
+        self.kinds.contents
+    }
+
+    /// Whether a style may be a float.
+    pub fn may_have_floats(&self) -> bool {
+        self.kinds.floats
+    }
+
+    /// Whether a style may be a list item.
+    pub fn may_have_list_items(&self) -> bool {
+        self.kinds.list_items
     }
 
     pub fn len(&self) -> usize {
@@ -45,6 +96,13 @@ impl StyleMap {
     /// The style of `id` to change. It is copied first if another node has the
     /// same one, so the change is this node's alone.
     pub fn get_mut(&mut self, id: &NodeId) -> Option<&mut ComputedStyle> {
+        self.kinds.any();
+        self.styles.get_mut(id).map(Arc::make_mut)
+    }
+
+    /// [`Self::get_mut`] for a write that changes neither the `display` nor the `float` of the
+    /// style, which leaves what the map may hold as it was.
+    pub fn get_mut_same_kind(&mut self, id: &NodeId) -> Option<&mut ComputedStyle> {
         self.styles.get_mut(id).map(Arc::make_mut)
     }
 
@@ -53,11 +111,13 @@ impl StyleMap {
     }
 
     pub fn insert(&mut self, id: NodeId, style: ComputedStyle) {
+        self.kinds.note(&style);
         self.styles.insert(id, Arc::new(style));
     }
 
     /// Gives `id` a style another node already has, without copying it.
     pub fn insert_shared(&mut self, id: NodeId, style: Arc<ComputedStyle>) {
+        self.kinds.note(&style);
         self.styles.insert(id, style);
     }
 
@@ -96,19 +156,17 @@ impl std::fmt::Debug for StyleMap {
 
 impl FromIterator<(NodeId, ComputedStyle)> for StyleMap {
     fn from_iter<I: IntoIterator<Item = (NodeId, ComputedStyle)>>(iter: I) -> Self {
-        Self {
-            styles: iter
-                .into_iter()
-                .map(|(id, style)| (id, Arc::new(style)))
-                .collect(),
-        }
+        let mut map = Self::default();
+        map.extend(iter);
+        map
     }
 }
 
 impl Extend<(NodeId, ComputedStyle)> for StyleMap {
     fn extend<I: IntoIterator<Item = (NodeId, ComputedStyle)>>(&mut self, iter: I) {
-        self.styles
-            .extend(iter.into_iter().map(|(id, style)| (id, Arc::new(style))));
+        for (id, style) in iter {
+            self.insert(id, style);
+        }
     }
 }
 
@@ -183,6 +241,41 @@ mod tests {
         let mut seen: Vec<_> = copy.iter().map(|(&id, style)| (id, style.width)).collect();
         seen.sort_by_key(|&(id, _)| id);
         assert_eq!(seen, vec![(1, plain.width), (2, Some(40.0))]);
+    }
+
+    #[test]
+    fn the_map_says_which_rare_kinds_of_box_it_may_hold() {
+        let (plain, _) = two_styles();
+        let mut map = StyleMap::new();
+        map.insert(1, plain.clone());
+        assert!(!map.may_have_contents() && !map.may_have_floats() && !map.may_have_list_items());
+
+        let mut floated = plain.clone();
+        floated.float = Float::Left;
+        map.insert(2, floated);
+        assert!(map.may_have_floats());
+        assert!(!map.may_have_contents() && !map.may_have_list_items());
+
+        let mut contents = plain.clone();
+        contents.display = Display::Contents;
+        map.insert_shared(3, Arc::new(contents));
+        assert!(map.may_have_contents());
+
+        let mut item = plain;
+        item.display = Display::ListItem;
+        let collected: StyleMap = [(1, item)].into_iter().collect();
+        assert!(collected.may_have_list_items());
+    }
+
+    #[test]
+    fn a_write_that_may_change_the_kind_of_a_box_makes_every_kind_possible() {
+        let (plain, _) = two_styles();
+        let mut map = StyleMap::new();
+        map.insert(1, plain);
+        map.get_mut_same_kind(&1).unwrap().width = Some(3.0);
+        assert!(!map.may_have_contents());
+        map.get_mut(&1).unwrap().display = Display::Contents;
+        assert!(map.may_have_contents() && map.may_have_floats() && map.may_have_list_items());
     }
 
     #[test]
