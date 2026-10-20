@@ -1484,8 +1484,7 @@ fn line_marker(
     let Some(image) = &style.list_style_image else {
         return Some(LineMarker::Room(inside_marker_room(font, style, number()?)));
     };
-    let normal = node_text_style(Some(style)).with_line_height(florui_text::LineHeight::Normal);
-    let size = list::image_marker_size(image, font.measure(normal, "x").baseline.round());
+    let size = list::image_marker_size(image, marker_ascent(font, style));
     Some(if size.broken {
         // The type stands for it, which is nothing outside.
         if !inside {
@@ -1500,13 +1499,19 @@ fn line_marker(
     })
 }
 
+/// The ascent of the font of a list item, in whole pixels: what the sizes of its marker come
+/// from.
+pub fn marker_ascent(font: &mut florui_text::Font, style: &ComputedStyle) -> f32 {
+    let normal = node_text_style(Some(style)).with_line_height(florui_text::LineHeight::Normal);
+    font.measure(normal, "x").baseline.round()
+}
+
 /// How much room the marker of a list item in `style` numbered `number` takes before its
 /// first line when it is inside. An image that cannot be read is what its type is, with the
 /// gap an image has after it.
 pub fn inside_marker_room(font: &mut florui_text::Font, style: &ComputedStyle, number: i64) -> f32 {
     let text_style = node_text_style(Some(style));
-    let normal = text_style.with_line_height(florui_text::LineHeight::Normal);
-    let ascent = font.measure(normal, "x").baseline.round();
+    let ascent = marker_ascent(font, style);
     let Some(image) = &style.list_style_image else {
         return match list::marker_of(style, number) {
             Some(MarkerKind::Shape(_)) => shape_metrics(ascent, style.font_size).advance,
@@ -3625,8 +3630,7 @@ pub(crate) fn marker_rise(
     }
     let style = styles.get(&node)?;
     let text_style = node_text_style(Some(style));
-    let normal = text_style.with_line_height(florui_text::LineHeight::Normal);
-    let ascent = font.measure(normal, "x").baseline.round();
+    let ascent = marker_ascent(font, style);
     let size = list::image_marker_size(style.list_style_image.as_ref()?, ascent);
     let strut = font.measure(text_style, "x");
     Some(tree::MarkerRise {
