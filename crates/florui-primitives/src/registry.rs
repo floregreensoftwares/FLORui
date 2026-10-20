@@ -92,6 +92,27 @@ pub const PRIMITIVES: &[Primitive] = &[
         "footer content for its nearest sectioning ancestor"
     ),
     primitive!("nav", Content::Normal, "a navigation landmark"),
+    primitive!("search", Content::Normal, "a search landmark"),
+    primitive!("hgroup", Content::Normal, "a heading with its subheading"),
+    primitive!("address", Content::Normal, "contact information, in italic"),
+    primitive!(
+        "blockquote",
+        Content::Normal,
+        "a quotation set in from both sides"
+    ),
+    primitive!(
+        "figure",
+        Content::Normal,
+        "self-contained content, set in from both sides"
+    ),
+    primitive!("figcaption", Content::Normal, "the caption of a figure"),
+    primitive!("dl", Content::Normal, "a list of terms and descriptions"),
+    primitive!("dt", Content::Normal, "a term in a description list"),
+    primitive!(
+        "dd",
+        Content::Normal,
+        "a description in a description list, set in from the left"
+    ),
     // Text.
     primitive!(
         "h1",
@@ -135,6 +156,59 @@ pub const PRIMITIVES: &[Primitive] = &[
         "stress emphasis; combines default style with semantics"
     ),
     primitive!("small", Content::Normal, "side comments and small print"),
+    primitive!("b", Content::Normal, "bold text with no added importance"),
+    primitive!(
+        "i",
+        Content::Normal,
+        "text in an alternate voice, in italic"
+    ),
+    primitive!(
+        "u",
+        Content::Normal,
+        "text with an unarticulated annotation, underlined"
+    ),
+    primitive!(
+        "s",
+        Content::Normal,
+        "text that is no longer accurate, struck through"
+    ),
+    primitive!("del", Content::Normal, "removed text, struck through"),
+    primitive!("ins", Content::Normal, "inserted text, underlined"),
+    primitive!("mark", Content::Normal, "text highlighted for reference"),
+    primitive!(
+        "sub",
+        Content::Normal,
+        "subscript, in a smaller size below the baseline"
+    ),
+    primitive!(
+        "sup",
+        Content::Normal,
+        "superscript, in a smaller size above the baseline"
+    ),
+    primitive!("kbd", Content::Normal, "user input, in the monospace font"),
+    primitive!(
+        "samp",
+        Content::Normal,
+        "sample output, in the monospace font"
+    ),
+    primitive!("var", Content::Normal, "a variable, in italic"),
+    primitive!("cite", Content::Normal, "the title of a work, in italic"),
+    primitive!(
+        "dfn",
+        Content::Normal,
+        "the defining instance of a term, in italic"
+    ),
+    primitive!(
+        "abbr",
+        Content::Normal,
+        "an abbreviation; underlined with dots when it has a title"
+    ),
+    primitive!("time", Content::Normal, "a date or time"),
+    primitive!(
+        "data",
+        Content::Normal,
+        "content with a machine-readable value"
+    ),
     primitive!("code", Content::Normal, "a fragment of computer code"),
     primitive!(
         "pre",
