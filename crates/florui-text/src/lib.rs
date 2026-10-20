@@ -2224,16 +2224,16 @@ mod tests {
     }
 
     #[test]
-    fn a_line_of_atomic_boxes_alone_has_no_strut() {
-        // A button on its own in a div is as tall as the button, not taller by
-        // the depth of an empty text line.
+    fn a_line_of_atomic_boxes_alone_has_the_strut_depth_below_them() {
+        // Chrome 153: a div holding one inline box 20px high is 25px tall, the 20 of
+        // the box and the 5 an empty 16px line has below its baseline.
         let items = [InlineContent::Box {
             id: 1,
             width: 20.0,
             height: 50.0,
         }];
         let line = Font::load_embedded().shape_inline(&items, sans(16.0), None);
-        close(line.height, 50.0);
+        close(line.height, 50.0 + 5.0);
         close(line.baseline, 50.0);
         close(line.boxes[0].y, 0.0);
     }

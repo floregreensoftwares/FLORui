@@ -7851,21 +7851,21 @@ mod tests {
         let css = ".outer { width: 200px; height: 100px; } \
                    .box { width: 100px; height: 100px; clip-path: url(#c); } \
                    .kid { width: 100px; height: 100px; }";
-        let (arena, hit) = hit_in(css, &tree, 50.0, 50.0);
+        let (arena, hit) = hit_in(css, &tree, 50.0, 72.0);
         let outer = arena.roots()[0];
         let boxed = arena.children(outer)[1];
         let kid = arena.children(boxed)[0];
         assert_eq!(hit, Some(kid), "inside the circle the child is on top");
         // The corner of the box is outside the circle.
-        let (_, corner) = hit_in(css, &tree, 5.0, 5.0);
+        let (_, corner) = hit_in(css, &tree, 5.0, 27.0);
         assert_eq!(corner, Some(outer));
-        let (_, inside) = hit_in(css, &tree, 85.0, 50.0);
+        let (_, inside) = hit_in(css, &tree, 85.0, 72.0);
         assert_eq!(inside, Some(kid));
-        let (_, outside) = hit_in(css, &tree, 95.0, 50.0);
+        let (_, outside) = hit_in(css, &tree, 95.0, 72.0);
         assert_eq!(outside, Some(outer));
         // A reference that names nothing clips nothing.
         let missing = css.replace("#c", "#nope");
-        let (_, corner) = hit_in(&missing, &tree, 5.0, 5.0);
+        let (_, corner) = hit_in(&missing, &tree, 5.0, 27.0);
         assert_eq!(corner, Some(kid));
     }
     #[test]
