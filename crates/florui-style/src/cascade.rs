@@ -1331,6 +1331,19 @@ impl ComputedStyle {
                 .any(|track| track.is_fit_content())
     }
 
+    /// Where a box stacks among its siblings in a block: boxes in the flow, then
+    /// floats, then positioned boxes by `z-index`, with document order left to
+    /// break any tie.
+    pub fn block_stacking(&self) -> (i32, i32) {
+        if self.position != Position::Static {
+            (self.z_index.unwrap_or(0), 2)
+        } else if self.float != Float::None {
+            (0, 1)
+        } else {
+            (0, 0)
+        }
+    }
+
     /// Whether a column of the node is a calc() of a length and a percentage,
     /// which is of the grid's own width.
     pub fn has_grid_column_calc(&self) -> bool {
