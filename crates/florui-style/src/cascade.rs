@@ -1096,6 +1096,18 @@ pub struct ComputedStyle {
     /// but, where the borders of table cells collapse, wins over every other
     /// border on the edge.
     pub border_hidden: Edges<bool>,
+    /// `list-style-type`, which inherits.
+    pub list_style_type: crate::list::ListStyleType,
+    /// `list-style-position`, which inherits.
+    pub list_style_position: crate::list::ListStylePosition,
+    /// `list-style-image`: a URL, which marks a list item when it can be read; the
+    /// type does when it cannot. It inherits.
+    pub list_style_image: Option<crate::BackgroundImage>,
+    /// `counter-reset`, `counter-increment` and `counter-set` of this element alone:
+    /// each counter by name with its amount.
+    pub counter_reset: Vec<(String, i32)>,
+    pub counter_increment: Vec<(String, i32)>,
+    pub counter_set: Vec<(String, i32)>,
     /// `border-*-radius` per corner as a (horizontal, vertical) pair, still
     /// carrying any percentage unresolved: it resolves against this node's
     /// own border box (width for horizontal, height for vertical), which
@@ -1498,6 +1510,12 @@ impl ComputedStyle {
             gap_normal: _,
             border_radius: _,
             border_hidden: _,
+            list_style_type: _,
+            list_style_position: _,
+            list_style_image: _,
+            counter_reset: _,
+            counter_increment: _,
+            counter_set: _,
             grid_template_columns: _,
             grid_template_rows: _,
             grid_auto_columns: _,
@@ -3084,6 +3102,83 @@ mod tests {
             .map(|button| computed[&button].width)
             .collect();
         assert_eq!(widths, vec![Some(5.0), Some(20.0), Some(20.0)]);
+    }
+
+    #[test]
+    fn lists_have_the_markers_and_the_padding_of_the_default_style() {
+        let tree: Element = view! {
+            <ul>
+                <li>{"a"}</li>
+                <li><ul><li><ul><li>{"b"}</li></ul></li></ul></li>
+            </ul>
+            <ol><li>{"c"}</li></ol>
+        };
+        let (arena, computed) = styles(&tree, "", &InteractionState::new());
+        let lists = arena.find_all(|a, id| a.tag(id) == "ul");
+        let kinds: Vec<_> = lists
+            .iter()
+            .map(|id| computed[id].list_style_type.clone())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                crate::ListStyleType::Disc,
+                crate::ListStyleType::Circle,
+                crate::ListStyleType::Square
+            ]
+        );
+        let items = arena.find_all(|a, id| a.tag(id) == "li");
+        assert!(
+            items
+                .iter()
+                .all(|id| computed[id].display == Display::ListItem)
+        );
+        let ordered = arena.find(|a, id| a.tag(id) == "ol").unwrap();
+        assert_eq!(
+            computed[&ordered].list_style_type,
+            crate::ListStyleType::Counter("decimal".to_owned())
+        );
+        assert_eq!(computed[&lists[0]].padding.left, 40.0);
+    }
+
+    #[test]
+    fn list_style_and_the_counter_properties_resolve() {
+        let tree: Element = view! {
+            <ol class="o"><li class="i">{"a"}</li></ol>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".o { list-style: lower-roman inside; counter-reset: a 3 b; } \
+             .i { list-style-type: \"> \"; counter-increment: a 2; counter-set: b -1; }",
+            &InteractionState::new(),
+        );
+        let list = arena.find(|a, id| a.tag(id) == "ol").unwrap();
+        let item = arena.find(|a, id| a.tag(id) == "li").unwrap();
+        assert_eq!(
+            computed[&list].list_style_type,
+            crate::ListStyleType::Counter("lower-roman".to_owned())
+        );
+        assert_eq!(
+            computed[&list].list_style_position,
+            crate::ListStylePosition::Inside
+        );
+        // The type and the position inherit, the counters do not.
+        assert_eq!(
+            computed[&item].list_style_type,
+            crate::ListStyleType::String("> ".to_owned())
+        );
+        assert_eq!(
+            computed[&item].list_style_position,
+            crate::ListStylePosition::Inside
+        );
+        assert_eq!(
+            computed[&list].counter_reset,
+            vec![("a".to_owned(), 3), ("b".to_owned(), 0)]
+        );
+        assert!(computed[&item].counter_reset.is_empty());
+        assert_eq!(computed[&item].counter_increment, vec![("a".to_owned(), 2)]);
+        assert_eq!(computed[&item].counter_set, vec![("b".to_owned(), -1)]);
+        assert!(computed[&list].counter_increment.is_empty());
     }
 
     #[test]

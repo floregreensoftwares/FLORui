@@ -1974,6 +1974,14 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
             bottom: is_hidden(border.border_bottom_style),
             left: is_hidden(border.border_left_style),
         },
+        list_style_type: mirrored(values, "list-style-type")
+            .map(|value| crate::list::parse_list_style_type(&value))
+            .unwrap_or_default(),
+        list_style_position: to_list_style_position(values),
+        list_style_image: to_background_image(&values.get_list().list_style_image, &text.color),
+        counter_reset: to_counters(values, "counter-reset", 0),
+        counter_increment: to_counters(values, "counter-increment", 1),
+        counter_set: to_counters(values, "counter-set", 0),
         border_radius: Corners {
             top_left: to_corner_radius(&border.border_top_left_radius),
             top_right: to_corner_radius(&border.border_top_right_radius),
@@ -3586,6 +3594,25 @@ fn to_border_line_style(style: style::values::computed::BorderStyle) -> BorderLi
 /// every other style. `currentcolor` resolves against `inherited_color`
 /// (this element's own already-resolved `color`), the same fallback
 /// `background-color` already uses.
+fn to_list_style_position(values: &ComputedValues) -> crate::list::ListStylePosition {
+    use style::computed_values::list_style_position::T;
+    match values.get_list().list_style_position {
+        T::Inside => crate::list::ListStylePosition::Inside,
+        T::Outside => crate::list::ListStylePosition::Outside,
+    }
+}
+
+/// The counters a mirrored `counter-reset`, `counter-increment` or `counter-set`
+/// names on this element (they do not inherit, as the custom property does).
+fn to_counters(values: &ComputedValues, name: &str, default: i32) -> Vec<(String, i32)> {
+    if !declares_mirrored(values, name) {
+        return Vec::new();
+    }
+    mirrored(values, name)
+        .map(|value| crate::list::parse_counters(&value, default))
+        .unwrap_or_default()
+}
+
 fn is_hidden(style: style::values::computed::BorderStyle) -> bool {
     style == style::values::computed::BorderStyle::Hidden
 }
