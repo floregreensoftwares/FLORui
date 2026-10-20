@@ -347,9 +347,61 @@ pub fn shape_metrics(ascent: f32, font_size: f32) -> ShapeMetrics {
 /// and the gap of 7px.
 pub const IMAGE_GAP: f32 = 7.0;
 
+/// What `list-style-image` is drawn as: the box it fills, which stands on the baseline of
+/// the first line. A `url()` that cannot be read has no height and a width that depends
+/// only on the font, as in Chrome.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImageMarkerSize {
+    pub width: f32,
+    pub height: f32,
+    pub broken: bool,
+}
+
+/// The size of the image `image` as a marker for a font whose ascent is `ascent` (a whole
+/// number of pixels). An image with sides of its own has them; one that has none is a
+/// square of half the ascent, a side or a ratio it has fills in the rest of it.
+pub fn image_marker_size(image: &florui_style::BackgroundImage, ascent: f32) -> ImageMarkerSize {
+    use florui_assets::url_image::Natural;
+    let side = ascent / 2.0;
+    let sized = |width, height| ImageMarkerSize {
+        width,
+        height,
+        broken: false,
+    };
+    let florui_style::BackgroundImage::Url(url) = image else {
+        // A gradient has no size of its own.
+        return sized(side, side);
+    };
+    let Some(loaded) = florui_assets::url_image::load(url) else {
+        return ImageMarkerSize {
+            width: shape_metrics(ascent, 0.0).size + 2.0,
+            height: 0.0,
+            broken: true,
+        };
+    };
+    let Natural {
+        width,
+        height,
+        ratio,
+    } = loaded.natural;
+    match (width, height, ratio) {
+        (Some(width), Some(height), _) => sized(width, height),
+        (Some(width), None, Some(ratio)) => sized(width, width / ratio),
+        (Some(width), None, None) => sized(width, side),
+        (None, Some(height), Some(ratio)) => sized(height * ratio, height),
+        (None, Some(height), None) => sized(side, height),
+        // Contained by the square.
+        (None, None, Some(ratio)) if ratio >= 1.0 => sized(side, side / ratio),
+        (None, None, Some(ratio)) => sized(side * ratio, side),
+        (None, None, None) => sized(side, side),
+    }
+}
+
 #[cfg(test)]
 mod marker_tests {
     use crate::test_support::*;
+
+    use florui::prelude::Element;
 
     use super::{MarkerKind, MarkerShape, marker_of, shape_metrics};
 
@@ -452,5 +504,259 @@ mod marker_tests {
             marker_of(laid.styles.get(&laid.node("i")).unwrap(), 1),
             None
         );
+    }
+
+    /// A box of `width` x `height` as the `list-style-image` of the item.
+    fn image(width: u32, height: u32) -> String {
+        format!(
+            "list-style-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='{width}' height='{height}'%3E%3Crect width='{width}' height='{height}'/%3E%3C/svg%3E\");"
+        )
+    }
+
+    /// The list of one item of `content`, in 16px Open Sans, laid out with `css` for its item.
+    fn image_item(content: Vec<Element>, css: &str) -> Laid {
+        image_item_with(content, css, "")
+    }
+
+    /// [`image_item`], with `more` rules for the rest of the list.
+    fn image_item_with(content: Vec<Element>, css: &str, more: &str) -> Laid {
+        lay_out(
+            &div(
+                "p",
+                vec![element("ul", "u", vec![element("li", "i", content)])],
+            ),
+            &format!(
+                ".p {{ width: 360px; }} .u {{ margin: 0; padding: 0 0 0 60px; }} .q {{ margin: 0; }} .i {{ {css} }} {more}"
+            ),
+        )
+    }
+
+    /// Where the text of the first line of the item starts, from its content box.
+    fn first_text_x(laid: &Laid) -> f32 {
+        let mut font = florui_text::Font::load_embedded();
+        let shaped = crate::shape_inline_formatting_context(
+            &mut font,
+            &laid.arena,
+            &laid.styles,
+            (&laid.layouts, 1.0),
+            laid.node("i"),
+            240.0,
+        )
+        .unwrap();
+        shaped
+            .layout
+            .runs
+            .iter()
+            .filter(|run| run.line == 0)
+            .map(|run| run.x)
+            .fold(f32::MAX, f32::min)
+    }
+
+    #[test]
+    fn an_image_marker_stands_on_the_baseline_and_makes_the_first_line_taller() {
+        // Chrome 153, 16px Open Sans: a line is 22 tall, 17 above its baseline.
+        for (width, height, tall) in [
+            (12, 12, 22.0),
+            (40, 40, 45.0),
+            (8, 30, 35.0),
+            (100, 20, 25.0),
+        ] {
+            for position in ["outside", "inside"] {
+                let laid = image_item(
+                    vec![text("Hello")],
+                    &format!("list-style-position: {position}; {}", image(width, height)),
+                );
+                assert_eq!(laid.rect("i").3, tall, "{width}x{height} {position}");
+            }
+        }
+        // The strut of a line of 30px has a half-leading: 4px above the 17, 4 below the 5.
+        let laid = image_item(
+            vec![text("Hello")],
+            &format!("line-height: 30px; {}", image(40, 40)),
+        );
+        assert_eq!(laid.rect("i").3, 49.0);
+    }
+
+    #[test]
+    fn an_image_marker_inside_takes_its_width_and_seven_pixels() {
+        // Chrome 153: the text of an inside marker starts 7px after the image.
+        for (width, height, start) in [
+            (12, 12, 19.0),
+            (40, 40, 47.0),
+            (8, 30, 15.0),
+            (100, 20, 107.0),
+        ] {
+            let laid = image_item(
+                vec![text("Hello")],
+                &format!("list-style-position: inside; {}", image(width, height)),
+            );
+            assert_eq!(first_text_x(&laid), start, "{width}x{height}");
+        }
+        // An image outside is beside the content, which starts where it would.
+        let laid = image_item(vec![text("Hello")], &image(40, 40));
+        assert_eq!(first_text_x(&laid), 0.0);
+        let laid = image_item(
+            vec![text(
+                "Hello wrapped text that is long enough to wrap onto two lines at three hundred pixels wide ok",
+            )],
+            &format!("list-style-position: inside; {}", image(40, 40)),
+        );
+        // The first of three lines of 22 holds the image: 45 and two of 22.
+        assert_eq!(laid.rect("i").3, 89.0);
+    }
+
+    #[test]
+    fn an_image_with_no_size_of_its_own_is_a_square_of_half_the_ascent() {
+        use florui_style::BackgroundImage;
+        let url = |attributes: &str| {
+            BackgroundImage::Url(format!(
+                "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' {attributes}><rect width='30' height='10'/></svg>"
+            ))
+        };
+        let size = |image: &BackgroundImage| {
+            let size = super::image_marker_size(image, 17.0);
+            (size.width, size.height)
+        };
+        // Chrome 153, 16px Open Sans: the ascent is 17.
+        let laid = image_item(
+            vec![text("x")],
+            "list-style-image: linear-gradient(red, blue);",
+        );
+        let gradient = laid
+            .styles
+            .get(&laid.node("i"))
+            .and_then(|style| style.list_style_image.clone())
+            .expect("a gradient");
+        assert_eq!(size(&gradient), (8.5, 8.5));
+        assert_eq!(size(&url("")), (8.5, 8.5));
+        assert_eq!(size(&url("viewBox='0 0 20 10'")), (8.5, 4.25));
+        assert_eq!(size(&url("viewBox='0 0 10 20'")), (4.25, 8.5));
+        assert_eq!(size(&url("width='30'")), (30.0, 8.5));
+        assert_eq!(size(&url("height='30'")), (8.5, 30.0));
+        assert_eq!(size(&url("width='30' viewBox='0 0 20 10'")), (30.0, 15.0));
+        assert_eq!(size(&url("width='30' height='7'")), (30.0, 7.0));
+        // One that cannot be read has no height and the width of the bullet and 2px.
+        let broken = super::image_marker_size(&BackgroundImage::Url("no/such.png".into()), 17.0);
+        assert_eq!(
+            (broken.width, broken.height, broken.broken),
+            (8.0, 0.0, true)
+        );
+    }
+
+    #[test]
+    fn an_image_marker_beside_blocks_is_where_chrome_puts_it() {
+        let paragraph = || element("p", "q", vec![text("Hello")]);
+        let item = |content, position: &str| {
+            image_item(
+                content,
+                &format!("list-style-position: {position}; {}", image(40, 40)),
+            )
+        };
+        // Inside, with a block first: the marker is alone on a line of its own.
+        let laid = item(vec![paragraph()], "inside");
+        assert_eq!(laid.rect("i").3, 67.0);
+        assert_eq!(laid.rect("q").1 - laid.rect("i").1, 45.0);
+        // After text, it is in the line of the text.
+        for position in ["inside", "outside"] {
+            let laid = item(vec![text("Hi"), paragraph()], position);
+            assert_eq!(laid.rect("i").3, 67.0, "{position}");
+            assert_eq!(laid.rect("q").1 - laid.rect("i").1, 45.0, "{position}");
+        }
+        // Outside, with a block first: the block comes down until its first baseline is the
+        // marker's.
+        let laid = item(vec![paragraph()], "outside");
+        assert_eq!(laid.rect("i").3, 45.0);
+        assert_eq!(laid.rect("q").1 - laid.rect("i").1, 23.0);
+        // An item with nothing in it has a line for its marker.
+        let laid = item(vec![], "outside");
+        assert_eq!(laid.rect("i").3, 45.0);
+    }
+
+    #[test]
+    fn the_content_comes_down_until_its_first_baseline_is_below_the_image() {
+        // Chrome 153: the baseline of the content is 17 from its top and the image is 40
+        // high, so it comes down 23, below the padding and the border of the item.
+        let marker = format!("list-style-position: outside; {}", image(40, 40));
+        let paragraph = |class| element("p", class, vec![text("Hello")]);
+        let down = |laid: &Laid| laid.rect("q").1 - laid.rect("i").1;
+        let laid = image_item(
+            vec![paragraph("q")],
+            &format!("padding-top: 10px; {marker}"),
+        );
+        assert_eq!((laid.rect("i").3, down(&laid)), (55.0, 33.0));
+        let laid = image_item(
+            vec![paragraph("q")],
+            &format!("border-top: 5px solid red; padding-top: 10px; {marker}"),
+        );
+        assert_eq!((laid.rect("i").3, down(&laid)), (60.0, 38.0));
+        // The margin above the paragraph still collapses out of the item.
+        let laid = image_item_with(vec![paragraph("q")], &marker, ".q { margin-top: 16px; }");
+        assert_eq!(
+            (laid.rect("i").1, laid.rect("i").3, down(&laid)),
+            (16.0, 45.0, 23.0)
+        );
+        // The paragraph has a baseline of its own, 27 down: it comes down 13.
+        let laid = image_item_with(vec![paragraph("q")], &marker, ".q { padding-top: 10px; }");
+        assert_eq!((laid.rect("i").3, down(&laid)), (45.0, 13.0));
+        // One whose baseline is below the image does not come down.
+        let laid = image_item_with(
+            vec![paragraph("q")],
+            &marker,
+            ".q { font-size: 40px; line-height: 50px; }",
+        );
+        assert_eq!((laid.rect("i").3, down(&laid)), (50.0, 0.0));
+        // Two come down together, once.
+        let laid = image_item(vec![paragraph("q"), paragraph("q")], &marker);
+        assert_eq!((laid.rect("i").3, down(&laid)), (67.0, 23.0));
+        // With no baseline in the content the item is as tall as the line of the image.
+        let laid = image_item_with(
+            vec![element("div", "q", vec![])],
+            &marker,
+            ".q { height: 30px; }",
+        );
+        assert_eq!((laid.rect("i").3, down(&laid)), (45.0, 0.0));
+        // A box of its own is no different.
+        let laid = image_item(vec![paragraph("q")], &format!("overflow: hidden; {marker}"));
+        assert_eq!((laid.rect("i").3, down(&laid)), (45.0, 23.0));
+    }
+
+    #[test]
+    fn an_image_that_cannot_be_read_is_its_type_with_the_gap_of_an_image() {
+        // Chrome 153: the text starts 7px after what the type takes, which for a bullet
+        // is its box, 2px wider than the bullet.
+        let at = |css: &str| {
+            first_text_x(&image_item(
+                vec![text("Hello")],
+                &format!("list-style-position: inside; {css}"),
+            ))
+        };
+        let broken = "list-style-image: url(\"no/such/file.png\");";
+        for kind in [
+            "decimal",
+            "lower-roman",
+            "none",
+            "\"-> \"",
+            "disc",
+            "square",
+        ] {
+            let kind = format!("list-style-type: {kind};");
+            let own = at(&kind);
+            let bullet = if kind.contains("disc") || kind.contains("square") {
+                // The marker of a shape takes the width of the bullet, the space after it,
+                // and (inside) the font size.
+                own - (6.0 + 1.0 + 16.0)
+            } else {
+                own
+            };
+            let expected = if kind.contains("disc") || kind.contains("square") {
+                6.0 + 2.0 + 7.0
+            } else {
+                bullet + 7.0
+            };
+            near(at(&format!("{kind} {broken}")), expected, 0.01, &kind);
+        }
+        // Outside, it is nothing: the item is as it was.
+        let laid = image_item(vec![text("Hello")], broken);
+        assert_eq!(laid.rect("i").3, 22.0);
     }
 }

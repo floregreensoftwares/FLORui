@@ -106,7 +106,10 @@ pub use cache::LayoutCache;
 pub use clip::{ClipGeometry, clip_admits, resolve_clip_path};
 pub use collapse::{BorderSegment, collapsed_border_segments};
 pub use flow::{flow_children, flow_items, flow_parent, is_contents};
-pub use list::{IMAGE_GAP, MarkerKind, MarkerShape, ShapeMetrics, marker_of, shape_metrics};
+pub use list::{
+    IMAGE_GAP, ImageMarkerSize, MarkerKind, MarkerShape, ShapeMetrics, image_marker_size,
+    marker_of, shape_metrics,
+};
 pub use transform::{
     ContextPlane, Matrix4, NEAR_W, context_planes, hides_its_back, node_screen_bounds,
     perspective_matrix, preserves_3d, resolve_node_transform, resolve_transform, screen_bounds,
@@ -677,6 +680,8 @@ fn layout_kind(arena: &Tree, styles: &StyleMap, node: NodeId) -> LayoutKind {
     }
     match (block, inline) {
         (false, true) => LayoutKind::Inline,
+        // An item with nothing in it still has a line for its image marker.
+        (false, false) if has_outside_image_marker(styles, node) => LayoutKind::Inline,
         _ => LayoutKind::Blocks,
     }
 }
@@ -876,6 +881,14 @@ const MARKER: NodeId = 1 << 54;
 
 fn marker_id(node: NodeId) -> NodeId {
     MARKER | node
+}
+
+/// Marks the id under which the box an image marker has in the first line of its list
+/// item is reported, like any box of a line.
+const MARKER_IMAGE: NodeId = 1 << 53;
+
+fn marker_image_id(node: NodeId) -> NodeId {
+    MARKER_IMAGE | node
 }
 
 /// What the marker of the list item `node` is placed by, in the pixels `layouts` is
@@ -1424,43 +1437,95 @@ fn has_inside_marker(styles: &StyleMap, node: NodeId) -> bool {
         })
 }
 
-/// How much room the marker of the list item `node` takes in its first line when it
-/// is inside: what it is wide, and the space after it. `laid` has the number it was
-/// given when the boxes were placed, which a layout in the making has in `NUMBERING`.
-fn inside_marker_advance(
+/// Whether `node` is a list item whose marker is an image outside its box, which still
+/// stands on the baseline of the first line and can make it taller.
+fn has_outside_image_marker(styles: &StyleMap, node: NodeId) -> bool {
+    styles.may_have_list_items()
+        && styles.get(&node).is_some_and(|style| {
+            style.display == StyleDisplay::ListItem
+                && style.list_style_position == florui_style::ListStylePosition::Outside
+                && style.list_style_image.is_some()
+        })
+}
+
+/// Whether the marker of `node` is in the lines of its content, as a box of the first.
+fn has_line_marker(styles: &StyleMap, node: NodeId) -> bool {
+    has_inside_marker(styles, node) || has_outside_image_marker(styles, node)
+}
+
+/// What the marker of a list item takes in its first line.
+enum LineMarker {
+    /// The room of a shape or a text before what the line holds.
+    Room(f32),
+    /// An image, which stands on the baseline: `advance` is what it takes before what the
+    /// line holds (nothing when it is outside) and `height` how far it rises above it.
+    Image { advance: f32, height: f32 },
+}
+
+/// What the marker of the list item `node` takes in its first line: when it is inside, what
+/// it is wide and the space after it; an image, outside or in, as high as it is. `laid` has
+/// the number it was given when the boxes were placed, which a layout in the making has in
+/// `NUMBERING`.
+fn line_marker(
     font: &mut florui_text::Font,
     styles: &StyleMap,
     node: NodeId,
     laid: Laid<'_>,
-) -> Option<f32> {
-    if !has_inside_marker(styles, node) {
+) -> Option<LineMarker> {
+    if !has_line_marker(styles, node) {
         return None;
     }
     let style = styles.get(&node)?;
-    let number = match laid {
-        Some((layouts, scale)) => marker_anchor(layouts, node, scale)?.number,
-        None => NUMBERING.with(|numbers| numbers.borrow().get(&node).copied())?,
+    let inside = style.list_style_position == florui_style::ListStylePosition::Inside;
+    let number = || match laid {
+        Some((layouts, scale)) => marker_anchor(layouts, node, scale).map(|anchor| anchor.number),
+        None => NUMBERING.with(|numbers| numbers.borrow().get(&node).copied()),
     };
-    let mut plain;
-    let style = if style.list_style_image.is_some() {
-        // The size of an image is not known here: the type stands for it.
-        plain = style.clone();
-        plain.list_style_image = None;
-        &plain
+    let Some(image) = &style.list_style_image else {
+        return Some(LineMarker::Room(inside_marker_room(font, style, number()?)));
+    };
+    let normal = node_text_style(Some(style)).with_line_height(florui_text::LineHeight::Normal);
+    let size = list::image_marker_size(image, font.measure(normal, "x").baseline.round());
+    Some(if size.broken {
+        // The type stands for it, which is nothing outside.
+        if !inside {
+            return None;
+        }
+        LineMarker::Room(inside_marker_room(font, style, number().unwrap_or(0)))
     } else {
-        style
-    };
-    let kind = list::marker_of(style, number)?;
+        LineMarker::Image {
+            advance: if inside { size.width + IMAGE_GAP } else { 0.0 },
+            height: size.height,
+        }
+    })
+}
+
+/// How much room the marker of a list item in `style` numbered `number` takes before its
+/// first line when it is inside. An image that cannot be read is what its type is, with the
+/// gap an image has after it.
+pub fn inside_marker_room(font: &mut florui_text::Font, style: &ComputedStyle, number: i64) -> f32 {
     let text_style = node_text_style(Some(style));
     let normal = text_style.with_line_height(florui_text::LineHeight::Normal);
-    Some(match kind {
-        MarkerKind::Shape(_) => {
-            let ascent = font.measure(normal, "x").baseline.round();
-            shape_metrics(ascent, style.font_size).advance
+    let ascent = font.measure(normal, "x").baseline.round();
+    let Some(image) = &style.list_style_image else {
+        return match list::marker_of(style, number) {
+            Some(MarkerKind::Shape(_)) => shape_metrics(ascent, style.font_size).advance,
+            Some(MarkerKind::Text(text)) => marker_text_width(font, text_style, &text),
+            Some(MarkerKind::Image(_)) | None => 0.0,
+        };
+    };
+    let size = list::image_marker_size(image, ascent);
+    if !size.broken {
+        return size.width + IMAGE_GAP;
+    }
+    let mut plain = style.clone();
+    plain.list_style_image = None;
+    IMAGE_GAP
+        + match list::marker_of(&plain, number) {
+            Some(MarkerKind::Shape(_)) => size.width,
+            Some(MarkerKind::Text(text)) => marker_text_width(font, text_style, &text),
+            Some(MarkerKind::Image(_)) | None => 0.0,
         }
-        MarkerKind::Text(text) => marker_text_width(font, text_style, &text),
-        MarkerKind::Image(_) => 0.0,
-    })
 }
 
 /// How wide the text of a marker is, the spaces that end it among it.
@@ -1475,8 +1540,8 @@ pub fn marker_text_width(
     font.measure(style, kept).width + space * trailing as f32
 }
 
-/// Puts room for the marker of the list item `node` first in its context, when the marker
-/// is inside.
+/// Puts the marker of the list item `node` first in its context, when it is in its lines: room
+/// for a shape or a text that is inside, a box for an image.
 fn marker_spacer(
     font: &mut florui_text::Font,
     styles: &StyleMap,
@@ -1484,13 +1549,25 @@ fn marker_spacer(
     laid: Laid<'_>,
     context: &mut InlineContext,
 ) {
-    if let Some(advance) = inside_marker_advance(font, styles, node, laid) {
-        context.items.push(InlineContentItem::Spacer {
+    match line_marker(font, styles, node, laid) {
+        Some(LineMarker::Room(advance)) => context.items.push(InlineContentItem::Spacer {
             element: 0,
             inside: 0.0,
             margin: advance,
             end: false,
-        });
+        }),
+        Some(LineMarker::Image { advance, height }) => {
+            context.items.push(InlineContentItem::Box {
+                child: marker_image_id(node),
+                width: advance,
+                height,
+                baseline: height,
+                element: 0,
+                vertical_align: florui_text::VerticalAlign::Baseline,
+                nested: None,
+            });
+        }
+        None => {}
     }
 }
 
@@ -1539,14 +1616,11 @@ fn build_run_content_items(
         nodes: vec![node],
         hidden: Vec::new(),
     };
-    if has_inside_marker(styles, node)
+    if has_line_marker(styles, node)
         && mixed_parts_of(arena, styles, node)
             .iter()
-            .find_map(|part| match part {
-                Part::Run(first) => Some(first.clone()),
-                _ => None,
-            })
-            == Some(run.clone())
+            .find(|part| !matches!(part, Part::Spot(_)))
+            == Some(&Part::Run(run.clone()))
     {
         marker_spacer(font, styles, node, laid, &mut context);
     }
@@ -3296,7 +3370,7 @@ fn build_node(
         match step {
             BuildStep::Visit(node) => {
                 let arena_children = flow_children(arena, styles, node);
-                let leaf = (arena.children(node).is_empty() && !has_inside_marker(styles, node))
+                let leaf = (arena.children(node).is_empty() && !has_line_marker(styles, node))
                     || arena.tag(node) == "svg";
                 let kind = if leaf {
                     LayoutKind::Blocks
@@ -3305,7 +3379,7 @@ fn build_node(
                 };
                 // An inline `<svg>` is a replaced box: what is in it is drawn with it.
                 let is_svg = arena.tag(node) == "svg";
-                let id = if (arena.children(node).is_empty() && !has_inside_marker(styles, node))
+                let id = if (arena.children(node).is_empty() && !has_line_marker(styles, node))
                     || is_svg
                 {
                     let style = to_taffy_style(styles.get(&node));
@@ -3397,7 +3471,7 @@ fn build_node(
                     }
                     continue;
                 };
-                register(tree, arena, styles, taffy_ids, node, id)?;
+                register(font, tree, arena, styles, taffy_ids, node, id)?;
             }
             BuildStep::BuildMixed(node, parts) => {
                 let reorders = reorders_children(styles, node)
@@ -3459,7 +3533,7 @@ fn build_node(
                 }
                 sort_by_order(&mut children, &orders);
                 let id = tree.new_with_children(to_taffy_style(styles.get(&node)), &children)?;
-                register(tree, arena, styles, taffy_ids, node, id)?;
+                register(font, tree, arena, styles, taffy_ids, node, id)?;
             }
             BuildStep::BuildInline(node, floats) => {
                 let context = build_inline_content_items(font, arena, styles, node, None);
@@ -3472,7 +3546,7 @@ fn build_node(
                     &float_ids,
                 )?;
                 inline_leaves.push((node, context));
-                register(tree, arena, styles, taffy_ids, node, id)?;
+                register(font, tree, arena, styles, taffy_ids, node, id)?;
             }
             BuildStep::Build(node) => {
                 let style = to_taffy_style(styles.get(&node));
@@ -3500,7 +3574,7 @@ fn build_node(
                 }
                 sort_by_order(&mut children, &orders);
                 let id = tree.new_with_children(style, &children)?;
-                register(tree, arena, styles, taffy_ids, node, id)?;
+                register(font, tree, arena, styles, taffy_ids, node, id)?;
             }
         }
     }
@@ -3508,8 +3582,10 @@ fn build_node(
     Ok(taffy_ids[&root])
 }
 
-/// Makes `id` the Taffy node of `node`, with what it is in a table.
+/// Makes `id` the Taffy node of `node`, with what it is in a table and what its marker puts
+/// above its content.
 fn register(
+    font: &mut florui_text::Font,
     tree: &mut FlorTree,
     arena: &Tree,
     styles: &StyleMap,
@@ -3518,8 +3594,46 @@ fn register(
     id: taffy::NodeId,
 ) -> Result<(), taffy::TaffyError> {
     tree.set_role(id, table::role_of(arena, styles, node))?;
+    tree.set_marker(id, marker_rise(font, arena, styles, node))?;
     taffy_ids.insert(node, id);
     Ok(())
+}
+
+/// What the image marker outside the list item `node` puts above its content, when that is
+/// blocks (an item whose first line is text has the marker in it, as a box).
+pub(crate) fn marker_rise(
+    font: &mut florui_text::Font,
+    arena: &Tree,
+    styles: &StyleMap,
+    node: NodeId,
+) -> Option<tree::MarkerRise> {
+    if !has_outside_image_marker(styles, node) {
+        return None;
+    }
+    let blocks_first = match layout_kind(arena, styles, node) {
+        LayoutKind::Blocks => true,
+        LayoutKind::Inline => false,
+        LayoutKind::Mixed => matches!(
+            mixed_parts_of(arena, styles, node)
+                .iter()
+                .find(|part| !matches!(part, Part::Spot(_))),
+            Some(Part::Block(_))
+        ),
+    };
+    if !blocks_first || arena.children(node).is_empty() {
+        return None;
+    }
+    let style = styles.get(&node)?;
+    let text_style = node_text_style(Some(style));
+    let normal = text_style.with_line_height(florui_text::LineHeight::Normal);
+    let ascent = font.measure(normal, "x").baseline.round();
+    let size = list::image_marker_size(style.list_style_image.as_ref()?, ascent);
+    let strut = font.measure(text_style, "x");
+    Some(tree::MarkerRise {
+        height: size.height,
+        ascent: strut.baseline,
+        descent: strut.height - strut.baseline,
+    })
 }
 
 /// The `order` of a flex or grid item.
@@ -3934,7 +4048,7 @@ pub fn absolute_position(
 pub fn layout_parent(arena: &Tree, id: NodeId) -> Option<NodeId> {
     if is_anonymous(id) {
         Some(anonymous_container(id))
-    } else if id & (PIECE | BASELINE | SLOTS | SHIFT | GRID | BORDER | MARKER) != 0 {
+    } else if id & (PIECE | BASELINE | SLOTS | SHIFT | GRID | BORDER | MARKER | MARKER_IMAGE) != 0 {
         None
     } else {
         arena.parent(id)
@@ -3945,7 +4059,9 @@ pub fn layout_parent(arena: &Tree, id: NodeId) -> Option<NodeId> {
 /// node is placed in, which is what its scroll offset and its sticky bounds
 /// come from.
 pub fn layout_parent_in(arena: &Tree, styles: &StyleMap, id: NodeId) -> Option<NodeId> {
-    if id & (ANONYMOUS | PIECE | BASELINE | SLOTS | SHIFT | GRID | BORDER | MARKER) != 0 {
+    if id & (ANONYMOUS | PIECE | BASELINE | SLOTS | SHIFT | GRID | BORDER | MARKER | MARKER_IMAGE)
+        != 0
+    {
         layout_parent(arena, id)
     } else {
         flow_parent(arena, styles, id)
