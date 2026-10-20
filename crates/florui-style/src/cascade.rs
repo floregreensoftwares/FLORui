@@ -1178,6 +1178,10 @@ impl ComputedStyle {
     /// out of the width the grid gets from its content.
     pub fn has_fit_content_columns(&self) -> bool {
         self.grid_template_columns.has_fit_content()
+            || self
+                .grid_auto_columns
+                .iter()
+                .any(|track| track.is_fit_content())
     }
 
     /// Whether a column of the node is a calc() of a length and a percentage,
