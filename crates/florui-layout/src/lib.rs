@@ -7545,6 +7545,89 @@ mod tests {
     }
 
     #[test]
+    fn a_grid_with_subgrids_inside_an_item_of_another_is_sized_from_the_inner_one_first() {
+        // Chrome 153: the inner grid's rows are 20 and 30 (54px with its gap), so
+        // the outer grid's first row is 54px and the grid 100px.
+        let tree: Element = view! {
+            <div class="p1">
+                <div class="s1">
+                    <div class="p2">
+                        <div class="s2">
+                            <div class="h10" />
+                            <div class="h30" />
+                        </div>
+                        <div class="s2">
+                            <div class="h20" />
+                            <div class="h14" />
+                        </div>
+                    </div>
+                    <div class="h14" />
+                </div>
+                <div class="s1">
+                    <div class="h30" />
+                    <div class="h40" />
+                </div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            &format!(
+                "{SUBGRID_CSS} .p1 {{ display: grid; grid-template-columns: 120px 120px; \
+                 grid-template-rows: auto auto; gap: 6px; width: 246px; }} \
+                 .s1 {{ grid-row: span 2; display: grid; grid-template-rows: subgrid; }} \
+                 .p2 {{ display: grid; grid-template-columns: 56px 56px; \
+                 grid-template-rows: auto auto; gap: 4px; }} \
+                 .s2 {{ grid-row: span 2; display: grid; grid-template-rows: subgrid; }}"
+            ),
+        );
+        let boxes = descendant_boxes(&arena, &layouts);
+        assert_eq!(layouts[&arena.roots()[0]].height, 100.0, "the outer grid");
+        // [s1, p2, s2, 10, 30, s2, 20, 14, foot, s1, 30, 40]
+        assert_eq!((boxes[1].1, boxes[1].3), (0.0, 54.0), "the inner grid");
+        assert_eq!((boxes[3].1, boxes[3].3), (0.0, 10.0));
+        assert_eq!((boxes[4].1, boxes[4].3), (24.0, 30.0));
+        assert_eq!((boxes[6].1, boxes[6].3), (0.0, 20.0));
+        assert_eq!((boxes[7].1, boxes[7].3), (24.0, 14.0));
+        assert_eq!((boxes[8].1, boxes[8].3), (60.0, 14.0), "the foot");
+        assert_eq!((boxes[11].1, boxes[11].3), (60.0, 40.0), "the body beside");
+    }
+
+    #[test]
+    fn a_grid_with_subgrids_inside_an_item_of_another_gets_its_width_from_it_for_columns() {
+        // Chrome 153: the inner grid is the 170px the first grid leaves, and its
+        // two columns, which its subgrid shares, are 85px each.
+        let tree: Element = view! {
+            <div class="p1">
+                <div class="s1">
+                    <div class="w30" />
+                    <div class="p2">
+                        <div class="s2">
+                            <div class="w10" />
+                            <div class="w20" />
+                        </div>
+                    </div>
+                </div>
+            </div>
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            &format!(
+                "{SUBGRID_CSS} .p1 {{ display: grid; grid-template-columns: auto 1fr; width: 200px; }} \
+                 .s1 {{ grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; }} \
+                 .p2 {{ display: grid; grid-template-columns: 1fr 1fr; }} \
+                 .s2 {{ grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; }} \
+                 .w30 {{ height: 10px; }} .w10 {{ height: 10px; }} .w20 {{ height: 10px; }}"
+            ),
+        );
+        let boxes = descendant_boxes(&arena, &layouts);
+        // [s1, 30, p2, s2, 10, 20]
+        assert_eq!((boxes[2].0, boxes[2].2), (30.0, 170.0), "the inner grid");
+        assert_eq!((boxes[3].0, boxes[3].2), (0.0, 170.0), "its subgrid");
+        assert_eq!(boxes[4].0, 0.0);
+        assert_eq!(boxes[5].0, 85.0);
+    }
+
+    #[test]
     fn a_subgrid_that_is_not_in_a_grid_is_none() {
         let tree: Element = view! {
             <div class="flex">
