@@ -434,6 +434,17 @@ mod arena_tests {
     }
 
     #[test]
+    fn a_q_element_is_wrapped_in_the_quotation_marks_of_its_depth_with_no_author_rule() {
+        let tree: Element = view! { <p><q>"a " <q>"b"</q></q></p> };
+        let (arena, _) = styled(&tree, "");
+        let marks: Vec<String> = arena
+            .find_all(|tree, id| tree.generated(id).is_some())
+            .into_iter()
+            .map(|id| arena.text_content(id).to_owned())
+            .collect();
+        assert_eq!(marks, ["\u{201c}", "\u{2018}", "\u{2019}", "\u{201d}"]);
+    }
+    #[test]
     fn rebuilding_with_the_same_slots_keeps_the_arena_and_other_slots_build_it_anew() {
         let tree: Element = view! { <p class="p">"hello"</p> };
         let rules = parse_stylesheet(".p::before { content: 'x' }").unwrap();
