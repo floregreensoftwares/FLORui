@@ -156,6 +156,11 @@ pub const PRIMITIVES: &[Primitive] = &[
         "stress emphasis; combines default style with semantics"
     ),
     primitive!("small", Content::Normal, "side comments and small print"),
+    primitive!(
+        "q",
+        Content::Normal,
+        "an inline quotation, wrapped in the quotation marks of `quotes`"
+    ),
     primitive!("b", Content::Normal, "bold text with no added importance"),
     primitive!(
         "i",
