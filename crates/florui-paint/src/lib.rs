@@ -3894,9 +3894,7 @@ fn paint_list_marker(
     let (x, y) = absolute_position(arena, layouts, node);
     let color = style.color;
     let text_style = florui_layout::node_text_style(Some(style));
-    // The ascent of the font, in whole pixels: what the sizes of a shape come from.
-    let normal = text_style.with_line_height(florui_text::LineHeight::Normal);
-    let ascent = font.measure(normal, "x").baseline.round();
+    let ascent = florui_layout::marker_ascent(font, style);
     let baseline = y + anchor
         .baseline
         .unwrap_or((style.border.top.width + style.padding.top + ascent) * scale_factor);
@@ -4165,7 +4163,7 @@ fn crisp_dots(from: f32, to: f32, width: f32) -> Vec<(f32, f32)> {
     let over = length - (2 * dot * count - dot);
     let mut widths = vec![dot; count as usize];
     let mut gaps = vec![dot; (count - 1) as usize];
-    if over > 2 {
+    if over > 2 && count > 1 {
         widths[0] += 1;
         widths[count as usize - 1] += 1;
         if let Some(last) = gaps.last_mut() {
@@ -8026,6 +8024,8 @@ mod tests {
                 .map(|(a, b)| (a as i32, b as i32))
                 .collect()
         };
+        // A segment with room for one dot only has the one dot, as wide as the line.
+        assert_eq!(starts(6.0, 3.0), [(0, 3)]);
         assert_eq!(starts(22.0, 3.0), [(0, 3), (7, 10), (13, 16), (19, 22)]);
         assert_eq!(starts(23.0, 3.0), [(0, 3), (7, 10), (13, 16), (20, 23)]);
         assert_eq!(
