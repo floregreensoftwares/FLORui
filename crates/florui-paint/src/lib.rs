@@ -762,6 +762,8 @@ enum Turn {
     /// The box of a part of a table (a row, a group, a column), drawn under every
     /// cell of the table whatever the order they are written in.
     Part,
+    /// The collapsed borders of a table, drawn over its cells.
+    Borders,
 }
 
 /// Paints `nodes` (a set of siblings — document roots when
@@ -855,6 +857,14 @@ fn paint_nodes(
                     scale_factor,
                     node_clip.as_ref(),
                 );
+            }
+            continue;
+        }
+        if turn == Turn::Borders {
+            let in_view = view.as_ref().is_none_or(|view| view.own.contains(&node));
+            let mask = node_clip.as_ref().and_then(|clip| clip.to_mask(buffer));
+            if in_view && (node_clip.is_none() || mask.is_some()) {
+                paint_collapsed_borders(buffer, arena, styles, layouts, node, mask.as_ref());
             }
             continue;
         }
@@ -1023,6 +1033,11 @@ fn paint_nodes(
         }
         let child_clip = clip_for_children(arena, styles, layouts, node, node_clip, scale_factor);
         let child_display = styles.get(&node).map(|s| s.display);
+        if styles.get(&node).is_some_and(|s| {
+            s.display.is_table() && s.border_collapse == florui_style::BorderCollapse::Collapse
+        }) {
+            stack.push((node, child_clip.clone(), Turn::Borders));
+        }
         stack.extend(
             frames_in_order(
                 arena,
@@ -1132,7 +1147,7 @@ fn ink_is_outside_clip(
         return true;
     }
 
-    let border = scaled_border(style.map_or(NO_BORDER, |s| s.border), scale_factor);
+    let border = scaled_border(border_of(layouts, style, node, scale_factor), scale_factor);
     let padding = scaled_padding(
         style.map_or(
             florui_style::Edges {
@@ -1225,7 +1240,7 @@ fn clip_for_children(
     };
     let (x, y) = absolute_position(arena, layouts, node);
     let border = scaled_border(
-        styles.get(&node).map_or(NO_BORDER, |s| s.border),
+        border_of(layouts, styles.get(&node), node, scale_factor),
         scale_factor,
     );
     let mut padding_box = ClipRect::from_xywh(
@@ -1283,6 +1298,30 @@ fn self_wrap(content_width: f32, scale_factor: f32) -> f32 {
 
 /// `border` with its widths in painted pixels: they are authored in logical
 /// pixels, like every length, and the boxes they sit in are already scaled.
+/// The border `node` has to be laid out and painted with: its own, except in a table
+/// whose borders collapse, where the table draws them and what is left of a cell's
+/// and of the table's is the half of each edge that is inside its box.
+fn border_of(
+    layouts: &HashMap<NodeId, BoxLayout>,
+    style: Option<&ComputedStyle>,
+    node: NodeId,
+    scale_factor: f32,
+) -> florui_style::Edges<florui_style::BorderSide> {
+    let mut border = style.map_or(NO_BORDER, |s| s.border);
+    if let Some([top, right, bottom, left]) = florui_layout::collapsed_border(layouts, node) {
+        for (side, width) in [
+            (&mut border.top, top),
+            (&mut border.right, right),
+            (&mut border.bottom, bottom),
+            (&mut border.left, left),
+        ] {
+            side.width = width / scale_factor;
+            side.color = Rgba::TRANSPARENT;
+        }
+    }
+    border
+}
+
 fn scaled_border(
     mut border: florui_style::Edges<florui_style::BorderSide>,
     scale_factor: f32,
@@ -1780,7 +1819,7 @@ fn own_extent(
         max_y += ring;
     }
 
-    let border = scaled_border(style.map_or(NO_BORDER, |s| s.border), scale_factor);
+    let border = scaled_border(border_of(layouts, style, node, scale_factor), scale_factor);
     let no_padding = florui_style::Edges {
         top: 0.0,
         right: 0.0,
@@ -1896,7 +1935,7 @@ fn subtree_extent(
     )?;
     let layout = *layouts.get(&node)?;
     let style = styles.get(&node);
-    let border = scaled_border(style.map_or(NO_BORDER, |s| s.border), scale_factor);
+    let border = scaled_border(border_of(layouts, style, node, scale_factor), scale_factor);
 
     let overflow_clips = style.is_some_and(|s| s.overflow_clips);
     let clip_to_padding = overflow_clips.then(|| {
@@ -2361,6 +2400,18 @@ fn render_group(
             text_inputs,
             images,
         );
+        if styles.get(&node).is_some_and(|s| {
+            s.display.is_table() && s.border_collapse == florui_style::BorderCollapse::Collapse
+        }) {
+            paint_collapsed_borders(
+                &mut group,
+                arena,
+                styles,
+                layouts,
+                node,
+                inner_mask.as_ref(),
+            );
+        }
     }
     paint_outline_of(
         &mut group,
@@ -3743,6 +3794,58 @@ fn part_cells(
     }
 }
 
+/// Draws the collapsed borders of the table `node` over its cells.
+fn paint_collapsed_borders(
+    buffer: &mut Surface,
+    arena: &Tree,
+    styles: &StyleMap,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    node: NodeId,
+    clip: Option<&Mask>,
+) {
+    for segment in florui_layout::collapsed_border_segments(arena, styles, layouts, node) {
+        let (x, y, width, height) = if segment.horizontal {
+            (
+                segment.x0,
+                segment.y0 - segment.width / 2.0,
+                segment.x1 - segment.x0,
+                segment.width,
+            )
+        } else {
+            (
+                segment.x0 - segment.width / 2.0,
+                segment.y0,
+                segment.width,
+                segment.y1 - segment.y0,
+            )
+        };
+        if width <= 0.0 || height <= 0.0 {
+            continue;
+        }
+        if segment.style == florui_style::BorderLineStyle::Solid {
+            fill_rect(buffer, x, y, width, height, segment.color, clip);
+            continue;
+        }
+        let side = florui_style::BorderSide {
+            width: segment.width,
+            color: segment.color,
+            style: segment.style,
+        };
+        let mut border = NO_BORDER;
+        if segment.horizontal {
+            border.top = side;
+        } else {
+            border.left = side;
+        }
+        paint_box_border(
+            buffer,
+            &RoundedRect::square(x, y, width, height),
+            border,
+            clip,
+        );
+    }
+}
+
 /// Draws the box of a part of a table (what it stands on: its background, not
 /// the borders and shadows a cell has and a row does not).
 #[allow(clippy::too_many_arguments)]
@@ -3880,7 +3983,7 @@ fn paint_node(
         }
 
         // The layout border stays: it is where the content sits.
-        let border = scaled_border(style.map_or(NO_BORDER, |s| s.border), scale_factor);
+        let border = scaled_border(border_of(layouts, style, node, scale_factor), scale_factor);
         let box_shadow: &[florui_style::BoxShadow] = if shown {
             style.map_or(&[][..], |s| &s.box_shadow[..])
         } else {
@@ -7369,6 +7472,23 @@ mod tests {
         assert_eq!(pixel_rgb(&canvas, 30, 30), [0, 0, 255]);
         // And the row shows only where its cells are: nothing in the first row.
         assert_eq!(pixel_rgb(&canvas, 30, 10), WHITE);
+    }
+
+    #[test]
+    fn the_collapsed_border_of_a_table_is_drawn_once_between_its_cells() {
+        let tree: Element = view! {
+            <table class="t"><tr><td class="a" /><td class="b" /></tr></table>
+        };
+        let css = ".t { border-collapse: collapse; } td { padding: 0; width: 20px; height: 20px; \
+                   border: 4px solid #000000; }";
+        let canvas = paint_text_css(&tree, css, (60, 40));
+        // The table has 2px of its own border outside the cells, which are 24 wide: the shared
+        // border is 4px centered at x = 26.
+        for x in 24..28 {
+            assert_eq!(pixel_rgb(&canvas, x, 12), [0, 0, 0], "x = {x}");
+        }
+        assert_eq!(pixel_rgb(&canvas, 12, 12), WHITE);
+        assert_eq!(pixel_rgb(&canvas, 36, 12), WHITE);
     }
 
     #[test]
