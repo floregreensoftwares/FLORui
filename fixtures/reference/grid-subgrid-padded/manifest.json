@@ -1,0 +1,147 @@
+{
+    "id":  "grid-subgrid-padded",
+    "description":  "Items of a subgrid with their own padding and border, text that wraps in them, and with border-box sizing: the rows they share are sized from the width they really have.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  300,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 300px; background-color: #ffffff; font-size: 13px; line-height: 16px; color: #101010; } .p { display: grid; margin: 0 0 8px 10px; background-color: #e4e4e4; grid-template-columns: 110px 110px; grid-template-rows: auto auto; gap: 6px; width: 226px; } .card { grid-row: span 2; display: grid; grid-template-rows: subgrid; background-color: #c8d4e8; } .t { background-color: #d05040; padding: 8px; border: 2px solid #802010; } .b { background-color: #40a060; padding: 4px 10px; } .bb { box-sizing: border-box; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "card",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "t",
+                                                                                  "css":  "",
+                                                                                  "text":  "A padded title that has to wrap across lines",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "b",
+                                                                                  "css":  "",
+                                                                                  "text":  "Body text here",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "card",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "t",
+                                                                                  "css":  "",
+                                                                                  "text":  "Short",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "b",
+                                                                                  "css":  "",
+                                                                                  "text":  "Another body that wraps over a couple of lines",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "card",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "t bb",
+                                                                                  "css":  "",
+                                                                                  "text":  "A padded title that has to wrap across lines",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "b bb",
+                                                                                  "css":  "",
+                                                                                  "text":  "Body text here",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "card",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "t bb",
+                                                                                  "css":  "",
+                                                                                  "text":  "Short",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "b bb",
+                                                                                  "css":  "",
+                                                                                  "text":  "Another body that wraps over a couple of lines",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  7,
+                           "geometry_tolerance_px":  0.5,
+                           "channel_tolerance":  0,
+                           "reason":  "Every box matches Chromium to the pixel; the remaining difference (5.5% measured) is the anti-aliasing of wrapped text on large fills, as in the other fixtures that render text."
+                       }
+}
