@@ -375,9 +375,9 @@ impl LayoutCache {
         while let Some(step) = stack.pop() {
             match step {
                 Step::Visit(node) => {
-                    let arena_children = arena.children(node);
+                    let arena_children = flow_children(arena, styles, node);
                     // An inline `<svg>` is a leaf: what is in it is drawn with it.
-                    let leaf = arena_children.is_empty() || arena.tag(node) == "svg";
+                    let leaf = arena.children(node).is_empty() || arena.tag(node) == "svg";
                     let kind = if leaf {
                         LayoutKind::Blocks
                     } else {
@@ -485,15 +485,14 @@ impl LayoutCache {
                 }
                 Step::Build(node) => {
                     let reorders = reorders_children(styles, node)
-                        && arena
-                            .children(node)
+                        && flow_children(arena, styles, node)
                             .iter()
                             .any(|&child| order_of(styles, child) != 0);
                     let mut children: Vec<taffy::NodeId> =
-                        Vec::with_capacity(arena.children(node).len());
+                        Vec::with_capacity(flow_children(arena, styles, node).len());
                     let mut orders: Vec<i32> = Vec::new();
                     let mut children_are_new = true;
-                    for &child in arena.children(node) {
+                    for &child in flow_children(arena, styles, node).iter() {
                         if is_viewport_fixed(arena, styles, child) {
                             let spot = self.tree.new_leaf(static_spot_style())?;
                             self.anonymous.insert(static_spot_id(child), spot);

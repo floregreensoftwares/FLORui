@@ -872,10 +872,14 @@ fn paint_nodes(
             // context (its box behind the text, then the text); only the
             // atomic boxes inside it are walked.
             stack.extend(
-                paint_order(styles, Some(Display::Inline), arena.children(node))
-                    .into_iter()
-                    .rev()
-                    .map(|id| (id, node_clip.clone(), Turn::First)),
+                paint_order(
+                    styles,
+                    Some(Display::Inline),
+                    &florui_layout::flow_children(arena, styles, node),
+                )
+                .into_iter()
+                .rev()
+                .map(|id| (id, node_clip.clone(), Turn::First)),
             );
             continue;
         }
@@ -1001,10 +1005,14 @@ fn paint_nodes(
         let child_clip = clip_for_children(arena, styles, layouts, node, node_clip, scale_factor);
         let child_display = styles.get(&node).map(|s| s.display);
         stack.extend(
-            paint_order(styles, child_display, arena.children(node))
-                .into_iter()
-                .rev()
-                .map(|id| (id, child_clip.clone(), Turn::First)),
+            paint_order(
+                styles,
+                child_display,
+                &florui_layout::flow_children(arena, styles, node),
+            )
+            .into_iter()
+            .rev()
+            .map(|id| (id, child_clip.clone(), Turn::First)),
         );
     }
     // The mask this described goes away with `mask_cache`.
@@ -1091,8 +1099,9 @@ fn ink_is_outside_clip(
     if !florui_layout::anonymous_blocks(arena, styles, node).is_empty() {
         return false;
     }
+    let flowed = florui_layout::flow_items(arena, styles, node);
     let text = if florui_layout::is_inline_formatting_context(arena, styles, node) {
-        match arena.inline_items(node) {
+        match &*flowed.items {
             [florui_style::InlineItem::Text(text)] => text.as_str(),
             _ => return false,
         }
@@ -1880,7 +1889,7 @@ fn subtree_extent(
         )
     });
 
-    for &child in arena.children(node) {
+    for &child in florui_layout::flow_children(arena, styles, node).iter() {
         let child_opacity = styles.get(&child).map_or(1.0, |s| s.opacity);
         if child_opacity <= 0.0 {
             continue;
@@ -2327,7 +2336,7 @@ fn render_group(
             layouts,
             font,
             child_display,
-            arena.children(node),
+            &florui_layout::flow_children(arena, styles, node),
             scale_factor,
             content_clip,
             text_inputs,
@@ -5838,7 +5847,7 @@ fn text_coverage(
         layouts,
         font,
         child_display,
-        arena.children(node),
+        &florui_layout::flow_children(arena, &text_styles, node),
         scale_factor,
         content_clip,
         None,
@@ -5909,7 +5918,7 @@ fn paint_inline_color(
 /// context is: it fades, filters, clips, masks or blends all of its fragments, and
 /// what is in it, together.
 fn paints_as_group(style: &ComputedStyle) -> bool {
-    style.opacity < 1.0 || style.has_group_effect()
+    style.display != Display::Contents && (style.opacity < 1.0 || style.has_group_effect())
 }
 
 /// What an inline context paints as groups, and the way to paint it.
@@ -6195,7 +6204,10 @@ fn paint_inline_boxes(
         if !include(fragment.element) {
             continue;
         }
-        let Some(style) = styles.get(&inline.nodes[fragment.element]) else {
+        let Some(style) = styles
+            .get(&inline.nodes[fragment.element])
+            .filter(|style| style.display != Display::Contents)
+        else {
             continue;
         };
         if !style.visibility.is_visible() {
@@ -6338,7 +6350,10 @@ fn paint_inline_outlines(
         if !include(fragment.element) {
             continue;
         }
-        let Some(style) = styles.get(&inline.nodes[fragment.element]) else {
+        let Some(style) = styles
+            .get(&inline.nodes[fragment.element])
+            .filter(|style| style.display != Display::Contents)
+        else {
             continue;
         };
         if !border_style::has_outline(style) {
