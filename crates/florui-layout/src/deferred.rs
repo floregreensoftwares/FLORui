@@ -41,6 +41,9 @@ pub(crate) fn resolve(
     available: Size<AvailableSpace>,
     count: usize,
 ) -> Result<(), LayoutError> {
+    if !styles.may_have_deferred() {
+        return Ok(());
+    }
     let mut nodes: Vec<NodeId> = styles
         .iter()
         .filter(|(_, style)| {
