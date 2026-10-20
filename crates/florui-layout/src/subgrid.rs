@@ -345,10 +345,21 @@ pub(crate) fn resolve(
             .collect();
         tops.sort_unstable();
         tops.dedup();
-        for top in tops {
+        if tops.is_empty() {
+            continue;
+        }
+        for (at, &top) in tops.iter().enumerate() {
             let Some(top_id) = id_of(top) else {
                 continue;
             };
+            // A grid with another of these inside it hands that one the width it
+            // has, so it is laid out for it to read.
+            let settle = tops[at + 1..].iter().any(|&inner| {
+                std::iter::successors(layout_parent(arena, inner), |&node| {
+                    layout_parent(arena, node)
+                })
+                .any(|ancestor| ancestor == top)
+            });
             let ctx = Ctx {
                 styles,
                 owner: &owner,
@@ -358,8 +369,19 @@ pub(crate) fn resolve(
                 count,
                 axis,
             };
-            probe_top(font, tree, &ctx, top_id)?;
+            probe_top(font, tree, &ctx, top_id, settle)?;
         }
+        // Each grid was laid out alone; the tree around them follows.
+        let ctx = Ctx {
+            styles,
+            owner: &owner,
+            is_subgrid: &|node| is_subgrid(node, axis),
+            roots,
+            available,
+            count,
+            axis,
+        };
+        relayout_all(font, tree, &ctx)?;
     }
     Ok(())
 }
@@ -386,7 +408,8 @@ impl Ctx<'_> {
     }
 }
 
-fn relayout(
+/// The whole tree again, from its roots.
+fn relayout_all(
     font: &mut florui_text::Font,
     tree: &mut TaffyTree<LeafContext>,
     ctx: &Ctx<'_>,
@@ -397,11 +420,25 @@ fn relayout(
     Ok(())
 }
 
+/// The grid `top` alone, at `around`: the probes only read what is inside it,
+/// and laying out the tree from its roots for each would make a page with
+/// many such grids quadratic.
+fn layout_top(
+    font: &mut florui_text::Font,
+    tree: &mut TaffyTree<LeafContext>,
+    top: taffy::NodeId,
+    around: Size<AvailableSpace>,
+) -> Result<(), LayoutError> {
+    // Only the nodes under it are laid out, so a small capacity will do.
+    run_layout(font, tree, top, around, 64)
+}
+
 fn probe_top(
     font: &mut florui_text::Font,
     tree: &mut TaffyTree<LeafContext>,
     ctx: &Ctx<'_>,
     top: taffy::NodeId,
+    settle: bool,
 ) -> Result<(), LayoutError> {
     let axis = ctx.axis;
     let other = axis.other();
@@ -458,6 +495,23 @@ fn probe_top(
     if subs.is_empty() {
         return Ok(());
     }
+    // The grid is laid out alone from here: at the width it has, written as a
+    // length so that a percentage or a margin does not change it, and as tall
+    // as its content, which the rows are sized from.
+    let top_original = tree.style(top).map_err(LayoutError)?.clone();
+    let width = tree.layout(top).map_err(LayoutError)?.size.width;
+    let mut held = top_original.clone();
+    held.size.width =
+        taffy::Dimension::length(if held.box_sizing == taffy::BoxSizing::ContentBox {
+            (width - Axis::Column.padding_border(&held)).max(0.0)
+        } else {
+            width
+        });
+    tree.set_style(top, held).map_err(LayoutError)?;
+    let around = Size {
+        width: AvailableSpace::Definite(width),
+        height: AvailableSpace::MaxContent,
+    };
     let mut original: Vec<(taffy::NodeId, taffy::Style)> = Vec::new();
     // The subgrids that had an item to hold in their last track.
     let mut held_subs: Vec<usize> = Vec::new();
@@ -483,7 +537,7 @@ fn probe_top(
             );
             tree.set_style(id, placeholder).map_err(LayoutError)?;
         }
-        relayout(font, tree, ctx)?;
+        layout_top(font, tree, top, around)?;
         for &index in &fresh {
             let id = subs[index].id;
             let Some(info) = grid_info(tree, id) else {
@@ -551,7 +605,7 @@ fn probe_top(
     }
 
     // 3. The probe: the items of the subgrids are items of the top grid.
-    let top_style = tree.style(top).map_err(LayoutError)?.clone();
+    let top_style = top_original.clone();
     let top_gap = axis.gap(&top_style);
     let top_children = tree.children(top).map_err(LayoutError)?;
     let mut saved_children: Vec<(taffy::NodeId, Vec<taffy::NodeId>)> =
@@ -625,7 +679,7 @@ fn probe_top(
     probe_children.extend(&leaves);
     tree.set_children(top, &probe_children)
         .map_err(LayoutError)?;
-    relayout(font, tree, ctx)?;
+    layout_top(font, tree, top, around)?;
 
     // 4. What the probe sized.
     let probed = grid_info(tree, top).map(|info| {
@@ -664,7 +718,8 @@ fn probe_top(
         names,
     }) = probed
     else {
-        return relayout(font, tree, ctx);
+        tree.set_style(top, top_original).map_err(LayoutError)?;
+        return layout_top(font, tree, top, around);
     };
     let mut patched = top_style;
     axis.set_template(
@@ -759,5 +814,8 @@ fn probe_top(
             tree.set_style(item, style).map_err(LayoutError)?;
         }
     }
-    relayout(font, tree, ctx)
+    if settle {
+        layout_top(font, tree, top, around)?;
+    }
+    Ok(())
 }

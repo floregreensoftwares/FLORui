@@ -44,6 +44,12 @@ const CSS: &str = "
     .card { overflow: hidden; border-radius: 8px; margin: 6px; padding: 8px;
             background-color: #fff; box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.3); }
     .inner { overflow: hidden; border-radius: 4px; padding: 4px; background-color: #f4f4f8; }
+    .pgroups { display: flex; flex-direction: column; width: 100%; }
+    .pgroup { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: auto auto auto;
+              gap: 6px 8px; margin-bottom: 8px; }
+    .pcard { grid-row: span 3; display: grid; padding: 4px; background-color: #f4f4f8; font-size: 13px; }
+    .pcard.shared { grid-template-rows: subgrid; }
+    .ptitle { font-weight: 700; } .pbody { color: #333; } .pfoot { color: #666; }
 ";
 
 fn class(name: &str) -> Vec<(String, String)> {
@@ -175,6 +181,28 @@ fn card(i: usize) -> Element {
             ))],
         )],
     )
+}
+
+/// A grid of three cards, each of three rows of text, whose rows are its own or,
+/// with `shared`, the rows of the grid.
+fn card_group(i: usize, shared: bool) -> Element {
+    let card = |n: usize| {
+        let lines = |k: usize| "a few words of the card ".repeat(1 + (i + n + k) % 3);
+        Element::node(
+            "div",
+            class(if shared { "pcard shared" } else { "pcard" }),
+            vec![
+                Element::node(
+                    "div",
+                    class("ptitle"),
+                    vec![Element::text(format!("Card {i}.{n}"))],
+                ),
+                Element::node("div", class("pbody"), vec![Element::text(lines(1))]),
+                Element::node("div", class("pfoot"), vec![Element::text(lines(2))]),
+            ],
+        )
+    };
+    Element::node("div", class("pgroup"), (0..3).map(card).collect())
 }
 
 pub(crate) fn window(css: &str, root: impl Fn() -> Element + 'static) -> HeadlessWindow {
@@ -490,6 +518,46 @@ fn frame_pipeline() -> Vec<Workload> {
                 });
                 Box::new(move || {
                     win.update();
+                    black_box(win.frame());
+                })
+            },
+        },
+        Workload {
+            name: "grid_cards_200_groups",
+            description: "Resize and paint 200 grids of three cards, each with rows of its own",
+            exercises: "grid layout of nested grids, text in grid items",
+            build: || {
+                let mut win = window(CSS, || {
+                    Element::node(
+                        "div",
+                        class("pgroups"),
+                        (0..200).map(|i| card_group(i, false)).collect(),
+                    )
+                });
+                let mut wide = false;
+                Box::new(move || {
+                    wide = !wide;
+                    win.resize(if wide { 800.0 } else { 790.0 }, 600.0);
+                    black_box(win.frame());
+                })
+            },
+        },
+        Workload {
+            name: "subgrid_cards_200_groups",
+            description: "Resize and paint 200 grids of three cards that share the rows of their grid through subgrid",
+            exercises: "subgrid: the probe and the relayouts around it",
+            build: || {
+                let mut win = window(CSS, || {
+                    Element::node(
+                        "div",
+                        class("pgroups"),
+                        (0..200).map(|i| card_group(i, true)).collect(),
+                    )
+                });
+                let mut wide = false;
+                Box::new(move || {
+                    wide = !wide;
+                    win.resize(if wide { 800.0 } else { 790.0 }, 600.0);
                     black_box(win.frame());
                 })
             },
