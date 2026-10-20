@@ -3902,22 +3902,16 @@ fn paint_list_marker(
         .unwrap_or((style.border.top.width + style.padding.top + ascent) * scale_factor);
     let content_left = x + anchor.content_left;
     let mut kind = florui_layout::marker_of(style, anchor.number);
-    if inside && matches!(kind, Some(florui_layout::MarkerKind::Image(_))) {
-        let mut plain = style.clone();
-        plain.list_style_image = None;
-        kind = florui_layout::marker_of(&plain, anchor.number);
-    }
+    // An image marker: its box, which stands on the baseline.
+    let image_box = match &kind {
+        Some(florui_layout::MarkerKind::Image(image)) => {
+            Some(florui_layout::image_marker_size(image, ascent))
+        }
+        _ => None,
+    };
     // An inside marker is at the start of the first line: wherever that is.
     let line_start = if inside {
-        let advance = match &kind {
-            Some(florui_layout::MarkerKind::Shape(_)) => {
-                florui_layout::shape_metrics(ascent, style.font_size).advance
-            }
-            Some(florui_layout::MarkerKind::Text(text)) => {
-                florui_layout::marker_text_width(font, text_style, text)
-            }
-            _ => 0.0,
-        };
+        let advance = florui_layout::inside_marker_room(font, style, anchor.number);
         Some(inside_line_start(
             font,
             (arena, styles, layouts),
@@ -3930,20 +3924,24 @@ fn paint_list_marker(
         None
     };
     let mut image_failed = false;
-    if let Some(florui_layout::MarkerKind::Image(image)) = &kind {
-        if !inside
-            && let florui_style::BackgroundImage::Url(url) = image
-            && let Some(loaded) = image_source::load(url)
-        {
-            let (width, height) = (
-                loaded.intrinsic.0 * scale_factor,
-                loaded.intrinsic.1 * scale_factor,
-            );
-            let left = content_left - width - florui_layout::IMAGE_GAP * scale_factor;
-            let outline = RoundedRect::square(left, baseline - height, width, height);
+    if let (Some(florui_layout::MarkerKind::Image(image)), Some(size)) = (&kind, image_box) {
+        if !size.broken {
+            let (width, height) = (size.width * scale_factor, size.height * scale_factor);
+            let left = match line_start {
+                Some(start) => start,
+                None => content_left - width - florui_layout::IMAGE_GAP * scale_factor,
+            };
+            // The box is put on whole pixels, as a browser does with an image.
+            let (top, bottom) = ((baseline - height).round(), baseline.round());
+            let (left, right) = (left.round(), (left + width).round());
+            let outline = RoundedRect::square(left, top, right - left, bottom - top);
+            let whole = florui_style::LengthPercentage {
+                length: 0.0,
+                percentage: 1.0,
+            };
             let layer = florui_style::BackgroundLayer {
                 image: image.clone(),
-                size: florui_style::BackgroundSize::Explicit(None, None),
+                size: florui_style::BackgroundSize::Explicit(Some(whole), Some(whole)),
                 position: (
                     florui_style::LengthPercentage::default(),
                     florui_style::LengthPercentage::default(),
@@ -3985,6 +3983,8 @@ fn paint_list_marker(
         Some(florui_layout::MarkerKind::Shape(shape)) => {
             let metrics = florui_layout::shape_metrics(ascent, style.font_size);
             let left = match line_start {
+                // The box of an unreadable image is 2px wider than the bullet, which is in the middle of it.
+                Some(start) if image_failed => start + scale_factor,
                 Some(start) => start,
                 None => content_left + metrics.x * scale_factor,
             };
