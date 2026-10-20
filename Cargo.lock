@@ -1794,6 +1794,7 @@ dependencies = [
 name = "florui-assets"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "florui-profile",
  "image",
  "notify",
@@ -1951,6 +1952,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "florui",
+ "florui-assets",
  "florui-profile",
  "florui-style",
  "florui-svg",

@@ -24,6 +24,10 @@ use cssparser::{Parser, ParserInput, Token};
 
 /// The properties carried as `--florui-<name>` as written.
 pub(crate) const MIRRORED: &[&str] = &[
+    "list-style-type",
+    "counter-reset",
+    "counter-increment",
+    "counter-set",
     "font-feature-settings",
     "font-variant-caps",
     "font-variation-settings",
@@ -146,6 +150,7 @@ pub(crate) fn rewrite_declarations(css: &str) -> Cow<'_, str> {
 fn mentions(css: &str) -> bool {
     let lower = css.to_ascii_lowercase();
     lower.contains("font-variant")
+        || lower.contains("list-style")
         || lower.contains("text-decoration")
         || lower.contains("mask")
         || lower.contains("background")
@@ -248,6 +253,7 @@ fn is_handled(name: &str) -> bool {
         || name.eq_ignore_ascii_case("background")
         || name.eq_ignore_ascii_case("-webkit-background-clip")
         || name.eq_ignore_ascii_case("font-variant")
+        || name.eq_ignore_ascii_case("list-style")
         || name.eq_ignore_ascii_case("text-decoration")
         || name.eq_ignore_ascii_case("grid-template")
         || name.eq_ignore_ascii_case("grid")
@@ -344,6 +350,9 @@ fn is_global(word: &str) -> bool {
 fn expand(name: &str, value: &str, important: &str) -> Option<String> {
     match name {
         "font-variant" => expand_font_variant(value, important),
+        "list-style" => expand_list_style(value, important),
+        "list-style-type" => is_valid_list_style_type(value)
+            .then(|| format!("{}: {value}{important}", mirror_name(name))),
         "text-decoration" => expand_text_decoration(value, important),
         "clip-path" => Some(expand_clip_path(value, important)),
         "grid-template-columns" | "grid-template-rows" => {
@@ -809,6 +818,132 @@ fn words(value: &str) -> Vec<&str> {
         out.push(&value[begin..]);
     }
     out
+}
+
+/// The words of `value` apart at spaces that are not inside a string or a function.
+fn list_style_words(value: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0usize;
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut start = None;
+    for (index, c) in value.char_indices() {
+        if let Some(open) = quote {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == open {
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '"' | '\'' => quote = Some(c),
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            c if c.is_whitespace() && depth == 0 => {
+                if let Some(begin) = start.take() {
+                    out.push(&value[begin..index]);
+                }
+                continue;
+            }
+            _ => {}
+        }
+        start.get_or_insert(index);
+    }
+    if let Some(begin) = start {
+        out.push(&value[begin..]);
+    }
+    out
+}
+
+/// Whether `value` is a `list-style-type` a browser takes: a keyword or a name, or a string.
+/// The `symbols()` function is none of these in Chrome, which drops the declaration.
+fn is_valid_list_style_type(value: &str) -> bool {
+    let value = value.trim();
+    if is_global(value) || value.to_ascii_lowercase().contains("var(") {
+        return true;
+    }
+    if let Some(quote) = value.chars().next().filter(|c| matches!(c, '"' | '\'')) {
+        return value.len() >= 2 && value.ends_with(quote);
+    }
+    !value.starts_with(|c: char| c.is_ascii_digit() || c == '-')
+        && !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || !c.is_ascii())
+}
+
+/// `list-style`: the type goes to its custom property (the engine's servo build
+/// lacks most of its values), the position and the image to the properties.
+fn expand_list_style(value: &str, important: &str) -> Option<String> {
+    let words = list_style_words(value);
+    let part = |property: &str, setting: &str| {
+        if property == "list-style-type" {
+            format!("{}: {setting}{important}", mirror_name(property))
+        } else {
+            format!("{property}: {setting}{important}")
+        }
+    };
+    if let [word] = words.as_slice()
+        && is_global(word)
+    {
+        return Some(
+            ["list-style-type", "list-style-position", "list-style-image"]
+                .iter()
+                .map(|property| part(property, word))
+                .collect::<Vec<_>>()
+                .join("; "),
+        );
+    }
+    let (mut kind, mut position, mut image) = (None, None, None);
+    let mut nones = 0;
+    for word in words {
+        let lower = word.to_ascii_lowercase();
+        if lower == "inside" || lower == "outside" {
+            if position.replace(lower).is_some() {
+                return None;
+            }
+        } else if lower == "none" {
+            nones += 1;
+        } else if lower.starts_with("url(")
+            || lower.contains("gradient(")
+            || lower.starts_with("image-set(")
+            || lower.starts_with("-webkit-image-set(")
+        {
+            if image.replace(word.to_owned()).is_some() {
+                return None;
+            }
+        } else if !is_valid_list_style_type(word) || kind.replace(word.to_owned()).is_some() {
+            return None;
+        }
+    }
+    // A `none` is the type and the image that has not been named, both when
+    // it is the only word of them.
+    if nones > 2 || (nones == 2 && (kind.is_some() || image.is_some())) {
+        return None;
+    }
+    if nones >= 1 {
+        if kind.is_none() {
+            kind = Some("none".to_owned());
+            nones -= 1;
+        }
+        if nones >= 1 && image.is_none() {
+            image = Some("none".to_owned());
+        }
+    }
+    let kind = kind.unwrap_or_else(|| "disc".to_owned());
+    let image = image.unwrap_or_else(|| "none".to_owned());
+    let position = position.unwrap_or_else(|| "outside".to_owned());
+    Some(
+        [
+            part("list-style-type", &kind),
+            part("list-style-position", &position),
+            part("list-style-image", &image),
+        ]
+        .join("; "),
+    )
 }
 
 fn expand_font_variant(value: &str, important: &str) -> Option<String> {
@@ -1495,6 +1630,47 @@ mod tests {
             ".a { background-color: red }"
         );
     }
+    #[test]
+    fn list_style_sends_its_type_to_the_mirror_and_keeps_the_rest() {
+        assert_eq!(
+            sheet(".a { list-style: lower-roman inside }"),
+            ".a { --florui-list-style-type: lower-roman; list-style-position: inside; \
+             list-style-image: none }"
+        );
+        assert_eq!(
+            sheet(".a { list-style: \"> \" url(x.png) }"),
+            ".a { --florui-list-style-type: \"> \"; list-style-position: outside; \
+             list-style-image: url(x.png) }"
+        );
+        // A lone `none` is both the type and the image.
+        assert_eq!(
+            sheet(".a { list-style: none }"),
+            ".a { --florui-list-style-type: none; list-style-position: outside; \
+             list-style-image: none }"
+        );
+        assert!(sheet(".a { list-style: inherit }").contains("--florui-list-style-type: inherit"));
+        assert_eq!(
+            sheet(".a { counter-reset: a 3 }"),
+            ".a { --florui-counter-reset: a 3 }"
+        );
+    }
+
+    #[test]
+    fn symbols_is_no_list_style_type_as_in_chrome() {
+        for css in [
+            ".a { list-style-type: symbols(cyclic \"*\") }",
+            ".a { list-style: symbols(\"a\" \"b\") inside }",
+            ".a { list-style-type: foo bar }",
+            ".a { list-style-type: 3d }",
+        ] {
+            assert!(!sheet(css).contains("--florui-list-style-type"), "{css}");
+        }
+        assert!(
+            sheet(".a { list-style-type: my-style }")
+                .contains("--florui-list-style-type: my-style")
+        );
+    }
+
     #[test]
     fn font_variant_is_split_into_the_one_property_the_engine_has_and_the_rest() {
         assert_eq!(

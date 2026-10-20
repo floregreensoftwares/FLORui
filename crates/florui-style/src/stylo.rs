@@ -116,6 +116,8 @@ struct NodeSlot {
     has: std::cell::RefCell<Vec<usize>>,
     /// Whether the node holds text, which `:empty` counts as content.
     has_text: bool,
+    /// [`NodeSlot::identity`], worked out once: the elements do not change in a kept tree.
+    identity_hash: std::cell::OnceCell<u64>,
     data: AtomicRefCell<ElementData>,
     dirty_descendants: Cell<bool>,
     local_name: BorrowedLocalName,
@@ -142,6 +144,8 @@ pub(crate) struct StyloTree {
     /// Whether the last cascade gave any node a `:has()`, so the next one knows
     /// whether there is anything to take away.
     has_given: Cell<bool>,
+    /// The slot of the parent of each slot.
+    parents: Vec<Option<usize>>,
 }
 
 /// Where the number of a node's context sits in the state style sharing sees:
@@ -335,6 +339,7 @@ impl StyloTree {
                 context: Cell::new(0),
                 has: std::cell::RefCell::new(Vec::new()),
                 has_text: !arena.text_content(id).is_empty(),
+                identity_hash: std::cell::OnceCell::new(),
                 data: AtomicRefCell::new(ElementData::default()),
                 dirty_descendants: Cell::new(false),
                 local_name: arena.tag(id).into(),
@@ -371,18 +376,24 @@ impl StyloTree {
                 .style_attr(id)
                 .is_some_and(|css| css.to_ascii_lowercase().contains("scroll-behavior"))
         });
+        let parents: Vec<Option<usize>> = order
+            .iter()
+            .map(|&id| arena.parent(id).map(|parent| index_of[parent]))
+            .collect();
         let tree = Self {
             slots,
             index_of,
             order,
             uses_inline_scroll_behavior,
             has_given: Cell::new(false),
+            parents,
         };
-        tree.number_contexts(arena);
+        tree.number_contexts();
         (tree, primary_root)
     }
 
-    /// Numbers each node by the state of the nodes above it. A selector such as
+    /// Numbers each node by the state of the nodes above it. and by what
+    /// the selectors that name an ancestor read of it: its tag, its id and its classes. A selector such as
     /// `.row:hover .cell` matches two cells that are alike in everything else, under
     /// rows that differ only in their state, differently; Stylo's style sharing
     /// looks at the nodes and at the style of their parents, which is the same for
@@ -390,14 +401,18 @@ impl StyloTree {
     /// cells for the same. Nodes with the same number have the same state in every
     /// ancestor, and share. (What a sibling before a node has is covered by
     /// Stylo's own check of the selectors with a sibling combinator.)
-    fn number_contexts(&self, arena: &Arena) {
-        let mut numbers: HashMap<(u32, u64), u32> = HashMap::new();
+    fn number_contexts(&self) {
+        let mut numbers: HashMap<(u32, u64, u64), u32> = HashMap::new();
         let mut of_slot: Vec<u32> = vec![0; self.slots.len()];
-        for (index, &id) in self.order.iter().enumerate() {
+        for index in 0..self.order.len() {
             // What is above: the number of the parent, and the parent's own state.
-            let above = match arena.parent(id).map(|parent| self.index_of[parent]) {
-                Some(parent) => (of_slot[parent], self.slots[parent].state.get().bits()),
-                None => (0, 0),
+            let above = match self.parents[index] {
+                Some(parent) => (
+                    of_slot[parent],
+                    self.slots[parent].state.get().bits(),
+                    self.slots[parent].identity(),
+                ),
+                None => (0, 0, 0),
             };
             let next = numbers.len() as u32 + 1;
             let number = match numbers.get(&above) {
@@ -423,7 +438,7 @@ impl StyloTree {
             *slot.data.borrow_mut() = ElementData::default();
             slot.dirty_descendants.set(false);
         }
-        self.number_contexts(arena);
+        self.number_contexts();
     }
 
     /// How many nodes the tree has.
@@ -453,7 +468,7 @@ impl StyloTree {
             }
         }
         if !changed.is_empty() {
-            self.number_contexts(arena);
+            self.number_contexts();
         }
         changed
     }
@@ -1235,7 +1250,7 @@ pub(crate) fn parse_selector_list(text: &str) -> Option<Vec<u32>> {
 /// arguments are matched against the nodes below the node (or after it, and
 /// below them) with the engine's own selector matching, `:scope` being the node.
 /// The result is read back as the classes the rules were rewritten to.
-fn evaluate_has(tree: &StyloTree, rules: &[Rule]) {
+fn evaluate_has(tree: &StyloTree, rules: &[Rule]) -> bool {
     let mut numbers: Vec<usize> = rules
         .iter()
         .flat_map(|rule| rule.has_specs().iter().copied())
@@ -1243,14 +1258,14 @@ fn evaluate_has(tree: &StyloTree, rules: &[Rule]) {
     numbers.sort_unstable();
     numbers.dedup();
     if numbers.is_empty() && !tree.has_given.get() {
-        return;
+        return false;
     }
     for slot in &tree.slots {
         slot.has.borrow_mut().clear();
     }
     tree.has_given.set(false);
     if numbers.is_empty() {
-        return;
+        return true;
     }
     let url_data: style::stylesheets::UrlExtraData = url::Url::parse("about:florui")
         .expect("a fixed, valid URL literal")
@@ -1316,6 +1331,7 @@ fn evaluate_has(tree: &StyloTree, rules: &[Rule]) {
             }
         }
     }
+    true
 }
 
 /// Whether `test` holds for `root` or a node below it.
@@ -1341,7 +1357,11 @@ pub(crate) fn compute_with_tree(
 ) -> StyleMap {
     // One entry per node: growing a table of styles this big copies every
     // entry it already holds each time it doubles.
-    evaluate_has(tree, rules);
+    if evaluate_has(tree, rules) {
+        // The classes a node has can tell two nodes apart that the numbering took
+        // for the same.
+        tree.number_contexts();
+    }
     let mut result = StyleMap::with_capacity(tree.order.len());
     with_style_context(
         tree,
@@ -1481,6 +1501,7 @@ fn with_style_context<'t, R>(
         &mut AnimationTimeline,
     ) -> R,
 ) -> R {
+    let _counter_styles = crate::counter_style::install(crate::counter_style::collect(rules));
     let prefers_color_scheme = if timeline.prefers_dark_color_scheme() {
         PrefersColorScheme::Dark
     } else {
@@ -1623,6 +1644,20 @@ fn style_node<'t>(
                     std::sync::Arc::new(to_computed_style(&final_values, viewport_px))
                 }),
         )
+    };
+    // Elements that draw something of their own have no content to leave behind
+    // when they generate no box: `display: contents` on one acts as `none`.
+    let style = if style.display == FlorDisplay::Contents
+        && matches!(
+            target.0.tag,
+            "img" | "icon" | "svg" | "textarea" | "select" | "input" | "br" | "hr"
+        ) {
+        std::sync::Arc::new(ComputedStyle {
+            display: FlorDisplay::None,
+            ..(*style).clone()
+        })
+    } else {
+        style
     };
     // `primary` (the raw cascade result), not `final_values` (already
     // spliced with any in-progress transition/animation) -- Stylo's own
@@ -1923,6 +1958,7 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
     let position = values.get_position();
     let effects = values.get_effects();
     let box_style = values.get_box();
+    let inherited_table = values.get_inherited_table();
     let font = values.get_font();
     let margin = values.get_margin();
     let padding = values.get_padding();
@@ -2033,6 +2069,7 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
         font_variations: to_font_variations(values),
         text_transform: to_text_transform(text.text_transform),
         text_align: to_text_align(text.text_align),
+        block_align: to_block_align(text.text_align),
         text_shadow: to_text_shadows(&text.text_shadow.0, &text.color),
         glass: to_glass(values),
         backdrop_blur: to_backdrop_blur(values),
@@ -2045,6 +2082,10 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
             style::values::computed::ui::CursorKind::Pointer
         ),
         overflow_clips: to_overflow_clips(box_style.overflow_x, box_style.overflow_y),
+        overflow_makes_context: to_overflow_makes_context(
+            box_style.overflow_x,
+            box_style.overflow_y,
+        ),
         overflow_scrolls_x: to_overflow_scrolls_x(box_style.overflow_x),
         overflow_scrolls_y: to_overflow_scrolls_y(box_style.overflow_y),
         font_family: to_font_family(&font.font_family),
@@ -2074,6 +2115,22 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
                 color,
             ),
         },
+        border_hidden: Edges {
+            top: is_hidden(border.border_top_style),
+            right: is_hidden(border.border_right_style),
+            bottom: is_hidden(border.border_bottom_style),
+            left: is_hidden(border.border_left_style),
+        },
+        list_style_type: mirrored(values, "list-style-type")
+            .map(|value| {
+                crate::list::parse_list_style_type_with(&value, &crate::counter_style::lookup)
+            })
+            .unwrap_or_default(),
+        list_style_position: to_list_style_position(values),
+        list_style_image: to_background_image(&values.get_list().list_style_image, &text.color),
+        counter_reset: to_counters(values, "counter-reset", 0),
+        counter_increment: to_counters(values, "counter-increment", 1),
+        counter_set: to_counters(values, "counter-set", 0),
         border_radius: Corners {
             top_left: to_corner_radius(&border.border_top_left_radius),
             top_right: to_corner_radius(&border.border_top_right_radius),
@@ -2097,6 +2154,39 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
         justify_items: to_item_alignment(position.justify_items.computed.0),
         justify_self: to_item_alignment(position.justify_self.0.0),
         order: position.order,
+        float: to_float(box_style.float),
+        clear: to_clear(box_style.clear),
+        border_collapse: if inherited_table.border_collapse
+            == style::computed_values::border_collapse::T::Collapse
+        {
+            crate::cascade::BorderCollapse::Collapse
+        } else {
+            crate::cascade::BorderCollapse::Separate
+        },
+        border_spacing: (
+            inherited_table.border_spacing.0.width.px(),
+            inherited_table.border_spacing.0.height.px(),
+        ),
+        table_layout: if values.get_table().table_layout
+            == style::computed_values::table_layout::T::Fixed
+        {
+            crate::cascade::TableLayout::Fixed
+        } else {
+            crate::cascade::TableLayout::Auto
+        },
+        caption_side: if inherited_table.caption_side
+            == style::values::computed::table::CaptionSide::Bottom
+        {
+            crate::cascade::CaptionSide::Bottom
+        } else {
+            crate::cascade::CaptionSide::Top
+        },
+        empty_cells: if inherited_table.empty_cells == style::computed_values::empty_cells::T::Hide
+        {
+            crate::cascade::EmptyCells::Hide
+        } else {
+            crate::cascade::EmptyCells::Show
+        },
         grid_column: (
             to_grid_placement(&position.grid_column_start),
             to_grid_placement(&position.grid_column_end),
@@ -3653,6 +3743,29 @@ fn to_border_line_style(style: style::values::computed::BorderStyle) -> BorderLi
 /// every other style. `currentcolor` resolves against `inherited_color`
 /// (this element's own already-resolved `color`), the same fallback
 /// `background-color` already uses.
+fn to_list_style_position(values: &ComputedValues) -> crate::list::ListStylePosition {
+    use style::computed_values::list_style_position::T;
+    match values.get_list().list_style_position {
+        T::Inside => crate::list::ListStylePosition::Inside,
+        T::Outside => crate::list::ListStylePosition::Outside,
+    }
+}
+
+/// The counters a mirrored `counter-reset`, `counter-increment` or `counter-set`
+/// names on this element (they do not inherit, as the custom property does).
+fn to_counters(values: &ComputedValues, name: &str, default: i32) -> Vec<(String, i32)> {
+    if !declares_mirrored(values, name) {
+        return Vec::new();
+    }
+    mirrored(values, name)
+        .map(|value| crate::list::parse_counters(&value, default))
+        .unwrap_or_default()
+}
+
+fn is_hidden(style: style::values::computed::BorderStyle) -> bool {
+    style == style::values::computed::BorderStyle::Hidden
+}
+
 fn to_border_side(
     style: style::values::computed::BorderStyle,
     width: app_units::Au,
@@ -3901,14 +4014,50 @@ fn authored_display_none(values: &ComputedValues) -> bool {
 }
 
 fn to_display(display: style::values::computed::Display) -> FlorDisplay {
-    use style::values::specified::box_::{DisplayInside, DisplayOutside};
+    use style::values::specified::box_::{DisplayInside as I, DisplayOutside as O};
     match (display.outside(), display.inside()) {
-        (DisplayOutside::None, _) => FlorDisplay::None,
-        (DisplayOutside::Inline, DisplayInside::FlowRoot) => FlorDisplay::InlineBlock,
-        (DisplayOutside::Inline, _) => FlorDisplay::Inline,
-        (_, DisplayInside::Flex) => FlorDisplay::Flex,
-        (_, DisplayInside::Grid) => FlorDisplay::Grid,
+        (_, I::Contents) => FlorDisplay::Contents,
+        (O::None, _) => FlorDisplay::None,
+        (O::Inline, I::FlowRoot) => FlorDisplay::InlineBlock,
+        (O::Inline, I::Flex) => FlorDisplay::InlineFlex,
+        (O::Inline, I::Grid) => FlorDisplay::InlineGrid,
+        (O::Inline, I::Table) => FlorDisplay::InlineTable,
+        (O::Inline, _) => FlorDisplay::Inline,
+        (O::TableCaption, _) => FlorDisplay::TableCaption,
+        (_, I::Flex) => FlorDisplay::Flex,
+        (_, I::Grid) => FlorDisplay::Grid,
+        (_, I::FlowRoot) => FlorDisplay::FlowRoot,
+        (_, I::Table) => FlorDisplay::Table,
+        (_, I::TableRowGroup) => FlorDisplay::TableRowGroup,
+        (_, I::TableHeaderGroup) => FlorDisplay::TableHeaderGroup,
+        (_, I::TableFooterGroup) => FlorDisplay::TableFooterGroup,
+        (_, I::TableRow) => FlorDisplay::TableRow,
+        (_, I::TableColumn) => FlorDisplay::TableColumn,
+        (_, I::TableColumnGroup) => FlorDisplay::TableColumnGroup,
+        (_, I::TableCell) => FlorDisplay::TableCell,
+        _ if display.is_list_item() => FlorDisplay::ListItem,
         _ => FlorDisplay::Block,
+    }
+}
+
+fn to_float(value: style::values::computed::Float) -> crate::cascade::Float {
+    use crate::cascade::Float;
+    use style::values::computed::Float as F;
+    match value {
+        F::Left | F::InlineStart => Float::Left,
+        F::Right | F::InlineEnd => Float::Right,
+        F::None => Float::None,
+    }
+}
+
+fn to_clear(value: style::values::computed::Clear) -> crate::cascade::Clear {
+    use crate::cascade::Clear;
+    use style::values::computed::Clear as C;
+    match value {
+        C::None => Clear::None,
+        C::Left | C::InlineStart => Clear::Left,
+        C::Right | C::InlineEnd => Clear::Right,
+        C::Both => Clear::Both,
     }
 }
 
@@ -3935,6 +4084,19 @@ fn to_overflow_clips(
     use style::computed_values::overflow_x::T as OverflowX;
     use style::computed_values::overflow_y::T as OverflowY;
     !matches!(overflow_x, OverflowX::Visible) || !matches!(overflow_y, OverflowY::Visible)
+}
+
+/// Whether either axis's `overflow` is `hidden`, `scroll` or `auto`, which makes
+/// the box a scroll container and so the root of its own block formatting
+/// context. `clip` is not one.
+fn to_overflow_makes_context(
+    overflow_x: style::computed_values::overflow_x::T,
+    overflow_y: style::computed_values::overflow_y::T,
+) -> bool {
+    use style::computed_values::overflow_x::T as OverflowX;
+    use style::computed_values::overflow_y::T as OverflowY;
+    !matches!(overflow_x, OverflowX::Visible | OverflowX::Clip)
+        || !matches!(overflow_y, OverflowY::Visible | OverflowY::Clip)
 }
 
 /// Whether this axis's `overflow` is real CSS's `scroll`/`auto` — the two
@@ -4260,6 +4422,16 @@ fn to_vertical_align(value: &style::values::computed::VerticalAlign) -> crate::V
         Value::Keyword(Keyword::Bottom) => crate::VerticalAlign::Bottom,
         Value::Keyword(_) => crate::VerticalAlign::Baseline,
         Value::Length(length) => crate::VerticalAlign::Raise(to_length_percentage(length)),
+    }
+}
+
+fn to_block_align(value: style::values::computed::text::TextAlign) -> crate::BlockAlign {
+    use style::values::specified::text::TextAlignKeyword as Keyword;
+    match value {
+        Keyword::MozCenter => crate::BlockAlign::Center,
+        Keyword::MozLeft => crate::BlockAlign::Left,
+        Keyword::MozRight => crate::BlockAlign::Right,
+        _ => crate::BlockAlign::None,
     }
 }
 
@@ -5153,5 +5325,34 @@ mod style_sharing_tests {
                 "hovering card {position}"
             );
         }
+    }
+}
+
+impl NodeSlot {
+    /// A hash of what a selector with an ancestor in it can tell this node by: its tag,
+    /// its id, its classes and its attributes.
+    fn identity(&self) -> u64 {
+        let base = *self.identity_hash.get_or_init(|| self.hash_identity());
+        let has = self.has.borrow();
+        if has.is_empty() {
+            return base;
+        }
+        // The `:has()` it has changes with the tree below it and the state, so it is
+        // not part of what is kept.
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        base.hash(&mut hasher);
+        has.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn hash_identity(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.tag.hash(&mut hasher);
+        self.id_attr.hash(&mut hasher);
+        self.classes.hash(&mut hasher);
+        self.attrs.hash(&mut hasher);
+        hasher.finish()
     }
 }

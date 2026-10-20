@@ -354,6 +354,23 @@ mod cascade_tests {
     }
 
     #[test]
+    fn cousins_under_cards_that_differ_in_what_they_have_do_not_share_a_style() {
+        let tree: Element = view! {
+            <div>
+                <div class="card"><span class="child" /><span class="x" /></div>
+                <div class="card"><span class="child" /></div>
+            </div>
+        };
+        let (arena, colors) = colors(
+            &tree,
+            ".card:has(.x) .child { background-color: #00ff00 }",
+            &InteractionState::new(),
+        );
+        let children = arena.find_all(|a, id| a.classes(id).iter().any(|c| c == "child"));
+        assert_eq!(colors[children[0]], GREEN);
+        assert_ne!(colors[children[1]], GREEN, "its card has no .x");
+    }
+    #[test]
     fn an_element_with_text_is_not_empty_and_one_without_any_is() {
         let tree: Element = view! {
             <div><span class="a" /><span class="b">"t"</span><span class="c"><i /></span></div>

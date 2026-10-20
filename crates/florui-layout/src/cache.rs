@@ -16,7 +16,7 @@ use florui_style::StyleMap;
 /// id held and is written again; correctness never depends on ids being
 /// stable, only the saving does.
 pub struct LayoutCache {
-    tree: TaffyTree<LeafContext>,
+    tree: FlorTree,
     /// The Taffy node of each arena node laid out last time, by arena id.
     slots: Vec<Option<Slot>>,
     /// The synthetic block wrapping the roots of the document and of the
@@ -69,6 +69,8 @@ enum Step {
     Visit(NodeId),
     Build(NodeId),
     BuildMixed(NodeId, Vec<Part>),
+    /// Inline content with floats among it, which are its Taffy children.
+    BuildInline(NodeId, Vec<NodeId>),
 }
 
 impl Default for LayoutCache {
@@ -79,10 +81,9 @@ impl Default for LayoutCache {
 
 impl LayoutCache {
     pub fn new() -> Self {
-        let mut tree = TaffyTree::new();
+        let tree = FlorTree::new();
         // Text is measured at its exact width and paint reshapes it at the
         // laid out width: see `compute_layout_with_content_extents`.
-        tree.disable_rounding();
         LayoutCache {
             tree,
             slots: Vec::new(),
@@ -197,6 +198,7 @@ impl LayoutCache {
         styles: &StyleMap,
         available: Size<AvailableSpace>,
     ) -> Result<LayoutsAndContentExtents, LayoutError> {
+        let _numbers = install_numbering(arena, styles);
         if font.generation() != self.font_generation {
             *self = LayoutCache::new();
             self.font_generation = font.generation();
@@ -207,8 +209,7 @@ impl LayoutCache {
         }
         if self.slots.is_empty() {
             // A first layout: room for every node at once, as a tree built anew has.
-            let mut tree = TaffyTree::with_capacity(styles.len() + 2);
-            tree.disable_rounding();
+            let tree = FlorTree::with_capacity(styles.len() + 2);
             self.tree = tree;
             self.slots.reserve(styles.len());
         }
@@ -377,9 +378,10 @@ impl LayoutCache {
         while let Some(step) = stack.pop() {
             match step {
                 Step::Visit(node) => {
-                    let arena_children = arena.children(node);
+                    let arena_children = flow_children(arena, styles, node);
                     // An inline `<svg>` is a leaf: what is in it is drawn with it.
-                    let leaf = arena_children.is_empty() || arena.tag(node) == "svg";
+                    let leaf = (arena.children(node).is_empty() && !has_line_marker(styles, node))
+                        || arena.tag(node) == "svg";
                     let kind = if leaf {
                         LayoutKind::Blocks
                     } else {
@@ -392,11 +394,27 @@ impl LayoutCache {
                         } else {
                             to_taffy_style(styles.get(&node))
                         };
-                        self.place(node, style, context, &[], false)?;
+                        self.place(
+                            node,
+                            (table::role_of(arena, styles, node), None),
+                            style,
+                            context,
+                            &[],
+                            false,
+                        )?;
+                    } else if kind == LayoutKind::Inline
+                        && !ifc_floats(arena, styles, node).is_empty()
+                    {
+                        let floats = ifc_floats(arena, styles, node);
+                        stack.push(Step::BuildInline(node, floats.clone()));
+                        for &float in floats.iter().rev() {
+                            stack.push(Step::Visit(float));
+                        }
                     } else if kind == LayoutKind::Inline {
                         let context = build_inline_content_items(font, arena, styles, node, None);
                         self.place(
                             node,
+                            (table::role_of(arena, styles, node), None),
                             to_taffy_style(styles.get(&node)),
                             Some(LeafContext::Inline(context.clone())),
                             &[],
@@ -412,8 +430,18 @@ impl LayoutCache {
                                 Part::Run(_) | Part::Spot(_) => None,
                             })
                             .collect();
+                        let run_floats: Vec<NodeId> = parts
+                            .iter()
+                            .filter_map(|part| match part {
+                                Part::Run(range) => {
+                                    Some(crate::run_floats(arena, styles, node, range.clone()))
+                                }
+                                _ => None,
+                            })
+                            .flatten()
+                            .collect();
                         stack.push(Step::BuildMixed(node, parts));
-                        for &child in blocks.iter().rev() {
+                        for &child in blocks.iter().chain(run_floats.iter()).rev() {
                             stack.push(Step::Visit(child));
                         }
                     } else {
@@ -458,12 +486,19 @@ impl LayoutCache {
                                     range.clone(),
                                     None,
                                 );
-                                let leaf = self.tree.new_leaf_with_context(
+                                let float_ids: Vec<taffy::NodeId> =
+                                    crate::run_floats(arena, styles, node, range.clone())
+                                        .iter()
+                                        .map(|float| self.id_of(*float))
+                                        .collect();
+                                let leaf = crate::inline_node(
+                                    &mut self.tree,
                                     taffy::Style {
                                         display: Display::Block,
                                         ..Default::default()
                                     },
-                                    LeafContext::Inline(context.clone()),
+                                    context.clone(),
+                                    &float_ids,
                                 )?;
                                 let key = anonymous_id(node, run_number);
                                 run_number += 1;
@@ -479,23 +514,43 @@ impl LayoutCache {
                     sort_by_order(&mut children, &orders);
                     self.place(
                         node,
+                        (
+                            table::role_of(arena, styles, node),
+                            crate::marker_rise(font, arena, styles, node),
+                        ),
                         to_taffy_style(styles.get(&node)),
                         None,
                         &children,
                         false,
                     )?;
                 }
+                Step::BuildInline(node, floats) => {
+                    let context = build_inline_content_items(font, arena, styles, node, None);
+                    let float_ids: Vec<taffy::NodeId> =
+                        floats.iter().map(|float| self.id_of(*float)).collect();
+                    self.place(
+                        node,
+                        (
+                            table::role_of(arena, styles, node),
+                            crate::marker_rise(font, arena, styles, node),
+                        ),
+                        to_taffy_style(styles.get(&node)),
+                        Some(LeafContext::Inline(context.clone())),
+                        &float_ids,
+                        false,
+                    )?;
+                    inline_leaves.push((node, context));
+                }
                 Step::Build(node) => {
                     let reorders = reorders_children(styles, node)
-                        && arena
-                            .children(node)
+                        && flow_children(arena, styles, node)
                             .iter()
                             .any(|&child| order_of(styles, child) != 0);
                     let mut children: Vec<taffy::NodeId> =
-                        Vec::with_capacity(arena.children(node).len());
+                        Vec::with_capacity(flow_children(arena, styles, node).len());
                     let mut orders: Vec<i32> = Vec::new();
                     let mut children_are_new = true;
-                    for &child in arena.children(node) {
+                    for &child in flow_children(arena, styles, node).iter() {
                         if is_viewport_fixed(arena, styles, child) {
                             let spot = self.tree.new_leaf(static_spot_style())?;
                             self.anonymous.insert(static_spot_id(child), spot);
@@ -516,6 +571,10 @@ impl LayoutCache {
                     sort_by_order(&mut children, &orders);
                     self.place(
                         node,
+                        (
+                            table::role_of(arena, styles, node),
+                            crate::marker_rise(font, arena, styles, node),
+                        ),
                         to_taffy_style(styles.get(&node)),
                         None,
                         &children,
@@ -532,6 +591,7 @@ impl LayoutCache {
     fn place(
         &mut self,
         node: NodeId,
+        (role, marker): (table::Role, Option<crate::tree::MarkerRise>),
         style: taffy::Style,
         context: Option<LeafContext>,
         children: &[taffy::NodeId],
@@ -548,6 +608,11 @@ impl LayoutCache {
             // layout, which has no parent yet; any other child goes through
             // `set_children`, which leaves its old parent first.
             let id = match context {
+                Some(context) if !children.is_empty() => {
+                    let id = self.tree.new_leaf_with_context(style, context)?;
+                    self.tree.set_children(id, children)?;
+                    id
+                }
                 Some(context) => self.tree.new_leaf_with_context(style, context)?,
                 None if children_are_new && !children.is_empty() => {
                     self.tree.new_with_children(style, children)?
@@ -560,6 +625,8 @@ impl LayoutCache {
                     id
                 }
             };
+            self.tree.set_role(id, role)?;
+            self.tree.set_marker(id, marker)?;
             self.slots[node] = Some(Slot {
                 id,
                 children: children.to_vec(),
@@ -570,6 +637,8 @@ impl LayoutCache {
         };
         slot.epoch = epoch;
         let id = slot.id;
+        self.tree.set_role(id, role)?;
+        self.tree.set_marker(id, marker)?;
         if *self.tree.style(id)? != style {
             self.tree.set_style(id, style)?;
         }
@@ -938,6 +1007,355 @@ mod tests {
         // `b` (order 1) first, then `c`, then the two `a`s (order 3) in source order.
         assert!(layouts[&items[1]].x < layouts[&items[2]].x);
         assert!(layouts[&items[2]].x < layouts[&items[0]].x);
+    }
+
+    #[test]
+    fn a_kept_tree_with_floats_lays_out_as_one_built_anew() {
+        let css = ".p { width: 200px; font-size: 16px; line-height: 20px; } \
+                   .l { float: left; width: 50px; height: 50px; } \
+                   .r { float: right; width: 40px; height: 30px; margin: 5px; } \
+                   .cl { clear: both; height: 4px; } .fr { display: flow-root; }";
+        let sheet = florui_style::parse_stylesheet(css).unwrap();
+        let styled = |arena: &Arena| {
+            florui_style::compute(
+                arena,
+                &sheet,
+                &InteractionState::new(),
+                florui_style::Viewport::default(),
+                &mut florui_style::AnimationTimeline::default(),
+            )
+        };
+        let float =
+            |class: &str| Element::node("div", vec![("class".into(), class.into())], vec![]);
+        let paragraph = |class: &str, children: Vec<Element>| {
+            Element::node("div", vec![("class".into(), class.into())], children)
+        };
+        let tree = |words: usize, with_right: bool| {
+            let text = "alpha beta gamma delta epsilon zeta eta theta iota ".repeat(words);
+            let mut children = vec![float("l")];
+            if with_right {
+                children.push(float("r"));
+            }
+            children.push(Element::text(text));
+            Element::node(
+                "div",
+                vec![],
+                vec![
+                    paragraph("p", children),
+                    float("cl"),
+                    paragraph(
+                        "p fr",
+                        vec![float("l"), Element::text("contained"), float("r")],
+                    ),
+                    paragraph(
+                        "p",
+                        vec![
+                            Element::text("after "),
+                            float("r"),
+                            Element::text("the float"),
+                        ],
+                    ),
+                ],
+            )
+        };
+        let mut font = florui_text::Font::load_embedded();
+        let mut cache = LayoutCache::new();
+        let wide = Size::MAX_CONTENT;
+        let narrow = Size {
+            width: AvailableSpace::Definite(220.0),
+            height: AvailableSpace::MaxContent,
+        };
+        for (words, with_right, available) in [
+            (1, false, wide),
+            (1, false, wide),
+            (3, false, wide),
+            (3, true, wide),
+            (3, true, narrow),
+            (1, true, wide),
+            (5, false, narrow),
+        ] {
+            let arena = Arena::build(&tree(words, with_right));
+            let styles = styled(&arena);
+            let kept = cache
+                .compute(&mut font, &arena, &styles, available)
+                .unwrap();
+            let fresh =
+                compute_layout_with_content_extents(&mut font, &arena, &styles, available).unwrap();
+            assert_eq!(kept.0.len(), fresh.0.len(), "{words} {with_right}: count");
+            for (node, layout) in &fresh.0 {
+                assert_eq!(
+                    kept.0.get(node),
+                    Some(layout),
+                    "{words} {with_right}: node {node}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_kept_tree_with_contents_and_inline_boxes_lays_out_as_one_built_anew() {
+        let css = ".c { display: contents; } .b { display: block; padding: 3px; margin: 4px; } \
+                   .f { display: flex; } .x { display: flex; } .g { display: inline-grid; } \
+                   .h { display: inline-flex; } .r { display: flow-root; } .o { order: -1; } \
+                   .fl { float: left; width: 20px; height: 20px; }";
+        let sheet = florui_style::parse_stylesheet(css).unwrap();
+        let styled = |arena: &Arena| {
+            florui_style::compute(
+                arena,
+                &sheet,
+                &InteractionState::new(),
+                florui_style::Viewport::default(),
+                &mut florui_style::AnimationTimeline::default(),
+            )
+        };
+        let node = |tag: &'static str, class: &str, children: Vec<Element>| {
+            Element::node(tag, vec![("class".into(), class.into())], children)
+        };
+        let tree = |wrapper: &str, inner: &str| {
+            node(
+                "div",
+                "",
+                vec![
+                    node(
+                        "div",
+                        "f",
+                        vec![
+                            node(
+                                "div",
+                                wrapper,
+                                vec![node("p", "", vec![Element::text("one")])],
+                            ),
+                            node("p", "o", vec![Element::text("two")]),
+                        ],
+                    ),
+                    node(
+                        "div",
+                        "",
+                        vec![
+                            Element::text("before "),
+                            node(
+                                "span",
+                                inner,
+                                vec![node("i", "", vec![Element::text("in the box")])],
+                            ),
+                            Element::text(" after"),
+                            node("div", "fl", vec![]),
+                        ],
+                    ),
+                    node(
+                        "div",
+                        wrapper,
+                        vec![
+                            Element::text("text in "),
+                            node("em", "", vec![Element::text("em")]),
+                        ],
+                    ),
+                ],
+            )
+        };
+        let mut font = florui_text::Font::load_embedded();
+        let mut cache = LayoutCache::new();
+        for (wrapper, inner) in [
+            ("c", "g"),
+            ("c", "g"),
+            ("b", "g"),
+            ("c", "h"),
+            ("b", "h"),
+            ("c", "r"),
+            ("x", "g"),
+            ("c", "g"),
+        ] {
+            let arena = Arena::build(&tree(wrapper, inner));
+            let styles = styled(&arena);
+            let available = Size::MAX_CONTENT;
+            let kept = cache
+                .compute(&mut font, &arena, &styles, available)
+                .unwrap();
+            let fresh =
+                compute_layout_with_content_extents(&mut font, &arena, &styles, available).unwrap();
+            assert_eq!(kept.0.len(), fresh.0.len(), "{wrapper} {inner}: count");
+            for (node, layout) in &fresh.0 {
+                assert_eq!(
+                    kept.0.get(node),
+                    Some(layout),
+                    "{wrapper} {inner}: node {node}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_kept_tree_with_tables_and_lists_lays_out_as_one_built_anew() {
+        let css = "table { border-collapse: collapse; } td { padding: 2px; border: 1px solid #000; } \
+                   .w { width: 40px; } .i { list-style-position: inside; } \
+                   .l { margin: 0; padding-left: 20px; }";
+        let sheet = florui_style::parse_stylesheet(css).unwrap();
+        let styled = |arena: &Arena| {
+            florui_style::compute(
+                arena,
+                &sheet,
+                &InteractionState::new(),
+                florui_style::Viewport::default(),
+                &mut florui_style::AnimationTimeline::default(),
+            )
+        };
+        let cell = |class: &str, text: &str| {
+            Element::node(
+                "td",
+                vec![("class".into(), class.into())],
+                vec![Element::text(text)],
+            )
+        };
+        let tree = |rows: usize, inside: bool, words: usize| {
+            let body: Vec<Element> = (0..rows)
+                .map(|r| {
+                    Element::node(
+                        "tr",
+                        vec![],
+                        vec![
+                            cell("w", &"word ".repeat(words)),
+                            cell("", &format!("row {r}")),
+                        ],
+                    )
+                })
+                .collect();
+            let items: Vec<Element> = (0..3)
+                .map(|n| Element::node("li", vec![], vec![Element::text(format!("item {n}"))]))
+                .collect();
+            Element::node(
+                "div",
+                vec![],
+                vec![
+                    Element::node("table", vec![], body),
+                    Element::node(
+                        "ol",
+                        vec![(
+                            "class".into(),
+                            if inside {
+                                "l i".to_owned()
+                            } else {
+                                "l".to_owned()
+                            },
+                        )],
+                        items,
+                    ),
+                ],
+            )
+        };
+        let mut font = florui_text::Font::load_embedded();
+        let mut cache = LayoutCache::new();
+        let wide = Size::MAX_CONTENT;
+        let narrow = Size {
+            width: AvailableSpace::Definite(120.0),
+            height: AvailableSpace::MaxContent,
+        };
+        for (rows, inside, words, available) in [
+            (2, false, 1, wide),
+            (2, false, 1, wide),
+            (3, false, 2, wide),
+            (3, true, 2, wide),
+            (3, true, 4, narrow),
+            (1, true, 1, wide),
+            (4, false, 3, narrow),
+        ] {
+            let arena = Arena::build(&tree(rows, inside, words));
+            let styles = styled(&arena);
+            let kept = cache
+                .compute(&mut font, &arena, &styles, available)
+                .unwrap();
+            let fresh =
+                compute_layout_with_content_extents(&mut font, &arena, &styles, available).unwrap();
+            assert_eq!(
+                kept.0.len(),
+                fresh.0.len(),
+                "{rows} {inside} {words}: count"
+            );
+            for (node, layout) in &fresh.0 {
+                assert_eq!(
+                    kept.0.get(node),
+                    Some(layout),
+                    "{rows} {inside} {words}: node {node}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_kept_tree_with_image_markers_lays_out_as_one_built_anew() {
+        let svg = |side: u32| {
+            format!(
+                "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='{side}' height='{side}'%3E%3Crect width='{side}' height='{side}'/%3E%3C/svg%3E\")"
+            )
+        };
+        let css = format!(
+            "ul {{ margin: 0; padding-left: 20px; }} p {{ margin: 0; }} .big {{ list-style-image: {}; }} \
+             .small {{ list-style-image: {}; }} .in {{ list-style-position: inside; }}",
+            svg(40),
+            svg(12)
+        );
+        let sheet = florui_style::parse_stylesheet(&css).unwrap();
+        let styled = |arena: &Arena| {
+            florui_style::compute(
+                arena,
+                &sheet,
+                &InteractionState::new(),
+                florui_style::Viewport::default(),
+                &mut florui_style::AnimationTimeline::default(),
+            )
+        };
+        let item = |class: &str, content: Vec<Element>| {
+            Element::node("li", vec![("class".into(), class.into())], content)
+        };
+        let tree = |first: &str, second: &str, blocks: bool| {
+            let content = |text: &str| {
+                if blocks {
+                    vec![Element::node("p", vec![], vec![Element::text(text)])]
+                } else {
+                    vec![Element::text(text)]
+                }
+            };
+            Element::node(
+                "ul",
+                vec![],
+                vec![
+                    item(first, content("first")),
+                    item(second, content("second")),
+                    item(first, vec![]),
+                ],
+            )
+        };
+        let mut font = florui_text::Font::load_embedded();
+        let mut cache = LayoutCache::new();
+        let available = Size::MAX_CONTENT;
+        for (first, second, blocks) in [
+            ("big", "small in", false),
+            ("big", "small in", false),
+            ("big", "small in", true),
+            ("big in", "small", true),
+            ("small", "big in", false),
+            ("", "big", true),
+            ("big", "", false),
+        ] {
+            let arena = Arena::build(&tree(first, second, blocks));
+            let styles = styled(&arena);
+            let kept = cache
+                .compute(&mut font, &arena, &styles, available)
+                .unwrap();
+            let fresh =
+                compute_layout_with_content_extents(&mut font, &arena, &styles, available).unwrap();
+            assert_eq!(
+                kept.0.len(),
+                fresh.0.len(),
+                "{first} {second} {blocks}: count"
+            );
+            for (node, layout) in &fresh.0 {
+                assert_eq!(
+                    kept.0.get(node),
+                    Some(layout),
+                    "{first} {second} {blocks}: node {node}"
+                );
+            }
+        }
     }
 
     #[test]

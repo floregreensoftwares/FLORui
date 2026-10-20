@@ -1,0 +1,181 @@
+{
+    "id":  "list-inside",
+    "description":  "List items with their marker inside: shapes and numbers at the start of the first line, the text wrapping under them, an item that begins with a block (the marker is on a line of its own), an empty item, centered text, a marker that is an image (outside the box, as an image is) and one that cannot be read (the type marks the item).",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  420,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 420px; background-color: #ffffff; font-size: 16px; } ul, ol { margin: 0 0 6px 0; padding-left: 40px; width: 220px; background-color: #f0f0f0; } .in { list-style-position: inside; } .ci { list-style-type: circle; } .sq { list-style-type: square; } .cn { text-align: center; } .img { list-style-image: url(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAwAAAAMCAYAAABWdVznAAAAUUlEQVR4nGP4////gmdRAf9hWMOmAgUjy4EwA4hA1kSUBmRNRGuAaSKoAV0BIT9haCDkJ6wa8PkJpwZcfmJA9xQhPxHUgO4nojQgayJaA0wTALpXUCi3BUCiAAAAAElFTkSuQmCC\"); } .bad { list-style-image: url(\"missing.png\"); }",
+                   "children":  [
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "in",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Disc inside"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "ci",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "A longer item whose text wraps onto a second line under its marker"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "sq",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Square"
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ol",
+                                        "class":  "in",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Decimal inside"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Two"
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "in",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   "A block first"
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   "Another block"
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "in cn",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Centered"
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "img",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "With an image"
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "bad",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Unreadable image"
+                                                                          ]
+                                                         }
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "geometry_tolerance_px":  0.5,
+                           "threshold_percent":  6.5,
+                           "reason":  "The text is the same Open Sans through two rasterizers, which differ in anti-aliasing and hinting on every glyph; the boxes, the markers and the lines are the same.",
+                           "kind":  "tolerant"
+                       }
+}

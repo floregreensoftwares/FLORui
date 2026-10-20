@@ -225,6 +225,25 @@ pub const PRIMITIVES: &[Primitive] = &[
     primitive!("ul", Content::Normal, "an unordered list"),
     primitive!("ol", Content::Normal, "an ordered list"),
     primitive!("li", Content::Normal, "a list item"),
+    // Tables.
+    primitive!("table", Content::Normal, "tabular data in rows and columns"),
+    primitive!("caption", Content::Normal, "the title of a table"),
+    primitive!("colgroup", Content::Normal, "a group of columns of a table"),
+    primitive!("col", Content::Void, "a column of a table, for its style"),
+    primitive!("thead", Content::Normal, "the header rows of a table"),
+    primitive!("tbody", Content::Normal, "a group of body rows of a table"),
+    primitive!("tfoot", Content::Normal, "the footer rows of a table"),
+    primitive!("tr", Content::Normal, "a row of a table"),
+    primitive!(
+        "td",
+        Content::Normal,
+        "a cell of a table; `colspan` and `rowspan` span it"
+    ),
+    primitive!(
+        "th",
+        Content::Normal,
+        "a header cell of a table; `colspan` and `rowspan` span it"
+    ),
     // Interaction.
     primitive!(
         "button",
