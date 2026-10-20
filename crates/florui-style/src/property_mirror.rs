@@ -351,6 +351,8 @@ fn expand(name: &str, value: &str, important: &str) -> Option<String> {
     match name {
         "font-variant" => expand_font_variant(value, important),
         "list-style" => expand_list_style(value, important),
+        "list-style-type" => is_valid_list_style_type(value)
+            .then(|| format!("{}: {value}{important}", mirror_name(name))),
         "text-decoration" => expand_text_decoration(value, important),
         "clip-path" => Some(expand_clip_path(value, important)),
         "grid-template-columns" | "grid-template-rows" => {
@@ -856,6 +858,23 @@ fn list_style_words(value: &str) -> Vec<&str> {
     out
 }
 
+/// Whether `value` is a `list-style-type` a browser takes: a keyword or a name, or a string.
+/// The `symbols()` function is none of these in Chrome, which drops the declaration.
+fn is_valid_list_style_type(value: &str) -> bool {
+    let value = value.trim();
+    if is_global(value) || value.to_ascii_lowercase().contains("var(") {
+        return true;
+    }
+    if let Some(quote) = value.chars().next().filter(|c| matches!(c, '"' | '\'')) {
+        return value.len() >= 2 && value.ends_with(quote);
+    }
+    !value.starts_with(|c: char| c.is_ascii_digit() || c == '-')
+        && !value.is_empty()
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || !c.is_ascii())
+}
+
 /// `list-style`: the type goes to its custom property (the engine's servo build
 /// lacks most of its values), the position and the image to the properties.
 fn expand_list_style(value: &str, important: &str) -> Option<String> {
@@ -896,7 +915,7 @@ fn expand_list_style(value: &str, important: &str) -> Option<String> {
             if image.replace(word.to_owned()).is_some() {
                 return None;
             }
-        } else if kind.replace(word.to_owned()).is_some() {
+        } else if !is_valid_list_style_type(word) || kind.replace(word.to_owned()).is_some() {
             return None;
         }
     }
@@ -1633,6 +1652,22 @@ mod tests {
         assert_eq!(
             sheet(".a { counter-reset: a 3 }"),
             ".a { --florui-counter-reset: a 3 }"
+        );
+    }
+
+    #[test]
+    fn symbols_is_no_list_style_type_as_in_chrome() {
+        for css in [
+            ".a { list-style-type: symbols(cyclic \"*\") }",
+            ".a { list-style: symbols(\"a\" \"b\") inside }",
+            ".a { list-style-type: foo bar }",
+            ".a { list-style-type: 3d }",
+        ] {
+            assert!(!sheet(css).contains("--florui-list-style-type"), "{css}");
+        }
+        assert!(
+            sheet(".a { list-style-type: my-style }")
+                .contains("--florui-list-style-type: my-style")
         );
     }
 

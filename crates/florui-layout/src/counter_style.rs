@@ -4,7 +4,7 @@
 /// A number written in a counter style, and what is put after it in a marker.
 pub(crate) struct Counted {
     pub(crate) text: String,
-    pub(crate) suffix: &'static str,
+    pub(crate) suffix: String,
 }
 
 const DECIMAL: [char; 10] = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
@@ -240,9 +240,13 @@ fn hebrew(value: i64) -> Option<String> {
 /// `value` in the counter style `name`, with its suffix; a number the style cannot
 /// write is written in `decimal`.
 pub(crate) fn format(name: &str, value: i64) -> Counted {
-    let plain = |text: String| Counted { text, suffix: ". " };
+    let plain = |text: String| Counted {
+        text,
+        suffix: ". ".to_owned(),
+    };
     let cjk = |text: String| Counted {
-        text, suffix: "、"
+        text,
+        suffix: "、".to_owned(),
     };
     let decimal = || plain(numeric(value, &DECIMAL, 0));
     match name {

@@ -17,6 +17,8 @@ pub enum ListStyleType {
     Counter(String),
     /// A string, which is the marker as it is.
     String(String),
+    /// A counter style of the author (a `@counter-style` rule).
+    Custom(std::sync::Arc<crate::counter_style::CounterStyle>),
 }
 
 /// `list-style-position`.
@@ -29,8 +31,16 @@ pub enum ListStylePosition {
     Inside,
 }
 
-/// Reads the value of `list-style-type` as it is written.
+/// Reads the value of `list-style-type` as it is written, with no counter style of the author.
 pub fn parse_list_style_type(value: &str) -> ListStyleType {
+    parse_list_style_type_with(value, &|_| None)
+}
+
+/// [`parse_list_style_type`], where `lookup` finds the counter styles of the author by name.
+pub fn parse_list_style_type_with(
+    value: &str,
+    lookup: &dyn Fn(&str) -> Option<std::sync::Arc<crate::counter_style::CounterStyle>>,
+) -> ListStyleType {
     let value = value.trim();
     if let Some(string) = unquote(value) {
         return ListStyleType::String(string);
@@ -42,6 +52,9 @@ pub fn parse_list_style_type(value: &str) -> ListStyleType {
         "square" => ListStyleType::Square,
         "disclosure-open" => ListStyleType::DisclosureOpen,
         "disclosure-closed" => ListStyleType::DisclosureClosed,
+        _ if !value.is_empty() && value.chars().all(is_ident_char) && lookup(value).is_some() => {
+            lookup(value).map_or_else(ListStyleType::default, ListStyleType::Custom)
+        }
         name if !name.is_empty() && name.chars().all(is_ident_char) => {
             ListStyleType::Counter(name.to_owned())
         }

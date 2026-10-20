@@ -72,6 +72,7 @@ mod cache;
 mod clip;
 mod collapse;
 mod counter_style;
+mod counter_style_custom;
 mod deferred;
 mod floats;
 mod flow;

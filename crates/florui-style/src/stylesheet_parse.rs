@@ -51,7 +51,11 @@ const DYNAMIC_CACHE_CAPACITY: usize = 8;
 /// this to [`crate::cascade::compute`]. Cloning is cheap and shares the
 /// same underlying state (an [`Arc`]), including the cache below.
 #[derive(Clone)]
-pub struct Rule(Arc<RuleKind>, bool);
+pub struct Rule(
+    Arc<RuleKind>,
+    bool,
+    Arc<Vec<crate::counter_style::CounterStyle>>,
+);
 
 enum RuleKind {
     /// The common case: nothing in the authored CSS could possibly be a
@@ -76,6 +80,11 @@ enum RuleKind {
 }
 
 impl Rule {
+    /// The counter styles this stylesheet's `@counter-style` rules made, as written.
+    pub(crate) fn counter_styles(&self) -> &[crate::counter_style::CounterStyle] {
+        &self.2
+    }
+
     /// `container_query_signature[i]` is whether [`Self::container_query_blocks`]`()[i]`'s
     /// condition currently matches, for the single cascade this call is
     /// for — see [`crate::container_query_adapter`]'s own module doc. Must
@@ -185,6 +194,14 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
     LazyLock::force(&GRID_ENABLED);
     LazyLock::force(&BACKDROP_FILTER_ENABLED);
     LazyLock::force(&CONTAINER_QUERIES_ENABLED);
+    // The counter styles of the author are read here, and the rules left out for the engine.
+    let (counter_styled, counter_styles) = if origin == Origin::Author {
+        crate::counter_style::extract_rules(css)
+    } else {
+        (std::borrow::Cow::Borrowed(css), Vec::new())
+    };
+    let counter_styles = Arc::new(counter_styles);
+    let css: &str = &counter_styled;
     let css = if origin == Origin::Author {
         crate::scroll_behavior_adapter::rewrite_stylesheet(css)
     } else {
@@ -218,11 +235,13 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
                 cache: Mutex::new(Vec::new()),
             }),
             uses_scroll_behavior,
+            counter_styles,
         ));
     }
     Ok(Rule(
         Arc::new(RuleKind::Static(parse_str(css, origin))),
         uses_scroll_behavior,
+        counter_styles,
     ))
 }
 
