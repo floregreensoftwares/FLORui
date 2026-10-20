@@ -1,0 +1,269 @@
+{
+    "id":  "line-break-br",
+    "description":  "A \u003cbr\u003e ends the line it is in: the spaces around it go, a break at the end of a block or of preformatted text starts no line, the text after it wraps as a line of its own, aligned text is aligned line by line, and an element that holds one has a box on each line it is on.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  330,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 330px; background-color: #ffffff; font-size: 16px; line-height: 20px; } .p { width: 150px; margin: 0 0 6px 10px; background-color: #e4e4e4; } .c { text-align: center; } .r { text-align: right; } .pre { white-space: pre; } .bg { background-color: #f0d890; } .big { font-size: 28px; background-color: #c0d0f0; } .ib { display: inline-block; background-color: #c0d0f0; } .fx { display: flex; } .fx span { background-color: #d8e8c8; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "alpha",
+                                                         {
+                                                             "tag":  "br",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         "beta"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "gamma ",
+                                                         {
+                                                             "tag":  "br",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " delta"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "end",
+                                                         {
+                                                             "tag":  "br",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "br",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p c",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "mid ",
+                                                         {
+                                                             "tag":  "br",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         "centered text",
+                                                         {
+                                                             "tag":  "br",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "br",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         "x"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p r",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "right",
+                                                         {
+                                                             "tag":  "br",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         "aligned"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "wrap ",
+                                                         {
+                                                             "tag":  "br",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         "after the break goes on for a good while"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "bg",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "box",
+                                                                              {
+                                                                                  "tag":  "br",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              },
+                                                                              "on two lines"
+                                                                          ]
+                                                         },
+                                                         " tail"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "a",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "big",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "B",
+                                                                              {
+                                                                                  "tag":  "br",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         "c"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p pre",
+                                        "css":  "",
+                                        "text":  "pre\ntrail\n",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "ib",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "in",
+                                                                              {
+                                                                                  "tag":  "br",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              },
+                                                                              "box"
+                                                                          ]
+                                                         },
+                                                         " after"
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  6,
+                           "geometry_tolerance_px":  0.5,
+                           "channel_tolerance":  0,
+                           "reason":  "Every box has the geometry of Chromium (a delta of 0.0px); the 4.15% of pixels that differ are the anti-aliasing of the text, as in the other fixtures that render text. With a \u003cbr\u003e that is not a line break the same fixture differs by much more and its boxes are shorter, so it fails."
+                       }
+}

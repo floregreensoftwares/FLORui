@@ -484,7 +484,7 @@ impl UiRuntime {
             // copied by `get_mut`, which only a node that differs should pay.
             if let Some(style) = restyled.get(id)
                 && self.styles.get(id) != Some(style)
-                && let Some(old) = self.styles.get_mut(id)
+                && let Some(old) = self.styles.get_mut_same_kind(id)
             {
                 old.copy_paint_from(style);
             }
@@ -700,7 +700,7 @@ impl UiRuntime {
                 + style.border.left.width
                 + style.border.right.width;
             if needed > current.width
-                && let Some(style) = self.styles.get_mut(&select)
+                && let Some(style) = self.styles.get_mut_same_kind(&select)
             {
                 style.width = Some(needed);
                 any_fixed = true;
@@ -779,7 +779,7 @@ impl UiRuntime {
             );
             if ((resolved.width - current.width).abs() > 0.01
                 || (resolved.height - current.height).abs() > 0.01)
-                && let Some(style) = self.styles.get_mut(&node)
+                && let Some(style) = self.styles.get_mut_same_kind(&node)
             {
                 style.width = Some(resolved.width);
                 style.height = Some(resolved.height);

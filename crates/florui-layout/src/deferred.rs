@@ -35,12 +35,15 @@ pub(crate) fn resolve(
     font: &mut florui_text::Font,
     arena: &Tree,
     styles: &StyleMap,
-    tree: &mut TaffyTree<LeafContext>,
+    tree: &mut FlorTree,
     id_of: &dyn Fn(NodeId) -> Option<taffy::NodeId>,
     roots: &[taffy::NodeId],
     available: Size<AvailableSpace>,
     count: usize,
 ) -> Result<(), LayoutError> {
+    if !styles.may_have_deferred() {
+        return Ok(());
+    }
     let mut nodes: Vec<NodeId> = styles
         .iter()
         .filter(|(_, style)| {
@@ -139,7 +142,7 @@ fn fit_limit(track: &taffy::TrackSizingFunction) -> Option<f32> {
 /// min-content. `None` when no column is one, or a count is not known.
 fn measure_fit_content(
     font: &mut florui_text::Font,
-    tree: &mut TaffyTree<LeafContext>,
+    tree: &mut FlorTree,
     id: taffy::NodeId,
     count: usize,
 ) -> Result<Option<FitContent>, LayoutError> {
@@ -196,8 +199,8 @@ fn measure_fit_content(
             count,
         )?;
         let width = tree.layout(id).map_err(LayoutError)?.size.width;
-        let (sizes, explicit) = match tree.detailed_layout_info(id) {
-            taffy::DetailedLayoutInfo::Grid(info) => (
+        let (sizes, explicit) = match tree.grid_info(id) {
+            Some(info) => (
                 info.columns
                     .positions
                     .iter()
@@ -205,7 +208,7 @@ fn measure_fit_content(
                     .collect(),
                 info.columns.explicit_tracks as usize,
             ),
-            _ => (Vec::new(), 0),
+            None => (Vec::new(), 0),
         };
         Ok((width, sizes, explicit))
     };
@@ -236,7 +239,7 @@ fn measure_fit_content(
 fn measure_intrinsics(
     font: &mut florui_text::Font,
     styles: &StyleMap,
-    tree: &mut TaffyTree<LeafContext>,
+    tree: &mut FlorTree,
     id_of: &dyn Fn(NodeId) -> Option<taffy::NodeId>,
     nodes: &[NodeId],
     count: usize,
@@ -296,7 +299,7 @@ struct Basis {
 fn containing_block(
     arena: &Tree,
     styles: &StyleMap,
-    tree: &TaffyTree<LeafContext>,
+    tree: &FlorTree,
     id_of: &dyn Fn(NodeId) -> Option<taffy::NodeId>,
     node: NodeId,
     available: Size<AvailableSpace>,
@@ -313,7 +316,7 @@ fn containing_block(
         row: true,
     };
     let Some(parent) =
-        layout_parent(arena, node).filter(|_| !is_viewport_fixed(arena, styles, node))
+        layout_parent_in(arena, styles, node).filter(|_| !is_viewport_fixed(arena, styles, node))
     else {
         return viewport();
     };
@@ -354,7 +357,7 @@ fn containing_block(
 fn own_content_box(
     arena: &Tree,
     styles: &StyleMap,
-    tree: &TaffyTree<LeafContext>,
+    tree: &FlorTree,
     id: taffy::NodeId,
     node: NodeId,
     available: Size<AvailableSpace>,
@@ -406,7 +409,7 @@ fn definite_height(
         {
             return false;
         }
-        current = layout_parent(arena, id);
+        current = layout_parent_in(arena, styles, id);
     }
     matches!(available.height, AvailableSpace::Definite(_))
 }

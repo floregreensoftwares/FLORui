@@ -1,0 +1,133 @@
+{
+    "id":  "inline-box-contents",
+    "description":  "What is worked out from the layout around a box works inside an inline-flex, an inline-grid and an inline-block as it does in the page: a subgrid takes the tracks of the inline-grid it is in, and a width that mixes a percentage and a length is of the box it is in.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  300,
+                     "height_css_px":  160,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 300px; height: 160px; background-color: #ffffff; } .row { margin: 0 0 8px 10px; } .g { display: inline-grid; grid-template-columns: 50px 70px; grid-template-rows: 20px 24px; background-color: #e4e4e4; } .g .a { grid-column: 1 / 3; background-color: #d05040; } .g .s { display: grid; grid-column: 1 / 3; grid-template-columns: subgrid; padding: 0 5px; column-gap: 4px; background-color: #c0d0f0; } .g .x { background-color: #40a060; } .g .y { background-color: #f0d890; } .f { display: inline-flex; width: 200px; background-color: #e4e4e4; } .b { display: inline-block; width: 200px; background-color: #e4e4e4; } .c { width: calc(50% + 10px); height: 18px; background-color: #d05040; } .d { flex: 1; height: 18px; background-color: #40a060; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "row",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "g",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "a",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "s",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "x",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   },
+                                                                                                   {
+                                                                                                       "tag":  "div",
+                                                                                                       "class":  "y",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "row",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "f",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "c",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "d",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "row",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "b",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "c",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "exact"
+                       }
+}

@@ -102,7 +102,7 @@ use florui_layout::{BoxLayout, absolute_position};
 use florui_style::Arena;
 use florui_style::{
     BlendMode, ComputedStyle, ContentAlignment, Display, FilterFunction, FlexDirection,
-    GlassMaterial, GlassSpec, ItemAlignment, LengthPercentage, NodeId, ObjectFit, Position, Rgba,
+    GlassMaterial, GlassSpec, ItemAlignment, LengthPercentage, NodeId, ObjectFit, Rgba,
     RoundedRect, Tree,
 };
 use florui_text::Font;
@@ -759,6 +759,11 @@ enum Turn {
     First,
     Fixed,
     Outline,
+    /// The box of a part of a table (a row, a group, a column), drawn under every
+    /// cell of the table whatever the order they are written in.
+    Part,
+    /// The collapsed borders of a table, drawn over its cells.
+    Borders,
 }
 
 /// Paints `nodes` (a set of siblings — document roots when
@@ -808,10 +813,10 @@ fn paint_nodes(
 ) {
     // The flag is set for a box fixed to the viewport once its turn has come.
     let mut stack: Vec<(NodeId, Option<ClipRect>, Turn)> =
-        paint_order(styles, parent_display, nodes)
+        frames_in_order(arena, styles, parent_display, nodes)
             .into_iter()
             .rev()
-            .map(|id| (id, clip.clone(), Turn::First))
+            .map(|(id, turn)| (id, clip.clone(), turn))
             .collect();
     // Boxes fixed to the viewport go over everything else in their scope, in
     // `z-index` order, and nothing above them clips them.
@@ -839,6 +844,31 @@ fn paint_nodes(
             fixed.push(node);
             continue;
         }
+        if turn == Turn::Part {
+            let in_view = view.as_ref().is_none_or(|view| view.own.contains(&node));
+            let mask = node_clip.as_ref().and_then(|clip| clip.to_mask(buffer));
+            if in_view && (node_clip.is_none() || mask.is_some()) {
+                paint_table_part(
+                    buffer,
+                    arena,
+                    styles,
+                    layouts,
+                    font,
+                    node,
+                    scale_factor,
+                    mask.as_ref(),
+                );
+            }
+            continue;
+        }
+        if turn == Turn::Borders {
+            let in_view = view.as_ref().is_none_or(|view| view.own.contains(&node));
+            let mask = node_clip.as_ref().and_then(|clip| clip.to_mask(buffer));
+            if in_view && (node_clip.is_none() || mask.is_some()) {
+                paint_collapsed_borders(buffer, arena, styles, layouts, node, mask.as_ref());
+            }
+            continue;
+        }
         if turn == Turn::Outline {
             let in_view = view.as_ref().is_none_or(|view| view.own.contains(&node));
             let mask = node_clip.as_ref().and_then(|clip| clip.to_mask(buffer));
@@ -861,10 +891,8 @@ fn paint_nodes(
         {
             continue;
         }
-        if styles
-            .get(&node)
-            .is_some_and(|s| s.display == florui_style::Display::None)
-        {
+        let style = styles.get(&node);
+        if style.is_some_and(|s| s.display == florui_style::Display::None) {
             continue;
         }
         if florui_layout::is_flowed_inline(arena, styles, node) {
@@ -872,14 +900,18 @@ fn paint_nodes(
             // context (its box behind the text, then the text); only the
             // atomic boxes inside it are walked.
             stack.extend(
-                paint_order(styles, Some(Display::Inline), arena.children(node))
-                    .into_iter()
-                    .rev()
-                    .map(|id| (id, node_clip.clone(), Turn::First)),
+                paint_order(
+                    styles,
+                    Some(Display::Inline),
+                    &florui_layout::flow_children(arena, styles, node),
+                )
+                .into_iter()
+                .rev()
+                .map(|id| (id, node_clip.clone(), Turn::First)),
             );
             continue;
         }
-        let opacity = styles.get(&node).map_or(1.0, |s| s.opacity);
+        let opacity = style.map_or(1.0, |s| s.opacity);
         if opacity <= 0.0 {
             // Real CSS: a fully transparent subtree still occupies its
             // own layout box and stays hit-testable, but paints nothing
@@ -905,7 +937,7 @@ fn paint_nodes(
             }
             continue;
         }
-        if styles.get(&node).is_some_and(florui_layout::preserves_3d) {
+        if style.is_some_and(florui_layout::preserves_3d) {
             scene3d::paint_scene(
                 buffer,
                 arena,
@@ -926,9 +958,7 @@ fn paint_nodes(
             continue;
         }
         let has_effect = blend::isolates(arena, styles, node)
-            || styles
-                .get(&node)
-                .is_some_and(ComputedStyle::has_group_effect);
+            || style.is_some_and(ComputedStyle::has_group_effect);
         if opacity < 1.0 || !transform.is_identity() || has_effect {
             paint_group(
                 buffer,
@@ -995,16 +1025,26 @@ fn paint_nodes(
                 images,
             );
         }
-        if styles.get(&node).is_some_and(border_style::has_outline) {
+        if style.is_some_and(border_style::has_outline) {
             stack.push((node, node_clip.clone(), Turn::Outline));
         }
         let child_clip = clip_for_children(arena, styles, layouts, node, node_clip, scale_factor);
-        let child_display = styles.get(&node).map(|s| s.display);
+        let child_display = style.map(|s| s.display);
+        if style.is_some_and(|s| {
+            s.display.is_table() && s.border_collapse == florui_style::BorderCollapse::Collapse
+        }) {
+            stack.push((node, child_clip.clone(), Turn::Borders));
+        }
         stack.extend(
-            paint_order(styles, child_display, arena.children(node))
-                .into_iter()
-                .rev()
-                .map(|id| (id, child_clip.clone(), Turn::First)),
+            frames_in_order(
+                arena,
+                styles,
+                child_display,
+                &florui_layout::flow_children(arena, styles, node),
+            )
+            .into_iter()
+            .rev()
+            .map(|(id, turn)| (id, child_clip.clone(), turn)),
         );
     }
     // The mask this described goes away with `mask_cache`.
@@ -1091,8 +1131,9 @@ fn ink_is_outside_clip(
     if !florui_layout::anonymous_blocks(arena, styles, node).is_empty() {
         return false;
     }
+    let flowed = florui_layout::flow_items(arena, styles, node);
     let text = if florui_layout::is_inline_formatting_context(arena, styles, node) {
-        match arena.inline_items(node) {
+        match &*flowed.items {
             [florui_style::InlineItem::Text(text)] => text.as_str(),
             _ => return false,
         }
@@ -1103,7 +1144,7 @@ fn ink_is_outside_clip(
         return true;
     }
 
-    let border = scaled_border(style.map_or(NO_BORDER, |s| s.border), scale_factor);
+    let border = scaled_border(border_of(layouts, style, node, scale_factor), scale_factor);
     let padding = scaled_padding(
         style.map_or(
             florui_style::Edges {
@@ -1117,7 +1158,7 @@ fn ink_is_outside_clip(
         scale_factor,
     );
     let content_x = x + border.left.width + padding.left;
-    let content_y = y + border.top.width + padding.top;
+    let content_y = y + border.top.width + padding.top + cell_shift_of(layouts, style, node);
     let content_width =
         (layout.width - border.left.width - border.right.width - padding.left - padding.right)
             .max(0.0);
@@ -1196,7 +1237,7 @@ fn clip_for_children(
     };
     let (x, y) = absolute_position(arena, layouts, node);
     let border = scaled_border(
-        styles.get(&node).map_or(NO_BORDER, |s| s.border),
+        border_of(layouts, styles.get(&node), node, scale_factor),
         scale_factor,
     );
     let mut padding_box = ClipRect::from_xywh(
@@ -1250,6 +1291,68 @@ fn wrap_width(content_width: f32, scale_factor: f32) -> f32 {
 /// [`wrap_width`] where a local of the same name shadows it.
 fn self_wrap(content_width: f32, scale_factor: f32) -> f32 {
     wrap_width(content_width, scale_factor)
+}
+
+/// Whether layout reports measures of its own for the box with `style`: only the boxes
+/// of a table do, so no other box has them looked up.
+fn reports_table_measures(style: Option<&ComputedStyle>) -> bool {
+    style.is_none_or(|s| s.display.is_table() || s.display.is_table_part())
+}
+
+fn cell_shift_of(
+    layouts: &HashMap<NodeId, BoxLayout>,
+    style: Option<&ComputedStyle>,
+    node: NodeId,
+) -> f32 {
+    if reports_table_measures(style) {
+        florui_layout::cell_shift(layouts, node)
+    } else {
+        0.0
+    }
+}
+
+fn table_grid_of(
+    layouts: &HashMap<NodeId, BoxLayout>,
+    style: Option<&ComputedStyle>,
+    node: NodeId,
+) -> Option<(f32, f32)> {
+    reports_table_measures(style)
+        .then(|| florui_layout::table_grid(layouts, node))
+        .flatten()
+}
+
+fn collapsed_border_of(
+    layouts: &HashMap<NodeId, BoxLayout>,
+    style: Option<&ComputedStyle>,
+    node: NodeId,
+) -> Option<[f32; 4]> {
+    reports_table_measures(style)
+        .then(|| florui_layout::collapsed_border(layouts, node))
+        .flatten()
+}
+
+/// The border `node` has to be laid out and painted with: its own, except in a table
+/// whose borders collapse, where the table draws them and what is left of a cell's
+/// and of the table's is the half of each edge that is inside its box.
+fn border_of(
+    layouts: &HashMap<NodeId, BoxLayout>,
+    style: Option<&ComputedStyle>,
+    node: NodeId,
+    scale_factor: f32,
+) -> florui_style::Edges<florui_style::BorderSide> {
+    let mut border = style.map_or(NO_BORDER, |s| s.border);
+    if let Some([top, right, bottom, left]) = collapsed_border_of(layouts, style, node) {
+        for (side, width) in [
+            (&mut border.top, top),
+            (&mut border.right, right),
+            (&mut border.bottom, bottom),
+            (&mut border.left, left),
+        ] {
+            side.width = width / scale_factor;
+            side.color = Rgba::TRANSPARENT;
+        }
+    }
+    border
 }
 
 /// `border` with its widths in painted pixels: they are authored in logical
@@ -1751,7 +1854,7 @@ fn own_extent(
         max_y += ring;
     }
 
-    let border = scaled_border(style.map_or(NO_BORDER, |s| s.border), scale_factor);
+    let border = scaled_border(border_of(layouts, style, node, scale_factor), scale_factor);
     let no_padding = florui_style::Edges {
         top: 0.0,
         right: 0.0,
@@ -1760,7 +1863,7 @@ fn own_extent(
     };
     let padding = scaled_padding(style.map_or(no_padding, |s| s.padding), scale_factor);
     let content_x = abs_x + border.left.width + padding.left;
-    let content_y = abs_y + border.top.width + padding.top;
+    let content_y = abs_y + border.top.width + padding.top + cell_shift_of(layouts, style, node);
     let content_width =
         (layout.width - border.left.width - border.right.width - padding.left - padding.right)
             .max(0.0);
@@ -1793,17 +1896,15 @@ fn own_extent(
                 max_y = max_y.max(abs_y + at.y + shaped.layout.height * scale_factor + ink_pad);
             }
         }
-    } else if florui_layout::is_inline_formatting_context(arena, styles, node) {
-        if let Some(shaped) = florui_layout::shape_inline_formatting_context(
-            font,
-            arena,
-            styles,
-            (layouts, scale_factor),
-            node,
-            wrap_width,
-        ) {
-            shaped_extent = Some((shaped.layout.width, shaped.layout.height));
-        }
+    } else if let Some(shaped) = inline_shape(
+        font,
+        arena,
+        styles,
+        (layouts, scale_factor),
+        node,
+        wrap_width,
+    ) {
+        shaped_extent = Some((shaped.layout.width, shaped.layout.height));
     } else {
         let text = arena.text_content(node);
         if !text.is_empty() {
@@ -1868,7 +1969,7 @@ fn subtree_extent(
     )?;
     let layout = *layouts.get(&node)?;
     let style = styles.get(&node);
-    let border = scaled_border(style.map_or(NO_BORDER, |s| s.border), scale_factor);
+    let border = scaled_border(border_of(layouts, style, node, scale_factor), scale_factor);
 
     let overflow_clips = style.is_some_and(|s| s.overflow_clips);
     let clip_to_padding = overflow_clips.then(|| {
@@ -1880,7 +1981,7 @@ fn subtree_extent(
         )
     });
 
-    for &child in arena.children(node) {
+    for &child in florui_layout::flow_children(arena, styles, node).iter() {
         let child_opacity = styles.get(&child).map_or(1.0, |s| s.opacity);
         if child_opacity <= 0.0 {
             continue;
@@ -2327,12 +2428,24 @@ fn render_group(
             layouts,
             font,
             child_display,
-            arena.children(node),
+            &florui_layout::flow_children(arena, styles, node),
             scale_factor,
             content_clip,
             text_inputs,
             images,
         );
+        if styles.get(&node).is_some_and(|s| {
+            s.display.is_table() && s.border_collapse == florui_style::BorderCollapse::Collapse
+        }) {
+            paint_collapsed_borders(
+                &mut group,
+                arena,
+                styles,
+                layouts,
+                node,
+                inner_mask.as_ref(),
+            );
+        }
     }
     paint_outline_of(
         &mut group,
@@ -3546,24 +3659,736 @@ pub fn paint_order(
     parent_display: Option<Display>,
     nodes: &[NodeId],
 ) -> Vec<NodeId> {
-    let parent_is_flex_or_grid =
-        matches!(parent_display, Some(Display::Flex) | Some(Display::Grid));
+    paint_sorted(styles, parent_display, nodes).unwrap_or_else(|| nodes.to_vec())
+}
+
+/// [`paint_order`] when it is not the order the nodes are in.
+fn paint_sorted(
+    styles: &StyleMap,
+    parent_display: Option<Display>,
+    nodes: &[NodeId],
+) -> Option<Vec<NodeId>> {
+    let parent_is_flex_or_grid = parent_display.is_some_and(Display::is_flex_or_grid);
     let is_eligible = |id: &NodeId| {
-        parent_is_flex_or_grid
-            || styles
-                .get(id)
-                .is_some_and(|s| s.position != Position::Static)
+        parent_is_flex_or_grid || styles.get(id).is_some_and(|s| s.block_stacking() != (0, 0))
     };
     if !nodes.iter().any(is_eligible) {
-        return nodes.to_vec();
+        return None;
     }
     let mut ordered = nodes.to_vec();
     ordered.sort_by_key(|id| match styles.get(id) {
         Some(style) if parent_is_flex_or_grid => style.item_stacking(),
-        Some(style) if style.position != Position::Static => (style.z_index.unwrap_or(0), 0),
-        _ => (0, 0),
+        Some(style) => style.block_stacking(),
+        None => (0, 0),
     });
-    ordered
+    Some(ordered)
+}
+
+/// The nodes of a set of siblings, in the order they are painted, each with the
+/// turn it has. That is [`paint_order`], except among the children of a table:
+/// the boxes of its column groups, columns, row groups and rows go under every
+/// cell, whichever row a cell is written in, so that a cell across rows is not
+/// covered by the background of a row below its own.
+fn frames_in_order(
+    arena: &Tree,
+    styles: &StyleMap,
+    parent_display: Option<Display>,
+    nodes: &[NodeId],
+) -> Vec<(NodeId, Turn)> {
+    if !parent_display.is_some_and(Display::is_table) {
+        let mut ordered: Vec<NodeId> =
+            paint_sorted(styles, parent_display, nodes).unwrap_or_else(|| nodes.to_vec());
+        // The cells of a row that is a box of its own: the ones that are not drawn.
+        if parent_display == Some(Display::TableRow) {
+            ordered.retain(|cell| !hides_empty_cell(arena, styles, *cell));
+        }
+        return ordered.into_iter().map(|id| (id, Turn::First)).collect();
+    }
+    let display = |id: &NodeId| styles.get(id).map(|s| s.display);
+    let mut captions: Vec<NodeId> = Vec::new();
+    let (mut column_groups, mut columns, mut groups, mut rows) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut content: Vec<NodeId> = Vec::new();
+    // Rows and row groups that are one box with their cells (not opaque, moved,
+    // filtered...): painted over the cells that are not, with the cells in them.
+    let mut boxes: Vec<NodeId> = Vec::new();
+    let is_box = |id: &NodeId| styles.get(id).is_some_and(makes_group);
+    for &child in nodes {
+        match display(&child) {
+            Some(Display::TableCaption) => captions.push(child),
+            Some(Display::TableColumnGroup) => {
+                column_groups.push(child);
+                for &column in florui_layout::flow_children(arena, styles, child).iter() {
+                    if display(&column) == Some(Display::TableColumn) {
+                        columns.push(column);
+                    }
+                }
+            }
+            Some(Display::TableColumn) => columns.push(child),
+            Some(
+                Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup,
+            ) => {
+                if is_box(&child) {
+                    boxes.push(child);
+                    continue;
+                }
+                groups.push(child);
+                for &row in florui_layout::flow_children(arena, styles, child).iter() {
+                    if display(&row) != Some(Display::TableRow) {
+                        content.push(row);
+                    } else if is_box(&row) {
+                        boxes.push(row);
+                    } else {
+                        rows.push(row);
+                        content.extend(florui_layout::flow_children(arena, styles, row).iter());
+                    }
+                }
+            }
+            Some(Display::TableRow) => {
+                if is_box(&child) {
+                    boxes.push(child);
+                } else {
+                    rows.push(child);
+                    content.extend(florui_layout::flow_children(arena, styles, child).iter());
+                }
+            }
+            _ => content.push(child),
+        }
+    }
+    captions
+        .into_iter()
+        .map(|id| (id, Turn::First))
+        .chain(
+            column_groups
+                .into_iter()
+                .chain(columns)
+                .chain(groups)
+                .chain(rows)
+                .map(|id| (id, Turn::Part)),
+        )
+        .chain(
+            content
+                .into_iter()
+                .filter(|cell| !hides_empty_cell(arena, styles, *cell))
+                .chain(boxes)
+                .map(|id| (id, Turn::First)),
+        )
+        .collect()
+}
+
+/// Whether a row or a row group is painted as a box of its own with what is in it: it is not
+/// opaque, or is moved, filtered, masked or blended.
+fn makes_group(style: &ComputedStyle) -> bool {
+    style.display.is_table_row_like()
+        && !matches!(
+            style.display,
+            Display::TableColumn | Display::TableColumnGroup
+        )
+        && (style.opacity < 1.0 || style.has_transform() || style.has_group_effect())
+}
+
+/// A cell that `empty-cells: hide` does not draw: no content, in a table with separate borders.
+fn hides_empty_cell(arena: &Tree, styles: &StyleMap, cell: NodeId) -> bool {
+    styles.get(&cell).is_some_and(|s| {
+        s.display == Display::TableCell
+            && s.empty_cells == florui_style::EmptyCells::Hide
+            && s.border_collapse == florui_style::BorderCollapse::Separate
+    }) && arena.children(cell).is_empty()
+        && arena.text_content(cell).trim().is_empty()
+}
+
+/// The cells a row, a row group, a column or a column group paints its
+/// background in: the boxes of its cells, in the pixels `layouts` is in.
+fn part_cells(
+    arena: &Tree,
+    styles: &StyleMap,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    part: NodeId,
+) -> Vec<NodeId> {
+    let Some(display) = styles.get(&part).map(|s| s.display) else {
+        return Vec::new();
+    };
+    let is_cell = |id: &NodeId| styles.get(id).is_some_and(|s| s.display != Display::None);
+    let row_cells = |row: NodeId| -> Vec<NodeId> {
+        florui_layout::flow_children(arena, styles, row)
+            .iter()
+            .copied()
+            .filter(is_cell)
+            .collect()
+    };
+    match display {
+        Display::TableRow => row_cells(part),
+        Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup => {
+            florui_layout::flow_children(arena, styles, part)
+                .iter()
+                .filter(|row| styles.get(row).map(|s| s.display) == Some(Display::TableRow))
+                .flat_map(|&row| row_cells(row))
+                .collect()
+        }
+        Display::TableColumn | Display::TableColumnGroup => {
+            // The cells that start in the columns, found by where they are.
+            let Some(own) = layouts.get(&part) else {
+                return Vec::new();
+            };
+            let mut table = arena.parent(part);
+            while let Some(ancestor) = table {
+                if styles.get(&ancestor).is_some_and(|s| s.display.is_table()) {
+                    break;
+                }
+                table = arena.parent(ancestor);
+            }
+            let Some(table) = table else {
+                return Vec::new();
+            };
+            let (left, _) = absolute_position(arena, layouts, part);
+            let right = left + own.width;
+            let mut cells = Vec::new();
+            let mut stack: Vec<NodeId> =
+                florui_layout::flow_children(arena, styles, table).to_vec();
+            while let Some(node) = stack.pop() {
+                match styles.get(&node).map(|s| s.display) {
+                    Some(Display::TableCell) => {
+                        let (x, _) = absolute_position(arena, layouts, node);
+                        if x >= left - 0.01 && x < right - 0.01 {
+                            cells.push(node);
+                        }
+                    }
+                    Some(
+                        Display::TableRowGroup
+                        | Display::TableHeaderGroup
+                        | Display::TableFooterGroup
+                        | Display::TableRow,
+                    ) => stack.extend(florui_layout::flow_children(arena, styles, node).iter()),
+                    _ => {}
+                }
+            }
+            cells
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Draws the marker of the list item `node` when it is outside its box: a shape, a
+/// number or a string beside the first line, or an image.
+#[allow(clippy::too_many_arguments)]
+fn paint_list_marker(
+    buffer: &mut Surface,
+    arena: &Tree,
+    styles: &StyleMap,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    font: &mut Font,
+    node: NodeId,
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
+    let Some(style) = styles.get(&node) else {
+        return;
+    };
+    if !style.visibility.is_visible() {
+        return;
+    }
+    let inside = style.list_style_position == florui_style::ListStylePosition::Inside;
+    let Some(anchor) = florui_layout::marker_anchor(layouts, node, scale_factor) else {
+        return;
+    };
+    let (x, y) = absolute_position(arena, layouts, node);
+    let color = style.color;
+    let text_style = florui_layout::node_text_style(Some(style));
+    let ascent = florui_layout::marker_ascent(font, style);
+    let baseline = y + anchor
+        .baseline
+        .unwrap_or((style.border.top.width + style.padding.top + ascent) * scale_factor);
+    let content_left = x + anchor.content_left;
+    let mut kind = florui_layout::marker_of(style, anchor.number);
+    // An image marker: its box, which stands on the baseline.
+    let image_box = match &kind {
+        Some(florui_layout::MarkerKind::Image(image)) => {
+            Some(florui_layout::image_marker_size(image, ascent))
+        }
+        _ => None,
+    };
+    // An inside marker is at the start of the first line: wherever that is.
+    let line_start = if inside {
+        let advance = florui_layout::inside_marker_room(font, style, anchor.number);
+        Some(inside_line_start(
+            font,
+            (arena, styles, layouts),
+            node,
+            (x, y),
+            advance,
+            scale_factor,
+        ))
+    } else {
+        None
+    };
+    let mut image_failed = false;
+    if let (Some(florui_layout::MarkerKind::Image(image)), Some(size)) = (&kind, image_box) {
+        if !size.broken {
+            let (width, height) = (size.width * scale_factor, size.height * scale_factor);
+            let left = match line_start {
+                Some(start) => start,
+                None => content_left - width - florui_layout::IMAGE_GAP * scale_factor,
+            };
+            // The box is put on whole pixels, as a browser does with an image.
+            let (top, bottom) = ((baseline - height).round(), baseline.round());
+            let (left, right) = (left.round(), (left + width).round());
+            let outline = RoundedRect::square(left, top, right - left, bottom - top);
+            let whole = florui_style::LengthPercentage {
+                length: 0.0,
+                percentage: 1.0,
+            };
+            let layer = florui_style::BackgroundLayer {
+                image: image.clone(),
+                size: florui_style::BackgroundSize::Explicit(Some(whole), Some(whole)),
+                position: (
+                    florui_style::LengthPercentage::default(),
+                    florui_style::LengthPercentage::default(),
+                ),
+                repeat: (
+                    florui_style::BackgroundRepeat::NoRepeat,
+                    florui_style::BackgroundRepeat::NoRepeat,
+                ),
+                origin: florui_style::BackgroundBox::Border,
+                clip: florui_style::BackgroundBox::Border,
+                blend: BlendMode::Normal,
+            };
+            background::paint_layers(
+                buffer,
+                &outline,
+                NO_BORDER,
+                florui_style::Edges {
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                },
+                &[layer],
+                scale_factor,
+                clip,
+                None,
+            );
+            return;
+        }
+        image_failed = true;
+    }
+    if image_failed {
+        // An image that cannot be read stands for nothing: the type marks the item.
+        let mut plain = style.clone();
+        plain.list_style_image = None;
+        kind = florui_layout::marker_of(&plain, anchor.number);
+    }
+    match kind {
+        Some(florui_layout::MarkerKind::Shape(shape)) => {
+            let metrics = florui_layout::shape_metrics(ascent, style.font_size);
+            let left = match line_start {
+                // The box of an unreadable image is 2px wider than the bullet, which is in the middle of it.
+                Some(start) if image_failed => start + scale_factor,
+                Some(start) => start,
+                None => content_left + metrics.x * scale_factor,
+            };
+            let top = baseline + metrics.y * scale_factor;
+            let size = metrics.size * scale_factor;
+            paint_marker_shape(buffer, shape, (left, top, size), color, scale_factor, clip);
+        }
+        Some(florui_layout::MarkerKind::Text(text)) => {
+            // A marker keeps its spaces, which measuring leaves out where they end it.
+            let kept = text.trim_end_matches(' ');
+            let trailing = text.len() - kept.len();
+            let space =
+                font.measure(text_style, "a a").width - font.measure(text_style, "aa").width;
+            let measured = font.measure(text_style, kept);
+            let width = measured.width + space * trailing as f32;
+            let left = match line_start {
+                Some(start) => start,
+                None => content_left - width * scale_factor,
+            };
+            let top = baseline - measured.baseline * scale_factor;
+            // A marker is in the direction of the list, whatever script its number is in.
+            let drawn = format!("\u{200e}{text}");
+            paint_text(
+                buffer,
+                font,
+                TextPaint {
+                    text: &drawn,
+                    style: text_style,
+                    color,
+                    x: left,
+                    y: top,
+                    wrap_width: f32::MAX,
+                    scale_factor,
+                    clip,
+                    shadows: &[],
+                    ellipsis: None,
+                    decoration: None,
+                },
+            );
+        }
+        _ => {}
+    }
+}
+
+/// Where the first line of the list item `node` starts, less the `advance` (in logical
+/// pixels) its inside marker takes at the start of it: where the marker is drawn.
+#[allow(clippy::too_many_arguments)]
+fn inside_line_start(
+    font: &mut Font,
+    (arena, styles, layouts): (&Tree, &StyleMap, &HashMap<NodeId, BoxLayout>),
+    node: NodeId,
+    (x, _y): (f32, f32),
+    advance: f32,
+    scale_factor: f32,
+) -> f32 {
+    let (Some(style), Some(&layout)) = (styles.get(&node), layouts.get(&node)) else {
+        return x;
+    };
+    let edge = (style.border.left.width + style.padding.left) * scale_factor;
+    let content_x = x + edge;
+    let content_width = (layout.width
+        - (style.border.left.width
+            + style.border.right.width
+            + style.padding.left
+            + style.padding.right)
+            * scale_factor)
+        .max(0.0);
+    // The first of the lines of the item: in its own block when it begins with one.
+    let blocks = florui_layout::anonymous_blocks(arena, styles, node);
+    let (shaped, origin, width) = if let Some(&block) = blocks.first() {
+        let Some(&at) = layouts.get(&block) else {
+            return content_x;
+        };
+        (
+            florui_layout::shape_anonymous_block(
+                font,
+                arena,
+                styles,
+                (layouts, scale_factor),
+                block,
+                self_wrap(at.width, scale_factor),
+            ),
+            x + at.x,
+            at.width,
+        )
+    } else {
+        (
+            florui_layout::shape_inline_formatting_context(
+                font,
+                arena,
+                styles,
+                (layouts, scale_factor),
+                node,
+                wrap_width(content_width, scale_factor),
+            ),
+            content_x,
+            content_width,
+        )
+    };
+    let first = shaped.and_then(|shaped| {
+        shaped
+            .layout
+            .runs
+            .iter()
+            .filter(|run| run.line == 0)
+            .map(|run| run.x)
+            .min_by(f32::total_cmp)
+    });
+    match first {
+        Some(first) => origin + (first - advance) * scale_factor,
+        None => {
+            let free = (width / scale_factor - advance).max(0.0);
+            origin
+                + match style.text_align {
+                    florui_style::TextAlign::Center => free / 2.0,
+                    florui_style::TextAlign::End => free,
+                    _ => 0.0,
+                } * scale_factor
+        }
+    }
+}
+
+/// A bullet in the square at (`left`, `top`) of side `size`.
+fn paint_marker_shape(
+    buffer: &mut Surface,
+    shape: florui_layout::MarkerShape,
+    (left, top, size): (f32, f32, f32),
+    color: Rgba,
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
+    use florui_layout::MarkerShape;
+    if size <= 0.0 {
+        return;
+    }
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(color.r, color.g, color.b, color.a);
+    paint.anti_alias = true;
+    let transform = surface_transform(buffer);
+    match shape {
+        MarkerShape::Square => fill_rect(buffer, left, top, size, size, color, clip),
+        MarkerShape::Disc => {
+            if let Some(rect) = Rect::from_xywh(left, top, size, size)
+                && let Some(path) = PathBuilder::from_oval(rect)
+            {
+                buffer
+                    .pixmap
+                    .fill_path(&path, &paint, FillRule::Winding, transform, clip);
+            }
+        }
+        MarkerShape::Circle => {
+            // A ring a pixel wide along the edge of the square, half in and half out of it.
+            if let Some(rect) = Rect::from_xywh(left, top, size, size)
+                && let Some(path) = PathBuilder::from_oval(rect)
+            {
+                let stroke = tiny_skia::Stroke {
+                    width: scale_factor,
+                    ..tiny_skia::Stroke::default()
+                };
+                buffer
+                    .pixmap
+                    .stroke_path(&path, &paint, &stroke, transform, clip);
+            }
+        }
+    }
+}
+
+/// The dots of a dotted line up to three pixels thick, from `from` to `to`, as Chromium puts them on
+/// whole pixels: dots a width wide with a width between them, from end to end of the segment, what
+/// does not make another dot and gap going to the first and the last gap (a pixel less in each
+/// when the line is a pixel or two short of whole dots, a pixel more when it is over); a line
+/// three pixels over has the first dot, the last gap and the last dot a pixel wider.
+fn crisp_dots(from: f32, to: f32, width: f32) -> Vec<(f32, f32)> {
+    let length = (to - from).round() as i64;
+    let dot = (width.round() as i64).max(1);
+    // The most dots that leave at least two pixels short of whole dots, and what is over.
+    let count = ((length + dot + 2) / (2 * dot)).max(1);
+    let over = length - (2 * dot * count - dot);
+    let mut widths = vec![dot; count as usize];
+    let mut gaps = vec![dot; (count - 1) as usize];
+    if over > 2 && count > 1 {
+        widths[0] += 1;
+        widths[count as usize - 1] += 1;
+        if let Some(last) = gaps.last_mut() {
+            *last += 1;
+        }
+    } else {
+        let first = if over >= 0 {
+            (over + 1) / 2
+        } else {
+            -((1 - over) / 2)
+        };
+        if let Some(first_gap) = gaps.first_mut() {
+            *first_gap += first;
+        }
+        if let Some(last_gap) = gaps.last_mut() {
+            *last_gap += over - first;
+        }
+    }
+    let mut at = 0;
+    let mut dots = Vec::with_capacity(count as usize);
+    for (i, wide) in widths.iter().enumerate() {
+        dots.push((from + at as f32, from + (at + wide) as f32));
+        at += wide + gaps.get(i).copied().unwrap_or(0);
+    }
+    dots
+}
+
+/// Where the dots of a dotted line from `from` to `to`, `width` thick, have their centers:
+/// as many as fit by the gap that is nearest to a dot's width (a three pixel line judges by
+/// dots of four with two between, as Chromium does), spread from end to end.
+fn dot_centers(from: f32, to: f32, width: f32) -> Vec<f32> {
+    let length = to - from;
+    if length <= width {
+        return vec![(from + to) / 2.0];
+    }
+    let (dash, gap) = if width == 3.0 {
+        (4.0, 2.0)
+    } else {
+        (width, width)
+    };
+    let fitted = decoration::fitted_gap(length, dash, gap, false);
+    let count = ((length + fitted) / (dash + fitted)).round().max(2.0) as usize;
+    let step = (length - width) / (count - 1) as f32;
+    (0..count)
+        .map(|i| from + width / 2.0 + step * i as f32)
+        .collect()
+}
+
+/// A dotted collapsed border: round dots of the width of the line, spaced as the dashes of a
+/// line are, from one end of the segment to the other (a line drawn from end to end, not a
+/// side of a box, so the dots are as wide as the line and not a quarter pixel narrower).
+fn fill_dots(buffer: &mut Surface, segment: &florui_layout::BorderSegment, clip: Option<&Mask>) {
+    let width = segment.width;
+    let (from, to) = if segment.horizontal {
+        (segment.x0, segment.x1)
+    } else {
+        (segment.y0, segment.y1)
+    };
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(
+        segment.color.r,
+        segment.color.g,
+        segment.color.b,
+        segment.color.a,
+    );
+    paint.anti_alias = true;
+    if width <= 3.0 {
+        for (a, b) in crisp_dots(from, to, width) {
+            if segment.horizontal {
+                fill_rect(
+                    buffer,
+                    a,
+                    segment.y0 - width / 2.0,
+                    b - a,
+                    width,
+                    segment.color,
+                    clip,
+                );
+            } else {
+                fill_rect(
+                    buffer,
+                    segment.x0 - width / 2.0,
+                    a,
+                    width,
+                    b - a,
+                    segment.color,
+                    clip,
+                );
+            }
+        }
+        return;
+    }
+    for along in dot_centers(from, to, width) {
+        let (x, y) = if segment.horizontal {
+            (along, segment.y0)
+        } else {
+            (segment.x0, along)
+        };
+        let (cx, cy) = buffer.local(x, y);
+        let mut dot = PathBuilder::new();
+        dot.push_circle(cx, cy, width / 2.0);
+        let Some(dot) = dot.finish() else {
+            continue;
+        };
+        let mask = buffer.mask_for(clip, (cx - width, cy - width, cx + width, cy + width));
+        buffer
+            .pixmap
+            .fill_path(&dot, &paint, FillRule::Winding, Transform::identity(), mask);
+    }
+}
+
+/// Draws the collapsed borders of the table `node` over its cells.
+fn paint_collapsed_borders(
+    buffer: &mut Surface,
+    arena: &Tree,
+    styles: &StyleMap,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    node: NodeId,
+    clip: Option<&Mask>,
+) {
+    for segment in florui_layout::collapsed_border_segments(arena, styles, layouts, node) {
+        let (x, y, width, height) = if segment.horizontal {
+            (
+                segment.x0,
+                segment.y0 - segment.width / 2.0,
+                segment.x1 - segment.x0,
+                segment.width,
+            )
+        } else {
+            (
+                segment.x0 - segment.width / 2.0,
+                segment.y0,
+                segment.width,
+                segment.y1 - segment.y0,
+            )
+        };
+        if width <= 0.0 || height <= 0.0 {
+            continue;
+        }
+        if segment.style == florui_style::BorderLineStyle::Solid {
+            fill_rect(buffer, x, y, width, height, segment.color, clip);
+            continue;
+        }
+        if segment.style == florui_style::BorderLineStyle::Dotted && segment.width >= 3.0 {
+            fill_dots(buffer, &segment, clip);
+            continue;
+        }
+        let side = florui_style::BorderSide {
+            width: segment.width,
+            color: segment.color,
+            style: segment.style,
+        };
+        let mut border = NO_BORDER;
+        if segment.horizontal {
+            border.top = side;
+        } else {
+            border.left = side;
+        }
+        paint_box_border(
+            buffer,
+            &RoundedRect::square(x, y, width, height),
+            border,
+            clip,
+        );
+    }
+}
+
+/// Draws the box of a part of a table (what it stands on: its background, not
+/// the borders and shadows a cell has and a row does not).
+#[allow(clippy::too_many_arguments)]
+fn paint_table_part(
+    buffer: &mut Surface,
+    arena: &Tree,
+    styles: &StyleMap,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    font: &mut Font,
+    node: NodeId,
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
+    let Some(style) = styles.get(&node) else {
+        return;
+    };
+    if style.background_color.a == 0 && style.background_layers.is_empty() {
+        return;
+    }
+    let mut bare = style.clone();
+    // Not a part of a table any more: what paints it is the box it was cut to.
+    bare.display = Display::Block;
+    bare.border = NO_BORDER;
+    bare.border_image = None;
+    bare.box_shadow.clear();
+    bare.outline = Default::default();
+    let mut only = StyleMap::new();
+    only.insert(node, bare);
+    // Only where its cells are: the gaps between them are the table's.
+    for cell in part_cells(arena, styles, layouts, node) {
+        let Some(layout) = layouts.get(&cell) else {
+            continue;
+        };
+        let (x, y) = absolute_position(arena, layouts, cell);
+        // Where a box is filled: each edge at the nearest pixel.
+        let (x0, y0) = (x.round(), y.round());
+        let (x1, y1) = ((x + layout.width).round(), (y + layout.height).round());
+        let Some(mut mask) = ClipRect::from_xywh(x0, y0, x1 - x0, y1 - y0).to_mask(buffer) else {
+            continue;
+        };
+        if let Some(incoming) = clip {
+            for (own, outer) in mask.data_mut().iter_mut().zip(incoming.data()) {
+                *own = ((*own as u16 * *outer as u16) / 255) as u8;
+            }
+        }
+        paint_node(
+            buffer,
+            arena,
+            &only,
+            layouts,
+            font,
+            node,
+            scale_factor,
+            Some(&mask),
+            None,
+            None,
+        );
+    }
 }
 
 /// Paints `node`'s own background and text — document-order painting
@@ -3590,10 +4415,34 @@ fn paint_node(
     text_inputs: Option<&HashMap<NodeId, TextInputPaint>>,
     images: Option<&HashMap<NodeId, ImagePaint>>,
 ) {
+    // A row, a group or a column paints its background where its cells are; the cells it is
+    // painted with (those of a row that is a box of its own) go over it.
+    if styles
+        .get(&node)
+        .is_some_and(|s| s.display.is_table_row_like())
+    {
+        paint_table_part(
+            buffer,
+            arena,
+            styles,
+            layouts,
+            font,
+            node,
+            scale_factor,
+            clip,
+        );
+        return;
+    }
     if let Some(&layout) = layouts.get(&node) {
         florui_profile::count(florui_profile::Counter::NodesPainted, 1);
         let style = styles.get(&node);
         let (x, y) = absolute_position(arena, layouts, node);
+        // The border and the background of a table are those of its grid, not of the
+        // captions around it.
+        let (layout, y) = match table_grid_of(layouts, style, node) {
+            Some((top, height)) => (BoxLayout { height, ..layout }, y + top),
+            None => (layout, y),
+        };
 
         let outline = style.map_or(
             RoundedRect::square(x, y, layout.width, layout.height),
@@ -3642,7 +4491,7 @@ fn paint_node(
         }
 
         // The layout border stays: it is where the content sits.
-        let border = scaled_border(style.map_or(NO_BORDER, |s| s.border), scale_factor);
+        let border = scaled_border(border_of(layouts, style, node, scale_factor), scale_factor);
         let box_shadow: &[florui_style::BoxShadow] = if shown {
             style.map_or(&[][..], |s| &s.box_shadow[..])
         } else {
@@ -3794,6 +4643,18 @@ fn paint_node(
 
         let _content_span = florui_profile::span(florui_profile::Phase::RasterContent);
 
+        if style.is_some_and(|s| s.display == Display::ListItem) {
+            paint_list_marker(
+                buffer,
+                arena,
+                styles,
+                layouts,
+                font,
+                node,
+                scale_factor,
+                clip,
+            );
+        }
         let color = style.map_or(Rgba::opaque(0, 0, 0), |s| s.color);
         let anonymous = if arena.children(node).is_empty() {
             Vec::new()
@@ -3811,7 +4672,7 @@ fn paint_node(
         // content-box math `florui_layout`'s own `to_taffy_style` doc
         // describes for sizing applies to painting's own offset too.
         let content_x = x + border.left.width + padding.left;
-        let content_y = y + border.top.width + padding.top;
+        let content_y = y + border.top.width + padding.top + cell_shift_of(layouts, style, node);
         // The box's own final content width, whatever layout resolved it
         // to (wrapped or not) — shaping at exactly this width always
         // reproduces what layout already measured: an intrinsically
@@ -4148,7 +5009,14 @@ fn paint_node(
                     );
                 }
             }
-        } else if florui_layout::is_inline_formatting_context(arena, styles, node) {
+        } else if let Some(shaped) = inline_shape(
+            font,
+            arena,
+            styles,
+            (layouts, scale_factor),
+            node,
+            wrap_width,
+        ) {
             // A real mixed text/inline-element node: rebuilt and
             // reshaped fresh here, since this crate doesn't share layout's
             // own internal Taffy tree — deterministic at the same final
@@ -4156,14 +5024,7 @@ fn paint_node(
             // the plain single-style case below. Each inline element paints
             // its own box behind the text and its own color, shadow and
             // underline on it.
-            if let Some(shaped) = florui_layout::shape_inline_formatting_context(
-                font,
-                arena,
-                styles,
-                (layouts, scale_factor),
-                node,
-                wrap_width,
-            ) {
+            {
                 let is_button = arena.tag(node) == "button";
                 let (dx, dy) = text_offset(
                     is_button,
@@ -4221,10 +5082,27 @@ fn paint_node(
     }
 }
 
+/// The lines of `node` when they are not plain text on a plain wrap: an inline
+/// formatting context, or text that floats narrowed.
+fn inline_shape(
+    font: &mut Font,
+    arena: &Tree,
+    styles: &StyleMap,
+    laid: (&HashMap<NodeId, BoxLayout>, f32),
+    node: NodeId,
+    wrap_width: f32,
+) -> Option<florui_layout::InlineShaped> {
+    if florui_layout::is_inline_formatting_context(arena, styles, node) {
+        florui_layout::shape_inline_formatting_context(font, arena, styles, laid, node, wrap_width)
+    } else {
+        florui_layout::shape_text_in_slots(font, arena, styles, laid, node, wrap_width)
+    }
+}
+
 /// Whether [`text_offset`] can move this node's text at all, so a node that
 /// never needs it is not measured.
 fn places_its_text(is_button: bool, style: Option<&ComputedStyle>) -> bool {
-    style.is_some_and(|s| is_button || s.display == Display::Flex)
+    style.is_some_and(|s| is_button || matches!(s.display, Display::Flex | Display::InlineFlex))
 }
 
 /// How far a node's own text sits from the content box's corner. In a flex
@@ -4242,7 +5120,7 @@ fn text_offset(
     };
     let free_x = (content_width - text_width).max(0.0);
     let free_y = (content_height - text_height).max(0.0);
-    if style.display != Display::Flex {
+    if !matches!(style.display, Display::Flex | Display::InlineFlex) {
         return (0.0, if is_button { free_y / 2.0 } else { 0.0 });
     }
     let (main_free, cross_free, row) = match style.flex_direction {
@@ -5839,7 +6717,7 @@ fn text_coverage(
         layouts,
         font,
         child_display,
-        arena.children(node),
+        &florui_layout::flow_children(arena, &text_styles, node),
         scale_factor,
         content_clip,
         None,
@@ -5910,7 +6788,7 @@ fn paint_inline_color(
 /// context is: it fades, filters, clips, masks or blends all of its fragments, and
 /// what is in it, together.
 fn paints_as_group(style: &ComputedStyle) -> bool {
-    style.opacity < 1.0 || style.has_group_effect()
+    style.display != Display::Contents && (style.opacity < 1.0 || style.has_group_effect())
 }
 
 /// What an inline context paints as groups, and the way to paint it.
@@ -6196,7 +7074,10 @@ fn paint_inline_boxes(
         if !include(fragment.element) {
             continue;
         }
-        let Some(style) = styles.get(&inline.nodes[fragment.element]) else {
+        let Some(style) = styles
+            .get(&inline.nodes[fragment.element])
+            .filter(|style| style.display != Display::Contents)
+        else {
             continue;
         };
         if !style.visibility.is_visible() {
@@ -6339,7 +7220,10 @@ fn paint_inline_outlines(
         if !include(fragment.element) {
             continue;
         }
-        let Some(style) = styles.get(&inline.nodes[fragment.element]) else {
+        let Some(style) = styles
+            .get(&inline.nodes[fragment.element])
+            .filter(|style| style.display != Display::Contents)
+        else {
             continue;
         };
         if !border_style::has_outline(style) {
@@ -7088,6 +7972,193 @@ mod tests {
         // Far left, where a select's own label text sits -- must stay
         // the plain canvas background, not painted over by the chevron.
         assert_eq!(pixel_rgb(&buffer, 10, 10), [0, 0, 0], "left of the chevron");
+    }
+
+    #[test]
+    fn a_row_that_is_not_opaque_is_one_box_with_its_cells() {
+        let tree: Element = view! {
+            <table class="t">
+                <tr class="half"><td class="red" /><td /></tr>
+                <tr class="row"><td class="red" /><td /></tr>
+            </table>
+        };
+        let css = ".t { border-spacing: 0; } td { padding: 0; width: 20px; height: 20px; } \
+                   tr { background-color: #0000ff; } .red { background-color: #ff0000; } \
+                   .half { opacity: 0.5; }";
+        let canvas = paint_text_css(&tree, css, (60, 50));
+        // The cell over the row, and the row where the cell is not, at half of their colour...
+        assert_eq!(pixel_rgb(&canvas, 10, 10), [255, 128, 128]);
+        assert_eq!(pixel_rgb(&canvas, 30, 10), [128, 128, 255]);
+        // ...and the row that is opaque as it was.
+        assert_eq!(pixel_rgb(&canvas, 10, 30), [255, 0, 0]);
+        assert_eq!(pixel_rgb(&canvas, 30, 30), [0, 0, 255]);
+    }
+
+    #[test]
+    fn a_row_group_that_is_not_opaque_fades_its_rows_together() {
+        let tree: Element = view! {
+            <table class="t">
+                <tbody class="half">
+                    <tr><td class="red" /><td /></tr>
+                    <tr class="row"><td /><td /></tr>
+                </tbody>
+            </table>
+        };
+        let css = ".t { border-spacing: 0; } td { padding: 0; width: 20px; height: 20px; } \
+                   tbody { background-color: #0000ff; } .row { background-color: #00ff00; } \
+                   .red { background-color: #ff0000; } .half { opacity: 0.5; }";
+        let canvas = paint_text_css(&tree, css, (60, 50));
+        assert_eq!(pixel_rgb(&canvas, 10, 10), [255, 128, 128]);
+        assert_eq!(pixel_rgb(&canvas, 30, 10), [128, 128, 255]);
+        // The row over the group, at half.
+        assert_eq!(pixel_rgb(&canvas, 30, 30), [128, 255, 128]);
+    }
+
+    #[test]
+    fn thin_dots_are_on_whole_pixels_as_chromium_puts_them() {
+        // Chrome 153: the starts of the dots of a 3px dotted line of each length (the first
+        // and last dot a pixel wider where the line is three pixels over whole dots).
+        let starts = |length: f32, width: f32| -> Vec<(i32, i32)> {
+            crisp_dots(0.0, length, width)
+                .into_iter()
+                .map(|(a, b)| (a as i32, b as i32))
+                .collect()
+        };
+        // A segment with room for one dot only has the one dot, as wide as the line.
+        assert_eq!(starts(6.0, 3.0), [(0, 3)]);
+        assert_eq!(starts(22.0, 3.0), [(0, 3), (7, 10), (13, 16), (19, 22)]);
+        assert_eq!(starts(23.0, 3.0), [(0, 3), (7, 10), (13, 16), (20, 23)]);
+        assert_eq!(
+            starts(28.0, 3.0),
+            [(0, 3), (7, 10), (13, 16), (19, 22), (25, 28)]
+        );
+        assert_eq!(
+            starts(26.0, 3.0),
+            [(0, 3), (5, 8), (11, 14), (17, 20), (23, 26)]
+        );
+        assert_eq!(
+            starts(25.0, 3.0),
+            [(0, 3), (5, 8), (11, 14), (17, 20), (22, 25)]
+        );
+        assert_eq!(starts(24.0, 3.0), [(0, 4), (7, 10), (13, 16), (20, 24)]);
+        assert_eq!(starts(18.0, 3.0), [(0, 4), (7, 10), (14, 18)]);
+        assert_eq!(
+            starts(24.0, 2.0),
+            [
+                (0, 2),
+                (3, 5),
+                (7, 9),
+                (11, 13),
+                (15, 17),
+                (19, 21),
+                (22, 24)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cell_across_rows_is_not_covered_by_the_background_of_the_row_below_it() {
+        let tree: Element = view! {
+            <table class="t">
+                <tr class="r1"><td class="big" rowspan="2" /><td class="a" /></tr>
+                <tr class="r2"><td class="b" /></tr>
+            </table>
+        };
+        let css = ".t { border-spacing: 0; } td { padding: 0; width: 20px; height: 20px; } \
+                   .r2 { background-color: #0000ff; } .big { background-color: #ff0000; }";
+        let canvas = paint_text_css(&tree, css, (60, 50));
+        // The cell is over the second row at x = 10, y = 30; the second row's own cell is
+        // transparent, so the row shows at x = 30.
+        assert_eq!(pixel_rgb(&canvas, 10, 30), [255, 0, 0]);
+        assert_eq!(pixel_rgb(&canvas, 30, 30), [0, 0, 255]);
+        // And the row shows only where its cells are: nothing in the first row.
+        assert_eq!(pixel_rgb(&canvas, 30, 10), WHITE);
+    }
+
+    #[test]
+    fn the_collapsed_border_of_a_table_is_drawn_once_between_its_cells() {
+        let tree: Element = view! {
+            <table class="t"><tr><td class="a" /><td class="b" /></tr></table>
+        };
+        let css = ".t { border-collapse: collapse; } td { padding: 0; width: 20px; height: 20px; \
+                   border: 4px solid #000000; }";
+        let canvas = paint_text_css(&tree, css, (60, 40));
+        // The table has 2px of its own border outside the cells, which are 24 wide: the shared
+        // border is 4px centered at x = 26.
+        for x in 24..28 {
+            assert_eq!(pixel_rgb(&canvas, x, 12), [0, 0, 0], "x = {x}");
+        }
+        assert_eq!(pixel_rgb(&canvas, 12, 12), WHITE);
+        assert_eq!(pixel_rgb(&canvas, 36, 12), WHITE);
+    }
+
+    #[test]
+    fn a_list_item_has_a_marker_before_its_box() {
+        let tree: Element = view! {
+            <ul class="u"><li class="i">{"Item"}</li></ul>
+        };
+        let css = ".u { margin: 0; padding: 0 0 0 40px; } .i { color: #ff0000; font-size: 16px; }";
+        let canvas = paint_text_css(&tree, css, (120, 30));
+        let red_in = |x0: u32, x1: u32| {
+            (x0..x1)
+                .flat_map(|x| (0..30).map(move |y| (x, y)))
+                .filter(|&(x, y)| {
+                    let pixel = pixel_rgb(&canvas, x, y);
+                    pixel[0] > 200 && pixel[1] < 100
+                })
+                .count()
+        };
+        // Chrome: a disc of 6px at x = 22..28 (a 16px font), then the text from x = 40.
+        assert!(red_in(20, 30) >= 20, "the bullet");
+        assert_eq!(red_in(0, 18), 0);
+        assert!(red_in(40, 100) > 20, "the text");
+    }
+
+    #[test]
+    fn a_float_is_painted_over_the_block_that_follows_it_and_text_stays_beside_it() {
+        let tree: Element = view! {
+            <div class="r">
+                <div class="f" />
+                <div class="b">{"alpha beta gamma delta epsilon zeta eta theta iota kappa"}</div>
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(
+            ".r { width: 200px; } \
+             .f { float: left; width: 60px; height: 40px; background-color: #ff0000; } \
+             .b { background-color: #0000ff; color: #ffffff; font-size: 16px; line-height: 20px; }",
+        )
+        .unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let buffer = paint_to_buffer(
+            &mut font,
+            200,
+            80,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        );
+        // The block starts at the top, under the float, which is drawn over it.
+        assert_eq!(pixel_rgb(&buffer, 30, 20), [255, 0, 0], "the float");
+        // Its text is beside the float, not under it.
+        let ink = |x0: u32, x1: u32| {
+            (x0..x1)
+                .flat_map(|x| (0..40).map(move |y| (x, y)))
+                .filter(|&(x, y)| pixel_rgb(&buffer, x, y) == [255, 255, 255])
+                .count()
+        };
+        assert!(ink(60, 200) > 100, "the text is beside the float");
     }
 
     #[test]
@@ -13629,7 +14700,7 @@ mod tests {
             paint_text_css(
                 &tree,
                 &format!(
-                    ".b {{ width: 100px; height: 50px; background-color: #ff0000; {declaration}; }}"
+                    "svg {{ position: absolute; }} .b {{ width: 100px; height: 50px; background-color: #ff0000; {declaration}; }}"
                 ),
                 (110, 60),
             )
@@ -13718,7 +14789,7 @@ mod tests {
             paint_text_css(
                 &tree,
                 &format!(
-                    ".b {{ width: 40px; height: 40px; margin-left: 10px; background-color: #ff0000; {declaration}; }}"
+                    "svg {{ position: absolute; }} .b {{ width: 40px; height: 40px; margin-left: 10px; background-color: #ff0000; {declaration}; }}"
                 ),
                 size,
             )

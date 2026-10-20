@@ -51,7 +51,7 @@ pub mod editing;
 mod editor_core;
 mod ellipsis;
 mod features;
-pub use inline::{InlineElement, InlineItem};
+pub use inline::{InlineElement, InlineItem, LineEnv, LineSlot, LineSource, LineTrace};
 mod inline;
 mod inline_memo;
 mod settings;
@@ -1276,7 +1276,7 @@ impl Font {
     fn metrics_of_ref(layout: &parley::Layout<[u8; 4]>) -> TextMetrics {
         TextMetrics {
             width: layout.width(),
-            height: layout.height(),
+            height: height_without_final_break(layout),
             // The first line's own baseline offset is already relative to
             // the top of the whole block, since nothing precedes it.
             baseline: layout
@@ -1353,7 +1353,7 @@ impl Font {
         ShapedText {
             runs,
             width: layout.width(),
-            height: layout.height(),
+            height: height_without_final_break(&layout),
         }
     }
 
@@ -1453,9 +1453,39 @@ impl Font {
     }
 }
 
+/// The height of `layout`, less the empty line that a line break at the very end of the text
+/// would start: the break ends the line it is in, and no line comes after it.
+fn height_without_final_break(layout: &parley::Layout<[u8; 4]>) -> f32 {
+    let mut lines = layout.lines().rev();
+    match (lines.next(), lines.next()) {
+        (Some(last), Some(_)) if last.text_range().is_empty() => {
+            layout.height() - last.metrics().line_height
+        }
+        _ => layout.height(),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_line_break_at_the_end_of_the_text_starts_no_line() {
+        let mut font = Font::load_embedded();
+        let mut style = TextStyle::new(FontFamily::SansSerif, 16.0, 400.0);
+        style.collapse = WhiteSpaceCollapse::Preserve;
+        let one = font.measure_wrapped(style, "a", 100.0).height;
+        let ended = font.measure_wrapped(style, "a\n", 100.0).height;
+        let two = font.measure_wrapped(style, "a\nb", 100.0).height;
+        let blank = font.measure_wrapped(style, "a\n\n", 100.0).height;
+        assert_eq!(ended, one, "the break ends the line it is in");
+        assert!(two > one * 1.5, "a line after the break is one more");
+        assert_eq!(blank, two, "a second break is an empty line");
+        assert_eq!(
+            font.shape_wrapped(style, "a\n", 100.0).height,
+            one,
+            "and the same for what is painted"
+        );
+    }
 
     #[test]
     fn italic_uses_the_real_italic_face_where_there_is_one_and_a_slant_where_not() {
@@ -2224,16 +2254,16 @@ mod tests {
     }
 
     #[test]
-    fn a_line_of_atomic_boxes_alone_has_no_strut() {
-        // A button on its own in a div is as tall as the button, not taller by
-        // the depth of an empty text line.
+    fn a_line_of_atomic_boxes_alone_has_the_strut_depth_below_them() {
+        // Chrome 153: a div holding one inline box 20px high is 25px tall, the 20 of
+        // the box and the 5 an empty 16px line has below its baseline.
         let items = [InlineContent::Box {
             id: 1,
             width: 20.0,
             height: 50.0,
         }];
         let line = Font::load_embedded().shape_inline(&items, sans(16.0), None);
-        close(line.height, 50.0);
+        close(line.height, 50.0 + 5.0);
         close(line.baseline, 50.0);
         close(line.boxes[0].y, 0.0);
     }

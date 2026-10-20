@@ -500,10 +500,17 @@ pub(super) fn dashes(x: (f32, f32), dash: f32, gap: f32) -> Vec<(f32, f32)> {
     if length <= 0.0 || dash <= 0.0 {
         return Vec::new();
     }
-    if length < dash {
+    // Chromium: no room for two dashes, a solid line; room for two and not three, two dashes
+    // and the gap between them in proportion; else the gap fitted so that both ends are dashes.
+    if length <= dash * 2.0 {
         return vec![x];
     }
-    let gap = fitted_gap(length, dash, gap, false);
+    let (dash, gap) = if length <= dash * 2.0 + gap {
+        let scale = length / (dash * 2.0 + gap);
+        (dash * scale, gap * scale)
+    } else {
+        (dash, fitted_gap(length, dash, gap, false))
+    };
     let mut pieces = Vec::new();
     let mut at = x.0;
     while at < x.1 - 0.001 {
@@ -606,5 +613,20 @@ mod tests {
         assert_eq!(pieces.len(), 23);
         assert!((pieces[1].0 - 6.0 - 85.0 / 22.0).abs() < 1e-3, "{pieces:?}");
         assert!((pieces[22].1 - 223.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_line_too_short_for_three_dashes_is_two_in_proportion_or_solid() {
+        // Chrome 153, a 6px line (dash 12, gap 6): 28 long is two dashes of 11.2 and a gap of 5.6;
+        // 24 long or less has room for no gap, and is solid.
+        let pieces = dashes((0.0, 28.0), 12.0, 6.0);
+        assert_eq!(pieces.len(), 2, "{pieces:?}");
+        assert!((pieces[0].1 - 11.2).abs() < 1e-3 && (pieces[1].0 - 16.8).abs() < 1e-3);
+        assert_eq!(dashes((0.0, 24.0), 12.0, 6.0), vec![(0.0, 24.0)]);
+        // 30 long is exactly two dashes and a gap.
+        assert_eq!(
+            dashes((0.0, 30.0), 12.0, 6.0),
+            vec![(0.0, 12.0), (18.0, 30.0)]
+        );
     }
 }

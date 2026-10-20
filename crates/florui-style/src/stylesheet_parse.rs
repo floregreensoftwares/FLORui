@@ -51,7 +51,12 @@ const DYNAMIC_CACHE_CAPACITY: usize = 8;
 /// this to [`crate::cascade::compute`]. Cloning is cheap and shares the
 /// same underlying state (an [`Arc`]), including the cache below.
 #[derive(Clone)]
-pub struct Rule(Arc<RuleKind>, bool, Arc<[crate::generated::Subject]>);
+pub struct Rule(
+    Arc<RuleKind>,
+    bool,
+    Arc<Vec<crate::counter_style::CounterStyle>>,
+    Arc<[crate::generated::Subject]>,
+);
 
 enum RuleKind {
     /// The common case: nothing in the authored CSS could possibly be a
@@ -76,6 +81,11 @@ enum RuleKind {
 }
 
 impl Rule {
+    /// The counter styles this stylesheet's `@counter-style` rules made, as written.
+    pub(crate) fn counter_styles(&self) -> &[crate::counter_style::CounterStyle] {
+        &self.2
+    }
+
     /// `container_query_signature[i]` is whether [`Self::container_query_blocks`]`()[i]`'s
     /// condition currently matches, for the single cascade this call is
     /// for — see [`crate::container_query_adapter`]'s own module doc. Must
@@ -129,7 +139,7 @@ impl Rule {
 
     /// The elements this rule gives a `::before` or `::after` box through `content`.
     pub(crate) fn pseudo_subjects(&self) -> &[crate::generated::Subject] {
-        &self.2
+        &self.3
     }
 
     /// Every `@container` block this rule's own CSS contains, in source
@@ -190,6 +200,14 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
     LazyLock::force(&GRID_ENABLED);
     LazyLock::force(&BACKDROP_FILTER_ENABLED);
     LazyLock::force(&CONTAINER_QUERIES_ENABLED);
+    // The counter styles of the author are read here, and the rules left out for the engine.
+    let (counter_styled, counter_styles) = if origin == Origin::Author {
+        crate::counter_style::extract_rules(css)
+    } else {
+        (std::borrow::Cow::Borrowed(css), Vec::new())
+    };
+    let counter_styles = Arc::new(counter_styles);
+    let css: &str = &counter_styled;
     let css = if origin == Origin::Author {
         crate::scroll_behavior_adapter::rewrite_stylesheet(css)
     } else {
@@ -204,13 +222,9 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
     } else {
         css
     };
-    let css = if origin == Origin::Author {
-        match crate::property_mirror::rewrite_stylesheet(&css) {
-            std::borrow::Cow::Owned(rewritten) => std::borrow::Cow::Owned(rewritten),
-            std::borrow::Cow::Borrowed(_) => css,
-        }
-    } else {
-        css
+    let css = match crate::property_mirror::rewrite_stylesheet(&css) {
+        std::borrow::Cow::Owned(rewritten) => std::borrow::Cow::Owned(rewritten),
+        std::borrow::Cow::Borrowed(_) => css,
     };
     let css = css.as_ref();
     let pseudo_subjects: Arc<[crate::generated::Subject]> =
@@ -229,12 +243,14 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
                 cache: Mutex::new(Vec::new()),
             }),
             uses_scroll_behavior,
+            counter_styles,
             pseudo_subjects,
         ));
     }
     Ok(Rule(
         Arc::new(RuleKind::Static(parse_str(css, origin))),
         uses_scroll_behavior,
+        counter_styles,
         pseudo_subjects,
     ))
 }
