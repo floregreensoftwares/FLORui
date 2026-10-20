@@ -482,6 +482,23 @@ mod arena_tests {
     }
 
     #[test]
+    fn has_sees_the_elements_of_a_block_and_not_its_generated_boxes() {
+        let tree: Element = view! { <div class="p"><span class="a" /></div> };
+        let (arena, styles) = styled(
+            &tree,
+            ".p::before { content: 'x' } .p::after { content: 'y' } \
+             .p:has(> .a:first-child) { color: #112233 } \
+             .p:has(> .a:last-child) { background-color: #445566 }",
+        );
+        let div = arena.roots()[0];
+        assert_eq!(styles[&div].color, crate::Rgba::opaque(0x11, 0x22, 0x33));
+        assert_eq!(
+            styles[&div].background_color,
+            crate::Rgba::opaque(0x44, 0x55, 0x66)
+        );
+    }
+
+    #[test]
     fn quotation_marks_follow_the_nesting_of_the_boxes_in_document_order() {
         let tree: Element = view! {
             <div>

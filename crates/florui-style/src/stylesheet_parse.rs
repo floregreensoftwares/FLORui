@@ -56,6 +56,7 @@ pub struct Rule(
     bool,
     Arc<Vec<crate::counter_style::CounterStyle>>,
     Arc<crate::generated::Extras>,
+    Arc<[usize]>,
 );
 
 enum RuleKind {
@@ -163,6 +164,12 @@ impl Rule {
         &self.3.first_line_numbers
     }
 
+    /// The numbers of the `:has()` this rule held, which were replaced by classes
+    /// (see [`crate::has_adapter`]).
+    pub(crate) fn has_specs(&self) -> &[usize] {
+        &self.4
+    }
+
     /// Every `@container` block this rule's own CSS contains, in source
     /// order — the order [`Self::stylesheet`]'s own `container_query_signature`
     /// must align to. Empty for a [`RuleKind::Static`] rule.
@@ -247,6 +254,16 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
         std::borrow::Cow::Owned(rewritten) => std::borrow::Cow::Owned(rewritten),
         std::borrow::Cow::Borrowed(_) => css,
     };
+    let (css, has_specs) = if origin == Origin::Author {
+        let (rewritten, numbers) = crate::has_adapter::rewrite(&css);
+        match rewritten {
+            std::borrow::Cow::Owned(rewritten) => (std::borrow::Cow::Owned(rewritten), numbers),
+            std::borrow::Cow::Borrowed(_) => (css, numbers),
+        }
+    } else {
+        (css, Vec::new())
+    };
+    let has_specs: Arc<[usize]> = has_specs.into();
     let css = if origin == Origin::Author {
         match crate::placeholder_adapter::rewrite_stylesheet(&css) {
             std::borrow::Cow::Owned(rewritten) => std::borrow::Cow::Owned(rewritten),
@@ -289,6 +306,7 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
             uses_scroll_behavior,
             counter_styles,
             pseudo_subjects,
+            has_specs,
         ));
     }
     Ok(Rule(
@@ -296,6 +314,7 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
         uses_scroll_behavior,
         counter_styles,
         pseudo_subjects,
+        has_specs,
     ))
 }
 

@@ -55,6 +55,13 @@ impl StateReach {
             {
                 reach.everything = true;
             }
+            // A `:has()` that names a state is a class of the element it is asked
+            // of that a change deep below it flips: no selector shows where from.
+            if rule.has_specs().iter().any(|&number| {
+                crate::has_adapter::spec(number).is_some_and(|spec| spec.mentions_state)
+            }) {
+                reach.everything = true;
+            }
             let sheet = rule.stylesheet(viewport_height, &[], prefers_reduced_motion);
             reach.walk_rules(sheet.contents.rules.read_with(guard), guard);
         }
