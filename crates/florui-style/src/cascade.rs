@@ -1196,6 +1196,11 @@ pub struct ComputedStyle {
     /// [`Self::overflow_scrolls_y`] for which of those clipping causes also
     /// makes the axis reachable via real scrolling.
     pub overflow_clips: bool,
+    /// Whether `overflow` is `hidden`, `scroll` or `auto` on either axis: the
+    /// box is a scroll container, which is the root of a block formatting
+    /// context of its own (it contains its floats and its children's margins).
+    /// `overflow: clip` clips without being one.
+    pub overflow_makes_context: bool,
     /// Whether `overflow-x` is real CSS's `scroll`/`auto` — the two
     /// keywords that make this axis's clipped-away content reachable again
     /// by scrolling, rather than clipped away for good (`hidden`/`clip`).
@@ -1476,6 +1481,7 @@ impl ComputedStyle {
             font_variations: _,
             text_transform: _,
             overflow_clips: _,
+            overflow_makes_context: _,
             overflow_scrolls_x: _,
             overflow_scrolls_y: _,
             transform: _,
