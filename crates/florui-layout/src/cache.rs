@@ -393,7 +393,7 @@ impl LayoutCache {
                         let style = if arena.tag(node) == "svg" {
                             crate::svg_taffy_style(arena, styles, node)
                         } else {
-                            taffy_style_in(arena, styles, node)
+                            to_taffy_style(styles.get(&node))
                         };
                         self.place(
                             node,
@@ -416,7 +416,7 @@ impl LayoutCache {
                         self.place(
                             node,
                             table::role_of(arena, styles, node),
-                            taffy_style_in(arena, styles, node),
+                            to_taffy_style(styles.get(&node)),
                             Some(LeafContext::Inline(context.clone())),
                             &[],
                             false,
@@ -516,7 +516,7 @@ impl LayoutCache {
                     self.place(
                         node,
                         table::role_of(arena, styles, node),
-                        taffy_style_in(arena, styles, node),
+                        to_taffy_style(styles.get(&node)),
                         None,
                         &children,
                         false,
@@ -529,7 +529,7 @@ impl LayoutCache {
                     self.place(
                         node,
                         table::role_of(arena, styles, node),
-                        taffy_style_in(arena, styles, node),
+                        to_taffy_style(styles.get(&node)),
                         Some(LeafContext::Inline(context.clone())),
                         &float_ids,
                         false,
@@ -567,7 +567,7 @@ impl LayoutCache {
                     self.place(
                         node,
                         table::role_of(arena, styles, node),
-                        taffy_style_in(arena, styles, node),
+                        to_taffy_style(styles.get(&node)),
                         None,
                         &children,
                         children_are_new,
