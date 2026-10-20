@@ -46,6 +46,7 @@ mod intern;
 mod mask_box_image;
 mod mask_values;
 mod matrix;
+mod placeholder_adapter;
 mod property_mirror;
 mod reduced_motion_adapter;
 mod rounded;

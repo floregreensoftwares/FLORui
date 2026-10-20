@@ -1224,6 +1224,7 @@ pub(crate) fn compute_with_tree(
             // values. Every key is an `Arc` still held by its node's
             // `ElementData`, so no address is reused while the map is alive.
             let mut converted = Converted::new();
+            let mut fields = FieldStyles::default();
             // Level by level, so an ancestor's style is already committed to
             // its `ElementData` when a descendant resolves and Stylo's style
             // sharing cache sees every node of one depth together. One bloom
@@ -1238,7 +1239,8 @@ pub(crate) fn compute_with_tree(
                     timeline,
                     &mut converted,
                 );
-                result.insert_shared(id, styled.style);
+                let style = with_field_pseudos(&styled, shared, &mut converted, &mut fields);
+                result.insert_shared(id, style);
             }
         },
     );
@@ -1268,6 +1270,7 @@ pub(crate) fn restyle_nodes(
         &[],
         |shared, thread_local, timeline| {
             let mut converted = Converted::new();
+            let mut fields = FieldStyles::default();
             let mut work: std::collections::BTreeSet<(usize, usize)> = start
                 .iter()
                 .map(|&index| (tree.slots[index].depth, index))
@@ -1294,7 +1297,8 @@ pub(crate) fn restyle_nodes(
                         work.insert((tree.slots[child_index].depth, child_index));
                     }
                 }
-                styled.push((id, node.style));
+                let style = with_field_pseudos(&node, shared, &mut converted, &mut fields);
+                styled.push((id, style));
             }
             styled
         },
@@ -1334,6 +1338,66 @@ struct Styled {
     previous: Option<Arc<ComputedValues>>,
     /// The cascaded values now.
     primary: Arc<ComputedValues>,
+    /// For a text field, the values of its `::placeholder` (which the rules are
+    /// rewritten to put on the `::before` of a field, see
+    /// [`crate::placeholder_adapter`]) and of its `::selection`.
+    field_pseudos: [Option<Arc<ComputedValues>>; 2],
+}
+
+/// The styles of text fields that carry the style of their `::placeholder` and
+/// `::selection`, by the cascaded values of the three, and what keeps those
+/// addresses from being reused while the map is alive.
+#[derive(Default)]
+struct FieldStyles {
+    styles: HashMap<(usize, usize, usize), std::sync::Arc<ComputedStyle>>,
+    kept: Vec<Arc<ComputedValues>>,
+}
+
+/// `styled.style`, with the style of the `::placeholder` and the `::selection` of
+/// a text field in it.
+fn with_field_pseudos(
+    styled: &Styled,
+    shared: &SharedStyleContext<'_>,
+    converted: &mut Converted,
+    fields: &mut FieldStyles,
+) -> std::sync::Arc<ComputedStyle> {
+    if styled.field_pseudos.iter().all(Option::is_none) {
+        return std::sync::Arc::clone(&styled.style);
+    }
+    let address = |values: &Option<Arc<ComputedValues>>| {
+        values
+            .as_ref()
+            .map_or(0, |values| &**values as *const ComputedValues as usize)
+    };
+    let key = (
+        &*styled.primary as *const ComputedValues as usize,
+        address(&styled.field_pseudos[0]),
+        address(&styled.field_pseudos[1]),
+    );
+    if let Some(style) = fields.styles.get(&key) {
+        return std::sync::Arc::clone(style);
+    }
+    let viewport = shared.stylist.device().au_viewport_size();
+    let viewport_px = (viewport.width.to_f32_px(), viewport.height.to_f32_px());
+    let mut convert = |values: &Option<Arc<ComputedValues>>| {
+        values.as_ref().map(|values| {
+            fields.kept.push(Arc::clone(values));
+            std::sync::Arc::clone(
+                converted
+                    .entry(&**values as *const ComputedValues)
+                    .or_insert_with(|| std::sync::Arc::new(to_computed_style(values, viewport_px))),
+            )
+        })
+    };
+    let placeholder = convert(&styled.field_pseudos[0]);
+    let selection = convert(&styled.field_pseudos[1]);
+    fields.kept.push(Arc::clone(&styled.primary));
+    let mut style = (*styled.style).clone();
+    style.placeholder = placeholder;
+    style.selection = selection;
+    let style = std::sync::Arc::new(style);
+    fields.styles.insert(key, std::sync::Arc::clone(&style));
+    style
 }
 
 /// Runs `walk` with what the cascade of `tree` needs: a stylist holding the
@@ -1453,6 +1517,14 @@ fn style_node<'t>(
         thread_local,
     };
     let styles = resolve_sharing_styles(&mut context, target);
+    let field_pseudos = if matches!(target.0.tag, "input" | "textarea") {
+        [
+            styles.pseudos.get(&PseudoElement::Before).cloned(),
+            styles.pseudos.get(&PseudoElement::Selection).cloned(),
+        ]
+    } else {
+        [None, None]
+    };
     let viewport = shared.stylist.device().au_viewport_size();
     let viewport_px = (viewport.width.to_f32_px(), viewport.height.to_f32_px());
 
@@ -1510,6 +1582,7 @@ fn style_node<'t>(
         style,
         previous: old_values,
         primary,
+        field_pseudos,
     }
 }
 
@@ -2015,6 +2088,9 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
         resize: to_resize(values),
         placeholder_color: to_placeholder_color(values),
         scroll_behavior_smooth: to_scroll_behavior_smooth(values),
+        placeholder: None,
+        selection: None,
+        caret_color: mirrored(values, "caret-color").and_then(|css| parse_color(&css)),
     }
 }
 
