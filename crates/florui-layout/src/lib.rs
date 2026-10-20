@@ -69,11 +69,13 @@ mod blockflow_walk;
 mod cache;
 mod clip;
 mod collapse;
+mod counter_style;
 mod deferred;
 mod floats;
 mod flow;
 mod grid;
 mod subgrid;
+mod list;
 mod table;
 mod table_layout;
 mod table_structure;
@@ -97,6 +99,7 @@ pub use cache::LayoutCache;
 pub use clip::{ClipGeometry, clip_admits, resolve_clip_path};
 pub use collapse::{BorderSegment, collapsed_border_segments};
 pub use flow::{flow_children, flow_items, flow_parent, is_contents};
+pub use list::{IMAGE_GAP, MarkerKind, MarkerShape, ShapeMetrics, marker_of, shape_metrics};
 pub use transform::{
     ContextPlane, Matrix4, NEAR_W, context_planes, hides_its_back, node_screen_bounds,
     perspective_matrix, preserves_3d, resolve_node_transform, resolve_transform, screen_bounds,
@@ -644,7 +647,8 @@ enum LayoutKind {
 /// Which of the three `node` is, in one pass over its children (most nodes
 /// are asked at every layout, so the pass stops as soon as it knows).
 fn layout_kind(arena: &Tree, styles: &StyleMap, node: NodeId) -> LayoutKind {
-    let (mut block, mut inline) = (false, false);
+    // The marker of a list item, when it is inside, is inline content.
+    let (mut block, mut inline) = (false, has_inside_marker(styles, node));
     for item in flow_items(arena, styles, node).items.iter() {
         match item {
             StyleInlineItem::Text(text) => inline |= !text.trim().is_empty(),
@@ -734,6 +738,16 @@ fn mixed_parts_of(arena: &Tree, styles: &StyleMap, node: NodeId) -> Vec<Part> {
         }
     }
     close(&mut parts, start, items.len(), content);
+    // An inside marker is in the first line, which an item that begins with a block has
+    // no run for: it gets one with nothing in it.
+    if has_inside_marker(styles, node)
+        && !matches!(
+            parts.iter().find(|part| !matches!(part, Part::Spot(_))),
+            Some(Part::Run(_))
+        )
+    {
+        parts.insert(0, Part::Run(0..0));
+    }
     parts
 }
 
@@ -845,6 +859,39 @@ pub fn table_grid(layouts: &HashMap<NodeId, BoxLayout>, node: NodeId) -> Option<
     layouts
         .get(&grid_id(node))
         .map(|entry| (entry.y, entry.height))
+}
+
+/// Marks the id under which what a list item's marker is placed by is reported: where
+/// the baseline of its first line is as the `x` (`-1` when it has none), where its
+/// content box starts as the `y`, and its number as the `margin.top`.
+const MARKER: NodeId = 1 << 54;
+
+fn marker_id(node: NodeId) -> NodeId {
+    MARKER | node
+}
+
+/// What the marker of the list item `node` is placed by, in the pixels `layouts` is
+/// in (`scale` of the pixels of the layout): where the baseline of its first line is,
+/// how far in its content box starts, and its number.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MarkerAnchor {
+    pub baseline: Option<f32>,
+    pub content_left: f32,
+    pub number: i64,
+}
+
+pub fn marker_anchor(
+    layouts: &HashMap<NodeId, BoxLayout>,
+    node: NodeId,
+    scale: f32,
+) -> Option<MarkerAnchor> {
+    let entry = layouts.get(&marker_id(node))?;
+    Some(MarkerAnchor {
+        baseline: (entry.x >= 0.0).then_some(entry.x),
+        content_left: entry.y,
+        // Scaled with everything else in the layouts.
+        number: (entry.margin.top / scale).round() as i64,
+    })
 }
 
 /// Marks the id under which the border a part of a table has where its borders
@@ -1312,6 +1359,118 @@ fn inline_node(
     Ok(id)
 }
 
+thread_local! {
+    /// The numbers of the list items with their marker inside, while a layout is
+    /// being made: building the lines of such an item needs its marker's width.
+    static NUMBERING: std::cell::RefCell<HashMap<NodeId, i64>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// Forgets the numbers when a layout is done.
+struct NumberingGuard;
+
+impl Drop for NumberingGuard {
+    fn drop(&mut self) {
+        NUMBERING.with(|numbers| numbers.borrow_mut().clear());
+    }
+}
+
+/// Numbers the list items of the document, if one of them has its marker inside.
+fn install_numbering(arena: &Tree, styles: &StyleMap) -> NumberingGuard {
+    let inside = styles.values().any(|style| {
+        style.display == StyleDisplay::ListItem
+            && style.list_style_position == florui_style::ListStylePosition::Inside
+    });
+    NUMBERING.with(|numbers| {
+        *numbers.borrow_mut() = if inside {
+            list::numbering(arena, styles)
+        } else {
+            HashMap::new()
+        };
+    });
+    NumberingGuard
+}
+
+/// Whether `node` is a list item whose marker is the first thing in its first line.
+fn has_inside_marker(styles: &StyleMap, node: NodeId) -> bool {
+    styles.get(&node).is_some_and(|style| {
+        style.display == StyleDisplay::ListItem
+            && style.list_style_position == florui_style::ListStylePosition::Inside
+            && (style.list_style_type != florui_style::ListStyleType::None
+                || style.list_style_image.is_some())
+    })
+}
+
+/// How much room the marker of the list item `node` takes in its first line when it
+/// is inside: what it is wide, and the space after it. `laid` has the number it was
+/// given when the boxes were placed, which a layout in the making has in `NUMBERING`.
+fn inside_marker_advance(
+    font: &mut florui_text::Font,
+    styles: &StyleMap,
+    node: NodeId,
+    laid: Laid<'_>,
+) -> Option<f32> {
+    if !has_inside_marker(styles, node) {
+        return None;
+    }
+    let style = styles.get(&node)?;
+    let number = match laid {
+        Some((layouts, scale)) => marker_anchor(layouts, node, scale)?.number,
+        None => NUMBERING.with(|numbers| numbers.borrow().get(&node).copied())?,
+    };
+    let mut plain;
+    let style = if style.list_style_image.is_some() {
+        // The size of an image is not known here: the type stands for it.
+        plain = style.clone();
+        plain.list_style_image = None;
+        &plain
+    } else {
+        style
+    };
+    let kind = list::marker_of(style, number)?;
+    let text_style = node_text_style(Some(style));
+    let normal = text_style.with_line_height(florui_text::LineHeight::Normal);
+    Some(match kind {
+        MarkerKind::Shape(_) => {
+            let ascent = font.measure(normal, "x").baseline.round();
+            shape_metrics(ascent, style.font_size).advance
+        }
+        MarkerKind::Text(text) => marker_text_width(font, text_style, &text),
+        MarkerKind::Image(_) => 0.0,
+    })
+}
+
+/// How wide the text of a marker is, the spaces that end it among it.
+pub fn marker_text_width(
+    font: &mut florui_text::Font,
+    style: florui_text::TextStyle,
+    text: &str,
+) -> f32 {
+    let kept = text.trim_end_matches(' ');
+    let trailing = text.len() - kept.len();
+    let space = font.measure(style, "a a").width - font.measure(style, "aa").width;
+    font.measure(style, kept).width + space * trailing as f32
+}
+
+/// Puts room for the marker of the list item `node` first in its context, when the marker
+/// is inside.
+fn marker_spacer(
+    font: &mut florui_text::Font,
+    styles: &StyleMap,
+    node: NodeId,
+    laid: Laid<'_>,
+    context: &mut InlineContext,
+) {
+    if let Some(advance) = inside_marker_advance(font, styles, node, laid) {
+        context.items.push(InlineContentItem::Spacer {
+            element: 0,
+            inside: 0.0,
+            margin: advance,
+            end: false,
+        });
+    }
+}
+
 /// Builds `node`'s inline formatting context from [`Arena::inline_items`]:
 /// a bare text item inherits its element's font (real CSS: a text node has no
 /// style of its own), an `Inline` element child is an element of its own with
@@ -1333,6 +1492,7 @@ fn build_inline_content_items(
         nodes: vec![node],
         hidden: Vec::new(),
     };
+    marker_spacer(font, styles, node, laid, &mut context);
     flatten_inline(font, arena, styles, node, 0, &mut context, laid);
     context
 }
@@ -1356,6 +1516,17 @@ fn build_run_content_items(
         nodes: vec![node],
         hidden: Vec::new(),
     };
+    if has_inside_marker(styles, node)
+        && mixed_parts_of(arena, styles, node)
+            .iter()
+            .find_map(|part| match part {
+                Part::Run(first) => Some(first.clone()),
+                _ => None,
+            })
+            == Some(run.clone())
+    {
+        marker_spacer(font, styles, node, laid, &mut context);
+    }
     let flowed = flow_items(arena, styles, node);
     flatten_items(
         font,
@@ -1765,6 +1936,7 @@ fn compute_layout_in_place(
     styles: &StyleMap,
     available: Size<AvailableSpace>,
 ) -> Result<LayoutsAndContentExtents, LayoutError> {
+    let _numbers = install_numbering(arena, styles);
     let mut tree = FlorTree::with_capacity(styles.len() + 2);
     // Text is measured at its exact width and paint reshapes it at the laid
     // out width, so a width rounded down (a 36.26px label laid out at 36px)
@@ -1869,8 +2041,15 @@ fn collect_layouts(
     let node_count = nodes.size_hint().1.unwrap_or_default();
     let mut result = HashMap::with_capacity(node_count);
     let mut content_extents = HashMap::with_capacity(node_count);
+    let mut list_items: Vec<(NodeId, taffy::NodeId)> = Vec::new();
     for (node_id, tid) in nodes {
         let layout = tree.layout(tid).map_err(LayoutError)?;
+        if styles
+            .get(&node_id)
+            .is_some_and(|s| s.display == florui_style::Display::ListItem)
+        {
+            list_items.push((node_id, tid));
+        }
         result.insert(
             node_id,
             BoxLayout {
@@ -1928,6 +2107,34 @@ fn collect_layouts(
                     width: 0.0,
                     height: 0.0,
                     margin: BoxMargin::ZERO,
+                },
+            );
+        }
+    }
+
+    // The markers of the list items: where they are placed by, and their numbers.
+    if !list_items.is_empty() {
+        let numbers = list::numbering(arena, styles);
+        for (node_id, tid) in list_items {
+            let (Some(style), Some(&number)) = (styles.get(&node_id), numbers.get(&node_id)) else {
+                continue;
+            };
+            if style.list_style_type == florui_style::ListStyleType::None
+                && style.list_style_image.is_none()
+            {
+                continue;
+            }
+            result.insert(
+                marker_id(node_id),
+                BoxLayout {
+                    x: tree.first_baseline(tid).unwrap_or(-1.0),
+                    y: style.border.left.width + style.padding.left,
+                    width: 0.0,
+                    height: 0.0,
+                    margin: BoxMargin {
+                        top: number as f32,
+                        ..BoxMargin::ZERO
+                    },
                 },
             );
         }
@@ -2962,14 +3169,18 @@ fn build_node(
         match step {
             BuildStep::Visit(node) => {
                 let arena_children = flow_children(arena, styles, node);
-                let kind = if arena.children(node).is_empty() || arena.tag(node) == "svg" {
+                let leaf = (arena.children(node).is_empty() && !has_inside_marker(styles, node))
+                    || arena.tag(node) == "svg";
+                let kind = if leaf {
                     LayoutKind::Blocks
                 } else {
                     layout_kind(arena, styles, node)
                 };
                 // An inline `<svg>` is a replaced box: what is in it is drawn with it.
                 let is_svg = arena.tag(node) == "svg";
-                let id = if arena.children(node).is_empty() || is_svg {
+                let id = if (arena.children(node).is_empty() && !has_inside_marker(styles, node))
+                    || is_svg
+                {
                     let style = to_taffy_style(styles.get(&node));
                     // `icon` (a themable SVG icon) is the same kind of
                     // replaced element as `img` -- same intrinsic-size
@@ -3596,7 +3807,7 @@ pub fn absolute_position(
 pub fn layout_parent(arena: &Tree, id: NodeId) -> Option<NodeId> {
     if is_anonymous(id) {
         Some(anonymous_container(id))
-    } else if id & (PIECE | BASELINE | SLOTS | SHIFT | GRID | BORDER) != 0 {
+    } else if id & (PIECE | BASELINE | SLOTS | SHIFT | GRID | BORDER | MARKER) != 0 {
         None
     } else {
         arena.parent(id)
@@ -3607,7 +3818,7 @@ pub fn layout_parent(arena: &Tree, id: NodeId) -> Option<NodeId> {
 /// node is placed in, which is what its scroll offset and its sticky bounds
 /// come from.
 pub fn layout_parent_in(arena: &Tree, styles: &StyleMap, id: NodeId) -> Option<NodeId> {
-    if id & (ANONYMOUS | PIECE | BASELINE | SLOTS | SHIFT | GRID | BORDER) != 0 {
+    if id & (ANONYMOUS | PIECE | BASELINE | SLOTS | SHIFT | GRID | BORDER | MARKER) != 0 {
         layout_parent(arena, id)
     } else {
         flow_parent(arena, styles, id)
