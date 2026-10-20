@@ -16,7 +16,7 @@ use florui_style::StyleMap;
 /// id held and is written again; correctness never depends on ids being
 /// stable, only the saving does.
 pub struct LayoutCache {
-    tree: TaffyTree<LeafContext>,
+    tree: FlorTree,
     /// The Taffy node of each arena node laid out last time, by arena id.
     slots: Vec<Option<Slot>>,
     /// The synthetic block wrapping the roots of the document and of the
@@ -79,10 +79,9 @@ impl Default for LayoutCache {
 
 impl LayoutCache {
     pub fn new() -> Self {
-        let mut tree = TaffyTree::new();
+        let tree = FlorTree::new();
         // Text is measured at its exact width and paint reshapes it at the
         // laid out width: see `compute_layout_with_content_extents`.
-        tree.disable_rounding();
         LayoutCache {
             tree,
             slots: Vec::new(),
@@ -207,8 +206,7 @@ impl LayoutCache {
         }
         if self.slots.is_empty() {
             // A first layout: room for every node at once, as a tree built anew has.
-            let mut tree = TaffyTree::with_capacity(styles.len() + 2);
-            tree.disable_rounding();
+            let tree = FlorTree::with_capacity(styles.len() + 2);
             self.tree = tree;
             self.slots.reserve(styles.len());
         }
