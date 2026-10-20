@@ -846,7 +846,8 @@ fn paint_nodes(
         }
         if turn == Turn::Part {
             let in_view = view.as_ref().is_none_or(|view| view.own.contains(&node));
-            if in_view {
+            let mask = node_clip.as_ref().and_then(|clip| clip.to_mask(buffer));
+            if in_view && (node_clip.is_none() || mask.is_some()) {
                 paint_table_part(
                     buffer,
                     arena,
@@ -855,7 +856,7 @@ fn paint_nodes(
                     font,
                     node,
                     scale_factor,
-                    node_clip.as_ref(),
+                    mask.as_ref(),
                 );
             }
             continue;
@@ -3695,16 +3696,23 @@ fn frames_in_order(
     nodes: &[NodeId],
 ) -> Vec<(NodeId, Turn)> {
     if !parent_display.is_some_and(Display::is_table) {
-        return match paint_sorted(styles, parent_display, nodes) {
-            Some(sorted) => sorted.into_iter().map(|id| (id, Turn::First)).collect(),
-            None => nodes.iter().map(|&id| (id, Turn::First)).collect(),
-        };
+        let mut ordered: Vec<NodeId> =
+            paint_sorted(styles, parent_display, nodes).unwrap_or_else(|| nodes.to_vec());
+        // The cells of a row that is a box of its own: the ones that are not drawn.
+        if parent_display == Some(Display::TableRow) {
+            ordered.retain(|cell| !hides_empty_cell(arena, styles, *cell));
+        }
+        return ordered.into_iter().map(|id| (id, Turn::First)).collect();
     }
     let display = |id: &NodeId| styles.get(id).map(|s| s.display);
     let mut captions: Vec<NodeId> = Vec::new();
     let (mut column_groups, mut columns, mut groups, mut rows) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut content: Vec<NodeId> = Vec::new();
+    // Rows and row groups that are one box with their cells (not opaque, moved,
+    // filtered...): painted over the cells that are not, with the cells in them.
+    let mut boxes: Vec<NodeId> = Vec::new();
+    let is_box = |id: &NodeId| styles.get(id).is_some_and(makes_group);
     for &child in nodes {
         match display(&child) {
             Some(Display::TableCaption) => captions.push(child),
@@ -3720,31 +3728,33 @@ fn frames_in_order(
             Some(
                 Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup,
             ) => {
+                if is_box(&child) {
+                    boxes.push(child);
+                    continue;
+                }
                 groups.push(child);
                 for &row in florui_layout::flow_children(arena, styles, child).iter() {
-                    if display(&row) == Some(Display::TableRow) {
+                    if display(&row) != Some(Display::TableRow) {
+                        content.push(row);
+                    } else if is_box(&row) {
+                        boxes.push(row);
+                    } else {
                         rows.push(row);
                         content.extend(florui_layout::flow_children(arena, styles, row).iter());
-                    } else {
-                        content.push(row);
                     }
                 }
             }
             Some(Display::TableRow) => {
-                rows.push(child);
-                content.extend(florui_layout::flow_children(arena, styles, child).iter());
+                if is_box(&child) {
+                    boxes.push(child);
+                } else {
+                    rows.push(child);
+                    content.extend(florui_layout::flow_children(arena, styles, child).iter());
+                }
             }
             _ => content.push(child),
         }
     }
-    let hides = |cell: &NodeId| {
-        styles.get(cell).is_some_and(|s| {
-            s.display == Display::TableCell
-                && s.empty_cells == florui_style::EmptyCells::Hide
-                && s.border_collapse == florui_style::BorderCollapse::Separate
-        }) && arena.children(*cell).is_empty()
-            && arena.text_content(*cell).trim().is_empty()
-    };
     captions
         .into_iter()
         .map(|id| (id, Turn::First))
@@ -3759,10 +3769,32 @@ fn frames_in_order(
         .chain(
             content
                 .into_iter()
-                .filter(|cell| !hides(cell))
+                .filter(|cell| !hides_empty_cell(arena, styles, *cell))
+                .chain(boxes)
                 .map(|id| (id, Turn::First)),
         )
         .collect()
+}
+
+/// Whether a row or a row group is painted as a box of its own with what is in it: it is not
+/// opaque, or is moved, filtered, masked or blended.
+fn makes_group(style: &ComputedStyle) -> bool {
+    style.display.is_table_row_like()
+        && !matches!(
+            style.display,
+            Display::TableColumn | Display::TableColumnGroup
+        )
+        && (style.opacity < 1.0 || style.has_transform() || style.has_group_effect())
+}
+
+/// A cell that `empty-cells: hide` does not draw: no content, in a table with separate borders.
+fn hides_empty_cell(arena: &Tree, styles: &StyleMap, cell: NodeId) -> bool {
+    styles.get(&cell).is_some_and(|s| {
+        s.display == Display::TableCell
+            && s.empty_cells == florui_style::EmptyCells::Hide
+            && s.border_collapse == florui_style::BorderCollapse::Separate
+    }) && arena.children(cell).is_empty()
+        && arena.text_content(cell).trim().is_empty()
 }
 
 /// The cells a row, a row group, a column or a column group paints its
@@ -4183,7 +4215,7 @@ fn paint_table_part(
     font: &mut Font,
     node: NodeId,
     scale_factor: f32,
-    clip: Option<&ClipRect>,
+    clip: Option<&Mask>,
 ) {
     let Some(style) = styles.get(&node) else {
         return;
@@ -4192,6 +4224,8 @@ fn paint_table_part(
         return;
     }
     let mut bare = style.clone();
+    // Not a part of a table any more: what paints it is the box it was cut to.
+    bare.display = Display::Block;
     bare.border = NO_BORDER;
     bare.border_image = None;
     bare.box_shadow.clear();
@@ -4207,23 +4241,26 @@ fn paint_table_part(
         // Where a box is filled: each edge at the nearest pixel.
         let (x0, y0) = (x.round(), y.round());
         let (x1, y1) = ((x + layout.width).round(), (y + layout.height).round());
-        let rect = ClipRect::from_xywh(x0, y0, x1 - x0, y1 - y0);
-        let rect = clip.map_or_else(|| rect.clone(), |clip| rect.intersect(clip));
-        let mask = rect.to_mask(buffer);
-        if mask.is_some() {
-            paint_node(
-                buffer,
-                arena,
-                &only,
-                layouts,
-                font,
-                node,
-                scale_factor,
-                mask.as_ref(),
-                None,
-                None,
-            );
+        let Some(mut mask) = ClipRect::from_xywh(x0, y0, x1 - x0, y1 - y0).to_mask(buffer) else {
+            continue;
+        };
+        if let Some(incoming) = clip {
+            for (own, outer) in mask.data_mut().iter_mut().zip(incoming.data()) {
+                *own = ((*own as u16 * *outer as u16) / 255) as u8;
+            }
         }
+        paint_node(
+            buffer,
+            arena,
+            &only,
+            layouts,
+            font,
+            node,
+            scale_factor,
+            Some(&mask),
+            None,
+            None,
+        );
     }
 }
 
@@ -4251,6 +4288,24 @@ fn paint_node(
     text_inputs: Option<&HashMap<NodeId, TextInputPaint>>,
     images: Option<&HashMap<NodeId, ImagePaint>>,
 ) {
+    // A row, a group or a column paints its background where its cells are; the cells it is
+    // painted with (those of a row that is a box of its own) go over it.
+    if styles
+        .get(&node)
+        .is_some_and(|s| s.display.is_table_row_like())
+    {
+        paint_table_part(
+            buffer,
+            arena,
+            styles,
+            layouts,
+            font,
+            node,
+            scale_factor,
+            clip,
+        );
+        return;
+    }
     if let Some(&layout) = layouts.get(&node) {
         florui_profile::count(florui_profile::Counter::NodesPainted, 1);
         let style = styles.get(&node);
@@ -7790,6 +7845,46 @@ mod tests {
         // Far left, where a select's own label text sits -- must stay
         // the plain canvas background, not painted over by the chevron.
         assert_eq!(pixel_rgb(&buffer, 10, 10), [0, 0, 0], "left of the chevron");
+    }
+
+    #[test]
+    fn a_row_that_is_not_opaque_is_one_box_with_its_cells() {
+        let tree: Element = view! {
+            <table class="t">
+                <tr class="half"><td class="red" /><td /></tr>
+                <tr class="row"><td class="red" /><td /></tr>
+            </table>
+        };
+        let css = ".t { border-spacing: 0; } td { padding: 0; width: 20px; height: 20px; } \
+                   tr { background-color: #0000ff; } .red { background-color: #ff0000; } \
+                   .half { opacity: 0.5; }";
+        let canvas = paint_text_css(&tree, css, (60, 50));
+        // The cell over the row, and the row where the cell is not, at half of their colour...
+        assert_eq!(pixel_rgb(&canvas, 10, 10), [255, 128, 128]);
+        assert_eq!(pixel_rgb(&canvas, 30, 10), [128, 128, 255]);
+        // ...and the row that is opaque as it was.
+        assert_eq!(pixel_rgb(&canvas, 10, 30), [255, 0, 0]);
+        assert_eq!(pixel_rgb(&canvas, 30, 30), [0, 0, 255]);
+    }
+
+    #[test]
+    fn a_row_group_that_is_not_opaque_fades_its_rows_together() {
+        let tree: Element = view! {
+            <table class="t">
+                <tbody class="half">
+                    <tr><td class="red" /><td /></tr>
+                    <tr class="row"><td /><td /></tr>
+                </tbody>
+            </table>
+        };
+        let css = ".t { border-spacing: 0; } td { padding: 0; width: 20px; height: 20px; } \
+                   tbody { background-color: #0000ff; } .row { background-color: #00ff00; } \
+                   .red { background-color: #ff0000; } .half { opacity: 0.5; }";
+        let canvas = paint_text_css(&tree, css, (60, 50));
+        assert_eq!(pixel_rgb(&canvas, 10, 10), [255, 128, 128]);
+        assert_eq!(pixel_rgb(&canvas, 30, 10), [128, 128, 255]);
+        // The row over the group, at half.
+        assert_eq!(pixel_rgb(&canvas, 30, 30), [128, 255, 128]);
     }
 
     #[test]
