@@ -36,9 +36,11 @@ mod cascade;
 pub mod clip;
 mod color;
 mod container_query_adapter;
+pub mod content;
 mod default_stylesheet;
 mod error;
 mod focus;
+mod generated;
 mod grid;
 mod height_media_adapter;
 mod interaction;
@@ -83,6 +85,7 @@ pub use color::{ColorParseError, Rgba, parse_hex_color};
 pub use container_query_adapter::{ContentBoxSize, resolve_container_query_signatures};
 pub use error::StyleError;
 pub use focus::FocusPath;
+pub use generated::{Pseudo, PseudoSlots};
 pub use grid::{
     GridArea, GridAutoFlow, GridBreadth, GridLimit, GridPlacement, GridRepeat, GridRepeatCount,
     GridTemplate, GridTemplateAreas, GridTemplateComponent, GridTrackSize, SubgridNames,

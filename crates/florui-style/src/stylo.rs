@@ -134,6 +134,9 @@ pub(crate) struct StyloTree {
     /// Whether any `style` attribute declares `scroll-behavior`, which needs
     /// the same user-agent reset an author sheet declaring it does.
     uses_inline_scroll_behavior: bool,
+    /// The `::before` and `::after` boxes of each node, by slot, where the arena
+    /// has them; empty when it has none.
+    generated: Vec<[Option<NodeId>; 2]>,
 }
 
 /// Where the number of a node's context sits in the state style sharing sees:
@@ -275,7 +278,7 @@ impl StyloTree {
             Self::collect_order(arena, root, &mut order);
         }
 
-        let mut index_of = vec![usize::MAX; order.iter().copied().max().map_or(0, |max| max + 1)];
+        let mut index_of = vec![usize::MAX; arena.node_count()];
         for (index, &id) in order.iter().enumerate() {
             index_of[id] = index;
         }
@@ -300,7 +303,7 @@ impl StyloTree {
         };
         assign_ordinals(arena.roots());
         for &id in &order {
-            assign_ordinals(arena.children(id));
+            assign_ordinals(&arena.element_child_ids(id));
         }
         let mut slots: Vec<NodeSlot> = Vec::with_capacity(order.len());
         let mut stable_ids: Vec<usize> = Vec::with_capacity(order.len());
@@ -338,14 +341,14 @@ impl StyloTree {
             let parent_ptr = arena
                 .parent(id)
                 .map(|parent_id| &slots[index_of[parent_id]] as *const NodeSlot);
-            let children_ptrs: Vec<*const NodeSlot> = arena
-                .children(id)
+            let element_children = arena.element_child_ids(id);
+            let children_ptrs: Vec<*const NodeSlot> = element_children
                 .iter()
                 .map(|&child_id| &slots[index_of[child_id]] as *const NodeSlot)
                 .collect();
             slots[index].parent = parent_ptr;
             slots[index].children = children_ptrs;
-            for (position, child_id) in arena.children(id).iter().enumerate() {
+            for (position, child_id) in element_children.iter().enumerate() {
                 slots[index_of[*child_id]].sibling_index = position;
             }
         }
@@ -361,11 +364,25 @@ impl StyloTree {
                 .style_attr(id)
                 .is_some_and(|css| css.to_ascii_lowercase().contains("scroll-behavior"))
         });
+        let generated = if arena.has_generated() {
+            order
+                .iter()
+                .map(|&id| {
+                    [
+                        arena.generated_child(id, crate::Pseudo::Before),
+                        arena.generated_child(id, crate::Pseudo::After),
+                    ]
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let tree = Self {
             slots,
             index_of,
             order,
             uses_inline_scroll_behavior,
+            generated,
         };
         tree.number_contexts(arena);
         (tree, primary_root)
@@ -456,7 +473,7 @@ impl StyloTree {
         let mut stack = vec![id];
         while let Some(id) = stack.pop() {
             order.push(id);
-            stack.extend(arena.children(id).iter().rev());
+            stack.extend(arena.element_child_ids(id).iter().rev());
         }
     }
 
@@ -1223,6 +1240,7 @@ pub(crate) fn compute_with_tree(
             // node that shares them, so it is done once per distinct set of
             // values. Every key is an `Arc` still held by its node's
             // `ElementData`, so no address is reused while the map is alive.
+            let mut hidden = HiddenStyles::new();
             let mut converted = Converted::new();
             // Level by level, so an ancestor's style is already committed to
             // its `ElementData` when a descendant resolves and Stylo's style
@@ -1237,6 +1255,17 @@ pub(crate) fn compute_with_tree(
                     tree.node(id),
                     timeline,
                     &mut converted,
+                );
+                generated_styles(
+                    tree,
+                    id,
+                    &styled,
+                    shared,
+                    &mut converted,
+                    &mut hidden,
+                    |node, style| {
+                        result.insert_shared(node, style);
+                    },
                 );
                 result.insert_shared(id, styled.style);
             }
@@ -1267,6 +1296,7 @@ pub(crate) fn restyle_nodes(
         timeline,
         &[],
         |shared, thread_local, timeline| {
+            let mut hidden = HiddenStyles::new();
             let mut converted = Converted::new();
             let mut work: std::collections::BTreeSet<(usize, usize)> = start
                 .iter()
@@ -1289,11 +1319,22 @@ pub(crate) fn restyle_nodes(
                     .as_ref()
                     .is_none_or(|old| may_change_children(old, &node.primary));
                 if reaches_children {
-                    for &child in arena.children(id) {
+                    for &child in arena.element_child_ids(id).iter() {
                         let child_index = tree.index_of[child];
                         work.insert((tree.slots[child_index].depth, child_index));
                     }
                 }
+                generated_styles(
+                    tree,
+                    id,
+                    &node,
+                    shared,
+                    &mut converted,
+                    &mut hidden,
+                    |generated, style| {
+                        styled.push((generated, style));
+                    },
+                );
                 styled.push((id, node.style));
             }
             styled
@@ -1326,6 +1367,73 @@ fn may_change_children(old: &ComputedValues, new: &ComputedValues) -> bool {
 /// Converted styles by the cascaded values they came from.
 type Converted = HashMap<*const ComputedValues, std::sync::Arc<ComputedStyle>>;
 
+/// The style of a `::before` or `::after` that has no box, by the style of the node it
+/// belongs to.
+#[derive(Default)]
+struct HiddenStyles {
+    hidden: HashMap<*const ComputedStyle, std::sync::Arc<ComputedStyle>>,
+    /// The values the styles of the pseudo-elements were converted from, kept so no
+    /// address `converted` is keyed by is reused while it is alive.
+    kept: Vec<Arc<ComputedValues>>,
+    /// The styles `hidden` is keyed by.
+    parents: Vec<std::sync::Arc<ComputedStyle>>,
+}
+
+impl HiddenStyles {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// The styles of the `::before` and `::after` boxes of `id`, which come from the
+/// values the cascade gave its pseudo-elements. One with no `content` has no box.
+fn generated_styles(
+    tree: &StyloTree,
+    id: NodeId,
+    styled: &Styled,
+    shared: &SharedStyleContext<'_>,
+    converted: &mut Converted,
+    hidden: &mut HiddenStyles,
+    mut out: impl FnMut(NodeId, std::sync::Arc<ComputedStyle>),
+) {
+    let Some(boxes) = tree.generated.get(tree.index_of[id]) else {
+        return;
+    };
+    let viewport = shared.stylist.device().au_viewport_size();
+    let viewport_px = (viewport.width.to_f32_px(), viewport.height.to_f32_px());
+    for (position, node) in boxes.iter().enumerate() {
+        let Some(node) = *node else {
+            continue;
+        };
+        let own = styled.pseudos[position].as_ref().map(|values| {
+            hidden.kept.push(Arc::clone(values));
+            std::sync::Arc::clone(
+                converted
+                    .entry(&**values as *const ComputedValues)
+                    .or_insert_with(|| std::sync::Arc::new(to_computed_style(values, viewport_px))),
+            )
+        });
+        let style = match own {
+            Some(style) if style.content.generates_box() => style,
+            _ => {
+                let key = std::sync::Arc::as_ptr(&styled.style);
+                if !hidden.hidden.contains_key(&key) {
+                    hidden.parents.push(std::sync::Arc::clone(&styled.style));
+                    hidden.hidden.insert(
+                        key,
+                        std::sync::Arc::new(ComputedStyle {
+                            display: FlorDisplay::None,
+                            ..(*styled.style).clone()
+                        }),
+                    );
+                }
+                std::sync::Arc::clone(&hidden.hidden[&key])
+            }
+        };
+        out(node, style);
+    }
+}
+
 /// What styling one node gave.
 struct Styled {
     /// Its style, the same one for every node whose values are the same.
@@ -1334,6 +1442,8 @@ struct Styled {
     previous: Option<Arc<ComputedValues>>,
     /// The cascaded values now.
     primary: Arc<ComputedValues>,
+    /// The values of the node's `::before` and `::after`, where a rule gave it one.
+    pseudos: [Option<Arc<ComputedValues>>; 2],
 }
 
 /// Runs `walk` with what the cascade of `tree` needs: a stylist holding the
@@ -1453,6 +1563,10 @@ fn style_node<'t>(
         thread_local,
     };
     let styles = resolve_sharing_styles(&mut context, target);
+    let pseudos = [
+        styles.pseudos.get(&PseudoElement::Before).cloned(),
+        styles.pseudos.get(&PseudoElement::After).cloned(),
+    ];
     let viewport = shared.stylist.device().au_viewport_size();
     let viewport_px = (viewport.width.to_f32_px(), viewport.height.to_f32_px());
 
@@ -1510,6 +1624,7 @@ fn style_node<'t>(
         style,
         previous: old_values,
         primary,
+        pseudos,
     }
 }
 
@@ -2015,6 +2130,8 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
         resize: to_resize(values),
         placeholder_color: to_placeholder_color(values),
         scroll_behavior_smooth: to_scroll_behavior_smooth(values),
+        content: to_content(values),
+        quotes: to_quotes(values),
     }
 }
 
@@ -2096,6 +2213,66 @@ fn mirrored(values: &ComputedValues, name: &str) -> Option<String> {
     florui_property(values, |names| &names.mirrors[index])
         .map(|css| css.trim().to_owned())
         .filter(|css| !css.is_empty())
+}
+
+/// `content`, with the items that come after the `/` of alternative text left out.
+fn to_content(values: &ComputedValues) -> crate::content::Content {
+    use crate::content::{Content, ContentItem};
+    use style::values::generics::counters::{Content as Stylo, ContentItem as Item};
+    use style_traits::ToCss;
+
+    let text = |value: &str| -> std::sync::Arc<str> { value.into() };
+    match &values.get_counters().content {
+        Stylo::Normal => Content::Normal,
+        Stylo::None => Content::None,
+        Stylo::Items(items) => Content::Items(
+            items
+                .items
+                .iter()
+                .take(items.alt_start)
+                .map(|item| match item {
+                    Item::String(value) => ContentItem::Text(text(value)),
+                    Item::Attr(attr) => ContentItem::Attr(text(&attr.attribute)),
+                    Item::OpenQuote => ContentItem::OpenQuote,
+                    Item::CloseQuote => ContentItem::CloseQuote,
+                    Item::NoOpenQuote => ContentItem::NoOpenQuote,
+                    Item::NoCloseQuote => ContentItem::NoCloseQuote,
+                    Item::Counter(name, style) => ContentItem::Counter {
+                        name: text(name.0.as_ref()),
+                        style: text(&style.to_css_string()),
+                    },
+                    Item::Counters(name, separator, style) => ContentItem::Counters {
+                        name: text(name.0.as_ref()),
+                        separator: text(separator),
+                        style: text(&style.to_css_string()),
+                    },
+                    Item::Image(image) => ContentItem::Image(text(&image.to_css_string())),
+                })
+                .collect(),
+        ),
+    }
+}
+
+/// `quotes`.
+fn to_quotes(values: &ComputedValues) -> crate::content::Quotes {
+    use crate::content::Quotes;
+    use style::values::computed::Quotes as Stylo;
+
+    match &values.get_list().quotes {
+        Stylo::Auto => Quotes::Auto,
+        Stylo::QuoteList(list) if list.0.is_empty() => Quotes::None,
+        Stylo::QuoteList(list) => Quotes::Pairs(
+            list.0
+                .iter()
+                .map(|pair| {
+                    (
+                        std::sync::Arc::<str>::from(&*pair.opening),
+                        std::sync::Arc::<str>::from(&*pair.closing),
+                    )
+                })
+                .collect(),
+        ),
+    }
 }
 
 /// Reads `--florui-scroll-behavior`: smooth only for the exact keyword.

@@ -1165,6 +1165,11 @@ pub struct ComputedStyle {
     /// (see `scroll_behavior_adapter`); unlike a custom property it does
     /// not inherit. It animates programmatic scrolls of this element.
     pub scroll_behavior_smooth: bool,
+    /// `content`, which a `::before` or `::after` is generated from; any other
+    /// box ignores it.
+    pub content: crate::content::Content,
+    /// Inherited `quotes`: the marks of `open-quote` and `close-quote`.
+    pub quotes: crate::content::Quotes,
 }
 
 impl ComputedStyle {
@@ -1362,6 +1367,8 @@ impl ComputedStyle {
             appearance: _,
             resize: _,
             scroll_behavior_smooth: _,
+            content: _,
+            quotes: _,
         } = other;
         self.background_color = *background_color;
         self.background_color_clip = *background_color_clip;

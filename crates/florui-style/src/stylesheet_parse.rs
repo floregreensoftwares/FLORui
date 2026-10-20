@@ -51,7 +51,7 @@ const DYNAMIC_CACHE_CAPACITY: usize = 8;
 /// this to [`crate::cascade::compute`]. Cloning is cheap and shares the
 /// same underlying state (an [`Arc`]), including the cache below.
 #[derive(Clone)]
-pub struct Rule(Arc<RuleKind>, bool);
+pub struct Rule(Arc<RuleKind>, bool, Arc<[crate::generated::Subject]>);
 
 enum RuleKind {
     /// The common case: nothing in the authored CSS could possibly be a
@@ -125,6 +125,11 @@ impl Rule {
     /// makes the user-agent reset of its custom property worth applying.
     pub(crate) fn uses_scroll_behavior(&self) -> bool {
         self.1
+    }
+
+    /// The elements this rule gives a `::before` or `::after` box through `content`.
+    pub(crate) fn pseudo_subjects(&self) -> &[crate::generated::Subject] {
+        &self.2
     }
 
     /// Every `@container` block this rule's own CSS contains, in source
@@ -208,6 +213,8 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
         css
     };
     let css = css.as_ref();
+    let pseudo_subjects: Arc<[crate::generated::Subject]> =
+        crate::generated::subjects_in(css).into();
     let container_blocks = container_query_adapter::extract_container_queries(css);
     let lower_css = css.to_ascii_lowercase();
     if !container_blocks.is_empty()
@@ -222,11 +229,13 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
                 cache: Mutex::new(Vec::new()),
             }),
             uses_scroll_behavior,
+            pseudo_subjects,
         ));
     }
     Ok(Rule(
         Arc::new(RuleKind::Static(parse_str(css, origin))),
         uses_scroll_behavior,
+        pseudo_subjects,
     ))
 }
 
