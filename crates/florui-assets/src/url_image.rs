@@ -209,18 +209,27 @@ fn svg_natural(text: &str, size: (f32, f32)) -> Natural {
     }
 }
 
-/// The value of attribute `name` on the first `<svg>` element of `text`.
+/// The value of attribute `name` on the first `<svg>` element of `text`, which is the first
+/// one that is not in a comment.
 fn root_attribute(text: &str, name: &str) -> Option<String> {
-    let start = text
-        .match_indices("<svg")
-        .find(|(at, _)| {
-            text[at + 4..]
+    let mut at = 0;
+    let start = loop {
+        let relative = text[at..].find(['<'])?;
+        let tag = at + relative;
+        let rest = &text[tag..];
+        if rest.starts_with("<!--") {
+            at = tag + rest.find("-->").map_or(rest.len(), |end| end + 3);
+        } else if rest.starts_with("<svg")
+            && rest[4..]
                 .chars()
                 .next()
                 .is_some_and(|c| c.is_whitespace() || c == '>' || c == '/')
-        })?
-        .0
-        + 4;
+        {
+            break tag + 4;
+        } else {
+            at = tag + 1;
+        }
+    };
     let mut rest = &text[start..];
     // The attributes, up to the `>` that is not in a quoted value.
     while let Some(first) = rest.find(|c: char| !c.is_whitespace()) {
@@ -228,15 +237,21 @@ fn root_attribute(text: &str, name: &str) -> Option<String> {
         if rest.starts_with('>') || rest.starts_with("/>") {
             return None;
         }
-        let equals = rest.find('=')?;
-        let key = rest[..equals].trim();
-        let after = rest[equals + 1..].trim_start();
-        let quote = after.chars().next().filter(|c| matches!(c, '"' | '\''))?;
-        let close = after[1..].find(quote)? + 1;
+        let key_end = rest.find(|c: char| c.is_whitespace() || matches!(c, '=' | '>' | '/'))?;
+        let key = &rest[..key_end];
+        let after = rest[key_end..].trim_start();
+        let Some(value) = after.strip_prefix('=') else {
+            // An attribute with no value.
+            rest = after;
+            continue;
+        };
+        let value = value.trim_start();
+        let quote = value.chars().next().filter(|c| matches!(c, '"' | '\''))?;
+        let close = value[1..].find(quote)? + 1;
         if key == name {
-            return Some(after[1..close].to_owned());
+            return Some(value[1..close].to_owned());
         }
-        rest = &after[close + 1..];
+        rest = &value[close + 1..];
     }
     None
 }
@@ -360,6 +375,19 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_root_of_an_svg_is_the_first_svg_that_is_not_in_a_comment() {
+        let svg = "data:image/svg+xml;utf8,<!-- <svg width='10' height='10'> --><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 10'><rect width='20' height='10'/></svg>";
+        let loaded = load(svg).expect("an SVG");
+        assert_eq!(
+            loaded.natural,
+            Natural {
+                width: None,
+                height: None,
+                ratio: Some(2.0)
+            }
+        );
+    }
     #[test]
     fn an_svg_says_the_sides_it_declares_and_the_ratio_it_has() {
         let natural = |attributes: &str| {
