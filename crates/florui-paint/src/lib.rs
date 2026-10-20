@@ -4152,6 +4152,131 @@ fn paint_marker_shape(
     }
 }
 
+/// The dots of a dotted line up to three pixels thick, from `from` to `to`, as Chromium puts them on
+/// whole pixels: dots a width wide with a width between them, from end to end of the segment, what
+/// does not make another dot and gap going to the first and the last gap (a pixel less in each
+/// when the line is a pixel or two short of whole dots, a pixel more when it is over); a line
+/// three pixels over has the first dot, the last gap and the last dot a pixel wider.
+fn crisp_dots(from: f32, to: f32, width: f32) -> Vec<(f32, f32)> {
+    let length = (to - from).round() as i64;
+    let dot = (width.round() as i64).max(1);
+    // The most dots that leave at least two pixels short of whole dots, and what is over.
+    let count = ((length + dot + 2) / (2 * dot)).max(1);
+    let over = length - (2 * dot * count - dot);
+    let mut widths = vec![dot; count as usize];
+    let mut gaps = vec![dot; (count - 1) as usize];
+    if over > 2 {
+        widths[0] += 1;
+        widths[count as usize - 1] += 1;
+        if let Some(last) = gaps.last_mut() {
+            *last += 1;
+        }
+    } else {
+        let first = if over >= 0 {
+            (over + 1) / 2
+        } else {
+            -((1 - over) / 2)
+        };
+        if let Some(first_gap) = gaps.first_mut() {
+            *first_gap += first;
+        }
+        if let Some(last_gap) = gaps.last_mut() {
+            *last_gap += over - first;
+        }
+    }
+    let mut at = 0;
+    let mut dots = Vec::with_capacity(count as usize);
+    for (i, wide) in widths.iter().enumerate() {
+        dots.push((from + at as f32, from + (at + wide) as f32));
+        at += wide + gaps.get(i).copied().unwrap_or(0);
+    }
+    dots
+}
+
+/// Where the dots of a dotted line from `from` to `to`, `width` thick, have their centers:
+/// as many as fit by the gap that is nearest to a dot's width (a three pixel line judges by
+/// dots of four with two between, as Chromium does), spread from end to end.
+fn dot_centers(from: f32, to: f32, width: f32) -> Vec<f32> {
+    let length = to - from;
+    if length <= width {
+        return vec![(from + to) / 2.0];
+    }
+    let (dash, gap) = if width == 3.0 {
+        (4.0, 2.0)
+    } else {
+        (width, width)
+    };
+    let fitted = decoration::fitted_gap(length, dash, gap, false);
+    let count = ((length + fitted) / (dash + fitted)).round().max(2.0) as usize;
+    let step = (length - width) / (count - 1) as f32;
+    (0..count)
+        .map(|i| from + width / 2.0 + step * i as f32)
+        .collect()
+}
+
+/// A dotted collapsed border: round dots of the width of the line, spaced as the dashes of a
+/// line are, from one end of the segment to the other (a line drawn from end to end, not a
+/// side of a box, so the dots are as wide as the line and not a quarter pixel narrower).
+fn fill_dots(buffer: &mut Surface, segment: &florui_layout::BorderSegment, clip: Option<&Mask>) {
+    let width = segment.width;
+    let (from, to) = if segment.horizontal {
+        (segment.x0, segment.x1)
+    } else {
+        (segment.y0, segment.y1)
+    };
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(
+        segment.color.r,
+        segment.color.g,
+        segment.color.b,
+        segment.color.a,
+    );
+    paint.anti_alias = true;
+    if width <= 3.0 {
+        for (a, b) in crisp_dots(from, to, width) {
+            if segment.horizontal {
+                fill_rect(
+                    buffer,
+                    a,
+                    segment.y0 - width / 2.0,
+                    b - a,
+                    width,
+                    segment.color,
+                    clip,
+                );
+            } else {
+                fill_rect(
+                    buffer,
+                    segment.x0 - width / 2.0,
+                    a,
+                    width,
+                    b - a,
+                    segment.color,
+                    clip,
+                );
+            }
+        }
+        return;
+    }
+    for along in dot_centers(from, to, width) {
+        let (x, y) = if segment.horizontal {
+            (along, segment.y0)
+        } else {
+            (segment.x0, along)
+        };
+        let (cx, cy) = buffer.local(x, y);
+        let mut dot = PathBuilder::new();
+        dot.push_circle(cx, cy, width / 2.0);
+        let Some(dot) = dot.finish() else {
+            continue;
+        };
+        let mask = buffer.mask_for(clip, (cx - width, cy - width, cx + width, cy + width));
+        buffer
+            .pixmap
+            .fill_path(&dot, &paint, FillRule::Winding, Transform::identity(), mask);
+    }
+}
+
 /// Draws the collapsed borders of the table `node` over its cells.
 fn paint_collapsed_borders(
     buffer: &mut Surface,
@@ -4182,6 +4307,10 @@ fn paint_collapsed_borders(
         }
         if segment.style == florui_style::BorderLineStyle::Solid {
             fill_rect(buffer, x, y, width, height, segment.color, clip);
+            continue;
+        }
+        if segment.style == florui_style::BorderLineStyle::Dotted && segment.width >= 3.0 {
+            fill_dots(buffer, &segment, clip);
             continue;
         }
         let side = florui_style::BorderSide {
@@ -7885,6 +8014,46 @@ mod tests {
         assert_eq!(pixel_rgb(&canvas, 30, 10), [128, 128, 255]);
         // The row over the group, at half.
         assert_eq!(pixel_rgb(&canvas, 30, 30), [128, 255, 128]);
+    }
+
+    #[test]
+    fn thin_dots_are_on_whole_pixels_as_chromium_puts_them() {
+        // Chrome 153: the starts of the dots of a 3px dotted line of each length (the first
+        // and last dot a pixel wider where the line is three pixels over whole dots).
+        let starts = |length: f32, width: f32| -> Vec<(i32, i32)> {
+            crisp_dots(0.0, length, width)
+                .into_iter()
+                .map(|(a, b)| (a as i32, b as i32))
+                .collect()
+        };
+        assert_eq!(starts(22.0, 3.0), [(0, 3), (7, 10), (13, 16), (19, 22)]);
+        assert_eq!(starts(23.0, 3.0), [(0, 3), (7, 10), (13, 16), (20, 23)]);
+        assert_eq!(
+            starts(28.0, 3.0),
+            [(0, 3), (7, 10), (13, 16), (19, 22), (25, 28)]
+        );
+        assert_eq!(
+            starts(26.0, 3.0),
+            [(0, 3), (5, 8), (11, 14), (17, 20), (23, 26)]
+        );
+        assert_eq!(
+            starts(25.0, 3.0),
+            [(0, 3), (5, 8), (11, 14), (17, 20), (22, 25)]
+        );
+        assert_eq!(starts(24.0, 3.0), [(0, 4), (7, 10), (13, 16), (20, 24)]);
+        assert_eq!(starts(18.0, 3.0), [(0, 4), (7, 10), (14, 18)]);
+        assert_eq!(
+            starts(24.0, 2.0),
+            [
+                (0, 2),
+                (3, 5),
+                (7, 9),
+                (11, 13),
+                (15, 17),
+                (19, 21),
+                (22, 24)
+            ]
+        );
     }
 
     #[test]
