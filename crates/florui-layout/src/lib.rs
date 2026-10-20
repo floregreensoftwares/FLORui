@@ -59,16 +59,20 @@ use florui_style::{
     NodeId, Position as StylePosition, RoundedRect, Rule, Tree, Viewport,
 };
 use taffy::prelude::*;
+
 use tree::FlorTree;
 
 mod cache;
 mod clip;
 mod deferred;
+mod flow;
 mod grid;
 mod subgrid;
 mod transform;
 mod tree;
 
+#[cfg(test)]
+mod contents_tests;
 #[cfg(test)]
 mod formatting_context_tests;
 #[cfg(test)]
@@ -78,6 +82,7 @@ mod test_support;
 
 pub use cache::LayoutCache;
 pub use clip::{ClipGeometry, clip_admits, resolve_clip_path};
+pub use flow::{flow_children, flow_items, flow_parent, is_contents};
 pub use transform::{
     ContextPlane, Matrix4, NEAR_W, context_planes, hides_its_back, node_screen_bounds,
     perspective_matrix, preserves_3d, resolve_node_transform, resolve_transform, screen_bounds,
@@ -602,7 +607,7 @@ enum LayoutKind {
 /// are asked at every layout, so the pass stops as soon as it knows).
 fn layout_kind(arena: &Tree, styles: &StyleMap, node: NodeId) -> LayoutKind {
     let (mut block, mut inline) = (false, false);
-    for item in arena.inline_items(node) {
+    for item in flow_items(arena, styles, node).items.iter() {
         match item {
             StyleInlineItem::Text(text) => inline |= !text.trim().is_empty(),
             StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
@@ -649,7 +654,8 @@ fn mixed_parts(arena: &Tree, styles: &StyleMap, node: NodeId) -> Option<Vec<Part
 
 /// [`mixed_parts`] of a node already known to be [`LayoutKind::Mixed`].
 fn mixed_parts_of(arena: &Tree, styles: &StyleMap, node: NodeId) -> Vec<Part> {
-    let items = arena.inline_items(node);
+    let flowed = flow_items(arena, styles, node);
+    let items = &flowed.items;
     let mut parts = Vec::new();
     let mut start = 0;
     let mut content = false;
@@ -774,15 +780,20 @@ type Laid<'a> = Option<(&'a HashMap<NodeId, BoxLayout>, f32)>;
 /// Whether everything inside the inline element `node` is inline-level, so
 /// it can flow in its container's lines.
 fn inline_subtree_is_inline(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
-    arena.inline_items(node).iter().all(|item| match item {
-        StyleInlineItem::Text(_) => true,
-        StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
-            _ if is_viewport_fixed(arena, styles, *child) => true,
-            Some(StyleDisplay::Inline) => inline_subtree_is_inline(arena, styles, *child),
-            Some(display) if display.is_atomic_inline() || display == StyleDisplay::None => true,
-            _ => false,
-        },
-    })
+    flow_items(arena, styles, node)
+        .items
+        .iter()
+        .all(|item| match item {
+            StyleInlineItem::Text(_) => true,
+            StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
+                _ if is_viewport_fixed(arena, styles, *child) => true,
+                Some(StyleDisplay::Inline) => inline_subtree_is_inline(arena, styles, *child),
+                Some(display) if display.is_atomic_inline() || display == StyleDisplay::None => {
+                    true
+                }
+                _ => false,
+            },
+        })
 }
 
 /// An inline-block child's own intrinsic *border-box* size: its own
@@ -1051,7 +1062,7 @@ fn last_line_baseline(
     if is_anonymous(node) {
         return None;
     }
-    let children = arena.children(node);
+    let children = flow_children(arena, styles, node);
     if children.is_empty() {
         let text = leaf_text(arena, node);
         if text.is_empty() || arena.tag(node) == "textarea" {
@@ -1134,11 +1145,12 @@ fn build_run_content_items(
         nodes: vec![node],
         hidden: Vec::new(),
     };
+    let flowed = flow_items(arena, styles, node);
     flatten_items(
         font,
         arena,
         styles,
-        &arena.inline_items(node)[run],
+        (&flowed.items[run.clone()], flowed.owners(run), node),
         0,
         &mut context,
         laid,
@@ -1156,33 +1168,61 @@ fn flatten_inline(
     context: &mut InlineContext,
     laid: Laid<'_>,
 ) {
+    let flowed = flow_items(arena, styles, node);
+    let owners = flowed.owners(0..flowed.items.len());
     flatten_items(
         font,
         arena,
         styles,
-        arena.inline_items(node),
+        (&flowed.items, owners, node),
         element,
         context,
         laid,
     );
 }
 
-/// Adds `items`, which belong to element `element` of `context`.
+/// Adds `items`, which belong to element `element` of `context` and to the
+/// node `owner`; `owners` names the node of each one that takes the style of
+/// a `display: contents` element instead (none if they are all the node's own).
 fn flatten_items(
     font: &mut florui_text::Font,
     arena: &Tree,
     styles: &StyleMap,
-    items: &[StyleInlineItem],
+    (items, owners, own): (&[StyleInlineItem], &[NodeId], NodeId),
     element: usize,
     context: &mut InlineContext,
     laid: Laid<'_>,
 ) {
-    for item in items {
+    // The element made for the owner of the text last added, so that the
+    // text of one `display: contents` element is one element.
+    let mut last_owner: Option<(NodeId, usize)> = None;
+    for (index, item) in items.iter().enumerate() {
         match item {
-            StyleInlineItem::Text(text) => context.items.push(InlineContentItem::Text {
-                text: text.clone(),
-                element,
-            }),
+            StyleInlineItem::Text(text) => {
+                let owner = owners.get(index).copied().unwrap_or(own);
+                let element = if owner == own {
+                    element
+                } else if let Some((last, made)) = last_owner.filter(|(last, _)| *last == owner) {
+                    let _ = last;
+                    made
+                } else {
+                    let mut style = node_text_style(styles.get(&owner));
+                    // No box, so nothing to align.
+                    style.vertical_align = florui_text::VerticalAlign::Baseline;
+                    context.elements.push(florui_text::InlineElement {
+                        parent: element,
+                        style,
+                    });
+                    context.nodes.push(owner);
+                    let made = context.elements.len() - 1;
+                    last_owner = Some((owner, made));
+                    made
+                };
+                context.items.push(InlineContentItem::Text {
+                    text: text.clone(),
+                    element,
+                });
+            }
             StyleInlineItem::Element(child) => {
                 let child_style = styles.get(child);
                 match child_style.map(|s| s.display) {
@@ -1307,11 +1347,11 @@ pub fn is_flowed_inline(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
     // The outermost inline element on the way up is the one that is a child
     // of the container; it flows only if everything in it is inline-level.
     let mut top = node;
-    let mut parent = arena.parent(node);
+    let mut parent = flow_parent(arena, styles, node);
     while let Some(candidate) = parent {
         if styles.get(&candidate).map(|s| s.display) == Some(StyleDisplay::Inline) {
             top = candidate;
-            parent = arena.parent(candidate);
+            parent = flow_parent(arena, styles, candidate);
         } else {
             return needs_inline_layout(arena, styles, candidate)
                 || (inline_subtree_is_inline(arena, styles, top)
@@ -1798,6 +1838,34 @@ fn collect_layouts(
         }
     }
 
+    // A `display: contents` element has no box, whatever the lines it flows in
+    // made of its text: it is reported as an empty one at the origin of the box
+    // around it, where its children are placed from, so that a walk up the
+    // arena adds nothing for it.
+    for (&node, style) in styles.iter() {
+        if style.display == StyleDisplay::Contents {
+            let empty = BoxLayout {
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: 0.0,
+                margin: BoxMargin::ZERO,
+            };
+            result.insert(node, empty);
+            content_extents.insert(
+                node,
+                ContentExtent {
+                    width: 0.0,
+                    height: 0.0,
+                },
+            );
+            let mut piece = 0;
+            while result.remove(&piece_id(node, piece)).is_some() {
+                piece += 1;
+            }
+        }
+    }
+
     place_fixed(arena, styles, fixed, &mut result, &mut content_extents);
     Ok((result, content_extents))
 }
@@ -1821,7 +1889,7 @@ fn place_fixed(
             continue;
         };
         let style = styles.get(&node);
-        let parent = arena.parent(node);
+        let parent = flow_parent(arena, styles, node);
         let parent_origin = parent.map_or((0.0, 0.0), |p| absolute_position(arena, layouts, p));
         let (auto_x, auto_y) = style.map_or((false, false), |s| {
             (
@@ -2542,15 +2610,15 @@ fn build_node(
     while let Some(step) = stack.pop() {
         match step {
             BuildStep::Visit(node) => {
-                let arena_children = arena.children(node);
-                let kind = if arena_children.is_empty() || arena.tag(node) == "svg" {
+                let arena_children = flow_children(arena, styles, node);
+                let kind = if arena.children(node).is_empty() || arena.tag(node) == "svg" {
                     LayoutKind::Blocks
                 } else {
                     layout_kind(arena, styles, node)
                 };
                 // An inline `<svg>` is a replaced box: what is in it is drawn with it.
                 let is_svg = arena.tag(node) == "svg";
-                let id = if arena_children.is_empty() || is_svg {
+                let id = if arena.children(node).is_empty() || is_svg {
                     let style = to_taffy_style(styles.get(&node));
                     // `icon` (a themable SVG icon) is the same kind of
                     // replaced element as `img` -- same intrinsic-size
@@ -2682,14 +2750,13 @@ fn build_node(
             BuildStep::Build(node) => {
                 let style = to_taffy_style(styles.get(&node));
                 let reorders = reorders_children(styles, node)
-                    && arena
-                        .children(node)
+                    && flow_children(arena, styles, node)
                         .iter()
                         .any(|&child| order_of(styles, child) != 0);
                 let mut children: Vec<taffy::NodeId> =
-                    Vec::with_capacity(arena.children(node).len());
+                    Vec::with_capacity(flow_children(arena, styles, node).len());
                 let mut orders: Vec<i32> = Vec::new();
-                for &child in arena.children(node) {
+                for &child in flow_children(arena, styles, node).iter() {
                     if is_viewport_fixed(arena, styles, child) {
                         let spot = tree.new_leaf(static_spot_style())?;
                         taffy_ids.insert(static_spot_id(child), spot);
@@ -3101,6 +3168,17 @@ pub fn layout_parent(arena: &Tree, id: NodeId) -> Option<NodeId> {
     }
 }
 
+/// [`layout_parent`] with `display: contents` ancestors skipped: the box a
+/// node is placed in, which is what its scroll offset and its sticky bounds
+/// come from.
+pub fn layout_parent_in(arena: &Tree, styles: &StyleMap, id: NodeId) -> Option<NodeId> {
+    if id & (ANONYMOUS | PIECE | BASELINE) != 0 {
+        layout_parent(arena, id)
+    } else {
+        flow_parent(arena, styles, id)
+    }
+}
+
 /// Shifts every node's own box by its *immediate* parent's scroll offset,
 /// if `scroll_offsets` has one — sufficient because [`absolute_position`]'s
 /// own ancestor-chain summation already propagates that one-level shift to
@@ -3122,16 +3200,16 @@ pub fn apply_scroll_offsets(
     let mut shifted: HashMap<NodeId, BoxLayout> = layouts
         .iter()
         .map(|(&id, &layout)| {
-            let parent = layout_parent(arena, id);
+            let parent = layout_parent_in(arena, styles, id);
             if !scroll_offsets.is_empty() && is_viewport_fixed(arena, styles, id) {
                 let (mut carried_x, mut carried_y) = (0.0, 0.0);
-                let mut above = parent.and_then(|parent| layout_parent(arena, parent));
+                let mut above = parent.and_then(|parent| layout_parent_in(arena, styles, parent));
                 while let Some(ancestor) = above {
                     if let Some(&(x, y)) = scroll_offsets.get(&ancestor) {
                         carried_x += x;
                         carried_y += y;
                     }
-                    above = layout_parent(arena, ancestor);
+                    above = layout_parent_in(arena, styles, ancestor);
                 }
                 return (
                     id,
@@ -3178,7 +3256,8 @@ fn apply_sticky(arena: &Tree, styles: &StyleMap, layouts: &mut HashMap<NodeId, B
         .collect();
     sticky.sort_unstable();
     for node in sticky {
-        let (Some(style), Some(parent)) = (styles.get(&node), arena.parent(node)) else {
+        let (Some(style), Some(parent)) = (styles.get(&node), flow_parent(arena, styles, node))
+        else {
             continue;
         };
         let mut scroller = Some(parent);
@@ -3186,7 +3265,7 @@ fn apply_sticky(arena: &Tree, styles: &StyleMap, layouts: &mut HashMap<NodeId, B
             if styles.get(&candidate).is_some_and(|s| s.overflow_clips) {
                 break;
             }
-            scroller = arena.parent(candidate);
+            scroller = flow_parent(arena, styles, candidate);
         }
         let (Some(scroller), Some(own), Some(parent_box)) = (
             scroller,
@@ -3360,15 +3439,15 @@ fn children_by_paint<'a>(
     styles: &StyleMap,
     node: NodeId,
 ) -> std::borrow::Cow<'a, [NodeId]> {
-    let children = arena.children(node);
+    let children = flow_children(arena, styles, node);
     let stacks = styles
         .get(&node)
         .is_some_and(|style| style.display.is_flex_or_grid());
     let key = |child: &NodeId| styles.get(child).map_or((0, 0), |s| s.item_stacking());
     if !stacks || children.iter().all(|child| key(child) == (0, 0)) {
-        return std::borrow::Cow::Borrowed(children);
+        return children;
     }
-    let mut sorted = children.to_vec();
+    let mut sorted = children.into_owned();
     sorted.sort_by_key(key);
     std::borrow::Cow::Owned(sorted)
 }
@@ -3499,7 +3578,7 @@ fn hit_walk(
             if leaf || preset.is_none() {
                 continue;
             }
-            for &child in arena.children(node).iter().rev() {
+            for &child in flow_children(arena, styles, node).iter().rev() {
                 if is_flowed_inline(arena, styles, child) {
                     stack.push(HitVisit {
                         node: child,

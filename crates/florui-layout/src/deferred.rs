@@ -313,7 +313,7 @@ fn containing_block(
         row: true,
     };
     let Some(parent) =
-        layout_parent(arena, node).filter(|_| !is_viewport_fixed(arena, styles, node))
+        layout_parent_in(arena, styles, node).filter(|_| !is_viewport_fixed(arena, styles, node))
     else {
         return viewport();
     };
@@ -406,7 +406,7 @@ fn definite_height(
         {
             return false;
         }
-        current = layout_parent(arena, id);
+        current = layout_parent_in(arena, styles, id);
     }
     matches!(available.height, AvailableSpace::Definite(_))
 }

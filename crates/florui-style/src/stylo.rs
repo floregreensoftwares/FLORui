@@ -1493,6 +1493,20 @@ fn style_node<'t>(
                 }),
         )
     };
+    // Elements that draw something of their own have no content to leave behind
+    // when they generate no box: `display: contents` on one acts as `none`.
+    let style = if style.display == FlorDisplay::Contents
+        && matches!(
+            target.0.tag,
+            "img" | "icon" | "svg" | "textarea" | "select" | "input" | "br" | "hr"
+        ) {
+        std::sync::Arc::new(ComputedStyle {
+            display: FlorDisplay::None,
+            ..(*style).clone()
+        })
+    } else {
+        style
+    };
     // `primary` (the raw cascade result), not `final_values` (already
     // spliced with any in-progress transition/animation) -- Stylo's own
     // `update_transitions_for_new_style` compares next frame's `primary`

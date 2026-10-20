@@ -345,6 +345,10 @@ pub fn node_screen_bounds(
     let mut chain = Chain::ROOT;
     let mut result = None;
     for &step in path.iter().rev() {
+        // A `display: contents` element has no plane, and its transform nothing to move.
+        if crate::is_contents(styles, step) {
+            continue;
+        }
         let Some(&layout) = layouts.get(&step) else {
             continue;
         };

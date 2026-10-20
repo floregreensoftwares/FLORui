@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use florui::prelude::Element;
-use florui_style::{Arena, InteractionState, NodeId};
+use florui_style::{Arena, InteractionState, NodeId, StyleMap};
 use taffy::prelude::TaffyMaxContent;
 
 use crate::{BoxLayout, absolute_position, compute_layout};
@@ -33,6 +33,7 @@ pub(crate) fn text(content: &str) -> Element {
 
 pub(crate) struct Laid {
     pub(crate) arena: Arena,
+    pub(crate) styles: StyleMap,
     pub(crate) layouts: HashMap<NodeId, BoxLayout>,
 }
 
@@ -86,7 +87,11 @@ pub(crate) fn lay_out_in(
         Ok(layouts) => layouts,
         Err(error) => panic!("layout failed: {error}"),
     };
-    Laid { arena, layouts }
+    Laid {
+        arena,
+        styles,
+        layouts,
+    }
 }
 
 /// `actual` is within `tolerance` of `expected`.
