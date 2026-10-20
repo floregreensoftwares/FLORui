@@ -20,11 +20,14 @@ use taffy::{
 };
 
 use super::{LeafContext, LeafScratch, measure_leaf};
+use crate::table::Role;
 
 pub(crate) type TreeResult<T> = Result<T, TaffyError>;
 
 pub(crate) struct Node {
     pub(crate) style: Style,
+    /// What the node is in a table.
+    pub(crate) role: Role,
     pub(crate) cache: Cache,
     pub(crate) layout: Layout,
     pub(crate) children: Vec<NodeId>,
@@ -37,12 +40,20 @@ pub(crate) struct Node {
     /// The room of each line of the content, when a float made some lines
     /// shorter than the box: what laying the content out again needs.
     pub(crate) slots: Option<std::sync::Arc<[florui_text::LineSlot]>>,
+    /// How far a table cell pushed its content down inside its box, so that it sits
+    /// where `vertical-align` says: part of the padding above it that the style does
+    /// not state.
+    pub(crate) shift: f32,
+    /// For a table with captions: how far down its box the grid starts, and how tall
+    /// it is, which is where its border and its background are.
+    pub(crate) grid: Option<(f32, f32)>,
 }
 
 impl Node {
     fn new(style: Style, context: Option<LeafContext>) -> Self {
         Node {
             style,
+            role: Role::None,
             cache: Cache::new(),
             layout: Layout::with_order(0),
             children: Vec::new(),
@@ -51,6 +62,8 @@ impl Node {
             grid_info: None,
             baseline: None,
             slots: None,
+            shift: 0.0,
+            grid: None,
         }
     }
 }
@@ -151,6 +164,31 @@ impl FlorTree {
         Ok(self.insert(Node::new(style, Some(context))))
     }
 
+    /// A node that holds `children` without being their parent: it can be laid
+    /// out and forgotten ([`Self::discard`]) and they stay where they are.
+    pub(crate) fn new_detached(&mut self, style: Style, children: &[NodeId]) -> NodeId {
+        let id = self.insert(Node::new(style, None));
+        self.live_mut(id).children = children.to_vec();
+        id
+    }
+
+    /// [`Self::new_detached`], with something to measure instead of children.
+    pub(crate) fn new_detached_leaf(&mut self, style: Style, context: LeafContext) -> NodeId {
+        self.insert(Node::new(style, Some(context)))
+    }
+
+    /// Forgets a node made by [`Self::new_detached`].
+    pub(crate) fn discard(&mut self, id: NodeId) {
+        let (index, generation) = split_id(id);
+        if let Some(entry) = self.entries.get_mut(index)
+            && entry.generation == generation
+        {
+            entry.node = None;
+            entry.generation = entry.generation.wrapping_add(1);
+            self.free.push(index as u32);
+        }
+    }
+
     /// A node holding `children`, which must not have a parent yet.
     pub(crate) fn new_with_children(
         &mut self,
@@ -205,6 +243,15 @@ impl FlorTree {
     pub(crate) fn set_style(&mut self, id: NodeId, style: Style) -> TreeResult<()> {
         self.get_mut(id)?.style = style;
         self.mark_dirty(id)
+    }
+
+    pub(crate) fn set_role(&mut self, id: NodeId, role: Role) -> TreeResult<()> {
+        let node = self.get_mut(id)?;
+        if node.role != role {
+            node.role = role;
+            self.mark_dirty(id)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn style(&self, id: NodeId) -> TreeResult<&Style> {
@@ -308,6 +355,9 @@ impl Run<'_> {
         let output = compute_cached_layout(self, node_id, inputs, |run, node_id, inputs| {
             let node = run.tree.live(node_id);
             let (display, has_children) = (node.style.display, !node.children.is_empty());
+            if node.role.is_table() {
+                return run.compute_table(node_id, inputs);
+            }
             if matches!(display, Display::Block | Display::FlowRoot)
                 && run.region_has_float(node_id)
             {

@@ -392,7 +392,14 @@ impl LayoutCache {
                         } else {
                             to_taffy_style(styles.get(&node))
                         };
-                        self.place(node, style, context, &[], false)?;
+                        self.place(
+                            node,
+                            table::role_of(arena, styles, node),
+                            style,
+                            context,
+                            &[],
+                            false,
+                        )?;
                     } else if kind == LayoutKind::Inline
                         && !ifc_floats(arena, styles, node).is_empty()
                     {
@@ -405,6 +412,7 @@ impl LayoutCache {
                         let context = build_inline_content_items(font, arena, styles, node, None);
                         self.place(
                             node,
+                            table::role_of(arena, styles, node),
                             to_taffy_style(styles.get(&node)),
                             Some(LeafContext::Inline(context.clone())),
                             &[],
@@ -504,6 +512,7 @@ impl LayoutCache {
                     sort_by_order(&mut children, &orders);
                     self.place(
                         node,
+                        table::role_of(arena, styles, node),
                         to_taffy_style(styles.get(&node)),
                         None,
                         &children,
@@ -516,6 +525,7 @@ impl LayoutCache {
                         floats.iter().map(|float| self.id_of(*float)).collect();
                     self.place(
                         node,
+                        table::role_of(arena, styles, node),
                         to_taffy_style(styles.get(&node)),
                         Some(LeafContext::Inline(context.clone())),
                         &float_ids,
@@ -553,6 +563,7 @@ impl LayoutCache {
                     sort_by_order(&mut children, &orders);
                     self.place(
                         node,
+                        table::role_of(arena, styles, node),
                         to_taffy_style(styles.get(&node)),
                         None,
                         &children,
@@ -569,6 +580,7 @@ impl LayoutCache {
     fn place(
         &mut self,
         node: NodeId,
+        role: table::Role,
         style: taffy::Style,
         context: Option<LeafContext>,
         children: &[taffy::NodeId],
@@ -602,6 +614,7 @@ impl LayoutCache {
                     id
                 }
             };
+            self.tree.set_role(id, role)?;
             self.slots[node] = Some(Slot {
                 id,
                 children: children.to_vec(),
@@ -612,6 +625,7 @@ impl LayoutCache {
         };
         slot.epoch = epoch;
         let id = slot.id;
+        self.tree.set_role(id, role)?;
         if *self.tree.style(id)? != style {
             self.tree.set_style(id, style)?;
         }
