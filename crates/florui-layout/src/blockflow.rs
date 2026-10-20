@@ -73,6 +73,9 @@ impl Run<'_> {
     /// it: one among its children, or among the children of the blocks that share
     /// its context.
     pub(crate) fn region_has_float(&mut self, id: NodeId) -> bool {
+        if !self.floats {
+            return false;
+        }
         if let Some(&known) = self.regions.get(&id) {
             return known;
         }

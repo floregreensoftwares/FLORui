@@ -83,6 +83,9 @@ struct Entry {
 pub(crate) struct FlorTree {
     entries: Vec<Entry>,
     free: Vec<u32>,
+    /// Whether a node has been given a style with a float, which stays so: until one has,
+    /// no block formatting context has to be searched for floats.
+    floats: bool,
 }
 
 fn make_id(index: usize, generation: u32) -> NodeId {
@@ -103,10 +106,12 @@ impl FlorTree {
         FlorTree {
             entries: Vec::with_capacity(capacity),
             free: Vec::new(),
+            floats: false,
         }
     }
 
     fn insert(&mut self, node: Node) -> NodeId {
+        self.floats |= node.style.float != taffy::Float::None;
         if let Some(index) = self.free.pop() {
             let entry = &mut self.entries[index as usize];
             entry.node = Some(node);
@@ -245,6 +250,7 @@ impl FlorTree {
     }
 
     pub(crate) fn set_style(&mut self, id: NodeId, style: Style) -> TreeResult<()> {
+        self.floats |= style.float != taffy::Float::None;
         self.get_mut(id)?.style = style;
         self.mark_dirty(id)
     }
@@ -326,11 +332,13 @@ impl FlorTree {
         node_count: usize,
     ) -> TreeResult<()> {
         self.get(root)?;
+        let floats = self.floats;
         let mut run = Run {
             tree: self,
             font,
             scratch: HashMap::with_capacity(node_count),
             regions: HashMap::new(),
+            floats,
         };
         compute_root_layout(&mut run, root, available);
         Ok(())
@@ -347,6 +355,8 @@ pub(crate) struct Run<'a> {
     pub(crate) scratch: HashMap<NodeId, LeafScratch>,
     /// Whether the context a node roots has floats in it; see `region_has_float`.
     pub(crate) regions: HashMap<NodeId, bool>,
+    /// Whether any node of the tree has a float: see [`FlorTree`].
+    pub(crate) floats: bool,
 }
 
 impl Run<'_> {
