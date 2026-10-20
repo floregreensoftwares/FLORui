@@ -3794,6 +3794,290 @@ fn part_cells(
     }
 }
 
+/// Draws the marker of the list item `node` when it is outside its box: a shape, a
+/// number or a string beside the first line, or an image.
+#[allow(clippy::too_many_arguments)]
+fn paint_list_marker(
+    buffer: &mut Surface,
+    arena: &Tree,
+    styles: &StyleMap,
+    layouts: &HashMap<NodeId, BoxLayout>,
+    font: &mut Font,
+    node: NodeId,
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
+    let Some(style) = styles.get(&node) else {
+        return;
+    };
+    if !style.visibility.is_visible() {
+        return;
+    }
+    let inside = style.list_style_position == florui_style::ListStylePosition::Inside;
+    let Some(anchor) = florui_layout::marker_anchor(layouts, node, scale_factor) else {
+        return;
+    };
+    let (x, y) = absolute_position(arena, layouts, node);
+    let color = style.color;
+    let text_style = florui_layout::node_text_style(Some(style));
+    // The ascent of the font, in whole pixels: what the sizes of a shape come from.
+    let normal = text_style.with_line_height(florui_text::LineHeight::Normal);
+    let ascent = font.measure(normal, "x").baseline.round();
+    let baseline = y + anchor
+        .baseline
+        .unwrap_or((style.border.top.width + style.padding.top + ascent) * scale_factor);
+    let content_left = x + anchor.content_left;
+    let mut kind = florui_layout::marker_of(style, anchor.number);
+    if inside && matches!(kind, Some(florui_layout::MarkerKind::Image(_))) {
+        let mut plain = style.clone();
+        plain.list_style_image = None;
+        kind = florui_layout::marker_of(&plain, anchor.number);
+    }
+    // An inside marker is at the start of the first line: wherever that is.
+    let line_start = if inside {
+        let advance = match &kind {
+            Some(florui_layout::MarkerKind::Shape(_)) => {
+                florui_layout::shape_metrics(ascent, style.font_size).advance
+            }
+            Some(florui_layout::MarkerKind::Text(text)) => {
+                florui_layout::marker_text_width(font, text_style, text)
+            }
+            _ => 0.0,
+        };
+        Some(inside_line_start(
+            font,
+            (arena, styles, layouts),
+            node,
+            (x, y),
+            advance,
+            scale_factor,
+        ))
+    } else {
+        None
+    };
+    let mut image_failed = false;
+    if let Some(florui_layout::MarkerKind::Image(image)) = &kind {
+        if !inside
+            && let florui_style::BackgroundImage::Url(url) = image
+            && let Some(loaded) = image_source::load(url)
+        {
+            let (width, height) = (
+                loaded.intrinsic.0 * scale_factor,
+                loaded.intrinsic.1 * scale_factor,
+            );
+            let left = content_left - width - florui_layout::IMAGE_GAP * scale_factor;
+            let outline = RoundedRect::square(left, baseline - height, width, height);
+            let layer = florui_style::BackgroundLayer {
+                image: image.clone(),
+                size: florui_style::BackgroundSize::Explicit(None, None),
+                position: (
+                    florui_style::LengthPercentage::default(),
+                    florui_style::LengthPercentage::default(),
+                ),
+                repeat: (
+                    florui_style::BackgroundRepeat::NoRepeat,
+                    florui_style::BackgroundRepeat::NoRepeat,
+                ),
+                origin: florui_style::BackgroundBox::Border,
+                clip: florui_style::BackgroundBox::Border,
+                blend: BlendMode::Normal,
+            };
+            background::paint_layers(
+                buffer,
+                &outline,
+                NO_BORDER,
+                florui_style::Edges {
+                    top: 0.0,
+                    right: 0.0,
+                    bottom: 0.0,
+                    left: 0.0,
+                },
+                &[layer],
+                scale_factor,
+                clip,
+                None,
+            );
+            return;
+        }
+        image_failed = true;
+    }
+    if image_failed {
+        // An image that cannot be read stands for nothing: the type marks the item.
+        let mut plain = style.clone();
+        plain.list_style_image = None;
+        kind = florui_layout::marker_of(&plain, anchor.number);
+    }
+    match kind {
+        Some(florui_layout::MarkerKind::Shape(shape)) => {
+            let metrics = florui_layout::shape_metrics(ascent, style.font_size);
+            let left = match line_start {
+                Some(start) => start,
+                None => content_left + metrics.x * scale_factor,
+            };
+            let top = baseline + metrics.y * scale_factor;
+            let size = metrics.size * scale_factor;
+            paint_marker_shape(buffer, shape, (left, top, size), color, scale_factor, clip);
+        }
+        Some(florui_layout::MarkerKind::Text(text)) => {
+            // A marker keeps its spaces, which measuring leaves out where they end it.
+            let kept = text.trim_end_matches(' ');
+            let trailing = text.len() - kept.len();
+            let space =
+                font.measure(text_style, "a a").width - font.measure(text_style, "aa").width;
+            let measured = font.measure(text_style, kept);
+            let width = measured.width + space * trailing as f32;
+            let left = match line_start {
+                Some(start) => start,
+                None => content_left - width * scale_factor,
+            };
+            let top = baseline - measured.baseline * scale_factor;
+            // A marker is in the direction of the list, whatever script its number is in.
+            let drawn = format!("\u{200e}{text}");
+            paint_text(
+                buffer,
+                font,
+                TextPaint {
+                    text: &drawn,
+                    style: text_style,
+                    color,
+                    x: left,
+                    y: top,
+                    wrap_width: f32::MAX,
+                    scale_factor,
+                    clip,
+                    shadows: &[],
+                    ellipsis: None,
+                    decoration: None,
+                },
+            );
+        }
+        _ => {}
+    }
+}
+
+/// Where the first line of the list item `node` starts, less the `advance` (in logical
+/// pixels) its inside marker takes at the start of it: where the marker is drawn.
+#[allow(clippy::too_many_arguments)]
+fn inside_line_start(
+    font: &mut Font,
+    (arena, styles, layouts): (&Tree, &StyleMap, &HashMap<NodeId, BoxLayout>),
+    node: NodeId,
+    (x, _y): (f32, f32),
+    advance: f32,
+    scale_factor: f32,
+) -> f32 {
+    let (Some(style), Some(&layout)) = (styles.get(&node), layouts.get(&node)) else {
+        return x;
+    };
+    let edge = (style.border.left.width + style.padding.left) * scale_factor;
+    let content_x = x + edge;
+    let content_width = (layout.width
+        - (style.border.left.width
+            + style.border.right.width
+            + style.padding.left
+            + style.padding.right)
+            * scale_factor)
+        .max(0.0);
+    // The first of the lines of the item: in its own block when it begins with one.
+    let blocks = florui_layout::anonymous_blocks(arena, styles, node);
+    let (shaped, origin, width) = if let Some(&block) = blocks.first() {
+        let Some(&at) = layouts.get(&block) else {
+            return content_x;
+        };
+        (
+            florui_layout::shape_anonymous_block(
+                font,
+                arena,
+                styles,
+                (layouts, scale_factor),
+                block,
+                self_wrap(at.width, scale_factor),
+            ),
+            x + at.x,
+            at.width,
+        )
+    } else {
+        (
+            florui_layout::shape_inline_formatting_context(
+                font,
+                arena,
+                styles,
+                (layouts, scale_factor),
+                node,
+                wrap_width(content_width, scale_factor),
+            ),
+            content_x,
+            content_width,
+        )
+    };
+    let first = shaped.and_then(|shaped| {
+        shaped
+            .layout
+            .runs
+            .iter()
+            .filter(|run| run.line == 0)
+            .map(|run| run.x)
+            .min_by(f32::total_cmp)
+    });
+    match first {
+        Some(first) => origin + (first - advance) * scale_factor,
+        None => {
+            let free = (width / scale_factor - advance).max(0.0);
+            origin
+                + match style.text_align {
+                    florui_style::TextAlign::Center => free / 2.0,
+                    florui_style::TextAlign::End => free,
+                    _ => 0.0,
+                } * scale_factor
+        }
+    }
+}
+
+/// A bullet in the square at (`left`, `top`) of side `size`.
+fn paint_marker_shape(
+    buffer: &mut Surface,
+    shape: florui_layout::MarkerShape,
+    (left, top, size): (f32, f32, f32),
+    color: Rgba,
+    scale_factor: f32,
+    clip: Option<&Mask>,
+) {
+    use florui_layout::MarkerShape;
+    if size <= 0.0 {
+        return;
+    }
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(color.r, color.g, color.b, color.a);
+    paint.anti_alias = true;
+    let transform = surface_transform(buffer);
+    match shape {
+        MarkerShape::Square => fill_rect(buffer, left, top, size, size, color, clip),
+        MarkerShape::Disc => {
+            if let Some(rect) = Rect::from_xywh(left, top, size, size)
+                && let Some(path) = PathBuilder::from_oval(rect)
+            {
+                buffer
+                    .pixmap
+                    .fill_path(&path, &paint, FillRule::Winding, transform, clip);
+            }
+        }
+        MarkerShape::Circle => {
+            // A ring a pixel wide along the edge of the square, half in and half out of it.
+            if let Some(rect) = Rect::from_xywh(left, top, size, size)
+                && let Some(path) = PathBuilder::from_oval(rect)
+            {
+                let stroke = tiny_skia::Stroke {
+                    width: scale_factor,
+                    ..tiny_skia::Stroke::default()
+                };
+                buffer
+                    .pixmap
+                    .stroke_path(&path, &paint, &stroke, transform, clip);
+            }
+        }
+    }
+}
+
 /// Draws the collapsed borders of the table `node` over its cells.
 fn paint_collapsed_borders(
     buffer: &mut Surface,
@@ -4135,6 +4419,18 @@ fn paint_node(
 
         let _content_span = florui_profile::span(florui_profile::Phase::RasterContent);
 
+        if style.is_some_and(|s| s.display == Display::ListItem) {
+            paint_list_marker(
+                buffer,
+                arena,
+                styles,
+                layouts,
+                font,
+                node,
+                scale_factor,
+                clip,
+            );
+        }
         let color = style.map_or(Rgba::opaque(0, 0, 0), |s| s.color);
         let anonymous = if arena.children(node).is_empty() {
             Vec::new()
@@ -7489,6 +7785,28 @@ mod tests {
         }
         assert_eq!(pixel_rgb(&canvas, 12, 12), WHITE);
         assert_eq!(pixel_rgb(&canvas, 36, 12), WHITE);
+    }
+
+    #[test]
+    fn a_list_item_has_a_marker_before_its_box() {
+        let tree: Element = view! {
+            <ul class="u"><li class="i">{"Item"}</li></ul>
+        };
+        let css = ".u { margin: 0; padding: 0 0 0 40px; } .i { color: #ff0000; font-size: 16px; }";
+        let canvas = paint_text_css(&tree, css, (120, 30));
+        let red_in = |x0: u32, x1: u32| {
+            (x0..x1)
+                .flat_map(|x| (0..30).map(move |y| (x, y)))
+                .filter(|&(x, y)| {
+                    let pixel = pixel_rgb(&canvas, x, y);
+                    pixel[0] > 200 && pixel[1] < 100
+                })
+                .count()
+        };
+        // Chrome: a disc of 6px at x = 22..28 (a 16px font), then the text from x = 40.
+        assert!(red_in(20, 30) >= 20, "the bullet");
+        assert_eq!(red_in(0, 18), 0);
+        assert!(red_in(40, 100) > 20, "the text");
     }
 
     #[test]
