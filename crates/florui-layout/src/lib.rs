@@ -6759,6 +6759,105 @@ mod tests {
         assert_eq!(spans, vec![(0.0, 60.0), (60.0, 115.0), (175.0, 75.0)]);
     }
 
+    /// The width of a grid and of its two items, the grid being sized by its
+    /// content (`width` or a flex parent) and its items 70px wide boxes.
+    fn shrink_to_fit_grid(parent: &str, grid: &str, second_item_empty: bool) -> (f32, Vec<f32>) {
+        let tree: Element = if second_item_empty {
+            view! {
+                <div class="outer">
+                    <div class="g">
+                        <div class="k"><div class="big" /></div>
+                        <div class="k" />
+                    </div>
+                </div>
+            }
+        } else {
+            view! {
+                <div class="outer">
+                    <div class="g">
+                        <div class="k"><div class="big" /></div>
+                        <div class="k"><div class="big" /></div>
+                    </div>
+                </div>
+            }
+        };
+        let (arena, layouts) = layout_for(
+            &tree,
+            &format!(
+                ".outer {{ width: 400px; {parent} }} .g {{ display: grid; grid-auto-rows: 20px; {grid} }} \
+                 .k {{ min-width: 0; }} .big {{ width: 70px; height: 10px; }}"
+            ),
+        );
+        let grid = arena.children(arena.roots()[0])[0];
+        let items = arena
+            .children(grid)
+            .iter()
+            .map(|c| layouts[c].width)
+            .collect();
+        (layouts[&grid].width, items)
+    }
+
+    #[test]
+    fn a_grid_sized_by_its_content_counts_a_mixed_calc_track_as_auto_then_resolves_it() {
+        // Chrome 153: the width comes from the items with the percentage as
+        // `auto`, and the percentage is then of that width.
+        let case = |grid: &str, second_item_empty: bool| {
+            shrink_to_fit_grid(
+                "",
+                &format!("width: fit-content; {grid}"),
+                second_item_empty,
+            )
+        };
+        assert_eq!(
+            case("grid-template-columns: calc(10px + 50%) 1fr;", false),
+            (140.0, vec![80.0, 60.0])
+        );
+        assert_eq!(
+            case("grid-template-columns: calc(10px + 25%) 40px;", true),
+            (110.0, vec![37.5, 40.0])
+        );
+        assert_eq!(
+            case(
+                "grid-template-columns: minmax(20px, calc(50% - 10px)) auto;",
+                false
+            ),
+            (140.0, vec![60.0, 80.0])
+        );
+        assert_eq!(
+            case("grid-template-columns: 50% 1fr;", false),
+            (140.0, vec![70.0, 70.0])
+        );
+    }
+
+    #[test]
+    fn a_grid_that_is_a_flex_item_keeps_the_width_its_content_gave_it() {
+        // The resolved calc() must not size the grid again: 140, not more.
+        assert_eq!(
+            shrink_to_fit_grid(
+                "display: flex;",
+                "grid-template-columns: calc(20px + 50%) 1fr;",
+                false
+            ),
+            (140.0, vec![90.0, 50.0])
+        );
+    }
+
+    #[test]
+    fn fit_content_with_a_percentage_is_max_content_until_the_grid_has_a_width() {
+        let case = |columns: &str| {
+            shrink_to_fit_grid(
+                "",
+                &format!("width: fit-content; grid-template-columns: {columns};"),
+                false,
+            )
+        };
+        assert_eq!(
+            case("fit-content(calc(10px + 50%)) 1fr"),
+            (140.0, vec![70.0, 70.0])
+        );
+        assert_eq!(case("fit-content(50%) 1fr"), (140.0, vec![70.0, 70.0]));
+    }
+
     #[test]
     fn the_margin_box_uses_the_margins_layout_resolved() {
         let margin_box = |wrapper: &str, own: &str| {

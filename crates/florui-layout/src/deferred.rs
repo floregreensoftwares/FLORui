@@ -390,6 +390,16 @@ fn patch(
             .iter()
             .map(|track| track.resolve_calc(own.height))
             .collect();
+        // The percentage is of the width the grid got when it was sized with
+        // the calc() as `auto`; the width stays that, or the resolved tracks
+        // would size it again and move what the percentage is of.
+        if style.has_grid_column_calc()
+            && style.width.is_none()
+            && style.width_percent.is_none()
+            && !style.deferred.iter().any(|d| d.slot == Slot::Width)
+        {
+            patched.width = Some(written(own.width + padding_x));
+        }
     }
     patched
 }
