@@ -32,6 +32,8 @@ struct Node {
     context: Option<LeafContext>,
     /// What the last grid layout of the node made of its tracks and items.
     grid_info: Option<Box<DetailedGridInfo>>,
+    /// The first baseline of the last layout, from the top of the border box.
+    baseline: Option<f32>,
 }
 
 impl Node {
@@ -44,6 +46,7 @@ impl Node {
             parent: None,
             context,
             grid_info: None,
+            baseline: None,
         }
     }
 }
@@ -228,6 +231,11 @@ impl FlorTree {
         Ok(&self.get(id)?.layout)
     }
 
+    /// Where the first baseline of `id` lies, from the top of its border box.
+    pub(crate) fn first_baseline(&self, id: NodeId) -> Option<f32> {
+        self.get(id).ok()?.baseline
+    }
+
     /// Forgets what was measured for `id` and for the nodes above it.
     pub(crate) fn mark_dirty(&mut self, id: NodeId) -> TreeResult<()> {
         let mut current = Some(id);
@@ -281,7 +289,7 @@ impl Run<'_> {
         if inputs.run_mode == RunMode::PerformHiddenLayout {
             return compute_hidden_layout(self, node_id);
         }
-        compute_cached_layout(self, node_id, inputs, |run, node_id, inputs| {
+        let output = compute_cached_layout(self, node_id, inputs, |run, node_id, inputs| {
             let node = run.tree.live(node_id);
             let (display, has_children) = (node.style.display, !node.children.is_empty());
             match (display, has_children) {
@@ -292,7 +300,11 @@ impl Run<'_> {
                 (Display::Grid, true) => compute_grid_layout(run, node_id, inputs),
                 (_, false) => run.measure(node_id, inputs),
             }
-        })
+        });
+        if inputs.run_mode == RunMode::PerformLayout {
+            self.tree.live_mut(node_id).baseline = output.baselines.first;
+        }
+        output
     }
 
     /// Lays out a node with no children: a text leaf, an inline formatting
