@@ -1113,3 +1113,112 @@ fn a_percentage_height_in_a_cell_is_of_the_height_the_cell_states() {
     close(&laid, "t", (0.0, 0.0, 14.38, 106.0));
     close(&laid, "p", (3.0, 28.0, 8.38, 50.0));
 }
+
+fn segments_of(laid: &Laid) -> Vec<crate::BorderSegment> {
+    crate::collapsed_border_segments(&laid.arena, &laid.styles, &laid.layouts, laid.node("t"))
+}
+
+/// The dashes of a dashed collapsed border start again in each segment: Chrome 153 splits the
+/// line of two cells at the right edge of the middle border (the junction goes with the cell
+/// before it), where the lines of a spanning cell run into each other by a junction's width.
+#[test]
+fn the_segments_of_a_dashed_border_do_not_overlap_but_where_a_cell_spans() {
+    let two = |cells: Vec<Element>| page(table("t", vec![tr("r", cells)]));
+    let cell = |class: &str| td(class, vec![div("d", vec![])]);
+    let css = format!(
+        "{CSS} .t {{ border-collapse: collapse; }} td {{ padding: 1px; border: 3px dashed #000; }} \
+         .d {{ width: 20px; height: 10px; }}"
+    );
+    let laid = lay_out(&two(vec![cell("a"), cell("b")]), &css);
+    let mut tops: Vec<_> = segments_of(&laid)
+        .into_iter()
+        .filter(|s| s.horizontal && s.y0 < 2.0)
+        .collect();
+    tops.sort_by(|a, b| a.x0.total_cmp(&b.x0));
+    let spans: Vec<(f32, f32)> = tops.iter().map(|s| (s.x0, s.x1)).collect();
+    assert_eq!(spans, vec![(0.0, 28.0), (28.0, 53.0)]);
+    let mut sides: Vec<_> = segments_of(&laid)
+        .into_iter()
+        .filter(|s| !s.horizontal && s.x0 < 3.0)
+        .collect();
+    sides.sort_by(|a, b| a.y0.total_cmp(&b.y0));
+    assert_eq!(sides.len(), 1);
+    near(sides[0].y0, 0.0, 0.01, "left edge from the top");
+    near(sides[0].y1, 18.0, 0.01, "left edge to the bottom");
+
+    // Two rows: the left border is a segment to the right edge of the border between them.
+    let rows = page(table(
+        "t",
+        vec![tr("r1", vec![cell("a")]), tr("r2", vec![cell("b")])],
+    ));
+    let laid = lay_out(&rows, &css);
+    let mut left: Vec<_> = segments_of(&laid)
+        .into_iter()
+        .filter(|s| !s.horizontal && s.x0 < 3.0)
+        .collect();
+    left.sort_by(|a, b| a.y0.total_cmp(&b.y0));
+    let spans: Vec<(f32, f32)> = left.iter().map(|s| (s.y0, s.y1)).collect();
+    assert_eq!(spans, vec![(0.0, 18.0), (18.0, 33.0)]);
+
+    // A cell across two columns has the line along its top in two segments that overlap by
+    // the junction: Chrome 153 has them at 0..27 and 27..53 on the top edge (no border
+    // between the columns above), and at 0..28 and 25..53 under it.
+    let wide = page(table(
+        "t",
+        vec![
+            tr(
+                "r1",
+                vec![
+                    with_attr("td", "a", &[("colspan", "2")], vec![div("d", vec![])]),
+                    cell("b"),
+                ],
+            ),
+            tr("r2", vec![cell("c"), cell("e"), cell("g")]),
+        ],
+    ));
+    let laid = lay_out(&wide, &css);
+    let mut top: Vec<_> = segments_of(&laid)
+        .into_iter()
+        .filter(|s| s.horizontal && s.y0 < 2.0)
+        .collect();
+    top.sort_by(|a, b| a.x0.total_cmp(&b.x0));
+    let spans: Vec<(f32, f32)> = top.iter().map(|s| (s.x0, s.x1)).collect();
+    assert_eq!(spans, vec![(0.0, 27.0), (27.0, 53.0), (53.0, 78.0)]);
+    let mut inner: Vec<_> = segments_of(&laid)
+        .into_iter()
+        .filter(|s| s.horizontal && (s.y0 - 16.5).abs() < 0.1)
+        .collect();
+    inner.sort_by(|a, b| a.x0.total_cmp(&b.x0));
+    let spans: Vec<(f32, f32)> = inner.iter().map(|s| (s.x0, s.x1)).collect();
+    assert_eq!(spans, vec![(0.0, 28.0), (25.0, 53.0), (53.0, 78.0)]);
+}
+
+/// A vertical border that is wider than the dashed line it meets takes the square they have in
+/// common: the dashes of the line start after it (Chrome 153, a 6px solid edge and a 3px
+/// dashed one: dashes at 6..28 and 34..56).
+#[test]
+fn a_dashed_line_stops_at_a_wider_border_that_crosses_it() {
+    let tree = page(table(
+        "t",
+        vec![tr(
+            "r",
+            vec![
+                td("a", vec![div("d", vec![])]),
+                td("b", vec![div("d", vec![])]),
+            ],
+        )],
+    ));
+    let css = format!(
+        "{CSS} .t {{ border-collapse: collapse; }} \
+         td {{ padding: 1px; border: 6px solid #000; border-top: 3px dashed #000; \
+         border-bottom: 3px dashed #000; }} .d {{ width: 20px; height: 10px; }}"
+    );
+    let laid = lay_out(&tree, &css);
+    let mut tops: Vec<_> = segments_of(&laid)
+        .into_iter()
+        .filter(|s| s.horizontal && s.y0 < 2.0)
+        .collect();
+    tops.sort_by(|a, b| a.x0.total_cmp(&b.x0));
+    let spans: Vec<(f32, f32)> = tops.iter().map(|s| (s.x0, s.x1)).collect();
+    assert_eq!(spans, vec![(6.0, 28.0), (34.0, 56.0)]);
+}

@@ -80,6 +80,8 @@ pub(crate) enum Owner {
 struct Candidate {
     edge: Edge,
     owner: Owner,
+    /// The cell it is written by, when it is.
+    cell: Option<usize>,
     /// Of two alike, the one further to the left and then further to the top wins.
     place: (usize, usize),
 }
@@ -98,9 +100,9 @@ fn line_rank(line: Line) -> u8 {
 }
 
 /// The one border an edge has of those written on it.
-fn resolve(candidates: &[Candidate]) -> Edge {
+fn resolve(candidates: &[Candidate]) -> (Edge, Option<usize>) {
     if candidates.iter().any(|c| c.edge.line == Line::Hidden) {
-        return Edge::default();
+        return (Edge::default(), None);
     }
     let mut best: Option<&Candidate> = None;
     for candidate in candidates
@@ -127,7 +129,7 @@ fn resolve(candidates: &[Candidate]) -> Edge {
             best = Some(candidate);
         }
     }
-    best.map_or_else(Edge::default, |c| c.edge)
+    best.map_or_else(|| (Edge::default(), None), |c| (c.edge, c.cell))
 }
 
 /// What each part of a table writes.
@@ -148,6 +150,10 @@ pub(crate) struct Grid {
     /// `horizontal[boundary][column]`: the edge on the boundary before row `boundary`
     /// along column `column`.
     pub(crate) horizontal: Vec<Vec<Edge>>,
+    /// The cell whose border each of the edges above is, if one is: the same cell along two
+    /// edges is one that spans the boundary between them.
+    pub(crate) vertical_cell: Vec<Vec<Option<usize>>>,
+    pub(crate) horizontal_cell: Vec<Vec<Option<usize>>>,
 }
 
 impl Grid {
@@ -230,6 +236,7 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
     };
 
     let mut vertical = vec![vec![Edge::default(); columns + 1]; rows];
+    let mut vertical_cell = vec![vec![None; columns + 1]; rows];
     for (row, edges) in vertical.iter_mut().enumerate() {
         for (boundary, slot) in edges.iter_mut().enumerate() {
             let before = boundary.checked_sub(1).and_then(|col| at[row][col]);
@@ -243,6 +250,7 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
                 found.push(Candidate {
                     edge: borders.cells[cell][RIGHT],
                     owner: Owner::Cell,
+                    cell: Some(cell),
                     place: (structure.cells[cell].col, row),
                 });
             }
@@ -250,6 +258,7 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
                 found.push(Candidate {
                     edge: borders.cells[cell][LEFT],
                     owner: Owner::Cell,
+                    cell: Some(cell),
                     place: (structure.cells[cell].col, row),
                 });
             }
@@ -257,18 +266,21 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
                 found.push(Candidate {
                     edge: borders.rows[row][LEFT],
                     owner: Owner::Row,
+                    cell: None,
                     place: (0, row),
                 });
                 if let Some(group) = group_of_row(row) {
                     found.push(Candidate {
                         edge: borders.groups[group][LEFT],
                         owner: Owner::RowGroup,
+                        cell: None,
                         place: (0, row),
                     });
                 }
                 found.push(Candidate {
                     edge: borders.table[LEFT],
                     owner: Owner::Table,
+                    cell: None,
                     place: (0, 0),
                 });
             }
@@ -276,18 +288,21 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
                 found.push(Candidate {
                     edge: borders.rows[row][RIGHT],
                     owner: Owner::Row,
+                    cell: None,
                     place: (columns, row),
                 });
                 if let Some(group) = group_of_row(row) {
                     found.push(Candidate {
                         edge: borders.groups[group][RIGHT],
                         owner: Owner::RowGroup,
+                        cell: None,
                         place: (columns, row),
                     });
                 }
                 found.push(Candidate {
                     edge: borders.table[RIGHT],
                     owner: Owner::Table,
+                    cell: None,
                     place: (columns, 0),
                 });
             }
@@ -296,6 +311,7 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
                 found.push(Candidate {
                     edge: borders.columns[col][RIGHT],
                     owner: Owner::Column,
+                    cell: None,
                     place: (col, 0),
                 });
                 if let Some(group) = column_group(col)
@@ -305,6 +321,7 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
                     found.push(Candidate {
                         edge: borders.column_groups[group][RIGHT],
                         owner: Owner::ColumnGroup,
+                        cell: None,
                         place: (col, 0),
                     });
                 }
@@ -313,6 +330,7 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
                 found.push(Candidate {
                     edge: borders.columns[boundary][LEFT],
                     owner: Owner::Column,
+                    cell: None,
                     place: (boundary, 0),
                 });
                 if let Some(group) = column_group(boundary)
@@ -321,15 +339,19 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
                     found.push(Candidate {
                         edge: borders.column_groups[group][LEFT],
                         owner: Owner::ColumnGroup,
+                        cell: None,
                         place: (boundary, 0),
                     });
                 }
             }
-            *slot = resolve(&found);
+            let (edge, cell) = resolve(&found);
+            *slot = edge;
+            vertical_cell[row][boundary] = cell;
         }
     }
 
     let mut horizontal = vec![vec![Edge::default(); columns]; rows + 1];
+    let mut horizontal_cell = vec![vec![None; columns]; rows + 1];
     for (boundary, edges) in horizontal.iter_mut().enumerate() {
         for (col, slot) in edges.iter_mut().enumerate() {
             let above = boundary.checked_sub(1).and_then(|row| at[row][col]);
@@ -343,6 +365,7 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
                 found.push(Candidate {
                     edge: borders.cells[cell][BOTTOM],
                     owner: Owner::Cell,
+                    cell: Some(cell),
                     place: (col, structure.cells[cell].row),
                 });
             }
@@ -350,6 +373,7 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
                 found.push(Candidate {
                     edge: borders.cells[cell][TOP],
                     owner: Owner::Cell,
+                    cell: Some(cell),
                     place: (col, structure.cells[cell].row),
                 });
             }
@@ -358,6 +382,7 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
                 found.push(Candidate {
                     edge: borders.rows[row][BOTTOM],
                     owner: Owner::Row,
+                    cell: None,
                     place: (col, row),
                 });
                 if let Some(group) = group_of_row(row)
@@ -366,6 +391,7 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
                     found.push(Candidate {
                         edge: borders.groups[group][BOTTOM],
                         owner: Owner::RowGroup,
+                        cell: None,
                         place: (col, row),
                     });
                 }
@@ -374,6 +400,7 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
                 found.push(Candidate {
                     edge: borders.rows[boundary][TOP],
                     owner: Owner::Row,
+                    cell: None,
                     place: (col, boundary),
                 });
                 if let Some(group) = group_of_row(boundary)
@@ -382,6 +409,7 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
                     found.push(Candidate {
                         edge: borders.groups[group][TOP],
                         owner: Owner::RowGroup,
+                        cell: None,
                         place: (col, boundary),
                     });
                 }
@@ -390,18 +418,21 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
                 found.push(Candidate {
                     edge: borders.columns[col][TOP],
                     owner: Owner::Column,
+                    cell: None,
                     place: (col, 0),
                 });
                 if let Some(group) = column_group(col) {
                     found.push(Candidate {
                         edge: borders.column_groups[group][TOP],
                         owner: Owner::ColumnGroup,
+                        cell: None,
                         place: (col, 0),
                     });
                 }
                 found.push(Candidate {
                     edge: borders.table[TOP],
                     owner: Owner::Table,
+                    cell: None,
                     place: (0, 0),
                 });
             }
@@ -409,27 +440,34 @@ pub(crate) fn resolve_grid<I>(structure: &Structure<I>, borders: &Borders) -> Gr
                 found.push(Candidate {
                     edge: borders.columns[col][BOTTOM],
                     owner: Owner::Column,
+                    cell: None,
                     place: (col, rows),
                 });
                 if let Some(group) = column_group(col) {
                     found.push(Candidate {
                         edge: borders.column_groups[group][BOTTOM],
                         owner: Owner::ColumnGroup,
+                        cell: None,
                         place: (col, rows),
                     });
                 }
                 found.push(Candidate {
                     edge: borders.table[BOTTOM],
                     owner: Owner::Table,
+                    cell: None,
                     place: (0, rows),
                 });
             }
-            *slot = resolve(&found);
+            let (edge, cell) = resolve(&found);
+            *slot = edge;
+            horizontal_cell[boundary][col] = cell;
         }
     }
     Grid {
         vertical,
         horizontal,
+        vertical_cell,
+        horizontal_cell,
     }
 }
 
@@ -469,6 +507,11 @@ impl crate::table_structure::TableSource for ArenaSource<'_> {
             .get(&id)
             .is_some_and(|s| s.display == florui_style::Display::None)
     }
+}
+
+/// Whether a line of this style is dashes or dots, which start again with each segment.
+fn is_broken_line(style: BorderLineStyle) -> bool {
+    matches!(style, BorderLineStyle::Dashed | BorderLineStyle::Dotted)
 }
 
 /// The collapsed borders of the table `table`, wherever its cells ended up
@@ -582,6 +625,10 @@ pub fn collapsed_border_segments(
         ));
         (horizontal, vertical)
     };
+    // The dashes and dots of a line start again in each segment, and Chromium's segments
+    // do not overlap: the square where two lines meet goes with the line that is as wide
+    // as the wider (the one before when both are), and a segment that does not own it
+    // stops short of it.
     // Horizontal edges first, which a vertical edge as wide draws over.
     for boundary in 0..=rows {
         let mut col = 0;
@@ -593,10 +640,44 @@ pub fn collapsed_border_segments(
                     let (h, v) = junction(boundary, at);
                     if h >= v { v / 2.0 } else { 0.0 }
                 };
+                let (x0, x1) = if is_broken_line(style) {
+                    let half = |at: usize| junction(boundary, at).1 / 2.0;
+                    let owns = |at: usize| {
+                        let (h, v) = junction(boundary, at);
+                        h >= v
+                    };
+                    // Along a cell that spans the boundary the line has two segments that
+                    // run into each other by the square they have in common.
+                    let inside = |at: usize| {
+                        let cells = &grid.horizontal_cell[boundary];
+                        at > 0
+                            && at < columns
+                            && cells[at - 1].is_some()
+                            && cells[at - 1] == cells[at]
+                    };
+                    (
+                        if col > 0 && inside(col) {
+                            xs[col] - half(col)
+                        } else if col > 0 || !owns(col) {
+                            xs[col] + half(col)
+                        } else {
+                            xs[col] - half(col)
+                        }
+                        .round(),
+                        if inside(end) || owns(end) {
+                            xs[end] + half(end)
+                        } else {
+                            xs[end] - half(end)
+                        }
+                        .round(),
+                    )
+                } else {
+                    (xs[col] - reach(col), xs[end] + reach(end))
+                };
                 segments.push(BorderSegment {
-                    x0: xs[col] - reach(col),
+                    x0,
                     y0: ys[boundary],
-                    x1: xs[end] + reach(end),
+                    x1,
                     y1: ys[boundary],
                     horizontal: true,
                     width: edge.width,
@@ -618,11 +699,46 @@ pub fn collapsed_border_segments(
                     let (h, v) = junction(at, boundary);
                     if v >= h { h / 2.0 } else { 0.0 }
                 };
+                let (y0, y1) = if is_broken_line(style) {
+                    let half = |at: usize| junction(at, boundary).0 / 2.0;
+                    let owns = |at: usize| {
+                        let (h, v) = junction(at, boundary);
+                        v >= h
+                    };
+                    let inside = |at: usize| {
+                        let before = grid.vertical_cell.get(at.wrapping_sub(1));
+                        let after = grid.vertical_cell.get(at);
+                        match (before, after) {
+                            (Some(before), Some(after)) => {
+                                before[boundary].is_some() && before[boundary] == after[boundary]
+                            }
+                            _ => false,
+                        }
+                    };
+                    (
+                        if row > 0 && inside(row) {
+                            ys[row] - half(row)
+                        } else if row > 0 || !owns(row) {
+                            ys[row] + half(row)
+                        } else {
+                            ys[row] - half(row)
+                        }
+                        .round(),
+                        if inside(end) || owns(end) {
+                            ys[end] + half(end)
+                        } else {
+                            ys[end] - half(end)
+                        }
+                        .round(),
+                    )
+                } else {
+                    (ys[row] - reach(row), ys[end] + reach(end))
+                };
                 segments.push(BorderSegment {
                     x0: xs[boundary],
-                    y0: ys[row] - reach(row),
+                    y0,
                     x1: xs[boundary],
-                    y1: ys[end] + reach(end),
+                    y1,
                     horizontal: false,
                     width: edge.width,
                     color: edge.color,
