@@ -1083,6 +1083,102 @@ mod tests {
     }
 
     #[test]
+    fn a_kept_tree_with_tables_and_lists_lays_out_as_one_built_anew() {
+        let css = "table { border-collapse: collapse; } td { padding: 2px; border: 1px solid #000; } \
+                   .w { width: 40px; } .i { list-style-position: inside; } \
+                   .l { margin: 0; padding-left: 20px; }";
+        let sheet = florui_style::parse_stylesheet(css).unwrap();
+        let styled = |arena: &Arena| {
+            florui_style::compute(
+                arena,
+                &sheet,
+                &InteractionState::new(),
+                florui_style::Viewport::default(),
+                &mut florui_style::AnimationTimeline::default(),
+            )
+        };
+        let cell = |class: &str, text: &str| {
+            Element::node(
+                "td",
+                vec![("class".into(), class.into())],
+                vec![Element::text(text)],
+            )
+        };
+        let tree = |rows: usize, inside: bool, words: usize| {
+            let body: Vec<Element> = (0..rows)
+                .map(|r| {
+                    Element::node(
+                        "tr",
+                        vec![],
+                        vec![
+                            cell("w", &"word ".repeat(words)),
+                            cell("", &format!("row {r}")),
+                        ],
+                    )
+                })
+                .collect();
+            let items: Vec<Element> = (0..3)
+                .map(|n| Element::node("li", vec![], vec![Element::text(format!("item {n}"))]))
+                .collect();
+            Element::node(
+                "div",
+                vec![],
+                vec![
+                    Element::node("table", vec![], body),
+                    Element::node(
+                        "ol",
+                        vec![(
+                            "class".into(),
+                            if inside {
+                                "l i".to_owned()
+                            } else {
+                                "l".to_owned()
+                            },
+                        )],
+                        items,
+                    ),
+                ],
+            )
+        };
+        let mut font = florui_text::Font::load_embedded();
+        let mut cache = LayoutCache::new();
+        let wide = Size::MAX_CONTENT;
+        let narrow = Size {
+            width: AvailableSpace::Definite(120.0),
+            height: AvailableSpace::MaxContent,
+        };
+        for (rows, inside, words, available) in [
+            (2, false, 1, wide),
+            (2, false, 1, wide),
+            (3, false, 2, wide),
+            (3, true, 2, wide),
+            (3, true, 4, narrow),
+            (1, true, 1, wide),
+            (4, false, 3, narrow),
+        ] {
+            let arena = Arena::build(&tree(rows, inside, words));
+            let styles = styled(&arena);
+            let kept = cache
+                .compute(&mut font, &arena, &styles, available)
+                .unwrap();
+            let fresh =
+                compute_layout_with_content_extents(&mut font, &arena, &styles, available).unwrap();
+            assert_eq!(
+                kept.0.len(),
+                fresh.0.len(),
+                "{rows} {inside} {words}: count"
+            );
+            for (node, layout) in &fresh.0 {
+                assert_eq!(
+                    kept.0.get(node),
+                    Some(layout),
+                    "{rows} {inside} {words}: node {node}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn overlays_come_and_go_in_a_kept_tree() {
         let mut font = florui_text::Font::load_embedded();
         let mut cache = LayoutCache::new();

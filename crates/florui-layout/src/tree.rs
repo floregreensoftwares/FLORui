@@ -253,6 +253,10 @@ impl FlorTree {
         let node = self.get_mut(id)?;
         if node.role != role {
             node.role = role;
+            // What the node was laid out as a part of a table says nothing of what it is now.
+            node.shift = 0.0;
+            node.border = None;
+            node.grid = None;
             self.mark_dirty(id)?;
         }
         Ok(())
@@ -391,6 +395,11 @@ impl Run<'_> {
             scratch,
             ..
         } = self;
+        if inputs.run_mode == RunMode::PerformLayout {
+            // The lines of a leaf in a Taffy layout are the whole width; the room floats left
+            // them is of the layout of a block that has them.
+            tree.live_mut(node_id).slots = None;
+        }
         let Node { style, context, .. } = tree.live_mut(node_id);
         let mut context = context.as_mut();
         let mut measured_baseline = None;
