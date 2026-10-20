@@ -1866,6 +1866,16 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
         flex_basis: to_flex_basis(&position.flex_basis),
         column_gap: to_gap(&position.column_gap),
         row_gap: to_gap(&position.row_gap),
+        gap_normal: (
+            matches!(
+                position.column_gap,
+                style::values::generics::length::GenericLengthPercentageOrNormal::Normal
+            ),
+            matches!(
+                position.row_gap,
+                style::values::generics::length::GenericLengthPercentageOrNormal::Normal
+            ),
+        ),
         position: to_position(box_style.position),
         inset: Edges {
             top: to_optional_inset(&position.top),
@@ -1939,8 +1949,16 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
             bottom_right: to_corner_radius(&border.border_bottom_right_radius),
             bottom_left: to_corner_radius(&border.border_bottom_left_radius),
         },
-        grid_template_columns: to_grid_template(&position.grid_template_columns),
-        grid_template_rows: to_grid_template(&position.grid_template_rows),
+        grid_template_columns: to_grid_template_of(
+            values,
+            "grid-template-columns",
+            &position.grid_template_columns,
+        ),
+        grid_template_rows: to_grid_template_of(
+            values,
+            "grid-template-rows",
+            &position.grid_template_rows,
+        ),
         grid_auto_columns: to_implicit_tracks(&position.grid_auto_columns),
         grid_auto_rows: to_implicit_tracks(&position.grid_auto_rows),
         grid_auto_flow: to_grid_auto_flow(position.grid_auto_flow),
@@ -3527,14 +3545,34 @@ fn to_border_side(
     }
 }
 
+/// A `grid-template-columns`/`-rows`, read from the mirrored declaration when
+/// it was a `subgrid`, which the engine's build does not take.
+fn to_grid_template_of(
+    values: &ComputedValues,
+    name: &str,
+    component: &style::values::computed::GridTemplateComponent,
+) -> GridTemplate {
+    if declares_mirrored(values, name)
+        && let Some(css) = mirrored(values, name)
+        && let Some(names) = crate::grid::parse_subgrid(&css)
+    {
+        return GridTemplate {
+            subgrid: Some(names),
+            ..GridTemplate::default()
+        };
+    }
+    to_grid_template(component)
+}
+
 /// A `grid-template-columns`/`-rows` track list: tracks, `repeat()`s and the
 /// names of the lines. `none`, `subgrid` and `masonry` read as no template,
 /// the same as an unsupported keyword.
 fn to_grid_template(component: &style::values::computed::GridTemplateComponent) -> GridTemplate {
     use style::values::generics::grid::{GridTemplateComponent as Component, TrackListValue};
 
-    let Component::TrackList(list) = component else {
-        return GridTemplate::default();
+    let list = match component {
+        Component::TrackList(list) => list,
+        _ => return GridTemplate::default(),
     };
     let components = list
         .values
@@ -3561,6 +3599,7 @@ fn to_grid_template(component: &style::values::computed::GridTemplateComponent) 
     GridTemplate {
         components,
         line_names: to_line_names(&list.line_names),
+        subgrid: None,
     }
 }
 

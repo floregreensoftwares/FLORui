@@ -940,6 +940,9 @@ pub struct ComputedStyle {
     pub column_gap: f32,
     /// `row-gap`, the same on the other axis.
     pub row_gap: f32,
+    /// `column-gap` and `row-gap` are `normal`, which a subgrid reads from its
+    /// parent grid and nothing else tells from `0`.
+    pub gap_normal: (bool, bool),
     /// `border-*-width`/`-style`/`-color` per side — see [`BorderSide`]'s
     /// own doc for the solid-only scope and the `none`/`hidden` collapse.
     pub border: Edges<BorderSide>,
@@ -1288,6 +1291,7 @@ impl ComputedStyle {
             flex_basis: _,
             column_gap: _,
             row_gap: _,
+            gap_normal: _,
             border_radius: _,
             grid_template_columns: _,
             grid_template_rows: _,
@@ -4158,6 +4162,99 @@ mod tests {
                 "{percent}%: {fraction}"
             );
         }
+    }
+
+    #[test]
+    fn subgrid_and_its_line_names_are_read_back() {
+        let tree: Element = view! { <div class="g" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".g { display: grid; grid-template-rows: subgrid [a] [b c] repeat(2, [d] [e]); \
+             grid-template-columns: subgrid repeat(auto-fill, [x] [y]) [z]; }",
+            &InteractionState::new(),
+        );
+        let style = &computed[&arena.roots()[0]];
+        let names = |list: &[&[&str]]| -> Vec<Vec<String>> {
+            list.iter()
+                .map(|line| line.iter().map(|name| (*name).to_owned()).collect())
+                .collect()
+        };
+        let rows = style
+            .grid_template_rows
+            .subgrid
+            .clone()
+            .expect("rows are a subgrid");
+        assert_eq!(
+            rows.before,
+            names(&[&["a"], &["b", "c"], &["d"], &["e"], &["d"], &["e"]])
+        );
+        assert!(style.grid_template_rows.components.is_empty());
+        let columns = style
+            .grid_template_columns
+            .subgrid
+            .clone()
+            .expect("columns are a subgrid");
+        assert_eq!(columns.fill, names(&[&["x"], &["y"]]));
+        assert_eq!(columns.after, names(&[&["z"]]));
+        // Six lines: the fill repeats twice into the five the `z` leaves, then `z`.
+        assert_eq!(
+            columns.for_lines(6),
+            names(&[&["x"], &["y"], &["x"], &["y"], &["z"], &[]])
+        );
+        assert_eq!(rows.for_lines(3), names(&[&["a"], &["b", "c"], &["d"]]));
+    }
+
+    #[test]
+    fn the_grid_template_shorthand_carries_a_subgrid_and_leaves_other_values_alone() {
+        let tree: Element = view! { <div class="g" /> };
+        let (arena, computed) = styles(
+            &tree,
+            ".g { display: grid; grid-template: subgrid / 20px 30px; }",
+            &InteractionState::new(),
+        );
+        let style = &computed[&arena.roots()[0]];
+        assert!(style.grid_template_rows.is_subgrid());
+        assert_eq!(
+            style.grid_template_columns.explicit_tracks(),
+            vec![GridTrackSize::length(20.0), GridTrackSize::length(30.0)]
+        );
+        let (arena, computed) = styles(
+            &tree,
+            ".g { display: grid; grid-template: 10px 12px / subgrid [a] [b]; }",
+            &InteractionState::new(),
+        );
+        let style = &computed[&arena.roots()[0]];
+        assert_eq!(
+            style.grid_template_rows.explicit_tracks(),
+            vec![GridTrackSize::length(10.0), GridTrackSize::length(12.0)]
+        );
+        assert!(style.grid_template_columns.is_subgrid());
+        let (arena, computed) = styles(
+            &tree,
+            ".g { display: grid; grid-template: 40px 50px / 60px; }",
+            &InteractionState::new(),
+        );
+        let style = &computed[&arena.roots()[0]];
+        assert_eq!(
+            style.grid_template_rows.explicit_tracks(),
+            vec![GridTrackSize::length(40.0), GridTrackSize::length(50.0)]
+        );
+        assert!(!style.grid_template_columns.is_subgrid());
+    }
+
+    #[test]
+    fn a_gap_that_is_normal_is_told_from_one_of_zero() {
+        let tree: Element = view! { <div class="g" /> };
+        let normal = |css: &str| {
+            let (arena, computed) = styles(&tree, css, &InteractionState::new());
+            computed[&arena.roots()[0]].gap_normal
+        };
+        assert_eq!(normal(".g { display: grid; }"), (true, true));
+        assert_eq!(normal(".g { row-gap: 0; }"), (true, false));
+        assert_eq!(
+            normal(".g { column-gap: 4px; row-gap: normal; }"),
+            (false, true)
+        );
     }
 
     #[test]
