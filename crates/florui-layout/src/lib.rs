@@ -7406,6 +7406,144 @@ mod tests {
         assert_eq!(boxes[3].1, 112.0);
     }
 
+    /// The width of a grid and of its items, each a box of the given class
+    /// wrapped in a `.k`, in a parent of the given style.
+    fn fit_content_grid(
+        parent: &str,
+        grid: &str,
+        items: &[&str],
+        min_zero: bool,
+    ) -> (f32, Vec<f32>) {
+        let boxes: Vec<Element> = items
+            .iter()
+            .map(|class| {
+                Element::node(
+                    "div",
+                    vec![("class".to_owned(), "k".to_owned())],
+                    vec![Element::node(
+                        "div",
+                        vec![("class".to_owned(), (*class).to_owned())],
+                        Vec::new(),
+                    )],
+                )
+            })
+            .collect();
+        let tree = Element::node(
+            "div",
+            vec![("class".to_owned(), "outer".to_owned())],
+            vec![Element::node(
+                "div",
+                vec![("class".to_owned(), "g".to_owned())],
+                boxes,
+            )],
+        );
+        let (arena, layouts) = layout_for(
+            &tree,
+            &format!(
+                ".outer {{ width: 400px; {parent} }} \
+                 .g {{ display: grid; grid-auto-rows: 20px; {grid} }} \
+                 .k {{ {} }} .big {{ width: 70px; height: 10px; }} \
+                 .small {{ width: 20px; height: 10px; }}",
+                if min_zero { "min-width: 0;" } else { "" }
+            ),
+        );
+        let grid = arena.children(arena.roots()[0])[0];
+        let widths = arena
+            .children(grid)
+            .iter()
+            .map(|c| layouts[c].width)
+            .collect();
+        (layouts[&grid].width, widths)
+    }
+
+    #[test]
+    fn a_fit_content_column_counts_at_its_limit_in_the_width_a_grid_gets_from_its_content() {
+        // Chrome 153.
+        let fit = "width: fit-content;";
+        let case = |grid: &str, items: &[&str], min_zero: bool| {
+            fit_content_grid("", &format!("{fit} {grid}"), items, min_zero)
+        };
+        let big = ["big", "big"];
+        assert_eq!(
+            case("grid-template-columns: fit-content(30px) 1fr;", &big, true),
+            (100.0, vec![30.0, 70.0])
+        );
+        // The content is under the limit: the limit takes nothing off.
+        assert_eq!(
+            case("grid-template-columns: fit-content(100px) 1fr;", &big, true),
+            (140.0, vec![70.0, 70.0])
+        );
+        assert_eq!(
+            case(
+                "grid-template-columns: fit-content(30px) fit-content(40px);",
+                &big,
+                true
+            ),
+            (70.0, vec![30.0, 40.0])
+        );
+        // The content cannot shrink under its min-content.
+        assert_eq!(
+            case("grid-template-columns: fit-content(30px) 1fr;", &big, false),
+            (140.0, vec![70.0, 70.0])
+        );
+        assert_eq!(
+            case(
+                "grid-template-columns: repeat(2, fit-content(25px)) 1fr;",
+                &["big", "big", "big"],
+                true
+            ),
+            (120.0, vec![25.0, 25.0, 70.0])
+        );
+        assert_eq!(
+            case(
+                "padding: 4px 6px; border: 2px solid #000; \
+                 grid-template-columns: fit-content(30px) 1fr;",
+                &big,
+                true
+            ),
+            (116.0, vec![30.0, 70.0])
+        );
+        assert_eq!(
+            fit_content_grid(
+                "",
+                "width: max-content; \
+                 grid-template-columns: fit-content(30px) auto fit-content(50px);",
+                &["big", "big", "small"],
+                true
+            ),
+            (120.0, vec![30.0, 70.0, 20.0])
+        );
+    }
+
+    #[test]
+    fn a_grid_that_is_a_flex_item_with_a_fit_content_column_is_as_wide_as_the_limits_make_it() {
+        assert_eq!(
+            fit_content_grid(
+                "display: flex;",
+                "grid-template-columns: fit-content(30px) 1fr;",
+                &["big", "big"],
+                true
+            ),
+            (100.0, vec![30.0, 70.0])
+        );
+    }
+
+    #[test]
+    fn a_fit_content_column_changes_nothing_in_a_grid_with_a_width_of_its_own() {
+        let case = |width: &str, min_zero: bool| {
+            fit_content_grid(
+                "",
+                &format!("{width} grid-template-columns: fit-content(30px) 1fr;"),
+                &["big", "big"],
+                min_zero,
+            )
+        };
+        assert_eq!(case("width: 200px;", true), (200.0, vec![30.0, 170.0]));
+        assert_eq!(case("width: 100px;", false), (100.0, vec![70.0, 70.0]));
+        // Stretched by its parent, not sized by its content.
+        assert_eq!(case("", true), (400.0, vec![30.0, 370.0]));
+    }
+
     #[test]
     fn a_subgrid_that_is_not_in_a_grid_is_none() {
         let tree: Element = view! {

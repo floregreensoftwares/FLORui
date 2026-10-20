@@ -43,7 +43,9 @@ pub(crate) fn resolve(
 ) -> Result<(), LayoutError> {
     let mut nodes: Vec<NodeId> = styles
         .iter()
-        .filter(|(_, style)| !style.deferred.is_empty() || style.has_grid_calc())
+        .filter(|(_, style)| {
+            !style.deferred.is_empty() || style.has_grid_calc() || style.has_fit_content_columns()
+        })
         .map(|(&node, _)| node)
         .filter(|&node| id_of(node).is_some())
         .collect();
@@ -53,7 +55,28 @@ pub(crate) fn resolve(
     // Parents come first: ids follow document order.
     nodes.sort_unstable();
 
-    let intrinsics = measure_intrinsics(font, styles, tree, id_of, &nodes, count)?;
+    let mut intrinsics = measure_intrinsics(font, styles, tree, id_of, &nodes, count)?;
+    let mut fits: HashMap<NodeId, FitContent> = HashMap::new();
+    for &node in &nodes {
+        let (Some(tid), Some(style)) = (id_of(node), styles.get(&node)) else {
+            continue;
+        };
+        if !style.has_fit_content_columns() {
+            continue;
+        }
+        if let Some(fit) = measure_fit_content(font, tree, tid, count)? {
+            if let Some(intrinsic) = intrinsics.get_mut(&node) {
+                intrinsic.max_width = (intrinsic.max_width - fit.surplus).max(intrinsic.min_width);
+            }
+            fits.insert(node, fit);
+        }
+    }
+    if !fits.is_empty() {
+        // The probes left their sizes in the tree.
+        for &root in roots {
+            run_layout(font, tree, root, available, count)?;
+        }
+    }
     for _ in 0..PASSES {
         let mut changed = false;
         for &node in &nodes {
@@ -62,7 +85,13 @@ pub(crate) fn resolve(
             };
             let basis = containing_block(arena, styles, tree, id_of, node, available);
             let own = own_content_box(arena, styles, tree, tid, node, available);
-            let patched = patch(style, basis, own, intrinsics.get(&node).copied());
+            let patched = patch(
+                style,
+                basis,
+                own,
+                intrinsics.get(&node).copied(),
+                fits.get(&node).copied(),
+            );
             let taffy_style = to_taffy_style(Some(&patched));
             if tree.style(tid).map_err(LayoutError)? != &taffy_style {
                 tree.set_style(tid, taffy_style).map_err(LayoutError)?;
@@ -77,6 +106,109 @@ pub(crate) fn resolve(
         }
     }
     Ok(())
+}
+
+/// What a grid's `fit-content()` columns do to the width it gets from its
+/// content: Taffy counts such a column at its unlimited max-content, where a
+/// browser counts it at the limit (`fit-content(30px) 1fr` is 140px in Taffy
+/// and 100px in Chrome 153).
+#[derive(Clone, Copy)]
+struct FitContent {
+    /// The border-box width Taffy gives the grid at its max-content.
+    max_width: f32,
+    /// What it counts in that width that the limits take off.
+    surplus: f32,
+}
+
+/// The limit of a `fit-content()` track, in px.
+fn fit_limit(track: &taffy::TrackSizingFunction) -> Option<f32> {
+    track
+        .max
+        .is_fit_content()
+        .then(|| track.max.definite_limit(None, |_, _| 0.0))
+        .flatten()
+}
+
+/// How much of the width `id` gets at its max-content its `fit-content()`
+/// columns take off, from the size each column has at its max-content and
+/// at its min-content: a column is held to its limit, but not under its
+/// min-content. `None` when no column is one, or a count is not known.
+fn measure_fit_content(
+    font: &mut florui_text::Font,
+    tree: &mut TaffyTree<LeafContext>,
+    id: taffy::NodeId,
+    count: usize,
+) -> Result<Option<FitContent>, LayoutError> {
+    let original = tree.style(id).map_err(LayoutError)?.clone();
+    let mut limits: Vec<Option<f32>> = Vec::new();
+    for component in &original.grid_template_columns {
+        match component {
+            taffy::GridTemplateComponent::Single(track) => limits.push(fit_limit(track)),
+            taffy::GridTemplateComponent::Repeat(repeat) => match repeat.count {
+                taffy::RepetitionCount::Count(times) => {
+                    for _ in 0..times {
+                        limits.extend(repeat.tracks.iter().map(fit_limit));
+                    }
+                }
+                _ => return Ok(None),
+            },
+        }
+    }
+    if limits.iter().all(Option::is_none) {
+        return Ok(None);
+    }
+    // The same grid with those columns as `auto`.
+    let mut probe = original.clone();
+    let unlimited = |track: &mut taffy::TrackSizingFunction| {
+        if track.max.is_fit_content() {
+            track.max = taffy::MaxTrackSizingFunction::auto();
+        }
+    };
+    for component in &mut probe.grid_template_columns {
+        match component {
+            taffy::GridTemplateComponent::Single(track) => unlimited(track),
+            taffy::GridTemplateComponent::Repeat(repeat) => {
+                repeat.tracks.iter_mut().for_each(unlimited);
+            }
+        }
+    }
+    tree.set_style(id, probe).map_err(LayoutError)?;
+    let mut measure = |space: AvailableSpace| -> Result<(f32, Vec<f32>), LayoutError> {
+        run_layout(
+            font,
+            tree,
+            id,
+            Size {
+                width: space,
+                height: AvailableSpace::MaxContent,
+            },
+            count,
+        )?;
+        let width = tree.layout(id).map_err(LayoutError)?.size.width;
+        let sizes = match tree.detailed_layout_info(id) {
+            taffy::DetailedLayoutInfo::Grid(info) => info
+                .columns
+                .positions
+                .iter()
+                .map(|track| track.end - track.start)
+                .collect(),
+            _ => Vec::new(),
+        };
+        Ok((width, sizes))
+    };
+    let (max_width, contents) = measure(AvailableSpace::MaxContent)?;
+    // With no room the columns keep what they cannot go under.
+    let (_, minimums) = measure(AvailableSpace::Definite(0.0))?;
+    tree.set_style(id, original).map_err(LayoutError)?;
+    let mut surplus = 0.0;
+    for (index, limit) in limits.iter().enumerate() {
+        if let (Some(limit), Some(&content), Some(&minimum)) =
+            (limit, contents.get(index), minimums.get(index))
+        {
+            surplus += (content - minimum.max(content.min(*limit))).max(0.0);
+        }
+    }
+    Ok(Some(FitContent { max_width, surplus }))
 }
 
 /// The smallest and largest width of each node with a keyword for a width,
@@ -265,6 +397,7 @@ fn patch(
     basis: Basis,
     own: Basis,
     intrinsic: Option<Intrinsic>,
+    fit: Option<FitContent>,
 ) -> ComputedStyle {
     let mut patched = style.clone();
     patched.deferred.clear();
@@ -400,6 +533,16 @@ fn patch(
         {
             patched.width = Some(written(own.width + padding_x));
         }
+    }
+    // A grid the content sized, with a `fit-content()` column, is as wide as the
+    // limits make it; Taffy counts the columns without them.
+    if let Some(fit) = fit
+        && style.width.is_none()
+        && style.width_percent.is_none()
+        && !style.deferred.iter().any(|d| d.slot == Slot::Width)
+        && (own.width + padding_x - fit.max_width).abs() < 0.5
+    {
+        patched.width = Some(written(fit.max_width - fit.surplus));
     }
     patched
 }

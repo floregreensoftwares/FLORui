@@ -345,3 +345,22 @@ pub(crate) fn parse_subgrid(text: &str) -> Option<SubgridNames> {
     })();
     parsed.ok()
 }
+
+impl GridTrackSize {
+    /// Whether the track is a `fit-content()`.
+    pub fn is_fit_content(self) -> bool {
+        matches!(self, Self::FitContent(_))
+    }
+}
+
+impl GridTemplate {
+    /// Whether any track is a `fit-content()`.
+    pub fn has_fit_content(&self) -> bool {
+        self.components.iter().any(|component| match component {
+            GridTemplateComponent::Track(track) => track.is_fit_content(),
+            GridTemplateComponent::Repeat(repeat) => {
+                repeat.tracks.iter().any(|t| t.is_fit_content())
+            }
+        })
+    }
+}
