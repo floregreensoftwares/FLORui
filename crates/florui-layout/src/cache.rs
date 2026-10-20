@@ -198,6 +198,7 @@ impl LayoutCache {
         styles: &StyleMap,
         available: Size<AvailableSpace>,
     ) -> Result<LayoutsAndContentExtents, LayoutError> {
+        let _numbers = install_numbering(arena, styles);
         if font.generation() != self.font_generation {
             *self = LayoutCache::new();
             self.font_generation = font.generation();
@@ -379,7 +380,9 @@ impl LayoutCache {
                 Step::Visit(node) => {
                     let arena_children = flow_children(arena, styles, node);
                     // An inline `<svg>` is a leaf: what is in it is drawn with it.
-                    let leaf = arena.children(node).is_empty() || arena.tag(node) == "svg";
+                    let leaf = (arena.children(node).is_empty()
+                        && !has_inside_marker(styles, node))
+                        || arena.tag(node) == "svg";
                     let kind = if leaf {
                         LayoutKind::Blocks
                     } else {
