@@ -204,6 +204,10 @@ fn reached(
     let mut taken = vec![false; total];
     let mut set = Vec::new();
     let mut take = |node: NodeId, set: &mut Vec<usize>| {
+        // A pseudo-element box is styled with the node it belongs to.
+        if arena.generated(node).is_some() {
+            return false;
+        }
         let slot = tree.slot_of(node);
         if !taken[slot] {
             taken[slot] = true;
