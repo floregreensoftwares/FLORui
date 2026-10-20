@@ -43,6 +43,9 @@ enum Item {
         element: usize,
         vertical_align: [u32; 3],
     },
+    Float {
+        id: u64,
+    },
 }
 
 impl Item {
@@ -78,6 +81,7 @@ impl Item {
                 element,
                 vertical_align: vertical_align_bits(vertical_align),
             },
+            InlineItem::Float { id } => Item::Float { id },
         }
     }
 
@@ -203,6 +207,10 @@ fn hash_of(elements: &[InlineElement], items: &[InlineItem<'_>], width: Option<u
                 baseline.to_bits().hash(&mut hasher);
                 element.hash(&mut hasher);
                 vertical_align_bits(vertical_align).hash(&mut hasher);
+            }
+            InlineItem::Float { id } => {
+                3u8.hash(&mut hasher);
+                id.hash(&mut hasher);
             }
         }
     }

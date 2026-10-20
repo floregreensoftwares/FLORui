@@ -64,6 +64,219 @@ pub enum InlineItem<'a> {
         element: usize,
         vertical_align: VerticalAlign,
     },
+    /// A float, which is no part of the line but is placed where the line reaches it:
+    /// the caller says where it goes (see [`LineSource`]). Out of a context
+    /// shaped without one it takes no room.
+    Float {
+        id: u64,
+    },
+}
+
+/// The room of one line: where it starts and how wide it may be, in the
+/// coordinates of the inline context. A line beside a float starts after it, or
+/// ends before it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineSlot {
+    pub x: f32,
+    pub width: f32,
+    /// How far the line is pushed down, below where the one before it ends: it
+    /// had to wait for a float to end to have room for anything.
+    pub drop: f32,
+}
+
+/// Where the floats of a context go, as the lines reach them. All `y` are from
+/// the top of the context.
+pub trait LineEnv {
+    /// The room for a line box that starts at `y` and is `height` tall (what the
+    /// line is expected to be: a taller one is asked again).
+    fn slot(&mut self, y: f32, height: f32) -> LineSlot;
+    /// Float `id` is reached on the line that starts at `y`, which holds `used`
+    /// of its `slot`. Returns the new slot of the line if the float is put on
+    /// it, or `None` if it does not fit beside what the line holds and goes on
+    /// the line below ([`Self::float_below`]).
+    fn float_here(&mut self, id: u64, y: f32, used: f32, slot: LineSlot) -> Option<LineSlot>;
+    /// Float `id`, which did not fit on its line, goes at the top of the line
+    /// that starts at `y`.
+    fn float_below(&mut self, id: u64, y: f32);
+    /// Where a line that starts at `y` and is `height` tall can go when what it
+    /// holds does not fit in its slot: the bottom of the first float beside it
+    /// to end, or `None` when no float is.
+    fn clear_of_floats(&mut self, y: f32, height: f32) -> Option<f32>;
+    /// How many floats have been placed, to be forgotten with [`Self::rewind`].
+    fn mark(&mut self) -> usize;
+    /// Forgets the floats placed after `mark`.
+    fn rewind(&mut self, mark: usize);
+}
+
+/// Slack for lengths that should be equal.
+const EPSILON: f32 = 0.01;
+
+/// How many times lines are moved below the floats beside them in one layout.
+const MOVES: usize = 64;
+
+/// Where the room of each line comes from.
+pub enum LineSource<'a> {
+    /// The floats are placed as the lines reach them. `hints` are the heights
+    /// the lines had in an earlier pass (a line is as tall as it turns out to
+    /// be, which is only known once it is built).
+    Env {
+        env: &'a mut dyn LineEnv,
+        hints: &'a [f32],
+    },
+    /// The slots a pass found, one per line (the last for any line after it),
+    /// to lay the same lines out again where the floats are no longer known.
+    Replay(&'a [LineSlot]),
+}
+
+/// What a layout in slots took: the slot of every line, and how tall each came
+/// out.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LineTrace {
+    pub slots: Vec<LineSlot>,
+    pub heights: Vec<f32>,
+}
+
+/// Breaks the lines of `layout` one at a time, each in the slot `source` gives
+/// it, and returns the slots.
+fn break_in_slots(
+    layout: &mut parley::Layout<[u8; 4]>,
+    width: f32,
+    strut_height: f32,
+    source: &mut LineSource<'_>,
+    shifts: &[usize],
+) -> Vec<LineSlot> {
+    let mut slots: Vec<LineSlot> = Vec::new();
+    let mut breaker = layout.break_lines();
+    breaker.state_mut().set_layout_max_advance(width);
+    // Where the line being built starts, and where the one before it ended.
+    let mut y = 0.0f32;
+    let mut previous_end = 0.0f32;
+    let mut deferred: Vec<u64> = Vec::new();
+    // The room of the line that starts at `y`, once it is moved down as many
+    // times as `shifts` says, each to the end of the next float beside it.
+    let start_line =
+        |source: &mut LineSource<'_>, line: usize, y: &mut f32, previous_end: f32| match source {
+            LineSource::Env { env, hints } => {
+                let height = hints.get(line).copied().unwrap_or(strut_height);
+                for _ in 0..shifts.get(line).copied().unwrap_or(0) {
+                    match env.clear_of_floats(*y, height) {
+                        Some(next) if next > *y + EPSILON => *y = next,
+                        _ => break,
+                    }
+                }
+                let mut slot = env.slot(*y, height);
+                slot.drop = *y - previous_end;
+                slot
+            }
+            LineSource::Replay(known) => known
+                .get(line)
+                .copied()
+                .or_else(|| known.last().map(|last| LineSlot { drop: 0.0, ..*last }))
+                .unwrap_or(LineSlot {
+                    x: 0.0,
+                    width,
+                    drop: 0.0,
+                }),
+        };
+    let apply = |breaker: &mut parley::BreakLines<'_, [u8; 4]>, slot: LineSlot| {
+        let state = breaker.state_mut();
+        state.set_line_x(slot.x);
+        state.set_line_max_advance(slot.width.min(width));
+    };
+    let mut slot = start_line(source, 0, &mut y, previous_end);
+    apply(&mut breaker, slot);
+    loop {
+        match breaker.break_next() {
+            None => break,
+            Some(parley::YieldData::LineBreak(data)) => {
+                slots.push(slot);
+                y += match source {
+                    LineSource::Env { hints, .. } => hints
+                        .get(slots.len() - 1)
+                        .copied()
+                        .unwrap_or(data.line_height),
+                    LineSource::Replay(_) => data.line_height,
+                };
+                previous_end = y;
+                if let LineSource::Env { env, .. } = source {
+                    for id in deferred.drain(..) {
+                        env.float_below(id, y);
+                    }
+                }
+                slot = start_line(source, slots.len(), &mut y, previous_end);
+                apply(&mut breaker, slot);
+            }
+            Some(parley::YieldData::InlineBoxBreak(reached)) => {
+                if let LineSource::Env { env, .. } = source {
+                    match env.float_here(reached.inline_box_id, y, reached.advance, slot) {
+                        Some(narrower) => {
+                            slot = LineSlot {
+                                drop: slot.drop,
+                                ..narrower
+                            };
+                            apply(&mut breaker, slot);
+                        }
+                        None => deferred.push(reached.inline_box_id),
+                    }
+                }
+                breaker
+                    .state_mut()
+                    .append_inline_box_to_line(reached.advance, 0.0);
+            }
+            Some(parley::YieldData::MaxHeightExceeded(_)) => {}
+        }
+    }
+    breaker.finish();
+    slots
+}
+
+/// The first line that holds more than the room a float left it, which a line
+/// with room for nothing starts below the float instead.
+fn overflowing_line(
+    layout: &parley::Layout<[u8; 4]>,
+    slots: &[LineSlot],
+    width: f32,
+) -> Option<usize> {
+    layout.lines().zip(slots).position(|(line, slot)| {
+        let metrics = line.metrics();
+        slot.width + EPSILON < width
+            && metrics.advance - metrics.trailing_whitespace > slot.width + EPSILON
+    })
+}
+
+/// [`break_in_slots`], moving the lines that have no room for what they hold
+/// down below the floats that narrow them. `source` is left as the last
+/// pass found it.
+fn break_lines_in_slots(
+    layout: &mut parley::Layout<[u8; 4]>,
+    width: f32,
+    strut_height: f32,
+    source: &mut LineSource<'_>,
+) -> Vec<LineSlot> {
+    let start = match source {
+        LineSource::Env { env, .. } => env.mark(),
+        LineSource::Replay(_) => return break_in_slots(layout, width, strut_height, source, &[]),
+    };
+    let mut shifts: Vec<usize> = Vec::new();
+    let mut slots = break_in_slots(layout, width, strut_height, source, &shifts);
+    // Each pass moves one line, so there are as many as there are lines.
+    for _ in 0..MOVES {
+        let Some(line) = overflowing_line(layout, &slots, width) else {
+            break;
+        };
+        shifts.resize(shifts.len().max(line + 1), 0);
+        shifts[line] += 1;
+        if let LineSource::Env { env, .. } = source {
+            env.rewind(start);
+        }
+        let again = break_in_slots(layout, width, strut_height, source, &shifts);
+        if again == slots {
+            // No float is left to wait for: it overflows where it is.
+            break;
+        }
+        slots = again;
+    }
+    slots
 }
 
 /// A font's vertical metrics at one size, which line boxes are built from.
@@ -203,6 +416,32 @@ impl Font {
         items: &[InlineItem<'_>],
         max_width: Option<f32>,
     ) -> InlineLayout {
+        self.shape_inline_core(elements, items, max_width, None).0
+    }
+
+    /// [`Self::shape_inline_tree`] with the room of each line given by `source`
+    /// instead of one width: lines beside floats are shorter and start further
+    /// in. `width` is the width of the whole context. Returns the layout, and
+    /// what it took to lay it out: the slot of each line and the real height of
+    /// each line, to give the next pass as hints.
+    pub fn shape_inline_tree_in_slots(
+        &mut self,
+        elements: &[InlineElement],
+        items: &[InlineItem<'_>],
+        width: f32,
+        source: &mut LineSource<'_>,
+    ) -> (InlineLayout, LineTrace) {
+        self.shape_inline_core(elements, items, Some(width), Some(source))
+    }
+
+    fn shape_inline_core(
+        &mut self,
+        elements: &[InlineElement],
+        items: &[InlineItem<'_>],
+        max_width: Option<f32>,
+        source: Option<&mut LineSource<'_>>,
+    ) -> (InlineLayout, LineTrace) {
+        let mut trace = LineTrace::default();
         // The runs as laid out: each under its own element's white space, and
         // a space collapses with the one before even across elements.
         let mut previous_space = true;
@@ -230,7 +469,7 @@ impl Font {
                     in_word = false;
                     empty()
                 }
-                InlineItem::Spacer { .. } => empty(),
+                InlineItem::Spacer { .. } | InlineItem::Float { .. } => empty(),
             })
             .collect();
         let mut text = String::new();
@@ -270,15 +509,18 @@ impl Font {
             .iter()
             .any(|item| matches!(item, InlineItem::Box { .. }));
         if text.is_empty() && !has_box {
-            return InlineLayout {
-                width: 0.0,
-                height: 0.0,
-                baseline: 0.0,
-                last_baseline: 0.0,
-                runs: Vec::new(),
-                boxes: Vec::new(),
-                fragments: Vec::new(),
-            };
+            return (
+                InlineLayout {
+                    width: 0.0,
+                    height: 0.0,
+                    baseline: 0.0,
+                    last_baseline: 0.0,
+                    runs: Vec::new(),
+                    boxes: Vec::new(),
+                    fragments: Vec::new(),
+                },
+                trace,
+            );
         }
 
         let family_names = [
@@ -376,6 +618,19 @@ impl Font {
                         height,
                     });
                 }
+                InlineItem::Float { id } => {
+                    builder.push_inline_box(InlineBox {
+                        id,
+                        kind: if source.is_some() {
+                            InlineBoxKind::CustomOutOfFlow
+                        } else {
+                            InlineBoxKind::OutOfFlow
+                        },
+                        index: offset,
+                        width: 0.0,
+                        height: 0.0,
+                    });
+                }
             }
         }
 
@@ -391,7 +646,18 @@ impl Font {
         let mut layout: parley::Layout<[u8; 4]> = builder.build(&text);
         let (indent, options) = root_style.paragraph_indent(max_width);
         layout.set_text_indent(indent, options);
-        layout.break_all_lines(max_width);
+        match source {
+            Some(source) => {
+                let strut = self.element_box(root_style);
+                trace.slots = break_lines_in_slots(
+                    &mut layout,
+                    max_width.unwrap_or(f32::MAX),
+                    strut.above + strut.below,
+                    source,
+                );
+            }
+            None => layout.break_all_lines(max_width),
+        }
         layout.align(root_style.parley_alignment(), AlignmentOptions::default());
 
         let element_boxes: Vec<ElementBox> = elements
@@ -406,6 +672,7 @@ impl Font {
         let mut first_baseline = None;
         let mut last_baseline = 0.0;
         for (line_number, line) in layout.lines().enumerate() {
+            cursor += trace.slots.get(line_number).map_or(0.0, |slot| slot.drop);
             let placed = place_line(
                 &line,
                 &text,
@@ -431,18 +698,22 @@ impl Font {
             }));
             first_baseline.get_or_insert(placed.baseline);
             last_baseline = placed.baseline;
+            trace.heights.push(placed.height);
             cursor += placed.height;
         }
 
-        InlineLayout {
-            width: layout.width(),
-            height: cursor,
-            baseline: first_baseline.unwrap_or(0.0),
-            last_baseline,
-            runs,
-            boxes,
-            fragments,
-        }
+        (
+            InlineLayout {
+                width: layout.width(),
+                height: cursor,
+                baseline: first_baseline.unwrap_or(0.0),
+                last_baseline,
+                runs,
+                boxes,
+                fragments,
+            },
+            trace,
+        )
     }
 
     /// Ascent, descent, line gap and x-height of a font at a size, from the
@@ -1374,5 +1645,252 @@ mod tests {
         assert_eq!(take_in_font(own, (10.0, 3.0, 0.0)), own);
         // A fractional metric is rounded as the element's own font is.
         assert_eq!(take_in_font(own, (17.6, 4.7, 0.0)), (18.0, 5.0));
+    }
+
+    /// A float of the given margin box on one side of a 200 wide context.
+    struct Beside {
+        left: bool,
+        width: f32,
+        height: f32,
+        placed: Vec<(u64, f32)>,
+    }
+
+    impl Beside {
+        fn edges(&self, y: f32, height: f32) -> (f32, f32) {
+            if y < self.height && y + height > 0.0 {
+                if self.left {
+                    (self.width, 200.0)
+                } else {
+                    (0.0, 200.0 - self.width)
+                }
+            } else {
+                (0.0, 200.0)
+            }
+        }
+    }
+
+    impl LineEnv for Beside {
+        fn slot(&mut self, y: f32, height: f32) -> LineSlot {
+            let (from, to) = self.edges(y, height);
+            LineSlot {
+                x: from,
+                width: to - from,
+                drop: 0.0,
+            }
+        }
+
+        fn float_here(&mut self, id: u64, y: f32, used: f32, slot: LineSlot) -> Option<LineSlot> {
+            if used + self.width > slot.width {
+                return None;
+            }
+            self.placed.push((id, y));
+            let (from, to) = self.edges(y, 1.0);
+            Some(LineSlot {
+                x: from,
+                width: to - from,
+                drop: 0.0,
+            })
+        }
+
+        fn float_below(&mut self, id: u64, y: f32) {
+            self.placed.push((id, y));
+        }
+
+        fn clear_of_floats(&mut self, y: f32, height: f32) -> Option<f32> {
+            (y < self.height && y + height > 0.0).then_some(self.height)
+        }
+
+        fn mark(&mut self) -> usize {
+            self.placed.len()
+        }
+
+        fn rewind(&mut self, mark: usize) {
+            self.placed.truncate(mark);
+        }
+    }
+
+    /// How far each line of a layout reaches: from where its first glyph run
+    /// starts to where its last ends.
+    fn line_extents(layout: &InlineLayout) -> Vec<(f32, f32)> {
+        let lines = layout
+            .runs
+            .iter()
+            .map(|run| run.line)
+            .max()
+            .map_or(0, |last| last + 1);
+        (0..lines)
+            .map(|line| {
+                let runs = layout.runs.iter().filter(|run| run.line == line);
+                let from = runs.clone().map(|run| run.x).fold(f32::MAX, f32::min);
+                let to = runs.map(|run| run.x + run.width).fold(0.0, f32::max);
+                (from, to - from)
+            })
+            .collect()
+    }
+
+    const FOX: &str =
+        "The quick brown fox jumps over the lazy dog and keeps running along the road home again";
+
+    fn shaped_beside(env: &mut Beside, style: TextStyle) -> (InlineLayout, LineTrace) {
+        shaped_text_beside(env, style, FOX)
+    }
+
+    fn shaped_text_beside(
+        env: &mut Beside,
+        style: TextStyle,
+        text: &str,
+    ) -> (InlineLayout, LineTrace) {
+        let style = style.with_line_height(LineHeight::Length(20.0));
+        let elements = [InlineElement { parent: 0, style }];
+        let items = [InlineItem::Text { text, element: 0 }];
+        let mut hints: Vec<f32> = Vec::new();
+        let mut result = None;
+        for _ in 0..3 {
+            env.placed.clear();
+            let mut source = LineSource::Env {
+                env: &mut *env,
+                hints: &hints,
+            };
+            let (layout, trace) = Font::load_embedded().shape_inline_tree_in_slots(
+                &elements,
+                &items,
+                200.0,
+                &mut source,
+            );
+            let settled = trace.heights == hints;
+            hints = trace.heights.clone();
+            result = Some((layout, trace));
+            if settled {
+                break;
+            }
+        }
+        result.expect("at least one pass")
+    }
+
+    #[test]
+    fn lines_beside_a_left_float_start_after_it_and_those_below_start_at_the_edge() {
+        // Chrome 153: a 50x50 float at the left of 200px of 16px text with a 20px
+        // line height: three lines start at x = 50, the rest at 0.
+        let mut env = Beside {
+            left: true,
+            width: 50.0,
+            height: 50.0,
+            placed: Vec::new(),
+        };
+        let (layout, trace) = shaped_beside(&mut env, sans(16.0));
+        let lines = line_extents(&layout);
+        let expected = [
+            (50.0, 123.8),
+            (50.0, 139.58),
+            (50.0, 141.3),
+            (0.0, 171.39),
+            (0.0, 87.72),
+        ];
+        assert_eq!(lines.len(), expected.len(), "{lines:?}");
+        for (line, (from, width)) in lines.iter().zip(expected) {
+            // A trailing space belongs to the line's end.
+            assert!((line.0 - from).abs() < 0.6, "{lines:?}");
+            assert!((line.1 - width).abs() < 5.0, "{lines:?}");
+        }
+        assert_eq!(trace.slots.len(), 5);
+        close(trace.slots[0].x, 50.0);
+        close(trace.slots[3].x, 0.0);
+        close(trace.slots[3].width, 200.0);
+    }
+
+    #[test]
+    fn a_line_with_no_room_for_a_word_beside_a_float_starts_below_the_float() {
+        // Chrome 153: a 150x30 float at the left of 200px of 16px text with a 20px
+        // line height: "Short" fits beside it, "stackedwords" does not, so the next
+        // line starts where the float ends (y = 30, not 20) and the three lines
+        // are 70 tall.
+        let mut env = Beside {
+            left: true,
+            width: 150.0,
+            height: 30.0,
+            placed: Vec::new(),
+        };
+        let text = "Short stackedwords floats of different heights.";
+        let (layout, trace) = shaped_text_beside(&mut env, sans(16.0), text);
+        assert_eq!(trace.slots.len(), 3, "{trace:?}");
+        close(trace.slots[0].x, 150.0);
+        close(trace.slots[1].x, 0.0);
+        close(trace.slots[1].drop, 10.0);
+        close(trace.slots[2].drop, 0.0);
+        close(layout.height, 70.0);
+    }
+
+    #[test]
+    fn a_line_beside_a_right_float_is_shorter_and_stays_at_the_left_edge() {
+        let mut env = Beside {
+            left: false,
+            width: 70.0,
+            height: 30.0,
+            placed: Vec::new(),
+        };
+        let (layout, trace) = shaped_beside(&mut env, sans(16.0));
+        let lines = line_extents(&layout);
+        // Chrome 153: the first two lines end before the float (130 wide room).
+        assert!(
+            lines[0].1 <= 130.0 + 0.5 && lines[1].1 <= 130.0 + 0.5,
+            "{lines:?}"
+        );
+        close(lines[0].0, 0.0);
+        close(trace.slots[0].width, 130.0);
+        close(trace.slots[2].width, 200.0);
+    }
+
+    #[test]
+    fn a_float_item_is_put_at_the_top_of_the_line_it_is_reached_on_when_it_fits() {
+        let elements = [InlineElement {
+            parent: 0,
+            style: sans(16.0).with_line_height(LineHeight::Length(20.0)),
+        }];
+        let items = [
+            InlineItem::Text {
+                text: "ab ",
+                element: 0,
+            },
+            InlineItem::Float { id: 7 },
+            InlineItem::Text {
+                text: "cd ef gh ij kl mn op qr st uv wx yz 01 23 45 67 89",
+                element: 0,
+            },
+        ];
+        let mut env = Beside {
+            left: false,
+            width: 60.0,
+            height: 30.0,
+            placed: Vec::new(),
+        };
+        let mut source = LineSource::Env {
+            env: &mut env,
+            hints: &[],
+        };
+        let (_, trace) =
+            Font::load_embedded().shape_inline_tree_in_slots(&elements, &items, 200.0, &mut source);
+        assert_eq!(env.placed, vec![(7, 0.0)]);
+        close(trace.slots[0].width, 140.0);
+    }
+
+    #[test]
+    fn replaying_the_slots_of_a_pass_gives_the_same_lines_without_the_floats() {
+        let mut env = Beside {
+            left: true,
+            width: 50.0,
+            height: 50.0,
+            placed: Vec::new(),
+        };
+        let (first, trace) = shaped_beside(&mut env, sans(16.0));
+        let style = sans(16.0).with_line_height(LineHeight::Length(20.0));
+        let elements = [InlineElement { parent: 0, style }];
+        let items = [InlineItem::Text {
+            text: FOX,
+            element: 0,
+        }];
+        let mut source = LineSource::Replay(&trace.slots);
+        let (again, _) =
+            Font::load_embedded().shape_inline_tree_in_slots(&elements, &items, 200.0, &mut source);
+        assert_eq!(line_extents(&first), line_extents(&again));
     }
 }
