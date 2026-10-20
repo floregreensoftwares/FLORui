@@ -1,0 +1,364 @@
+{
+    "id":  "float-layout",
+    "description":  "float and clear without text: floats of different heights stacking in rows, mixed left and right floats with margins, clear on one side or both, a box that makes its own context (overflow, flow-root) sitting beside a float instead of under it, a float wider than its container, floats inside a floated box and a flex item, and a container that does not contain its floats next to one that does.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  520,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 520px; background-color: #ffffff; } .a { width: 300px; margin: 0 0 6px 10px; background-color: #e4e4e4; } .l { float: left; width: 90px; background-color: #d05040; } .r { float: right; width: 60px; background-color: #4070d0; } .h10 { height: 10px; } .h20 { height: 20px; } .h30 { height: 30px; } .h40 { height: 40px; } .h60 { height: 60px; } .cl { clear: left; height: 8px; background-color: #202020; } .cr { clear: right; height: 8px; background-color: #202020; } .cb { clear: both; height: 8px; background-color: #202020; } .m { margin: 4px 6px 2px 3px; } .g { background-color: #40a060; } .y { background-color: #e0b030; } .v { background-color: #8050c0; } .oh { overflow: hidden; height: 24px; background-color: #c8d8f0; } .fr { display: flow-root; height: 24px; background-color: #c8d8f0; } .wide { width: 340px; } .fl { display: flex; } .it { flex: 1; background-color: #c8d8f0; } .nest { float: left; width: 120px; background-color: #e0b030; } .in { float: left; width: 40px; height: 20px; background-color: #8050c0; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "l h30",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "l h40 g",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "l h10 y",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "cb",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "l h40 m",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "r h20 m",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "r h30 g",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "l h10 y",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "cb",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "l h60",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "r h20 g",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "cl",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "cr",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "cb",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "l h40",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "oh",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "fr",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "cb",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "l h20 wide",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "l h10 g",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "cb",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "nest",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "in",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "in v",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "r h30",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "cb",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a fl",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "it",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "l h20",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "it",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "l h20",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "cb",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "exact"
+                       }
+}
