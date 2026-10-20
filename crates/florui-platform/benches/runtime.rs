@@ -247,7 +247,7 @@ fn bench_update_phases(c: &mut Criterion) {
             b.iter(|| black_box(florui_style::Arena::build(&tree)))
         });
 
-        let arena = florui_style::Arena::build(&tree);
+        let mut arena = florui_style::Arena::build(&tree);
         let state = florui_style::InteractionState::new();
         let mut timeline = florui_style::AnimationTimeline::default();
         group.bench_function(format!("{n}_rows_cascade"), |b| {
@@ -269,7 +269,7 @@ fn bench_update_phases(c: &mut Criterion) {
                 black_box(
                     florui_layout::compute_with_style(
                         &mut font,
-                        &arena,
+                        &mut arena,
                         &rules,
                         &state,
                         viewport,
