@@ -67,16 +67,17 @@ pub use background::{
     MaskLayer, MaskMode, RadialExtent, RadialGradient, RadialSize,
 };
 pub use cascade::{
-    Appearance, AspectRatio, BackdropBlur, BorderImage, BorderImageOutset, BorderImageRepeat,
-    BorderImageSlice, BorderImageWidth, BorderLineStyle, BorderSide, BoxShadow, BoxSizing, Calc,
-    ComputedStyle, ContainerType, ContentAlignment, Corners, DecorationLines, DecorationStyle,
-    DecorationThickness, Deferred, DeferredSlot, DeferredValue, Display, Edges, FilterFunction,
-    FlexDirection, FlexWrap, FontFamily, FontStyle, FontSynthesis, FontVariantCaps, GlassMaterial,
-    GlassQuality, GlassSpec, ItemAlignment, LengthPercentage, LineHeight, ObjectFit, Outline,
-    OutlineStyle, OverflowWrap, Position, Resize, SizeKeyword, SkipInk, TextAlign, TextCase,
-    TextDecoration, TextIndent, TextOverflow, TextShadow, TextTransform, TransformBox,
-    TransformFunction, UnderlineOffset, UnderlinePosition, VerticalAlign, Viewport, Visibility,
-    WhiteSpaceCollapse, WordBreak, compute, compute_with_container_query_signature,
+    Appearance, AspectRatio, BackdropBlur, BorderCollapse, BorderImage, BorderImageOutset,
+    BorderImageRepeat, BorderImageSlice, BorderImageWidth, BorderLineStyle, BorderSide, BoxShadow,
+    BoxSizing, Calc, CaptionSide, Clear, ComputedStyle, ContainerType, ContentAlignment, Corners,
+    DecorationLines, DecorationStyle, DecorationThickness, Deferred, DeferredSlot, DeferredValue,
+    Display, Edges, EmptyCells, FilterFunction, FlexDirection, FlexWrap, Float, FontFamily,
+    FontStyle, FontSynthesis, FontVariantCaps, GlassMaterial, GlassQuality, GlassSpec,
+    ItemAlignment, LengthPercentage, LineHeight, ObjectFit, Outline, OutlineStyle, OverflowWrap,
+    Position, Resize, SizeKeyword, SkipInk, TableLayout, TextAlign, TextCase, TextDecoration,
+    TextIndent, TextOverflow, TextShadow, TextTransform, TransformBox, TransformFunction,
+    UnderlineOffset, UnderlinePosition, VerticalAlign, Viewport, Visibility, WhiteSpaceCollapse,
+    WordBreak, compute, compute_with_container_query_signature,
 };
 pub use clip::{ClipPath, ClipShape, PathSegment, ReferenceBox, ShapeRadius};
 pub use color::{ColorParseError, Rgba, parse_hex_color};
