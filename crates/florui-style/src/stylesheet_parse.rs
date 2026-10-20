@@ -51,7 +51,7 @@ const DYNAMIC_CACHE_CAPACITY: usize = 8;
 /// this to [`crate::cascade::compute`]. Cloning is cheap and shares the
 /// same underlying state (an [`Arc`]), including the cache below.
 #[derive(Clone)]
-pub struct Rule(Arc<RuleKind>, bool);
+pub struct Rule(Arc<RuleKind>, bool, Arc<[usize]>);
 
 enum RuleKind {
     /// The common case: nothing in the authored CSS could possibly be a
@@ -125,6 +125,12 @@ impl Rule {
     /// makes the user-agent reset of its custom property worth applying.
     pub(crate) fn uses_scroll_behavior(&self) -> bool {
         self.1
+    }
+
+    /// The numbers of the `:has()` this rule held, which were replaced by classes
+    /// (see [`crate::has_adapter`]).
+    pub(crate) fn has_specs(&self) -> &[usize] {
+        &self.2
     }
 
     /// Every `@container` block this rule's own CSS contains, in source
@@ -207,6 +213,16 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
     } else {
         css
     };
+    let (css, has_specs) = if origin == Origin::Author {
+        let (rewritten, numbers) = crate::has_adapter::rewrite(&css);
+        match rewritten {
+            std::borrow::Cow::Owned(rewritten) => (std::borrow::Cow::Owned(rewritten), numbers),
+            std::borrow::Cow::Borrowed(_) => (css, numbers),
+        }
+    } else {
+        (css, Vec::new())
+    };
+    let has_specs: Arc<[usize]> = has_specs.into();
     let css = css.as_ref();
     let container_blocks = container_query_adapter::extract_container_queries(css);
     let lower_css = css.to_ascii_lowercase();
@@ -222,11 +238,13 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
                 cache: Mutex::new(Vec::new()),
             }),
             uses_scroll_behavior,
+            has_specs,
         ));
     }
     Ok(Rule(
         Arc::new(RuleKind::Static(parse_str(css, origin))),
         uses_scroll_behavior,
+        has_specs,
     ))
 }
 

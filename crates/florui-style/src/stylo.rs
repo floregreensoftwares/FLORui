@@ -111,6 +111,11 @@ struct NodeSlot {
     /// number have the same state in every ancestor. See
     /// [`StyloTree::number_contexts`].
     context: Cell<u32>,
+    /// The `:has()` this node has, by number, as the classes `florui-has-N` the
+    /// rules were rewritten to (see [`crate::has_adapter`]).
+    has: std::cell::RefCell<Vec<usize>>,
+    /// Whether the node holds text, which `:empty` counts as content.
+    has_text: bool,
     data: AtomicRefCell<ElementData>,
     dirty_descendants: Cell<bool>,
     local_name: BorrowedLocalName,
@@ -134,6 +139,9 @@ pub(crate) struct StyloTree {
     /// Whether any `style` attribute declares `scroll-behavior`, which needs
     /// the same user-agent reset an author sheet declaring it does.
     uses_inline_scroll_behavior: bool,
+    /// Whether the last cascade gave any node a `:has()`, so the next one knows
+    /// whether there is anything to take away.
+    has_given: Cell<bool>,
 }
 
 /// Where the number of a node's context sits in the state style sharing sees:
@@ -325,6 +333,8 @@ impl StyloTree {
                 style_pdb: arena.style_attr(id).map(parse_inline_style),
                 state: Cell::new(node_state),
                 context: Cell::new(0),
+                has: std::cell::RefCell::new(Vec::new()),
+                has_text: !arena.text_content(id).is_empty(),
                 data: AtomicRefCell::new(ElementData::default()),
                 dirty_descendants: Cell::new(false),
                 local_name: arena.tag(id).into(),
@@ -366,6 +376,7 @@ impl StyloTree {
             index_of,
             order,
             uses_inline_scroll_behavior,
+            has_given: Cell::new(false),
         };
         tree.number_contexts(arena);
         (tree, primary_root)
@@ -779,6 +790,9 @@ impl<'a> SelectorsElement for StyloNode<'a> {
         name: &AtomIdent,
         case_sensitivity: selectors::attr::CaseSensitivity,
     ) -> bool {
+        if let Some(number) = crate::has_adapter::number_of_class(name.as_ref()) {
+            return self.0.has.borrow().contains(&number);
+        }
         self.0
             .classes
             .iter()
@@ -798,7 +812,7 @@ impl<'a> SelectorsElement for StyloNode<'a> {
     }
 
     fn is_empty(&self) -> bool {
-        self.0.children.is_empty()
+        self.0.children.is_empty() && !self.0.has_text
     }
 
     fn is_root(&self) -> bool {
@@ -887,6 +901,10 @@ impl<'a> TElement for StyloNode<'a> {
     {
         for class in &self.0.classes {
             let atom = Atom::from(class.as_str());
+            callback(AtomIdent::cast(&atom));
+        }
+        for number in self.0.has.borrow().iter() {
+            let atom = Atom::from(format!("florui-has-{number}").as_str());
             callback(AtomIdent::cast(&atom));
         }
     }
@@ -1201,6 +1219,118 @@ fn compute_in_layout_state(
     compute_with_tree(&tree, rules, viewport, timeline, container_query_signature)
 }
 
+/// The specificities of the selectors of `text`, or `None` when it does not
+/// parse as a list of them.
+pub(crate) fn parse_selector_list(text: &str) -> Option<Vec<u32>> {
+    let url_data: style::stylesheets::UrlExtraData = url::Url::parse("about:florui")
+        .expect("a fixed, valid URL literal")
+        .into();
+    let list =
+        style::selector_parser::SelectorParser::parse_author_origin_no_namespace(text, &url_data)
+            .ok()?;
+    Some(list.slice().iter().map(|s| s.specificity()).collect())
+}
+
+/// Gives each node the `:has()` it has: for every one the rules hold, the
+/// arguments are matched against the nodes below the node (or after it, and
+/// below them) with the engine's own selector matching, `:scope` being the node.
+/// The result is read back as the classes the rules were rewritten to.
+fn evaluate_has(tree: &StyloTree, rules: &[Rule]) {
+    let mut numbers: Vec<usize> = rules
+        .iter()
+        .flat_map(|rule| rule.has_specs().iter().copied())
+        .collect();
+    numbers.sort_unstable();
+    numbers.dedup();
+    if numbers.is_empty() && !tree.has_given.get() {
+        return;
+    }
+    for slot in &tree.slots {
+        slot.has.borrow_mut().clear();
+    }
+    tree.has_given.set(false);
+    if numbers.is_empty() {
+        return;
+    }
+    let url_data: style::stylesheets::UrlExtraData = url::Url::parse("about:florui")
+        .expect("a fixed, valid URL literal")
+        .into();
+    let mut caches = selectors::matching::SelectorCaches::default();
+    for number in numbers {
+        let Some(spec) = crate::has_adapter::spec(number) else {
+            continue;
+        };
+        let parsed: Vec<_> = spec
+            .relative
+            .iter()
+            .filter_map(|relative| {
+                let list =
+                    style::selector_parser::SelectorParser::parse_author_origin_no_namespace(
+                        &relative.selector,
+                        &url_data,
+                    )
+                    .ok()?;
+                Some((list, relative.siblings))
+            })
+            .collect();
+        for slot in &tree.slots {
+            let mut context = selectors::matching::MatchingContext::new(
+                selectors::matching::MatchingMode::Normal,
+                None,
+                &mut caches,
+                QuirksMode::NoQuirks,
+                selectors::matching::NeedsSelectorFlags::No,
+                selectors::matching::MatchingForInvalidation::No,
+            );
+            context.scope_element = Some(OpaqueElement::new(slot));
+            let found = parsed.iter().any(|(list, siblings)| {
+                let mut matches = |candidate: &NodeSlot| {
+                    let node = StyloNode(candidate);
+                    list.slice().iter().any(|selector| {
+                        selectors::matching::matches_selector(
+                            selector,
+                            0,
+                            None,
+                            &node,
+                            &mut context,
+                        )
+                    })
+                };
+                if *siblings {
+                    // SAFETY: the pointers of a tree point into its own slots.
+                    let Some(parent) = slot.parent.map(|p| unsafe { &*p }) else {
+                        return false;
+                    };
+                    parent.children[slot.sibling_index + 1..]
+                        .iter()
+                        .any(|&sibling| any_in_subtree(unsafe { &*sibling }, &mut matches))
+                } else {
+                    slot.children
+                        .iter()
+                        .any(|&child| any_in_subtree(unsafe { &*child }, &mut matches))
+                }
+            });
+            if found {
+                slot.has.borrow_mut().push(number);
+                tree.has_given.set(true);
+            }
+        }
+    }
+}
+
+/// Whether `test` holds for `root` or a node below it.
+fn any_in_subtree(root: &NodeSlot, test: &mut impl FnMut(&NodeSlot) -> bool) -> bool {
+    let mut stack = vec![root];
+    while let Some(slot) = stack.pop() {
+        if test(slot) {
+            return true;
+        }
+        // SAFETY: the pointers of a tree point into its own slots.
+        stack.extend(slot.children.iter().map(|&child| unsafe { &*child }));
+    }
+    false
+}
+
 /// The cascade over a tree already built and set to the state to style it in.
 pub(crate) fn compute_with_tree(
     tree: &StyloTree,
@@ -1211,6 +1341,7 @@ pub(crate) fn compute_with_tree(
 ) -> StyleMap {
     // One entry per node: growing a table of styles this big copies every
     // entry it already holds each time it doubles.
+    evaluate_has(tree, rules);
     let mut result = StyleMap::with_capacity(tree.order.len());
     with_style_context(
         tree,

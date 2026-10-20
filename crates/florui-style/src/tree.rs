@@ -174,6 +174,9 @@ struct ArenaNode {
     /// The node's own direct text, for text measurement — not inherited
     /// from or propagated to any other node.
     text: String,
+    /// Whether `text` was not empty when the node was built: `:empty` reads it, so
+    /// a refresh that makes it differ is not a refresh but a new arena.
+    has_text: bool,
     /// Same direct children as `text`/`children` below, but preserving the
     /// interleaving between them that both those flattened views lose —
     /// see [`Arena::inline_items`].
@@ -698,7 +701,9 @@ impl Arena {
                 .nodes
                 .iter()
                 .zip(&state.cursor)
-                .all(|(node, &used)| node.inline_items.len() == used)
+                .all(|(node, &used)| {
+                    node.inline_items.len() == used && node.has_text != node.text.is_empty()
+                })
     }
 
     fn refresh_all<'a>(
@@ -850,6 +855,7 @@ impl Arena {
                     // parsed rather than a fixed literal default.
                     let range_min = attr_f32(&node.attrs, "min", 0.0);
                     let range_max = attr_f32(&node.attrs, "max", 100.0);
+                    let text = collect_text(&node.children);
                     self.tree.nodes.push(ArenaNode {
                         tag: node.tag,
                         source: node.source,
@@ -883,7 +889,8 @@ impl Arena {
                         href: attr_value(&node.attrs, "href"),
                         src: attr_value(&node.attrs, "src"),
                         alt: attr_value(&node.attrs, "alt"),
-                        text: collect_text(&node.children),
+                        has_text: !text.is_empty(),
+                        text,
                         inline_items: Vec::new(),
                         parent,
                         children: Vec::new(),
@@ -1962,5 +1969,31 @@ mod tests {
     fn the_tree_can_be_shared_between_threads() {
         fn is_sync<T: Sync>() {}
         is_sync::<Tree>();
+    }
+
+    #[test]
+    fn a_text_that_makes_an_element_empty_or_not_is_a_new_arena_and_any_other_is_not() {
+        let tree = |text: &str| -> Element {
+            Element::node(
+                "div",
+                vec![],
+                vec![Element::node(
+                    "span",
+                    vec![],
+                    if text.is_empty() {
+                        vec![]
+                    } else {
+                        vec![Element::text(text)]
+                    },
+                )],
+            )
+        };
+        let mut arena = Arena::build(&tree("one"));
+        let shape = arena.style_shape();
+        assert!(arena.rebuild(&tree("two")), "text to text keeps the arena");
+        assert_eq!(arena.style_shape(), shape);
+        assert!(!arena.rebuild(&tree("")), "text to none is built anew");
+        assert_ne!(arena.style_shape(), shape);
+        assert!(!arena.rebuild(&tree("back")), "none to text is built anew");
     }
 }
