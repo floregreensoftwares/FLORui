@@ -1174,6 +1174,12 @@ impl ComputedStyle {
         (self.z_index.unwrap_or(0), self.order)
     }
 
+    /// Whether a column of the node is a `fit-content()`, which Taffy leaves
+    /// out of the width the grid gets from its content.
+    pub fn has_fit_content_columns(&self) -> bool {
+        self.grid_template_columns.has_fit_content()
+    }
+
     /// Whether a column of the node is a calc() of a length and a percentage,
     /// which is of the grid's own width.
     pub fn has_grid_column_calc(&self) -> bool {
