@@ -1171,6 +1171,12 @@ impl ComputedStyle {
         (self.z_index.unwrap_or(0), self.order)
     }
 
+    /// Whether a column of the node is a calc() of a length and a percentage,
+    /// which is of the grid's own width.
+    pub fn has_grid_column_calc(&self) -> bool {
+        self.grid_template_columns.has_calc() || self.grid_auto_columns.iter().any(|t| t.has_calc())
+    }
+
     /// Whether a grid track of the node is a `calc()` of a length and a
     /// percentage, which layout works out once the grid's own box is known.
     pub fn has_grid_calc(&self) -> bool {

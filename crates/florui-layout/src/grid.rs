@@ -70,7 +70,8 @@ fn to_track(track: GridTrackSize) -> TrackSizingFunction {
                 GridLimit::Percent(fraction) => {
                     MaxTrackSizingFunction::fit_content_percent(fraction)
                 }
-                GridLimit::Calc(calc) => MaxTrackSizingFunction::fit_content_px(calc.length),
+                // Until the grid's own size is known a percentage reads as no limit.
+                GridLimit::Calc(_) => MaxTrackSizingFunction::max_content(),
             },
         },
     }
@@ -80,7 +81,9 @@ fn to_min(breadth: GridBreadth) -> MinTrackSizingFunction {
     match breadth {
         GridBreadth::Length(px) => MinTrackSizingFunction::length(px),
         GridBreadth::Percent(fraction) => MinTrackSizingFunction::percent(fraction),
-        GridBreadth::Calc(calc) => MinTrackSizingFunction::length(calc.length),
+        // A calc() of a length and a percentage counts as `auto` until the grid's
+        // own size is known; layout then works it out from that size.
+        GridBreadth::Calc(_) => MinTrackSizingFunction::auto(),
         GridBreadth::Fr(_) | GridBreadth::Auto => MinTrackSizingFunction::auto(),
         GridBreadth::MinContent => MinTrackSizingFunction::min_content(),
         GridBreadth::MaxContent => MinTrackSizingFunction::max_content(),
@@ -91,7 +94,7 @@ fn to_max(breadth: GridBreadth) -> MaxTrackSizingFunction {
     match breadth {
         GridBreadth::Length(px) => MaxTrackSizingFunction::length(px),
         GridBreadth::Percent(fraction) => MaxTrackSizingFunction::percent(fraction),
-        GridBreadth::Calc(calc) => MaxTrackSizingFunction::length(calc.length),
+        GridBreadth::Calc(_) => MaxTrackSizingFunction::auto(),
         GridBreadth::Fr(share) => MaxTrackSizingFunction::fr(share),
         GridBreadth::Auto => MaxTrackSizingFunction::auto(),
         GridBreadth::MinContent => MaxTrackSizingFunction::min_content(),
