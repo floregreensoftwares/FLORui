@@ -1,0 +1,214 @@
+{
+    "id":  "default-block-tags",
+    "description":  "The default style of the block-level tags: the sectioning tags and hgroup as plain blocks, address in italic, blockquote and figure set in from both sides, a description list with a dd set in from the left, a preformatted block that keeps its spaces and lines, and a rule with its inset border and margins.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  560,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 560px; background-color: #ffffff; color: #101010; font-size: 14px; line-height: 18px; } .wrap \u003e * { background-color: #e8e8e8; } .wrap \u003e :nth-child(even) { background-color: #d8e4f4; } pre { font-family: \"Fira Mono\", monospace; font-size: 13px; }",
+                   "children":  [
+                                    {
+                                        "tag":  "article",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "article",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "aside",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "aside",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "header",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "header",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "footer",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "footer",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "main",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "main",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "nav",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "nav",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "search",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "search",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "section",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "section",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "hgroup",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "hgroup",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "address",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "address in italic",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "blockquote",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "blockquote set in from both sides",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "figure",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "figcaption",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "figure caption",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "dl",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "dt",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "term",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "dd",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "description set in",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "dt",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "second",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "dd",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "another",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "pre",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "keeps   spaces\n  and lines",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "hr",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "p",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "after the rule",
+                                        "children":  [
+
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  4.2,
+                           "geometry_tolerance_px":  0.5,
+                           "channel_tolerance":  0,
+                           "reason":  "Measured against Chromium 155 on Windows: 4.0% of the pixels differ and every box is where Chromium puts it; what is left is the two engines\u0027 glyph antialiasing. Without the default rules the same fixture measures 56.2%, and without the rule\u0027s own bevel colors 4.35%, so both fail."
+                       }
+}

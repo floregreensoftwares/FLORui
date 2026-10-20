@@ -1,0 +1,372 @@
+{
+    "id":  "default-text-tags",
+    "description":  "The default style of the text-level tags: italic, bold, bolder inside bold, underline, strike-through, mark, dotted abbreviation, smaller text, subscript and superscript (which move the line box), monospace, and each nested in itself.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  230,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 230px; background-color: #ffffff; color: #101010; } .row { margin-left: 10px; background-color: #f0f0f0; } code, kbd, samp { font-family: \"Fira Mono\", monospace; font-size: 13px; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "row",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "plain ",
+                                                         {
+                                                             "tag":  "b",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "b",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "strong",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "strong",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "i",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "i",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "em",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "em",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "cite",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "cite",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "dfn",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "dfn",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "var",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "var",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "row",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "u",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "u",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "s",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "s",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "ins",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "ins",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "del",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "del",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "mark",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "mark",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "abbr",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "abbr",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "title",
+                                                                               "x"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "abbr",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "plain",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "row",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "small",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "small",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " H",
+                                                         {
+                                                             "tag":  "sub",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "2",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         "O E=mc",
+                                                         {
+                                                             "tag":  "sup",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "2",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "time",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "time",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "data",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "data",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "row",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "code",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "code",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "kbd",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "kbd",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "samp",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "samp",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "row",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "strong",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "bold ",
+                                                                              {
+                                                                                  "tag":  "b",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "bolder",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "em",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "a ",
+                                                                              {
+                                                                                  "tag":  "em",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "b",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "small",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "a ",
+                                                                              {
+                                                                                  "tag":  "small",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "b",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "b",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "i",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "u",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "all",
+                                                                                                       "children":  [
+
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  7.5,
+                           "geometry_tolerance_px":  0.5,
+                           "channel_tolerance":  0,
+                           "reason":  "Measured against Chromium 155 on Windows: 6.81% of the pixels differ and every box is where Chromium puts it; what is left is the two engines\u0027 glyph antialiasing, as in the other text fixtures. Without the default rules the same fixture measures 12.86%, so it fails."
+                       }
+}

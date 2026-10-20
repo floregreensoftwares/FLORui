@@ -1,0 +1,10 @@
+.wrap { position: relative; width: 340px; height: 150px; background-color: #ffffff; color: #c03030; }
+.row { display: flex; gap: 6px; margin: 0 0 6px 10px; }
+.b { width: 70px; height: 20px; border-width: 4px; }
+.in { border-style: inset; }
+.out { border-style: outset; }
+.gr { border-style: groove; }
+.ri { border-style: ridge; }
+.e1 { border-color: #ebebeb; }
+.e2 { border-color: #ececec; }
+.e3 { border-color: #f0f0f0; }
