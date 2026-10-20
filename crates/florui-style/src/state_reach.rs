@@ -96,6 +96,9 @@ impl StateReach {
         let mut in_subject = true;
         for component in selector.iter_raw_match_order() {
             match component {
+                // What is in front of a pseudo-element is the element it belongs
+                // to, which a change of state restyles together with its boxes.
+                Component::Combinator(Combinator::PseudoElement) => {}
                 Component::Combinator(combinator) => {
                     in_subject = false;
                     match combinator {
