@@ -102,7 +102,7 @@ use florui_layout::{BoxLayout, absolute_position};
 use florui_style::Arena;
 use florui_style::{
     BlendMode, ComputedStyle, ContentAlignment, Display, FilterFunction, FlexDirection,
-    GlassMaterial, GlassSpec, ItemAlignment, LengthPercentage, NodeId, ObjectFit, Position, Rgba,
+    GlassMaterial, GlassSpec, ItemAlignment, LengthPercentage, NodeId, ObjectFit, Rgba,
     RoundedRect, Tree,
 };
 use florui_text::Font;
@@ -1802,17 +1802,15 @@ fn own_extent(
                 max_y = max_y.max(abs_y + at.y + shaped.layout.height * scale_factor + ink_pad);
             }
         }
-    } else if florui_layout::is_inline_formatting_context(arena, styles, node) {
-        if let Some(shaped) = florui_layout::shape_inline_formatting_context(
-            font,
-            arena,
-            styles,
-            (layouts, scale_factor),
-            node,
-            wrap_width,
-        ) {
-            shaped_extent = Some((shaped.layout.width, shaped.layout.height));
-        }
+    } else if let Some(shaped) = inline_shape(
+        font,
+        arena,
+        styles,
+        (layouts, scale_factor),
+        node,
+        wrap_width,
+    ) {
+        shaped_extent = Some((shaped.layout.width, shaped.layout.height));
     } else {
         let text = arena.text_content(node);
         if !text.is_empty() {
@@ -3557,10 +3555,7 @@ pub fn paint_order(
 ) -> Vec<NodeId> {
     let parent_is_flex_or_grid = parent_display.is_some_and(Display::is_flex_or_grid);
     let is_eligible = |id: &NodeId| {
-        parent_is_flex_or_grid
-            || styles
-                .get(id)
-                .is_some_and(|s| s.position != Position::Static)
+        parent_is_flex_or_grid || styles.get(id).is_some_and(|s| s.block_stacking() != (0, 0))
     };
     if !nodes.iter().any(is_eligible) {
         return nodes.to_vec();
@@ -3568,8 +3563,8 @@ pub fn paint_order(
     let mut ordered = nodes.to_vec();
     ordered.sort_by_key(|id| match styles.get(id) {
         Some(style) if parent_is_flex_or_grid => style.item_stacking(),
-        Some(style) if style.position != Position::Static => (style.z_index.unwrap_or(0), 0),
-        _ => (0, 0),
+        Some(style) => style.block_stacking(),
+        None => (0, 0),
     });
     ordered
 }
@@ -4156,7 +4151,14 @@ fn paint_node(
                     );
                 }
             }
-        } else if florui_layout::is_inline_formatting_context(arena, styles, node) {
+        } else if let Some(shaped) = inline_shape(
+            font,
+            arena,
+            styles,
+            (layouts, scale_factor),
+            node,
+            wrap_width,
+        ) {
             // A real mixed text/inline-element node: rebuilt and
             // reshaped fresh here, since this crate doesn't share layout's
             // own internal Taffy tree — deterministic at the same final
@@ -4164,14 +4166,7 @@ fn paint_node(
             // the plain single-style case below. Each inline element paints
             // its own box behind the text and its own color, shadow and
             // underline on it.
-            if let Some(shaped) = florui_layout::shape_inline_formatting_context(
-                font,
-                arena,
-                styles,
-                (layouts, scale_factor),
-                node,
-                wrap_width,
-            ) {
+            {
                 let is_button = arena.tag(node) == "button";
                 let (dx, dy) = text_offset(
                     is_button,
@@ -4226,6 +4221,23 @@ fn paint_node(
                 clip,
             );
         }
+    }
+}
+
+/// The lines of `node` when they are not plain text on a plain wrap: an inline
+/// formatting context, or text that floats narrowed.
+fn inline_shape(
+    font: &mut Font,
+    arena: &Tree,
+    styles: &StyleMap,
+    laid: (&HashMap<NodeId, BoxLayout>, f32),
+    node: NodeId,
+    wrap_width: f32,
+) -> Option<florui_layout::InlineShaped> {
+    if florui_layout::is_inline_formatting_context(arena, styles, node) {
+        florui_layout::shape_inline_formatting_context(font, arena, styles, laid, node, wrap_width)
+    } else {
+        florui_layout::shape_text_in_slots(font, arena, styles, laid, node, wrap_width)
     }
 }
 
@@ -7102,6 +7114,53 @@ mod tests {
         // Far left, where a select's own label text sits -- must stay
         // the plain canvas background, not painted over by the chevron.
         assert_eq!(pixel_rgb(&buffer, 10, 10), [0, 0, 0], "left of the chevron");
+    }
+
+    #[test]
+    fn a_float_is_painted_over_the_block_that_follows_it_and_text_stays_beside_it() {
+        let tree: Element = view! {
+            <div class="r">
+                <div class="f" />
+                <div class="b">{"alpha beta gamma delta epsilon zeta eta theta iota kappa"}</div>
+            </div>
+        };
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet(
+            ".r { width: 200px; } \
+             .f { float: left; width: 60px; height: 40px; background-color: #ff0000; } \
+             .b { background-color: #0000ff; color: #ffffff; font-size: 16px; line-height: 20px; }",
+        )
+        .unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+        let buffer = paint_to_buffer(
+            &mut font,
+            200,
+            80,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+        );
+        // The block starts at the top, under the float, which is drawn over it.
+        assert_eq!(pixel_rgb(&buffer, 30, 20), [255, 0, 0], "the float");
+        // Its text is beside the float, not under it.
+        let ink = |x0: u32, x1: u32| {
+            (x0..x1)
+                .flat_map(|x| (0..40).map(move |y| (x, y)))
+                .filter(|&(x, y)| pixel_rgb(&buffer, x, y) == [255, 255, 255])
+                .count()
+        };
+        assert!(ink(60, 200) > 100, "the text is beside the float");
     }
 
     #[test]
