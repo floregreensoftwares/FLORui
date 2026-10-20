@@ -2048,7 +2048,7 @@ fn run_layout(
 /// documented gap, not a silent approximation.
 pub fn compute_with_style(
     font: &mut florui_text::Font,
-    arena: &Arena,
+    arena: &mut Arena,
     rules: &[Rule],
     state: &InteractionState,
     viewport: Viewport,
@@ -2067,7 +2067,7 @@ pub fn compute_with_style(
 pub fn compute_with_style_cached(
     cache: &mut LayoutCache,
     font: &mut florui_text::Font,
-    arena: &Arena,
+    arena: &mut Arena,
     rules: &[Rule],
     state: &InteractionState,
     viewport: Viewport,
@@ -2090,7 +2090,7 @@ pub fn compute_with_style_cached(
 fn compute_with_style_in(
     mut cache: Option<&mut LayoutCache>,
     font: &mut florui_text::Font,
-    arena: &Arena,
+    arena: &mut Arena,
     rules: &[Rule],
     state: &InteractionState,
     viewport: Viewport,
@@ -2110,6 +2110,8 @@ fn compute_with_style_in(
             ),
         }
     };
+    // Gives the boxes of `::before` and `::after` the text their `content` says.
+    arena.apply_generated(&base_styles);
     if restyled {
         florui_profile::count(
             florui_profile::Counter::NodesStyled,
@@ -2181,6 +2183,7 @@ fn compute_with_style_in(
         }
     }
 
+    arena.apply_generated(&final_styles);
     drop(cascade_span);
     florui_profile::count(
         florui_profile::Counter::NodesStyled,
@@ -4129,8 +4132,8 @@ mod tests {
         tree: &Element,
         css: &str,
     ) -> (Arena, StyleMap, HashMap<NodeId, BoxLayout>) {
-        let arena = Arena::build(tree);
         let rules = florui_style::parse_stylesheet(css).unwrap();
+        let mut arena = Arena::build_with(tree, &florui_style::PseudoSlots::from_rules(&rules));
         let styles = florui_style::compute(
             &arena,
             &rules,
@@ -4138,6 +4141,7 @@ mod tests {
             florui_style::Viewport::default(),
             &mut florui_style::AnimationTimeline::default(),
         );
+        arena.apply_generated(&styles);
         let mut font = florui_text::Font::load_embedded();
         let layouts = compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
         (arena, styles, layouts)
@@ -9875,13 +9879,13 @@ mod tests {
             css: &str,
             available: Size<AvailableSpace>,
         ) -> (Arena, StyleMap, HashMap<NodeId, BoxLayout>) {
-            let arena = Arena::build(tree);
             let rules = florui_style::parse_stylesheet(css).unwrap();
+            let mut arena = Arena::build_with(tree, &florui_style::PseudoSlots::from_rules(&rules));
             let mut font = florui_text::Font::load_embedded();
             let mut timeline = florui_style::AnimationTimeline::default();
             let result = compute_with_style(
                 &mut font,
-                &arena,
+                &mut arena,
                 &rules,
                 &InteractionState::new(),
                 florui_style::Viewport::default(),

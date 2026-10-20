@@ -205,7 +205,7 @@ mod tests {
             </div>
         };
         let wrapper = Element::node("div", vec![], vec![tree]);
-        let arena = Arena::build(&wrapper);
+        let mut arena = Arena::build(&wrapper);
         let rules = parse_stylesheet(
             ".card { width: 120px; } h2 { height: 30px; margin-top: 0px; margin-bottom: 0px; } \
              p { height: 40px; }",
@@ -216,7 +216,7 @@ mod tests {
             styles, layouts, ..
         } = florui_layout::compute_with_style(
             &mut font,
-            &arena,
+            &mut arena,
             &rules,
             &InteractionState::new(),
             Viewport {
