@@ -52,6 +52,8 @@ struct Cell {
     least_height: f32,
     /// As laid out at the width of its columns.
     height: f32,
+    /// How tall its content makes it, without the height it states.
+    content_height: f32,
     baseline: Option<f32>,
 }
 
@@ -245,6 +247,7 @@ impl Run<'_> {
                 percent: None,
                 least_height: 0.0,
                 height: 0.0,
+                content_height: 0.0,
                 baseline: None,
             });
         }
@@ -352,37 +355,6 @@ impl Run<'_> {
             vertical_margins_are_collapsible: Line::FALSE,
         };
         self.child_layout(id, inputs, None)
-    }
-
-    /// Lays out `id` with `before` and `after` more padding above and below its
-    /// content than it states: what puts the content of a cell where its
-    /// alignment says.
-    fn cell_layout_padded(
-        &mut self,
-        id: NodeId,
-        basis: f32,
-        (before, after): (f32, f32),
-        width: f32,
-        height: f32,
-    ) -> LayoutOutput {
-        let original = self.tree.node(id).style.clone();
-        let own = own_of(
-            &original,
-            Size {
-                width: Some(basis),
-                height: None,
-            },
-        );
-        let mut padded = original.clone();
-        padded.padding.top = LengthPercentage::length(own.padding.top + before);
-        padded.padding.bottom = LengthPercentage::length(own.padding.bottom + after);
-        self.tree.live_mut(id).style = padded;
-        self.tree.live_mut(id).cache.clear();
-        let out = self.cell_layout(id, width, Some(height));
-        let node = self.tree.live_mut(id);
-        node.style = original;
-        node.cache.clear();
-        out
     }
 
     pub(crate) fn compute_table(&mut self, id: NodeId, inputs: LayoutInput) -> LayoutOutput {
@@ -952,6 +924,7 @@ impl Run<'_> {
             };
             let out = self.cell_layout(cell_id, span_width(&widths, col, cols), None);
             let cell = &mut model.cells[index];
+            cell.content_height = out.size.height;
             cell.height = out.size.height.max(cell.least_height);
             cell.baseline = out.baselines.first;
         }
@@ -1050,7 +1023,7 @@ impl Run<'_> {
                     cell.rows,
                     cell.cols,
                     cell.align,
-                    cell.height,
+                    cell.content_height,
                     cell.baseline,
                 )
             };
@@ -1059,25 +1032,30 @@ impl Run<'_> {
             let cell_height: f32 = heights[row..last].iter().sum::<f32>()
                 + spacing_v * (last - row).saturating_sub(1) as f32;
             let extra = (cell_height - natural).max(0.0);
-            let (before, after) = match align {
-                CellAlign::Top => (0.0, extra),
-                CellAlign::Middle => {
-                    let before = floor_unit(extra / 2.0);
-                    (before, extra - before)
-                }
-                CellAlign::Bottom => (extra, 0.0),
-                CellAlign::Baseline => {
-                    let shift = (row_baselines[row].unwrap_or(0.0) - baseline.unwrap_or(natural))
-                        .clamp(0.0, extra);
-                    (shift, extra - shift)
-                }
+            let before = match align {
+                CellAlign::Top => 0.0,
+                CellAlign::Middle => floor_unit(extra / 2.0),
+                CellAlign::Bottom => extra,
+                CellAlign::Baseline => (row_baselines[row].unwrap_or(0.0)
+                    - baseline.unwrap_or(natural))
+                .clamp(0.0, extra),
             };
             self.tree.live_mut(cell_id).shift = before;
-            let out = if before == 0.0 && after == 0.0 {
-                self.cell_layout(cell_id, cell_width, Some(cell_height))
-            } else {
-                self.cell_layout_padded(cell_id, width, (before, after), cell_width, cell_height)
-            };
+            let out = self.cell_layout(cell_id, cell_width, Some(cell_height));
+            // The content is where the alignment says, in the cell as it was laid out (what it
+            // states as a percentage is of the height the cell has).
+            if before != 0.0 {
+                let moved: Vec<NodeId> = if model.cells[index].temporary {
+                    model.cells[index].wrapped.clone()
+                } else {
+                    self.tree.node(cell_id).children.clone()
+                };
+                for child in moved {
+                    let mut at = self.tree.node(child).layout;
+                    at.location.y += before;
+                    self.set_layout(child, at);
+                }
+            }
             // Where the parent of the cell is, in the table.
             let parent = match model.rows[row].node {
                 Some(_) => (origin_x, row_y[row]),
