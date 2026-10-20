@@ -3546,8 +3546,7 @@ pub fn paint_order(
     parent_display: Option<Display>,
     nodes: &[NodeId],
 ) -> Vec<NodeId> {
-    let parent_is_flex_or_grid =
-        matches!(parent_display, Some(Display::Flex) | Some(Display::Grid));
+    let parent_is_flex_or_grid = parent_display.is_some_and(Display::is_flex_or_grid);
     let is_eligible = |id: &NodeId| {
         parent_is_flex_or_grid
             || styles
@@ -4224,7 +4223,7 @@ fn paint_node(
 /// Whether [`text_offset`] can move this node's text at all, so a node that
 /// never needs it is not measured.
 fn places_its_text(is_button: bool, style: Option<&ComputedStyle>) -> bool {
-    style.is_some_and(|s| is_button || s.display == Display::Flex)
+    style.is_some_and(|s| is_button || matches!(s.display, Display::Flex | Display::InlineFlex))
 }
 
 /// How far a node's own text sits from the content box's corner. In a flex
@@ -4242,7 +4241,7 @@ fn text_offset(
     };
     let free_x = (content_width - text_width).max(0.0);
     let free_y = (content_height - text_height).max(0.0);
-    if style.display != Display::Flex {
+    if !matches!(style.display, Display::Flex | Display::InlineFlex) {
         return (0.0, if is_button { free_y / 2.0 } else { 0.0 });
     }
     let (main_free, cross_free, row) = match style.flex_direction {

@@ -69,6 +69,11 @@ mod subgrid;
 mod transform;
 mod tree;
 
+#[cfg(test)]
+mod inline_level_tests;
+#[cfg(test)]
+mod test_support;
+
 pub use cache::LayoutCache;
 pub use clip::{ClipGeometry, clip_admits, resolve_clip_path};
 pub use transform::{
@@ -603,7 +608,7 @@ fn layout_kind(arena: &Tree, styles: &StyleMap, node: NodeId) -> LayoutKind {
                 Some(StyleDisplay::Inline) if inline_subtree_is_inline(arena, styles, *child) => {
                     inline = true;
                 }
-                Some(StyleDisplay::InlineBlock) => inline = true,
+                Some(display) if display.is_atomic_inline() => inline = true,
                 Some(StyleDisplay::None) => {}
                 _ => block = true,
             },
@@ -669,7 +674,7 @@ fn mixed_parts_of(arena: &Tree, styles: &StyleMap, node: NodeId) -> Vec<Part> {
                 Some(StyleDisplay::Inline) if inline_subtree_is_inline(arena, styles, *child) => {
                     content = true;
                 }
-                Some(StyleDisplay::InlineBlock) => content = true,
+                Some(display) if display.is_atomic_inline() => content = true,
                 Some(StyleDisplay::None) => {}
                 _ => {
                     close(&mut parts, start, index, content);
@@ -772,7 +777,7 @@ fn inline_subtree_is_inline(arena: &Tree, styles: &StyleMap, node: NodeId) -> bo
         StyleInlineItem::Element(child) => match styles.get(child).map(|s| s.display) {
             _ if is_viewport_fixed(arena, styles, *child) => true,
             Some(StyleDisplay::Inline) => inline_subtree_is_inline(arena, styles, *child),
-            Some(StyleDisplay::InlineBlock | StyleDisplay::None) => true,
+            Some(display) if display.is_atomic_inline() || display == StyleDisplay::None => true,
             _ => false,
         },
     })
@@ -891,7 +896,12 @@ fn measure_inline_block_intrinsic_size(
     } else {
         let line = font.measure(text_style, " ");
         let top = style.map_or(0.0, |s| s.padding.top + s.border.top.width);
-        top + measured.height - (line.height - line.baseline)
+        if style.is_some_and(|s| s.display.is_flex_or_grid()) {
+            // The anonymous item of a flex or grid container: its first line.
+            top + measured.baseline
+        } else {
+            top + measured.height - (line.height - line.baseline)
+        }
     };
     (width, height, baseline)
 }
@@ -928,6 +938,7 @@ fn nested_block(
         HashMap<NodeId, BoxLayout>,
         HashMap<NodeId, ContentExtent>,
         Vec<(NodeId, InlineContext)>,
+        Option<f32>,
     );
     let lay = |font: &mut florui_text::Font, width: AvailableSpace| -> Result<Laid, LayoutError> {
         let mut tree = FlorTree::new();
@@ -964,7 +975,8 @@ fn nested_block(
             &[],
             |node| ids[&node],
         )?;
-        Ok((layouts, extents, leaves))
+        let first_baseline = tree.first_baseline(ids[&node]);
+        Ok((layouts, extents, leaves, first_baseline))
     };
     let mut laid = lay(font, AvailableSpace::MaxContent)?;
     let natural = laid.0[&node].width;
@@ -977,14 +989,23 @@ fn nested_block(
             laid = lay(font, AvailableSpace::Definite(target))?;
         }
     }
-    let (mut layouts, mut extents, leaves) = laid;
+    let (mut layouts, mut extents, leaves, first_baseline) = laid;
     let own = layouts[&node];
     let contexts: HashMap<NodeId, &InlineContext> = leaves
         .iter()
         .map(|(node, context)| (*node, context))
         .collect();
-    let baseline =
-        last_line_baseline(font, arena, styles, &layouts, &contexts, node).unwrap_or(own.height);
+    // A flex or grid container sits on the first baseline of its items, a block
+    // on the last line of its text.
+    let baseline = if styles
+        .get(&node)
+        .is_some_and(|s| s.display.is_flex_or_grid())
+    {
+        first_baseline
+    } else {
+        last_line_baseline(font, arena, styles, &layouts, &contexts, node)
+    }
+    .unwrap_or(own.height);
     layouts.remove(&node);
     extents.remove(&node);
     Ok((
@@ -1165,7 +1186,7 @@ fn flatten_items(
                 match child_style.map(|s| s.display) {
                     _ if is_viewport_fixed(arena, styles, *child) => {}
                     Some(StyleDisplay::None) => context.hidden.push(*child),
-                    Some(StyleDisplay::InlineBlock) => {
+                    Some(display) if display.is_atomic_inline() => {
                         let (width, height, baseline, nested) = if arena.children(*child).is_empty()
                             || arena.tag(*child) == "svg"
                         {
