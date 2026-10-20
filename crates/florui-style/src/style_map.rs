@@ -31,6 +31,8 @@ struct Kinds {
     floats: bool,
     list_items: bool,
     block_align: bool,
+    deferred: bool,
+    subgrid: bool,
 }
 
 impl PartialEq for Kinds {
@@ -45,6 +47,10 @@ impl Kinds {
         self.floats |= style.float != Float::None;
         self.list_items |= style.display == Display::ListItem;
         self.block_align |= style.block_align != BlockAlign::None;
+        self.deferred |=
+            !style.deferred.is_empty() || style.has_grid_calc() || style.has_fit_content_columns();
+        self.subgrid |=
+            style.grid_template_columns.is_subgrid() || style.grid_template_rows.is_subgrid();
     }
 
     fn any(&mut self) {
@@ -53,6 +59,8 @@ impl Kinds {
             floats: true,
             list_items: true,
             block_align: true,
+            deferred: true,
+            subgrid: true,
         };
     }
 }
@@ -82,6 +90,17 @@ impl StyleMap {
     /// Whether a style may align the blocks in it (`text-align: -webkit-center` and the like).
     pub fn may_have_block_align(&self) -> bool {
         self.kinds.block_align
+    }
+
+    /// Whether a style may have values that are worked out from the layout around it: a
+    /// `calc()` that mixes units, a `fit-content()` column.
+    pub fn may_have_deferred(&self) -> bool {
+        self.kinds.deferred
+    }
+
+    /// Whether a style may have a `subgrid` track list.
+    pub fn may_have_subgrid(&self) -> bool {
+        self.kinds.subgrid
     }
 
     /// Whether a style may be a list item.

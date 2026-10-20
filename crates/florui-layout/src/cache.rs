@@ -1086,7 +1086,7 @@ mod tests {
     fn a_kept_tree_with_contents_and_inline_boxes_lays_out_as_one_built_anew() {
         let css = ".c { display: contents; } .b { display: block; padding: 3px; margin: 4px; } \
                    .f { display: flex; } .x { display: flex; } .g { display: inline-grid; } \
-                   .h { display: inline-flex; } .r { display: flow-root; } \
+                   .h { display: inline-flex; } .r { display: flow-root; } .o { order: -1; } \
                    .fl { float: left; width: 20px; height: 20px; }";
         let sheet = florui_style::parse_stylesheet(css).unwrap();
         let styled = |arena: &Arena| {

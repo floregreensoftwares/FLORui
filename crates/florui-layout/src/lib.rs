@@ -1158,14 +1158,31 @@ fn nested_block(
                 &[id],
             )
             .map_err(LayoutError)?;
-        run_layout(
+        let available = Size {
+            width,
+            height: AvailableSpace::MaxContent,
+        };
+        run_layout(font, &mut tree, root, available, ids.len())?;
+        // What is worked out from the layout around a box, and the subgrids, are done
+        // for the boxes in this tree as for the boxes of the page.
+        deferred::resolve(
             font,
+            arena,
+            styles,
             &mut tree,
-            root,
-            Size {
-                width,
-                height: AvailableSpace::MaxContent,
-            },
+            &|node| ids.get(&node).copied(),
+            &[root],
+            available,
+            ids.len(),
+        )?;
+        subgrid::resolve(
+            font,
+            arena,
+            styles,
+            &mut tree,
+            &|node| ids.get(&node).copied(),
+            &[root],
+            available,
             ids.len(),
         )?;
         let (layouts, extents) = collect_layouts(
@@ -7724,6 +7741,62 @@ mod tests {
                 </div>
             </div>
         }
+    }
+
+    #[test]
+    fn a_width_that_mixes_units_is_worked_out_inside_an_inline_flex_and_an_inline_block() {
+        // Chrome 153: 50% of 200 and 10px is 110 in both.
+        for (display, height) in [("inline-flex", 20.0), ("inline-block", 40.0)] {
+            let tree: Element = view! {
+                <div class="w">
+                    <div class="f">
+                        <div class="c">{"c"}</div>
+                        <div class="d">{"d"}</div>
+                    </div>
+                </div>
+            };
+            let laid = crate::test_support::lay_out(
+                &tree,
+                &format!(
+                    ".f {{ display: {display}; width: 200px; }} \
+                     .c {{ width: calc(50% + 10px); height: 20px; }} .d {{ flex: 1; height: 20px; }}"
+                ),
+            );
+            crate::test_support::rect_near(laid.rect("f"), (0.0, 0.0, 200.0, height), display);
+            assert!(
+                (laid.rect("c").2 - 110.0).abs() < 0.5,
+                "{display}: the width is {}",
+                laid.rect("c").2
+            );
+        }
+    }
+
+    #[test]
+    fn a_subgrid_in_an_inline_grid_takes_the_tracks_of_the_grid_it_is_in() {
+        // Chrome 153: the inline grid is 120x50; the subgrid across both columns
+        // has its items at x = 5 and 52 (its padding off the tracks, a gap of 4).
+        let tree: Element = view! {
+            <div class="w">
+                <div class="g">
+                    <div class="a">{"a"}</div>
+                    <div class="s">
+                        <div class="x">{"x"}</div>
+                        <div class="y">{"y"}</div>
+                    </div>
+                </div>
+            </div>
+        };
+        let laid = crate::test_support::lay_out(
+            &tree,
+            ".g { display: inline-grid; grid-template-columns: 50px 70px; \
+             grid-template-rows: 20px 30px; } .a { grid-column: 1 / 3; } \
+             .s { display: grid; grid-column: 1 / 3; grid-template-columns: subgrid; \
+             padding: 0 5px; column-gap: 4px; }",
+        );
+        crate::test_support::rect_near(laid.rect("g"), (0.0, 0.0, 120.0, 50.0), "grid");
+        crate::test_support::rect_near(laid.rect("s"), (0.0, 20.0, 120.0, 30.0), "subgrid");
+        crate::test_support::rect_near(laid.rect("x"), (5.0, 20.0, 43.0, 30.0), "x");
+        crate::test_support::rect_near(laid.rect("y"), (52.0, 20.0, 63.0, 30.0), "y");
     }
 
     #[test]

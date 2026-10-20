@@ -304,9 +304,11 @@ pub(crate) fn resolve(
     count: usize,
 ) -> Result<(), LayoutError> {
     // Nearly no document has one: nothing to build then.
-    if !styles.iter().any(|(_, style)| {
-        style.grid_template_columns.is_subgrid() || style.grid_template_rows.is_subgrid()
-    }) {
+    if !styles.may_have_subgrid()
+        || !styles.iter().any(|(_, style)| {
+            style.grid_template_columns.is_subgrid() || style.grid_template_rows.is_subgrid()
+        })
+    {
         return Ok(());
     }
     let is_subgrid = |node: NodeId, axis: Axis| -> bool {
@@ -315,8 +317,13 @@ pub(crate) fn resolve(
         };
         let in_a_grid = layout_parent(arena, node)
             .and_then(|parent| styles.get(&parent))
-            .is_some_and(|parent| parent.display == StyleDisplay::Grid);
-        style.display == StyleDisplay::Grid
+            .is_some_and(|parent| {
+                matches!(
+                    parent.display,
+                    StyleDisplay::Grid | StyleDisplay::InlineGrid
+                )
+            });
+        matches!(style.display, StyleDisplay::Grid | StyleDisplay::InlineGrid)
             && in_a_grid
             && !matches!(
                 style.position,
