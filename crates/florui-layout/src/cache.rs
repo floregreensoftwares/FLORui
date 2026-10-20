@@ -1083,6 +1083,98 @@ mod tests {
     }
 
     #[test]
+    fn a_kept_tree_with_contents_and_inline_boxes_lays_out_as_one_built_anew() {
+        let css = ".c { display: contents; } .b { display: block; padding: 3px; margin: 4px; } \
+                   .f { display: flex; } .x { display: flex; } .g { display: inline-grid; } \
+                   .h { display: inline-flex; } .r { display: flow-root; } \
+                   .fl { float: left; width: 20px; height: 20px; }";
+        let sheet = florui_style::parse_stylesheet(css).unwrap();
+        let styled = |arena: &Arena| {
+            florui_style::compute(
+                arena,
+                &sheet,
+                &InteractionState::new(),
+                florui_style::Viewport::default(),
+                &mut florui_style::AnimationTimeline::default(),
+            )
+        };
+        let node = |tag: &'static str, class: &str, children: Vec<Element>| {
+            Element::node(tag, vec![("class".into(), class.into())], children)
+        };
+        let tree = |wrapper: &str, inner: &str| {
+            node(
+                "div",
+                "",
+                vec![
+                    node(
+                        "div",
+                        "f",
+                        vec![
+                            node(
+                                "div",
+                                wrapper,
+                                vec![node("p", "", vec![Element::text("one")])],
+                            ),
+                            node("p", "o", vec![Element::text("two")]),
+                        ],
+                    ),
+                    node(
+                        "div",
+                        "",
+                        vec![
+                            Element::text("before "),
+                            node(
+                                "span",
+                                inner,
+                                vec![node("i", "", vec![Element::text("in the box")])],
+                            ),
+                            Element::text(" after"),
+                            node("div", "fl", vec![]),
+                        ],
+                    ),
+                    node(
+                        "div",
+                        wrapper,
+                        vec![
+                            Element::text("text in "),
+                            node("em", "", vec![Element::text("em")]),
+                        ],
+                    ),
+                ],
+            )
+        };
+        let mut font = florui_text::Font::load_embedded();
+        let mut cache = LayoutCache::new();
+        for (wrapper, inner) in [
+            ("c", "g"),
+            ("c", "g"),
+            ("b", "g"),
+            ("c", "h"),
+            ("b", "h"),
+            ("c", "r"),
+            ("x", "g"),
+            ("c", "g"),
+        ] {
+            let arena = Arena::build(&tree(wrapper, inner));
+            let styles = styled(&arena);
+            let available = Size::MAX_CONTENT;
+            let kept = cache
+                .compute(&mut font, &arena, &styles, available)
+                .unwrap();
+            let fresh =
+                compute_layout_with_content_extents(&mut font, &arena, &styles, available).unwrap();
+            assert_eq!(kept.0.len(), fresh.0.len(), "{wrapper} {inner}: count");
+            for (node, layout) in &fresh.0 {
+                assert_eq!(
+                    kept.0.get(node),
+                    Some(layout),
+                    "{wrapper} {inner}: node {node}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_kept_tree_with_tables_and_lists_lays_out_as_one_built_anew() {
         let css = "table { border-collapse: collapse; } td { padding: 2px; border: 1px solid #000; } \
                    .w { width: 40px; } .i { list-style-position: inside; } \
