@@ -1931,11 +1931,25 @@ fn run_layout(
                     Some(LeafContext::Text(_)) => shaping_caches.entry(node_id).or_default(),
                     _ => &mut throwaway_cache,
                 };
+                // Taffy hands the measure the size the box is known to have, border
+                // box and all, where text wraps in what is left of it.
+                let across = style.padding.left.resolve_or_zero(None, |_, _| 0.0)
+                    + style.padding.right.resolve_or_zero(None, |_, _| 0.0)
+                    + style.border.left.resolve_or_zero(None, |_, _| 0.0)
+                    + style.border.right.resolve_or_zero(None, |_, _| 0.0);
+                let down = style.padding.top.resolve_or_zero(None, |_, _| 0.0)
+                    + style.padding.bottom.resolve_or_zero(None, |_, _| 0.0)
+                    + style.border.top.resolve_or_zero(None, |_, _| 0.0)
+                    + style.border.bottom.resolve_or_zero(None, |_, _| 0.0);
                 let mut output = compute_leaf_layout(
                     inputs,
                     style,
                     |_, _| 0.0,
                     |known_dimensions, available_space| {
+                        let known_dimensions = Size {
+                            width: known_dimensions.width.map(|w| (w - across).max(0.0)),
+                            height: known_dimensions.height.map(|h| (h - down).max(0.0)),
+                        };
                         measure_leaf(
                             font,
                             shaping_cache,
@@ -7297,6 +7311,42 @@ mod tests {
         assert_eq!(boxes[1].0, 0.0);
         assert_eq!(boxes[2].0, 95.0);
         assert_eq!(boxes[3].0, 190.0);
+    }
+
+    #[test]
+    fn wrapped_text_in_a_padded_flex_or_grid_item_wraps_inside_its_padding() {
+        // Chrome 153: 90px of text across 110px less 8px of padding and 2px of
+        // border each side is four lines, 84px, in a block, a flex item and a
+        // grid item alike.
+        let height_in = |parent: &str| {
+            let tree: Element = view! {
+                <div class="p">
+                    <div class="t">"A padded title that has to wrap across lines"</div>
+                </div>
+            };
+            let (arena, layouts) = layout_for(
+                &tree,
+                &format!(
+                    "{parent} .p {{ font-size: 13px; line-height: 16px; }} \
+                     .t {{ padding: 8px; border: 2px solid #000; }}"
+                ),
+            );
+            layouts[&arena.children(arena.roots()[0])[0]].height
+        };
+        assert_eq!(height_in(".p { width: 110px; }"), 84.0);
+        assert_eq!(
+            height_in(".p { display: flex; flex-direction: column; width: 110px; }"),
+            84.0
+        );
+        assert_eq!(
+            height_in(".p { display: flex; width: 110px; } .t { flex: 1; }"),
+            84.0
+        );
+        assert_eq!(
+            height_in(".p { display: grid; grid-template-columns: 110px; }"),
+            84.0
+        );
+        assert_eq!(height_in(".p { display: grid; width: 110px; }"), 84.0);
     }
 
     #[test]
