@@ -31,7 +31,10 @@ fn list() -> Element {
         .collect();
     Element::node(
         "div",
-        vec![("id".into(), "list".into()), ("class".into(), "list".into())],
+        vec![
+            ("id".into(), "list".into()),
+            ("class".into(), "list".into()),
+        ],
         rows,
     )
 }
