@@ -70,6 +70,8 @@ mod transform;
 mod tree;
 
 #[cfg(test)]
+mod formatting_context_tests;
+#[cfg(test)]
 mod inline_level_tests;
 #[cfg(test)]
 mod test_support;
@@ -2795,6 +2797,14 @@ fn layout_fixed_group(
     Ok(Some(root))
 }
 
+fn to_taffy_overflow(makes_context: bool) -> taffy::Overflow {
+    if makes_context {
+        taffy::Overflow::Hidden
+    } else {
+        taffy::Overflow::Visible
+    }
+}
+
 fn to_taffy_box_sizing(value: StyleBoxSizing) -> BoxSizing {
     match value {
         StyleBoxSizing::ContentBox => BoxSizing::ContentBox,
@@ -2816,6 +2826,12 @@ fn to_taffy_style(style: Option<&ComputedStyle>) -> taffy::Style {
         // declared width/height rather than being carved out of it. Taffy's
         // own default is border-box, so this is always set explicitly.
         box_sizing: to_taffy_box_sizing(style.box_sizing),
+        // A scroll container is the root of a block formatting context of its own,
+        // and in a flex container its automatic minimum size is nothing.
+        overflow: taffy::Point {
+            x: to_taffy_overflow(style.overflow_makes_context),
+            y: to_taffy_overflow(style.overflow_makes_context),
+        },
         size: Size {
             width: to_size_dimension(style.width, style.width_percent),
             height: to_size_dimension(style.height, style.height_percent),

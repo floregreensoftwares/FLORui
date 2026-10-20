@@ -1915,6 +1915,10 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
             style::values::computed::ui::CursorKind::Pointer
         ),
         overflow_clips: to_overflow_clips(box_style.overflow_x, box_style.overflow_y),
+        overflow_makes_context: to_overflow_makes_context(
+            box_style.overflow_x,
+            box_style.overflow_y,
+        ),
         overflow_scrolls_x: to_overflow_scrolls_x(box_style.overflow_x),
         overflow_scrolls_y: to_overflow_scrolls_y(box_style.overflow_y),
         font_family: to_font_family(&font.font_family),
@@ -3863,6 +3867,19 @@ fn to_overflow_clips(
     use style::computed_values::overflow_x::T as OverflowX;
     use style::computed_values::overflow_y::T as OverflowY;
     !matches!(overflow_x, OverflowX::Visible) || !matches!(overflow_y, OverflowY::Visible)
+}
+
+/// Whether either axis's `overflow` is `hidden`, `scroll` or `auto`, which makes
+/// the box a scroll container and so the root of its own block formatting
+/// context. `clip` is not one.
+fn to_overflow_makes_context(
+    overflow_x: style::computed_values::overflow_x::T,
+    overflow_y: style::computed_values::overflow_y::T,
+) -> bool {
+    use style::computed_values::overflow_x::T as OverflowX;
+    use style::computed_values::overflow_y::T as OverflowY;
+    !matches!(overflow_x, OverflowX::Visible | OverflowX::Clip)
+        || !matches!(overflow_y, OverflowY::Visible | OverflowY::Clip)
 }
 
 /// Whether this axis's `overflow` is real CSS's `scroll`/`auto` — the two
