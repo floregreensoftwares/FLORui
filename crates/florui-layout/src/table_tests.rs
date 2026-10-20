@@ -947,3 +947,59 @@ fn table_with_cells() -> Element {
         )],
     )
 }
+
+#[test]
+fn a_pointer_is_over_a_cell_or_the_table_never_over_a_row() {
+    // Chrome 153: a cell across rows is hit where it lies over the second row, and the
+    // gap between cells hits the table.
+    let tree = page(table(
+        "t",
+        vec![
+            tr(
+                "r1",
+                vec![
+                    with_attr("td", "big", &[("rowspan", "2")], vec![text("big")]),
+                    td("a", vec![text("a")]),
+                ],
+            ),
+            tr("r2", vec![td("b", vec![text("b")])]),
+        ],
+    ));
+    let css =
+        format!("{CSS} td {{ width: 40px; height: 20px; }} .r2 {{ background-color: #fcc; }}");
+    let laid = lay_out(&tree, &css);
+    let (x, y, w, h) = laid.rect("big");
+    let hit = |x: f32, y: f32| crate::hit_test(&laid.arena, &laid.layouts, &laid.styles, x, y);
+    assert_eq!(hit(x + 5.0, y + 5.0), Some(laid.node("big")));
+    assert_eq!(hit(x + 5.0, y + h - 5.0), Some(laid.node("big")));
+    // In the row, between the cell across rows and the cell b.
+    let (_, ry, ..) = laid.rect("r2");
+    assert_eq!(hit(x + w + 1.0, ry + 3.0), Some(laid.node("t")));
+}
+
+#[test]
+fn a_caption_centers_the_blocks_in_it_and_a_header_cell_does_not() {
+    // Chrome 153: `text-align: -webkit-center` on a caption puts a block of its own
+    // width in the middle.
+    let tree = page(div(
+        "",
+        vec![
+            table(
+                "t1",
+                vec![
+                    element("caption", "c", vec![div("d1", vec![])]),
+                    tr("", vec![td("a", vec![text("a")])]),
+                ],
+            ),
+            table(
+                "t2",
+                vec![tr("", vec![element("th", "h", vec![div("d2", vec![])])])],
+            ),
+        ],
+    ));
+    let css =
+        format!("{CSS} .t1, .t2 {{ width: 200px; }} .d1, .d2 {{ width: 40px; height: 10px; }}");
+    let laid = lay_out(&tree, &css);
+    close(&laid, "d1", (80.0, 0.0, 40.0, 10.0));
+    near(laid.rect("d2").0, 3.0, 0.05, "block in a header cell");
+}
