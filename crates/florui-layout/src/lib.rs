@@ -440,6 +440,41 @@ pub fn node_text_style(style: Option<&ComputedStyle>) -> florui_text::TextStyle 
     style.map_or_else(default_text_style, text_style_of)
 }
 
+/// The text style a node has on the first line of its block, when that is not its own: the
+/// first line has no say in how the block lays its lines out, so what it does not change is
+/// the block's.
+fn first_line_text_style(styles: &StyleMap, node: NodeId) -> Option<florui_text::TextStyle> {
+    let style = styles.get(&node)?;
+    let line = style.first_line.as_deref()?;
+    let base = text_style_of(style);
+    let mut text = text_style_of(line);
+    text.align = base.align;
+    text.indent = base.indent;
+    text.collapse = base.collapse;
+    text.wrap = base.wrap;
+    text.word_break = base.word_break;
+    text.overflow_wrap = base.overflow_wrap;
+    Some(text)
+}
+
+/// An element of an inline context for `node`, with its style on the first line of the
+/// block if it has one there.
+fn inline_element(
+    styles: &StyleMap,
+    node: NodeId,
+    parent: usize,
+    style: florui_text::TextStyle,
+) -> florui_text::InlineElement {
+    florui_text::InlineElement {
+        first_line: first_line_text_style(styles, node).map(|mut line| {
+            // Where an element is on a line is not a matter of the line's style.
+            line.vertical_align = style.vertical_align;
+            line
+        }),
+        ..florui_text::InlineElement::new(parent, style)
+    }
+}
+
 /// One piece of a container's inline formatting context, already resolved
 /// down to what [`florui_text::Font::shape_inline_tree`] needs — built once
 /// in [`build_node`], reused by both the measure closure and the post-layout
@@ -1453,6 +1488,13 @@ fn has_line_marker(styles: &StyleMap, node: NodeId) -> bool {
     has_inside_marker(styles, node) || has_outside_image_marker(styles, node)
 }
 
+/// Whether the lines of a node with no children are laid out as an inline formatting
+/// context and not as plain text: it has a marker in its first line, or a first line of
+/// its own.
+fn has_line_context(styles: &StyleMap, node: NodeId) -> bool {
+    has_line_marker(styles, node) || styles.get(&node).is_some_and(|s| s.first_line.is_some())
+}
+
 /// What the marker of a list item takes in its first line.
 enum LineMarker {
     /// The room of a shape or a text before what the line holds.
@@ -1589,10 +1631,12 @@ fn build_inline_content_items(
     laid: Laid<'_>,
 ) -> InlineContext {
     let mut context = InlineContext {
-        elements: vec![florui_text::InlineElement {
-            parent: 0,
-            style: node_text_style(styles.get(&node)),
-        }],
+        elements: vec![inline_element(
+            styles,
+            node,
+            0,
+            node_text_style(styles.get(&node)),
+        )],
         items: Vec::new(),
         nodes: vec![node],
         hidden: Vec::new(),
@@ -1612,11 +1656,18 @@ fn build_run_content_items(
     run: std::ops::Range<usize>,
     laid: Laid<'_>,
 ) -> InlineContext {
+    // Only the first run of a block that starts with one has the first line of the block.
+    let mut element = inline_element(styles, node, 0, node_text_style(styles.get(&node)));
+    if element.first_line.is_some()
+        && mixed_parts_of(arena, styles, node)
+            .iter()
+            .find(|part| !matches!(part, Part::Spot(_)))
+            != Some(&Part::Run(run.clone()))
+    {
+        element.first_line = None;
+    }
     let mut context = InlineContext {
-        elements: vec![florui_text::InlineElement {
-            parent: 0,
-            style: node_text_style(styles.get(&node)),
-        }],
+        elements: vec![element],
         items: Vec::new(),
         nodes: vec![node],
         hidden: Vec::new(),
@@ -1693,10 +1744,9 @@ fn flatten_items(
                     let mut style = node_text_style(styles.get(&owner));
                     // No box, so nothing to align.
                     style.vertical_align = florui_text::VerticalAlign::Baseline;
-                    context.elements.push(florui_text::InlineElement {
-                        parent: element,
-                        style,
-                    });
+                    context
+                        .elements
+                        .push(inline_element(styles, owner, element, style));
                     context.nodes.push(owner);
                     let made = context.elements.len() - 1;
                     last_owner = Some((owner, made));
@@ -1775,10 +1825,9 @@ fn flatten_items(
                             // The break it stands for is kept, and the spaces around it go.
                             text_style.collapse = florui_text::WhiteSpaceCollapse::PreserveBreaks;
                         }
-                        context.elements.push(florui_text::InlineElement {
-                            parent: element,
-                            style: text_style,
-                        });
+                        context
+                            .elements
+                            .push(inline_element(styles, *child, element, text_style));
                         let own = context.elements.len() - 1;
                         context.nodes.push(*child);
                         let sides = |style: &ComputedStyle, end: bool| {
@@ -1843,9 +1892,50 @@ pub fn is_inline_formatting_context(arena: &Tree, styles: &StyleMap, node: NodeI
 /// node each element of them (the container is element `0`) belongs to.
 pub struct InlineShaped {
     pub layout: std::sync::Arc<florui_text::InlineLayout>,
+    /// The arena node of each element. When the first line of the context has a style of its
+    /// own, the elements as they are on the first line come after them, each the node of the
+    /// element it is the first line of: see [`florui_text::InlineLayout::first_line`].
     pub nodes: Vec<NodeId>,
-    /// The parent element of each element; the container's own is `0`.
+    /// The parent element of each element; the container's own is `0`, and so is the parent
+    /// of the container as it is on the first line.
     pub parents: Vec<usize>,
+}
+
+impl InlineShaped {
+    fn new(layout: std::sync::Arc<florui_text::InlineLayout>, context: &InlineContext) -> Self {
+        let mut nodes = context.nodes.clone();
+        let mut parents: Vec<usize> = context.elements.iter().map(|e| e.parent).collect();
+        if let Some(count) = layout.first_line {
+            for element in 0..count {
+                nodes.push(context.nodes[element]);
+                parents.push(if element == 0 {
+                    0
+                } else {
+                    count + context.elements[element].parent
+                });
+            }
+        }
+        Self {
+            layout,
+            nodes,
+            parents,
+        }
+    }
+
+    /// The style `element` has where it is: on the first line, that of the first line.
+    pub fn style<'a>(&self, styles: &'a StyleMap, element: usize) -> Option<&'a ComputedStyle> {
+        let style = styles.get(&self.nodes[element])?;
+        match self.layout.first_line {
+            Some(count) if element >= count => Some(style.first_line.as_deref().unwrap_or(style)),
+            _ => Some(style),
+        }
+    }
+
+    /// Whether `element` is the container as it is on the first line, which has no box of
+    /// its own but its background.
+    pub fn is_first_line(&self, element: usize) -> bool {
+        self.layout.first_line == Some(element)
+    }
 }
 
 /// Whether `node` is an inline element that flows in the lines of an inline
@@ -1909,11 +1999,10 @@ pub fn shape_anonymous_block(
     let context =
         build_run_content_items(font, arena, styles, container, range.clone(), Some(laid));
     let slots = slots_of(Some(laid), block);
-    Some(InlineShaped {
-        layout: shape_context(font, &context, wrap_width, slots.as_deref()),
-        nodes: context.nodes.clone(),
-        parents: context.elements.iter().map(|e| e.parent).collect(),
-    })
+    Some(InlineShaped::new(
+        shape_context(font, &context, wrap_width, slots.as_deref()),
+        &context,
+    ))
 }
 
 /// Shapes `node`'s own real inline formatting context at `wrap_width` —
@@ -1935,11 +2024,10 @@ pub fn shape_inline_formatting_context(
     }
     let context = build_inline_content_items(font, arena, styles, node, Some(laid));
     let slots = slots_of(Some(laid), node);
-    Some(InlineShaped {
-        layout: shape_context(font, &context, wrap_width, slots.as_deref()),
-        nodes: context.nodes.clone(),
-        parents: context.elements.iter().map(|e| e.parent).collect(),
-    })
+    Some(InlineShaped::new(
+        shape_context(font, &context, wrap_width, slots.as_deref()),
+        &context,
+    ))
 }
 
 /// The text of `node`, a block with plain text and a float beside it, shaped in the
@@ -1958,10 +2046,12 @@ pub fn shape_text_in_slots(
         return None;
     }
     let context = InlineContext {
-        elements: vec![florui_text::InlineElement {
-            parent: 0,
-            style: node_text_style(styles.get(&node)),
-        }],
+        elements: vec![inline_element(
+            styles,
+            node,
+            0,
+            node_text_style(styles.get(&node)),
+        )],
         items: vec![InlineContentItem::Text {
             text: text.to_owned(),
             element: 0,
@@ -1969,11 +2059,10 @@ pub fn shape_text_in_slots(
         nodes: vec![node],
         hidden: Vec::new(),
     };
-    Some(InlineShaped {
-        layout: shape_context(font, &context, wrap_width, Some(&slots)),
-        nodes: vec![node],
-        parents: vec![0],
-    })
+    Some(InlineShaped::new(
+        shape_context(font, &context, wrap_width, Some(&slots)),
+        &context,
+    ))
 }
 
 /// A fragment's border box as `(x0, y0, x1, y1)` in content coordinates: its
@@ -2438,9 +2527,14 @@ fn collect_layouts(
         };
         let mut pieces: Vec<Vec<(f32, f32, f32, f32)>> = vec![Vec::new(); count];
         for fragment in &shaped.fragments {
-            let rect = fragment_rect(styles, context.nodes[fragment.element], fragment);
-            merge(&mut rects[fragment.element], rect);
-            pieces[fragment.element].push(rect);
+            // An element on the first line is the same node as the rest of it.
+            let element = match shaped.first_line {
+                Some(first) if fragment.element >= first => fragment.element - first,
+                _ => fragment.element,
+            };
+            let rect = fragment_rect(styles, context.nodes[element], fragment);
+            merge(&mut rects[element], rect);
+            pieces[element].push(rect);
         }
         let origin_of = |element: usize, rects: &[Option<(f32, f32, f32, f32)>]| {
             if element == 0 {
@@ -3378,7 +3472,7 @@ fn build_node(
         match step {
             BuildStep::Visit(node) => {
                 let arena_children = flow_children(arena, styles, node);
-                let leaf = (arena.children(node).is_empty() && !has_line_marker(styles, node))
+                let leaf = (arena.children(node).is_empty() && !has_line_context(styles, node))
                     || arena.tag(node) == "svg";
                 let kind = if leaf {
                     LayoutKind::Blocks
@@ -3387,7 +3481,7 @@ fn build_node(
                 };
                 // An inline `<svg>` is a replaced box: what is in it is drawn with it.
                 let is_svg = arena.tag(node) == "svg";
-                let id = if (arena.children(node).is_empty() && !has_line_marker(styles, node))
+                let id = if (arena.children(node).is_empty() && !has_line_context(styles, node))
                     || is_svg
                 {
                     let style = to_taffy_style(styles.get(&node));
