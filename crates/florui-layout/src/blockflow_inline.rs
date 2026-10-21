@@ -153,10 +153,7 @@ impl Run<'_> {
                 hidden: Vec::new(),
             },
             Some(LeafContext::Text(text)) => InlineContext {
-                elements: vec![InlineElement {
-                    parent: 0,
-                    style: text.style,
-                }],
+                elements: vec![InlineElement::new(0, text.style)],
                 items: vec![InlineContentItem::Text {
                     text: text.text.clone(),
                     element: 0,

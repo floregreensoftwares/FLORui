@@ -108,6 +108,7 @@ fn vertical_align_bits(value: crate::VerticalAlign) -> [u32; 3] {
 struct Element {
     parent: usize,
     style: StyleBits,
+    first_line: Option<StyleBits>,
 }
 
 impl Element {
@@ -115,6 +116,7 @@ impl Element {
         Self {
             parent: element.parent,
             style: element.style.bits(),
+            first_line: element.first_line.map(|style| style.bits()),
         }
     }
 }
@@ -137,7 +139,9 @@ impl Entry {
             && self.elements.len() == elements.len()
             && self.items.len() == items.len()
             && self.elements.iter().zip(elements).all(|(stored, asked)| {
-                stored.parent == asked.parent && stored.style == asked.style.bits()
+                stored.parent == asked.parent
+                    && stored.style == asked.style.bits()
+                    && stored.first_line == asked.first_line.map(|style| style.bits())
             })
             && self
                 .items
@@ -172,6 +176,10 @@ fn hash_of(elements: &[InlineElement], items: &[InlineItem<'_>], width: Option<u
     for element in elements {
         element.parent.hash(&mut hasher);
         element.style.bits().hash(&mut hasher);
+        element
+            .first_line
+            .map(|style| style.bits())
+            .hash(&mut hasher);
     }
     for item in items {
         match *item {
