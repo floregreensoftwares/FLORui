@@ -119,6 +119,11 @@ struct NodeSlot {
     /// The first-letter selectors the owner matches, by number, as the classes
     /// `florui-fl-N` the rules were rewritten to (see [`crate::first_letter_adapter`]).
     fl: std::cell::RefCell<Vec<usize>>,
+    /// Whether the node is a first letter in a box of `::before` or `::after`, which
+    /// inherits from that box and not from the element.
+    fl_in_box: bool,
+    /// The values of the `::before` of the node, for such a first letter to inherit from.
+    before_values: std::cell::RefCell<Option<Arc<ComputedValues>>>,
     data: AtomicRefCell<ElementData>,
     dirty_descendants: Cell<bool>,
     local_name: BorrowedLocalName,
@@ -320,13 +325,15 @@ impl StyloTree {
         for &id in &order {
             let node_state = node_state_of(arena, state, id);
             let parent_stable = arena
-                .parent(id)
+                .style_parent(id)
                 .map(|parent_id| stable_ids[index_of[parent_id]]);
             let stable_id = timeline.stable_id(parent_stable, arena.tag(id), ordinal[id]);
             stable_ids.push(stable_id);
             slots.push(NodeSlot {
                 parent: None,
-                depth: arena.parent(id).map_or(0, |p| slots[index_of[p]].depth + 1),
+                depth: arena
+                    .style_parent(id)
+                    .map_or(0, |p| slots[index_of[p]].depth + 1),
                 sibling_index: 0,
                 children: Vec::new(),
                 tag: arena.tag(id),
@@ -341,6 +348,11 @@ impl StyloTree {
                 identity_hash: std::cell::OnceCell::new(),
                 fl_owner: arena.first_letter_owner(id).map(|owner| index_of[owner]),
                 fl: std::cell::RefCell::new(Vec::new()),
+                fl_in_box: arena.first_letter_owner(id).is_some()
+                    && arena
+                        .parent(id)
+                        .is_some_and(|p| arena.generated(p).is_some()),
+                before_values: std::cell::RefCell::new(None),
                 data: AtomicRefCell::new(ElementData::default()),
                 dirty_descendants: Cell::new(false),
                 local_name: arena.tag(id).into(),
@@ -352,7 +364,7 @@ impl StyloTree {
         // Vec has stopped growing, so parent/child pointers can be taken.
         for (index, &id) in order.iter().enumerate() {
             let parent_ptr = arena
-                .parent(id)
+                .style_parent(id)
                 .map(|parent_id| &slots[index_of[parent_id]] as *const NodeSlot);
             let element_children = arena.element_child_ids(id);
             let children_ptrs: Vec<*const NodeSlot> = element_children
@@ -422,7 +434,7 @@ impl StyloTree {
         let mut of_slot: Vec<u32> = vec![0; self.slots.len()];
         for (index, &id) in self.order.iter().enumerate() {
             // What is above: the number of the parent, and the parent's own state.
-            let above = match arena.parent(id).map(|parent| self.index_of[parent]) {
+            let above = match arena.style_parent(id).map(|parent| self.index_of[parent]) {
                 Some(parent) => (
                     of_slot[parent],
                     self.slots[parent].state.get().bits(),
@@ -500,6 +512,9 @@ impl StyloTree {
             order.push(id);
             if arena.has_first_letters() {
                 order.extend(arena.first_letter_children(id));
+                if let Some(before) = arena.generated_child(id, crate::Pseudo::Before) {
+                    order.extend(arena.first_letter_children(before));
+                }
             }
             stack.extend(arena.element_child_ids(id).iter().rev());
         }
@@ -1435,7 +1450,11 @@ pub(crate) fn restyle_nodes(
                 }
                 // The first letters in the node inherit from it.
                 if arena.has_first_letters() {
-                    for child in arena.first_letter_children(id) {
+                    let in_box = arena
+                        .generated_child(id, crate::Pseudo::Before)
+                        .into_iter()
+                        .flat_map(|before| arena.first_letter_children(before));
+                    for child in arena.first_letter_children(id).chain(in_box) {
                         let child_index = tree.index_of[child];
                         work.insert((tree.slots[child_index].depth, child_index));
                     }
@@ -1753,6 +1772,8 @@ fn style_node<'t>(
         styles.pseudos.get(&PseudoElement::Before).cloned(),
         styles.pseudos.get(&PseudoElement::After).cloned(),
     ];
+    // What a first letter in the box of the `::before` inherits from.
+    *target.0.before_values.borrow_mut() = pseudos[0].clone();
     let viewport = shared.stylist.device().au_viewport_size();
     let viewport_px = (viewport.width.to_f32_px(), viewport.height.to_f32_px());
 
@@ -1841,7 +1862,12 @@ fn resolve_sharing_styles<'a>(
         .insert_parents_recovering(element, element.0.depth);
 
     let parent: Option<StyloNode<'a>> = TElement::traversal_parent(&element);
-    let parent_style = parent.and_then(|p| p.borrow_data().map(|d| d.styles.primary().clone()));
+    let mut parent_style = parent.and_then(|p| p.borrow_data().map(|d| d.styles.primary().clone()));
+    if element.0.fl_in_box
+        && let Some(before) = parent.and_then(|p| p.0.before_values.borrow().clone())
+    {
+        parent_style = Some(before);
+    }
     let mut layout_parent = parent;
     let mut layout_parent_style = parent_style.clone();
     while let Some(style) = &layout_parent_style {
@@ -1862,7 +1888,9 @@ fn resolve_sharing_styles<'a>(
         (None, None) => true,
         _ => false,
     };
-    let may_share = layout_parent_is_parent && element.0.context.get() != OVERFLOW_CONTEXT;
+    let may_share = layout_parent_is_parent
+        && !element.0.fl_in_box
+        && element.0.context.get() != OVERFLOW_CONTEXT;
     let mut target = StyleSharingTarget::new(element);
     if may_share && let Some(shared) = target.share_style_if_possible(context) {
         return shared.into();
