@@ -66,6 +66,8 @@ struct ArenaNode {
     /// The letters a first-letter node has taken from the text after it, so that
     /// what the text said can be had again.
     fl_held: String,
+    /// The node of the first line of an element that has one.
+    first_line: Option<NodeId>,
     /// Where the element was written, if `view!` recorded it. See
     /// [`Arena::source`].
     source: florui::Provenance,
@@ -229,6 +231,8 @@ pub struct Tree {
     generated_nodes: Vec<NodeId>,
     /// The nodes that are first letters, in document order.
     first_letter_nodes: Vec<NodeId>,
+    /// The nodes that are first lines, in document order.
+    first_line_nodes: Vec<NodeId>,
 }
 
 /// Where the next [`Tree::style_shape`] number comes from.
@@ -280,6 +284,7 @@ impl Arena {
                 slots,
                 generated_nodes: Vec::new(),
                 first_letter_nodes: Vec::new(),
+                first_line_nodes: Vec::new(),
             },
             handlers: Vec::new(),
         }
@@ -341,7 +346,10 @@ impl Tree {
     /// [`Self::element_children`] as a slice, borrowed when the arena has no
     /// pseudo-element boxes.
     pub fn element_child_ids(&self, id: NodeId) -> std::borrow::Cow<'_, [NodeId]> {
-        if self.generated_nodes.is_empty() && self.first_letter_nodes.is_empty() {
+        if self.generated_nodes.is_empty()
+            && self.first_letter_nodes.is_empty()
+            && self.first_line_nodes.is_empty()
+        {
             std::borrow::Cow::Borrowed(&self.nodes[id].children)
         } else {
             std::borrow::Cow::Owned(self.element_children(id).collect())
@@ -358,9 +366,9 @@ impl Tree {
         !self.generated_nodes.is_empty()
     }
 
-    /// Whether any node is a first letter.
+    /// Whether any node is a first letter or a first line.
     pub fn has_first_letters(&self) -> bool {
-        !self.first_letter_nodes.is_empty()
+        !self.first_letter_nodes.is_empty() || !self.first_line_nodes.is_empty()
     }
 
     /// The first-letter nodes, in document order.
@@ -384,23 +392,39 @@ impl Tree {
         Some(parent)
     }
 
-    /// The element a first-letter node is the first letter of.
+    /// The element a first-letter or first-line node is that of.
     pub fn first_letter_owner(&self, id: NodeId) -> Option<NodeId> {
         self.nodes[id].fl_owner
     }
 
-    /// The first-letter nodes among the children of `id`.
+    /// The first-letter nodes among the children of `id`, and its first line.
     pub fn first_letter_children(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
         self.nodes[id]
             .children
             .iter()
             .copied()
             .filter(|&child| self.nodes[child].generated == Some(crate::Pseudo::FirstLetter))
+            .chain(self.nodes[id].first_line)
+    }
+
+    /// The node of the first line of `id`, when it has one.
+    pub fn first_line_child(&self, id: NodeId) -> Option<NodeId> {
+        self.nodes[id].first_line
+    }
+
+    /// The first-line nodes, in document order.
+    pub fn first_line_nodes(&self) -> &[NodeId] {
+        &self.first_line_nodes
     }
 
     /// Whether an element with this tag and attributes is given a first letter.
     fn wants_first_letter(&self, tag: &str, attrs: &[(String, String)]) -> bool {
         self.slots.wants_first_letter(tag, attrs)
+    }
+
+    /// Whether an element with this tag and attributes is given a first line.
+    fn wants_first_line(&self, tag: &str, attrs: &[(String, String)]) -> bool {
+        self.slots.wants_first_line(tag, attrs)
     }
 
     /// Whether a child with tag `child_tag` under `parent` is disabled by
@@ -1017,6 +1041,7 @@ impl Arena {
             generated: Some(pseudo),
             fl_owner: None,
             fl_held: String::new(),
+            first_line: None,
             source: florui::Provenance::none(),
             attrs: Vec::new(),
             classes: Vec::new(),
@@ -1080,6 +1105,30 @@ impl Arena {
         self.tree.generated_nodes.pop();
         self.tree.first_letter_nodes.push(id);
         self.tree.nodes[id].fl_owner = Some(owner);
+    }
+
+    /// Adds the node of the first line of `owner`, which is no child of it and no part
+    /// of what it holds: it is there for the style of the line to be worked out on.
+    fn push_first_line(&mut self, owner: NodeId) {
+        let id = self.tree.nodes.len();
+        self.push_generated(owner, crate::Pseudo::FirstLine);
+        self.tree.generated_nodes.pop();
+        self.tree.nodes[owner].inline_items.pop();
+        self.tree.nodes[owner].children.pop();
+        self.tree.nodes[owner].first_line = Some(id);
+        self.tree.first_line_nodes.push(id);
+        self.tree.nodes[id].fl_owner = Some(owner);
+    }
+
+    /// Checks that the next node is the first line of `owner`.
+    fn refresh_first_line(&mut self, owner: NodeId, state: &mut Refresh) -> bool {
+        let id = state.next;
+        state.next += 1;
+        self.tree.nodes.get(id).is_some_and(|node| {
+            node.generated == Some(crate::Pseudo::FirstLine)
+                && node.parent == Some(owner)
+                && node.fl_owner == Some(owner)
+        })
     }
 
     /// [`Self::refresh_generated`] for the node of a first letter, which has no text
@@ -1191,6 +1240,11 @@ impl Arena {
                             state.cursor[p] = used + 1;
                         }
                         None => state.roots += 1,
+                    }
+                    if self.tree.wants_first_line(node.tag, &node.attrs)
+                        && !self.refresh_first_line(id, state)
+                    {
+                        return false;
                     }
                     let wants = self.tree.wants_generated(node.tag, &node.attrs);
                     if wants && !self.refresh_generated(id, crate::Pseudo::Before, state) {
@@ -1322,6 +1376,7 @@ impl Arena {
                         generated: None,
                         fl_owner: None,
                         fl_held: String::new(),
+                        first_line: None,
                         source: node.source,
                         attrs: node.attrs.clone(),
                         classes: class_list(&node.attrs),
@@ -1375,6 +1430,9 @@ impl Arena {
                                 .push(InlineItem::Element(id));
                         }
                         None => self.tree.roots.push(id),
+                    }
+                    if self.tree.wants_first_line(node.tag, &node.attrs) {
+                        self.push_first_line(id);
                     }
                     let wants = self.tree.wants_generated(node.tag, &node.attrs);
                     if wants {
