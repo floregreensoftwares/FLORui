@@ -15,6 +15,9 @@ pub enum Pseudo {
     After,
     /// The first letter of a block, a node inside the element its text is in.
     FirstLetter,
+    /// The first line of a block: a node that has no box, which the style of the line
+    /// is worked out on.
+    FirstLine,
 }
 
 impl Pseudo {
@@ -24,6 +27,7 @@ impl Pseudo {
             Pseudo::Before => "florui-before",
             Pseudo::After => "florui-after",
             Pseudo::FirstLetter => "florui-first-letter",
+            Pseudo::FirstLine => "florui-first-line",
         }
     }
 }
@@ -65,6 +69,9 @@ pub(crate) struct Extras {
     pub first_letter: Vec<Subject>,
     /// The numbers of the selectors the sheet holds a `::first-letter` of.
     pub first_letter_numbers: Vec<usize>,
+    pub first_line: Vec<Subject>,
+    /// The numbers of the selectors the sheet holds a `::first-line` of.
+    pub first_line_numbers: Vec<usize>,
 }
 
 /// The rightmost compound of `selector`: the elements it can match.
@@ -77,6 +84,7 @@ pub(crate) fn subject_of_selector(selector: &str) -> Subject {
 pub struct PseudoSlots {
     subjects: Vec<Subject>,
     first_letter: Vec<Subject>,
+    first_line: Vec<Subject>,
 }
 
 /// Tags that never have a generated box: replaced elements and the controls
@@ -108,15 +116,33 @@ impl PseudoSlots {
                 }
             }
         }
+        let mut first_line = Vec::new();
+        for rule in rules {
+            for subject in rule.first_line_subjects() {
+                if !first_line.contains(subject) {
+                    first_line.push(subject.clone());
+                }
+            }
+        }
         Self {
             subjects,
             first_letter,
+            first_line,
         }
     }
 
     /// Whether no element is built with a node of a pseudo-element.
     pub fn is_empty(&self) -> bool {
-        self.subjects.is_empty() && self.first_letter.is_empty()
+        self.subjects.is_empty() && self.first_letter.is_empty() && self.first_line.is_empty()
+    }
+
+    /// Whether an element with this tag and attributes may have a first line.
+    pub(crate) fn wants_first_line(&self, tag: &str, attrs: &[(String, String)]) -> bool {
+        !has_no_generated_box(tag)
+            && self
+                .first_line
+                .iter()
+                .any(|subject| subject.fits(tag, attrs))
     }
 
     /// Whether an element with this tag and attributes may have a first letter.
@@ -357,6 +383,7 @@ mod tests {
                 subject(None, &[], Some("only")),
             ],
             first_letter: Vec::new(),
+            first_line: Vec::new(),
         };
         let attrs = |class: &str, id: &str| {
             vec![
