@@ -1127,8 +1127,11 @@ fn ink_is_outside_clip(
     }
     // An element holding only text counts as an inline formatting context,
     // but shapes that one text in the container's own font, exactly as the
-    // plain path does. Anything mixed with other elements is left alone.
-    if !florui_layout::anonymous_blocks(arena, styles, node).is_empty() {
+    // plain path does. Anything mixed with other elements is left alone, and
+    // so is a block whose first line is set in a style of its own.
+    if !florui_layout::anonymous_blocks(arena, styles, node).is_empty()
+        || style.is_some_and(|s| s.first_line.is_some())
+    {
         return false;
     }
     let flowed = florui_layout::flow_items(arena, styles, node);
@@ -6821,8 +6824,10 @@ fn paint_inline_context(
     clip: Option<&Mask>,
 ) {
     let mut owners: Vec<Option<usize>> = Vec::with_capacity(inline.nodes.len());
-    for (element, node) in inline.nodes.iter().enumerate() {
-        let group = element != 0 && styles.get(node).is_some_and(paints_as_group);
+    for element in 0..inline.nodes.len() {
+        let group = element != 0
+            && !inline.is_first_line(element)
+            && inline.style(styles, element).is_some_and(paints_as_group);
         owners.push(if group {
             Some(element)
         } else if element == 0 {
@@ -6920,7 +6925,7 @@ impl InlineEffects<'_> {
 
     /// The border box of a fragment, `(x, y, width, height)` in painted pixels.
     fn fragment_box(&self, fragment: &florui_text::InlineFragment) -> Option<(f32, f32, f32, f32)> {
-        let style = self.styles.get(&self.inline.nodes[fragment.element])?;
+        let style = self.inline.style(self.styles, fragment.element)?;
         let above = style.padding.top + style.border.top.width;
         let below = style.padding.bottom + style.border.bottom.width;
         Some((
@@ -6935,7 +6940,7 @@ impl InlineEffects<'_> {
     /// effects of `root`, and put on `surface`. The effects are of the first
     /// fragment's box, as in Chromium, and take in all of them.
     fn paint_group(&self, surface: &mut Surface, root: usize, clip: Option<&Mask>) {
-        let Some(style) = self.styles.get(&self.inline.nodes[root]) else {
+        let Some(style) = self.inline.style(self.styles, root) else {
             return;
         };
         let mut first = None;
@@ -6974,7 +6979,7 @@ impl InlineEffects<'_> {
         // glyphs that reach past their line.
         let shadow_reach = (1..self.owners.len())
             .filter(|&element| self.within(element, root))
-            .filter_map(|element| self.styles.get(&self.inline.nodes[element]))
+            .filter_map(|element| self.inline.style(self.styles, element))
             .flat_map(|style| style.box_shadow.iter().filter(|shadow| !shadow.inset))
             .map(|shadow| {
                 shadow.offset_x.abs().max(shadow.offset_y.abs())
@@ -7074,8 +7079,8 @@ fn paint_inline_boxes(
         if !include(fragment.element) {
             continue;
         }
-        let Some(style) = styles
-            .get(&inline.nodes[fragment.element])
+        let Some(style) = inline
+            .style(styles, fragment.element)
             .filter(|style| style.display != Display::Contents)
         else {
             continue;
@@ -7083,6 +7088,8 @@ fn paint_inline_boxes(
         if !style.visibility.is_visible() {
             continue;
         }
+        // The first line of a block has no box of its own but its background.
+        let line = inline.is_first_line(fragment.element);
         // A line cut by `text-overflow` ends where its mark does.
         let mut fragment = *fragment;
         if let Some(&(_, end)) = cuts.iter().find(|(line, _)| *line == fragment.line) {
@@ -7093,18 +7100,37 @@ fn paint_inline_boxes(
         }
         let fragment = &fragment;
         let mut border = style.border;
+        let mut padding = style.padding;
+        let mut radius = style.border_radius;
+        if line {
+            for side in [
+                &mut border.top,
+                &mut border.right,
+                &mut border.bottom,
+                &mut border.left,
+            ] {
+                side.width = 0.0;
+            }
+            padding.top = 0.0;
+            padding.right = 0.0;
+            padding.bottom = 0.0;
+            padding.left = 0.0;
+            radius.top_left = square;
+            radius.top_right = square;
+            radius.bottom_right = square;
+            radius.bottom_left = square;
+        }
         let has_border = [border.top, border.right, border.bottom, border.left]
             .iter()
             .any(|side| side.width > 0.0);
+        let shadows: &[florui_style::BoxShadow] = if line { &[] } else { &style.box_shadow };
         if style.background_color.a == 0
             && style.background_layers.is_empty()
             && !has_border
-            && style.box_shadow.is_empty()
+            && shadows.is_empty()
         {
             continue;
         }
-        let mut padding = style.padding;
-        let mut radius = style.border_radius;
         if !fragment.starts {
             border.left.width = 0.0;
             padding.left = 0.0;
@@ -7126,7 +7152,7 @@ fn paint_inline_boxes(
         let outline = RoundedRect::new(x, y, width, height, &radius, scale_factor);
         let border = scaled_border(border, scale_factor);
         // Outer shadows are behind everything the box paints, one for each fragment.
-        paint_box_shadows_clipped(buffer, &outline, border, &style.box_shadow, false, clip);
+        paint_box_shadows_clipped(buffer, &outline, border, shadows, false, clip);
         let color_clip = style.background_color_clip;
         let text_cover = (background::clips_to_text(&style.background_layers)
             || color_clip == florui_style::BackgroundBox::Text)
@@ -7194,7 +7220,7 @@ fn paint_inline_boxes(
                 );
             }
         }
-        paint_box_shadows_clipped(buffer, &outline, border, &style.box_shadow, true, clip);
+        paint_box_shadows_clipped(buffer, &outline, border, shadows, true, clip);
         if has_border {
             paint_box_border(buffer, &outline, border, clip);
         }
@@ -7220,13 +7246,13 @@ fn paint_inline_outlines(
         if !include(fragment.element) {
             continue;
         }
-        let Some(style) = styles
-            .get(&inline.nodes[fragment.element])
+        let Some(style) = inline
+            .style(styles, fragment.element)
             .filter(|style| style.display != Display::Contents)
         else {
             continue;
         };
-        if !border_style::has_outline(style) {
+        if inline.is_first_line(fragment.element) || !border_style::has_outline(style) {
             continue;
         }
         let mut fragment = *fragment;
@@ -7253,7 +7279,7 @@ fn paint_inline_outlines(
         }
     }
     for (element, rects) in boxes {
-        if let Some(style) = styles.get(&inline.nodes[element]) {
+        if let Some(style) = inline.style(styles, element) {
             border_style::paint_outline_rects(buffer, &style.outline, &rects, scale_factor, clip);
         }
     }
@@ -7272,12 +7298,10 @@ fn paint_inline_runs(
     scale_factor: f32,
     clip: Option<&Mask>,
 ) {
-    let declared: Vec<Option<decoration::Declared>> = inline
-        .nodes
-        .iter()
-        .map(|node| {
-            styles
-                .get(node)
+    let declared: Vec<Option<decoration::Declared>> = (0..inline.nodes.len())
+        .map(|element| {
+            inline
+                .style(styles, element)
                 .filter(|s| s.text_decoration.lines.any() && s.visibility.is_visible())
                 .map(|s| decoration::Declared {
                     decoration: s.text_decoration,
@@ -7308,7 +7332,7 @@ fn paint_inline_runs(
             end += 1;
         }
         let group = &runs[start..end];
-        let style = styles.get(&inline.nodes[element]);
+        let style = inline.style(styles, element);
         if style.is_some_and(|s| !s.visibility.is_visible()) {
             start = end;
             continue;
