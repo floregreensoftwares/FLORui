@@ -120,6 +120,11 @@ impl StyleMap {
         self.styles.get(id).map(|style| &**style)
     }
 
+    /// The style of `id`, as the map shares it.
+    pub fn get_shared(&self, id: &NodeId) -> Option<&Arc<ComputedStyle>> {
+        self.styles.get(id)
+    }
+
     /// The style of `id` to change. It is copied first if another node has the
     /// same one, so the change is this node's alone.
     pub fn get_mut(&mut self, id: &NodeId) -> Option<&mut ComputedStyle> {

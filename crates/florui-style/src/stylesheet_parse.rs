@@ -153,6 +153,16 @@ impl Rule {
         &self.3.first_letter_numbers
     }
 
+    /// The elements this rule gives a `::first-line` node.
+    pub(crate) fn first_line_subjects(&self) -> &[crate::generated::Subject] {
+        &self.3.first_line
+    }
+
+    /// The numbers of the selectors this rule holds a `::first-line` of.
+    pub(crate) fn first_line_numbers(&self) -> &[usize] {
+        &self.3.first_line_numbers
+    }
+
     /// Every `@container` block this rule's own CSS contains, in source
     /// order — the order [`Self::stylesheet`]'s own `container_query_signature`
     /// must align to. Empty for a [`RuleKind::Static`] rule.
@@ -245,21 +255,23 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
     } else {
         css
     };
-    let (css, first_letter_numbers, first_letter_subjects) = if origin == Origin::Author {
+    let (css, letters, lines) = if origin == Origin::Author {
         let rewritten = crate::first_letter_adapter::rewrite_stylesheet(&css);
-        let (numbers, subjects) = (rewritten.numbers, rewritten.subjects);
+        let (letters, lines) = (rewritten.letters, rewritten.lines);
         match rewritten.css {
-            std::borrow::Cow::Owned(text) => (std::borrow::Cow::Owned(text), numbers, subjects),
-            std::borrow::Cow::Borrowed(_) => (css, numbers, subjects),
+            std::borrow::Cow::Owned(text) => (std::borrow::Cow::Owned(text), letters, lines),
+            std::borrow::Cow::Borrowed(_) => (css, letters, lines),
         }
     } else {
-        (css, Vec::new(), Vec::new())
+        (css, Default::default(), Default::default())
     };
     let css = css.as_ref();
     let pseudo_subjects: Arc<crate::generated::Extras> = Arc::new(crate::generated::Extras {
         pseudo: crate::generated::subjects_in(css),
-        first_letter: first_letter_subjects,
-        first_letter_numbers,
+        first_letter: letters.subjects,
+        first_letter_numbers: letters.numbers,
+        first_line: lines.subjects,
+        first_line_numbers: lines.numbers,
     });
     let container_blocks = container_query_adapter::extract_container_queries(css);
     let lower_css = css.to_ascii_lowercase();
