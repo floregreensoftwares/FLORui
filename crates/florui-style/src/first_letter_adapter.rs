@@ -454,6 +454,51 @@ mod tests {
         }
 
         #[test]
+        fn the_text_of_the_before_box_comes_first_and_the_letter_inherits_from_the_box() {
+            let tree: Element = view! { <p class="p">{"world"}</p> };
+            let (arena, styles) = styled(
+                &tree,
+                ".p::before { content: \"Note: \"; color: #00ff00 } \
+                 .p::first-letter { font-size: 32px }",
+            );
+            let letters: Vec<(String, Rgba)> = arena
+                .find_all(|tree, id| tree.generated(id) == Some(Pseudo::FirstLetter))
+                .into_iter()
+                .map(|id| (arena.text_content(id).to_owned(), styles[&id].color))
+                .collect();
+            assert_eq!(
+                letters,
+                [
+                    ("N".to_owned(), Rgba::opaque(0, 255, 0)),
+                    (String::new(), Rgba::opaque(0, 0, 0))
+                ],
+                "the first letter is the box's, in its color, and the text keeps its own"
+            );
+            let p = arena.roots()[0];
+            let before = arena
+                .generated_child(p, Pseudo::Before)
+                .expect("a ::before box");
+            assert_eq!(
+                arena.inline_items(before)[1],
+                crate::tree::InlineItem::Text("ote: ".to_owned())
+            );
+            assert!(
+                arena
+                    .inline_items(p)
+                    .contains(&crate::tree::InlineItem::Text("world".to_owned()))
+            );
+        }
+
+        #[test]
+        fn a_before_box_with_no_content_leaves_the_letter_to_the_text() {
+            let tree: Element = view! { <p class="p">{"world"}</p> };
+            let (arena, _) = styled(
+                &tree,
+                ".p::before { color: #00ff00 } .p::first-letter { font-size: 32px }",
+            );
+            assert_eq!(letters_of(&arena), ["w"], "no box to take letters from");
+        }
+        #[test]
         fn a_selector_with_a_state_and_the_same_text_again_are_taken_from_the_arena_kept() {
             let tree: Element = view! { <p class="p">{"Hello world"}</p> };
             let rules = parse_stylesheet(RULE).unwrap();
