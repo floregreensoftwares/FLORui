@@ -4,4 +4,6 @@
 .b::first-letter { float: left; font-size: 40px; line-height: 40px; margin-right: 4px; color: #2040c0; }
 .c::first-letter { background-color: #ffd0d0; padding: 0 4px; font-weight: bold; }
 .d::first-letter { text-transform: uppercase; color: #208040; }
+.e::before { content: "Note: "; color: #208040; }
+.e::first-letter { font-size: 32px; color: #c02020; }
 .f { display: flex; }

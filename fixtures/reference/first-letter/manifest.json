@@ -13,7 +13,7 @@
     "florui":  {
                    "tag":  "div",
                    "class":  "wrap",
-                   "css":  ".wrap { position: relative; width: 340px; height: 560px; background-color: #ffffff; color: #101010; font-size: 14px; line-height: 18px; } .wrap \u003e div { margin: 0 0 6px 10px; width: 320px; background-color: #e8e8e8; } .a::first-letter { font-size: 32px; color: #c02020; } .b::first-letter { float: left; font-size: 40px; line-height: 40px; margin-right: 4px; color: #2040c0; } .c::first-letter { background-color: #ffd0d0; padding: 0 4px; font-weight: bold; } .d::first-letter { text-transform: uppercase; color: #208040; } .f { display: flex; }",
+                   "css":  ".wrap { position: relative; width: 340px; height: 560px; background-color: #ffffff; color: #101010; font-size: 14px; line-height: 18px; } .wrap \u003e div { margin: 0 0 6px 10px; width: 320px; background-color: #e8e8e8; } .a::first-letter { font-size: 32px; color: #c02020; } .b::first-letter { float: left; font-size: 40px; line-height: 40px; margin-right: 4px; color: #2040c0; } .c::first-letter { background-color: #ffd0d0; padding: 0 4px; font-weight: bold; } .d::first-letter { text-transform: uppercase; color: #208040; } .e::before { content: \"Note: \"; color: #208040; } .e::first-letter { font-size: 32px; color: #c02020; } .f { display: flex; }",
                    "children":  [
                                     {
                                         "tag":  "div",
@@ -146,14 +146,23 @@
                                         "children":  [
 
                                                      ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "e",
+                                        "css":  "",
+                                        "text":  "text after a generated box",
+                                        "children":  [
+
+                                                     ]
                                     }
                                 ]
                },
     "classification":  {
                            "kind":  "tolerant",
-                           "threshold_percent":  8.5,
+                           "threshold_percent":  9,
                            "geometry_tolerance_px":  0.5,
                            "channel_tolerance":  0,
-                           "reason":  "Measured against Chromium 155 on Windows: every box is where Chromium puts it and 7.8% of the pixels differ, the anti-aliasing of text and of the large letters. Without the first letter the same fixture measures 31.1%, so it fails."
+                           "reason":  "Measured against Chromium 155 on Windows: every box is where Chromium puts it and 8.5% of the pixels differ, the anti-aliasing of text and of the large letters. Without the first letter the same fixture measures 31.1%, so it fails."
                        }
 }

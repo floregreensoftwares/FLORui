@@ -368,6 +368,22 @@ impl Tree {
         &self.first_letter_nodes
     }
 
+    /// The node a node is styled as a child of: its parent, but for the first letter
+    /// in a box of `::before` or `::after`, which has no node of its own for the style
+    /// engine, the element the box belongs to.
+    pub fn style_parent(&self, id: NodeId) -> Option<NodeId> {
+        let parent = self.nodes[id].parent?;
+        if self.nodes[id].generated == Some(crate::Pseudo::FirstLetter)
+            && matches!(
+                self.nodes[parent].generated,
+                Some(crate::Pseudo::Before | crate::Pseudo::After)
+            )
+        {
+            return self.nodes[parent].parent;
+        }
+        Some(parent)
+    }
+
     /// The element a first-letter node is the first letter of.
     pub fn first_letter_owner(&self, id: NodeId) -> Option<NodeId> {
         self.nodes[id].fl_owner
@@ -819,10 +835,6 @@ impl Arena {
     pub fn apply_generated(&mut self, styles: &crate::StyleMap) {
         use crate::content::{Content, ContentItem};
 
-        self.apply_first_letters(styles);
-        if self.tree.generated_nodes.is_empty() {
-            return;
-        }
         let mut depth = 0usize;
         for index in 0..self.tree.generated_nodes.len() {
             let id = self.tree.generated_nodes[index];
@@ -860,20 +872,41 @@ impl Arena {
                     }
                 }
             }
-            let node = &mut self.tree.nodes[id];
-            let unchanged = match node.inline_items.as_slice() {
-                [] => text.is_empty(),
-                [InlineItem::Text(held)] => *held == text,
-                _ => false,
+            // The first letter of the box, when it has one, stays its first item, with
+            // the text whole again for it to take its letters from.
+            let first_letter = match self.tree.nodes[id].inline_items.first() {
+                Some(InlineItem::Element(child))
+                    if self.tree.nodes[*child].generated == Some(crate::Pseudo::FirstLetter) =>
+                {
+                    Some(*child)
+                }
+                _ => None,
             };
+            if let Some(child) = first_letter {
+                let letter = &mut self.tree.nodes[child];
+                letter.inline_items.clear();
+                letter.text.clear();
+                letter.fl_held.clear();
+            }
+            let node = &mut self.tree.nodes[id];
+            let unchanged = first_letter.is_none()
+                && match node.inline_items.as_slice() {
+                    [] => text.is_empty(),
+                    [InlineItem::Text(held)] => *held == text,
+                    _ => false,
+                };
             if !unchanged {
                 node.inline_items.clear();
+                if let Some(child) = first_letter {
+                    node.inline_items.push(InlineItem::Element(child));
+                }
                 if !text.is_empty() {
                     node.inline_items.push(InlineItem::Text(text.clone()));
                 }
                 node.text = text;
             }
         }
+        self.apply_first_letters(styles);
     }
 
     /// Gives each first-letter node the letters of the text after it, which are taken
@@ -882,6 +915,9 @@ impl Arena {
     fn apply_first_letters(&mut self, styles: &crate::StyleMap) {
         use crate::Display as D;
 
+        // The blocks that have their first letter already: the text of the `::before` of
+        // a block comes first, so a block never has two.
+        let mut lettered: Vec<NodeId> = Vec::new();
         for index in 0..self.tree.first_letter_nodes.len() {
             let id = self.tree.first_letter_nodes[index];
             let (Some(owner), Some(parent)) =
@@ -889,7 +925,8 @@ impl Arena {
             else {
                 continue;
             };
-            let mut active = styles.get(&id).is_some_and(|s| s.display != D::None)
+            let mut active = !lettered.contains(&owner)
+                && styles.get(&id).is_some_and(|s| s.display != D::None)
                 && styles.get(&owner).is_some_and(|s| {
                     matches!(
                         s.display,
@@ -938,6 +975,9 @@ impl Arena {
                 node.inline_items.push(InlineItem::Text(letters.clone()));
             }
             node.text.clone_from(&letters);
+            if !letters.is_empty() {
+                lettered.push(owner);
+            }
             node.fl_held = letters;
         }
     }
@@ -1156,6 +1196,12 @@ impl Arena {
                     if wants && !self.refresh_generated(id, crate::Pseudo::Before, state) {
                         return false;
                     }
+                    if wants && self.tree.wants_first_letter(node.tag, &node.attrs) {
+                        let before = state.next - 1;
+                        if !self.refresh_first_letter(id, before, state) {
+                            return false;
+                        }
+                    }
                     stack.push(Frame {
                         elements: &node.children,
                         index: 0,
@@ -1333,6 +1379,11 @@ impl Arena {
                     let wants = self.tree.wants_generated(node.tag, &node.attrs);
                     if wants {
                         self.push_generated(id, crate::Pseudo::Before);
+                        if self.tree.wants_first_letter(node.tag, &node.attrs) {
+                            // The text of the `::before` comes first in the block.
+                            let before = self.tree.nodes.len() - 1;
+                            self.push_first_letter(id, before);
+                        }
                     }
                     stack.push(Frame {
                         elements: &node.children,
