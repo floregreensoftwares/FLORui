@@ -13,6 +13,8 @@
 pub enum Pseudo {
     Before,
     After,
+    /// The first letter of a block, a node inside the element its text is in.
+    FirstLetter,
 }
 
 impl Pseudo {
@@ -21,6 +23,7 @@ impl Pseudo {
         match self {
             Pseudo::Before => "florui-before",
             Pseudo::After => "florui-after",
+            Pseudo::FirstLetter => "florui-first-letter",
         }
     }
 }
@@ -34,10 +37,46 @@ pub(crate) struct Subject {
     id: Option<String>,
 }
 
+impl Subject {
+    /// Whether an element with this tag and attributes is one the subject can name.
+    pub(crate) fn fits(&self, tag: &str, attrs: &[(String, String)]) -> bool {
+        let attr = |name: &str| {
+            attrs
+                .iter()
+                .find(|(key, _)| key == name)
+                .map(|(_, value)| value.as_str())
+        };
+        self.tag.as_deref().is_none_or(|t| t == tag)
+            && (self.classes.is_empty() || {
+                let class = attr("class").unwrap_or("");
+                self.classes
+                    .iter()
+                    .all(|c| class.split_whitespace().any(|held| held == c))
+            })
+            && self.id.as_deref().is_none_or(|i| attr("id") == Some(i))
+    }
+}
+
+/// What a stylesheet says of the nodes the arena builds beside its elements: which
+/// elements get a `::before` and an `::after`, and which a `::first-letter`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct Extras {
+    pub pseudo: Vec<Subject>,
+    pub first_letter: Vec<Subject>,
+    /// The numbers of the selectors the sheet holds a `::first-letter` of.
+    pub first_letter_numbers: Vec<usize>,
+}
+
+/// The rightmost compound of `selector`: the elements it can match.
+pub(crate) fn subject_of_selector(selector: &str) -> Subject {
+    compound_before(selector, selector.len())
+}
+
 /// The elements that get generated boxes: those a [`Subject`] of a rule fits.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PseudoSlots {
     subjects: Vec<Subject>,
+    first_letter: Vec<Subject>,
 }
 
 /// Tags that never have a generated box: replaced elements and the controls
@@ -61,35 +100,39 @@ impl PseudoSlots {
                 }
             }
         }
-        Self { subjects }
+        let mut first_letter = Vec::new();
+        for rule in rules {
+            for subject in rule.first_letter_subjects() {
+                if !first_letter.contains(subject) {
+                    first_letter.push(subject.clone());
+                }
+            }
+        }
+        Self {
+            subjects,
+            first_letter,
+        }
     }
 
+    /// Whether no element is built with a node of a pseudo-element.
     pub fn is_empty(&self) -> bool {
-        self.subjects.is_empty()
+        self.subjects.is_empty() && self.first_letter.is_empty()
+    }
+
+    /// Whether an element with this tag and attributes may have a first letter.
+    pub(crate) fn wants_first_letter(&self, tag: &str, attrs: &[(String, String)]) -> bool {
+        !has_no_generated_box(tag)
+            && self
+                .first_letter
+                .iter()
+                .any(|subject| subject.fits(tag, attrs))
     }
 
     /// Whether an element with this tag and attributes is built with generated nodes.
     /// Read for every element each time the arena is built or refreshed, so it
     /// allocates nothing and looks at the tag first.
     pub(crate) fn wants(&self, tag: &str, attrs: &[(String, String)]) -> bool {
-        let attr = |name: &str| {
-            attrs
-                .iter()
-                .find(|(key, _)| key == name)
-                .map(|(_, value)| value.as_str())
-        };
-        !has_no_generated_box(tag)
-            && self.subjects.iter().any(|subject| {
-                subject.tag.as_deref().is_none_or(|t| t == tag)
-                    && (subject.classes.is_empty() || {
-                        let class = attr("class").unwrap_or("");
-                        subject
-                            .classes
-                            .iter()
-                            .all(|c| class.split_whitespace().any(|held| held == c))
-                    })
-                    && subject.id.as_deref().is_none_or(|i| attr("id") == Some(i))
-            })
+        !has_no_generated_box(tag) && self.subjects.iter().any(|subject| subject.fits(tag, attrs))
     }
 }
 
@@ -313,6 +356,7 @@ mod tests {
                 subject(Some("div"), &["a"], None),
                 subject(None, &[], Some("only")),
             ],
+            first_letter: Vec::new(),
         };
         let attrs = |class: &str, id: &str| {
             vec![

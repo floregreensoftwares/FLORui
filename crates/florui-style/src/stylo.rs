@@ -113,6 +113,12 @@ struct NodeSlot {
     context: Cell<u32>,
     /// [`NodeSlot::identity`], worked out once: the elements do not change in a kept tree.
     identity_hash: std::cell::OnceCell<u64>,
+    /// For the node of a first letter, the slot of the element it is the first letter
+    /// of.
+    fl_owner: Option<usize>,
+    /// The first-letter selectors the owner matches, by number, as the classes
+    /// `florui-fl-N` the rules were rewritten to (see [`crate::first_letter_adapter`]).
+    fl: std::cell::RefCell<Vec<usize>>,
     data: AtomicRefCell<ElementData>,
     dirty_descendants: Cell<bool>,
     local_name: BorrowedLocalName,
@@ -139,6 +145,8 @@ pub(crate) struct StyloTree {
     /// The `::before` and `::after` boxes of each node, by slot, where the arena
     /// has them; empty when it has none.
     generated: Vec<[Option<NodeId>; 2]>,
+    /// The slots of the first-letter nodes.
+    first_letters: Vec<usize>,
 }
 
 /// Where the number of a node's context sits in the state style sharing sees:
@@ -331,6 +339,8 @@ impl StyloTree {
                 state: Cell::new(node_state),
                 context: Cell::new(0),
                 identity_hash: std::cell::OnceCell::new(),
+                fl_owner: arena.first_letter_owner(id).map(|owner| index_of[owner]),
+                fl: std::cell::RefCell::new(Vec::new()),
                 data: AtomicRefCell::new(ElementData::default()),
                 dirty_descendants: Cell::new(false),
                 local_name: arena.tag(id).into(),
@@ -380,12 +390,19 @@ impl StyloTree {
         } else {
             Vec::new()
         };
+        let first_letters: Vec<usize> = slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.fl_owner.is_some())
+            .map(|(index, _)| index)
+            .collect();
         let tree = Self {
             slots,
             index_of,
             order,
             uses_inline_scroll_behavior,
             generated,
+            first_letters,
         };
         tree.number_contexts(arena);
         (tree, primary_root)
@@ -481,6 +498,9 @@ impl StyloTree {
         let mut stack = vec![id];
         while let Some(id) = stack.pop() {
             order.push(id);
+            if arena.has_first_letters() {
+                order.extend(arena.first_letter_children(id));
+            }
             stack.extend(arena.element_child_ids(id).iter().rev());
         }
     }
@@ -804,6 +824,9 @@ impl<'a> SelectorsElement for StyloNode<'a> {
         name: &AtomIdent,
         case_sensitivity: selectors::attr::CaseSensitivity,
     ) -> bool {
+        if let Some(number) = crate::first_letter_adapter::number_of_class(name.as_ref()) {
+            return self.0.fl.borrow().contains(&number);
+        }
         self.0
             .classes
             .iter()
@@ -912,6 +935,10 @@ impl<'a> TElement for StyloNode<'a> {
     {
         for class in &self.0.classes {
             let atom = Atom::from(class.as_str());
+            callback(AtomIdent::cast(&atom));
+        }
+        for number in self.0.fl.borrow().iter() {
+            let atom = Atom::from(format!("florui-fl-{number}").as_str());
             callback(AtomIdent::cast(&atom));
         }
     }
@@ -1226,6 +1253,76 @@ fn compute_in_layout_state(
     compute_with_tree(&tree, rules, viewport, timeline, container_query_signature)
 }
 
+/// The specificities of the selectors of `text`, or `None` when it does not
+/// parse as a list of them.
+pub(crate) fn parse_selector_list(text: &str) -> Option<Vec<u32>> {
+    let url_data: style::stylesheets::UrlExtraData = url::Url::parse("about:florui")
+        .expect("a fixed, valid URL literal")
+        .into();
+    let list =
+        style::selector_parser::SelectorParser::parse_author_origin_no_namespace(text, &url_data)
+            .ok()?;
+    Some(list.slice().iter().map(|s| s.specificity()).collect())
+}
+
+/// Gives each first-letter node the first-letter selectors its owner matches, with
+/// the engine's own selector matching, so the rules rewritten for them apply.
+fn evaluate_first_letters(tree: &StyloTree, rules: &[Rule]) {
+    if tree.first_letters.is_empty() {
+        return;
+    }
+    let mut numbers: Vec<usize> = rules
+        .iter()
+        .flat_map(|rule| rule.first_letter_numbers().iter().copied())
+        .collect();
+    numbers.sort_unstable();
+    numbers.dedup();
+    for &index in &tree.first_letters {
+        tree.slots[index].fl.borrow_mut().clear();
+    }
+    if numbers.is_empty() {
+        return;
+    }
+    let url_data: style::stylesheets::UrlExtraData = url::Url::parse("about:florui")
+        .expect("a fixed, valid URL literal")
+        .into();
+    let parsed: Vec<_> = numbers
+        .iter()
+        .filter_map(|&number| {
+            let text = crate::first_letter_adapter::subject(number)?;
+            let list = style::selector_parser::SelectorParser::parse_author_origin_no_namespace(
+                &text, &url_data,
+            )
+            .ok()?;
+            Some((number, list))
+        })
+        .collect();
+    let mut caches = selectors::matching::SelectorCaches::default();
+    for &index in &tree.first_letters {
+        let slot = &tree.slots[index];
+        let Some(owner) = slot.fl_owner else {
+            continue;
+        };
+        let owner = StyloNode(&tree.slots[owner]);
+        let mut context = selectors::matching::MatchingContext::new(
+            selectors::matching::MatchingMode::Normal,
+            None,
+            &mut caches,
+            QuirksMode::NoQuirks,
+            selectors::matching::NeedsSelectorFlags::No,
+            selectors::matching::MatchingForInvalidation::No,
+        );
+        for (number, list) in &parsed {
+            let matched = list.slice().iter().any(|selector| {
+                selectors::matching::matches_selector(selector, 0, None, &owner, &mut context)
+            });
+            if matched {
+                slot.fl.borrow_mut().push(*number);
+            }
+        }
+    }
+}
+
 /// The cascade over a tree already built and set to the state to style it in.
 pub(crate) fn compute_with_tree(
     tree: &StyloTree,
@@ -1236,6 +1333,7 @@ pub(crate) fn compute_with_tree(
 ) -> StyleMap {
     // One entry per node: growing a table of styles this big copies every
     // entry it already holds each time it doubles.
+    evaluate_first_letters(tree, rules);
     let mut result = StyleMap::with_capacity(tree.order.len());
     with_style_context(
         tree,
@@ -1328,6 +1426,13 @@ pub(crate) fn restyle_nodes(
                     .is_none_or(|old| may_change_children(old, &node.primary));
                 if reaches_children {
                     for &child in arena.element_child_ids(id).iter() {
+                        let child_index = tree.index_of[child];
+                        work.insert((tree.slots[child_index].depth, child_index));
+                    }
+                }
+                // The first letters in the node inherit from it.
+                if arena.has_first_letters() {
+                    for child in arena.first_letter_children(id) {
                         let child_index = tree.index_of[child];
                         work.insert((tree.slots[child_index].depth, child_index));
                     }
