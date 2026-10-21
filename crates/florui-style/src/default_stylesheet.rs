@@ -130,6 +130,12 @@ const CSS: &str = "
         display: block;
     }
 
+    /* The node of the first letter of a block: no rule for a `::first-letter` has
+       made it one, so it holds nothing (see the first letter adapter). */
+    florui-first-letter {
+        display: none;
+    }
+
     span, a, b, i, u, s, del, ins, mark, sub, sup, kbd, samp, var, cite, dfn, abbr,
     time, data, code, em, strong, small, q {
         display: inline;

@@ -2094,6 +2094,8 @@ dependencies = [
  "stylo_config",
  "stylo_dom",
  "stylo_traits",
+ "unicode-general-category",
+ "unicode-segmentation",
  "url",
 ]
 
