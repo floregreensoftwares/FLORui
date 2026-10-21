@@ -412,9 +412,11 @@ const CSS: &str = "
     }
     ul, menu { list-style-type: disc; }
     ol { list-style-type: decimal; }
-    :is(ul, ol, menu) :is(ul, menu) { list-style-type: circle; }
-    :is(ul, ol, menu) :is(ul, ol, menu) :is(ul, menu) { list-style-type: square; }
-    :is(ul, ol, menu) :is(ul, ol, menu) { margin-top: 0; margin-bottom: 0; }
+    /* Written out rather than with :is(): a selector list is found by the tag of
+       its last compound, which a :is() hides from the style engine. */
+    ul ul, ul menu, ol ul, ol menu, menu ul, menu menu { list-style-type: circle; }
+    ul ul ul, ul ul menu, ul ol ul, ul ol menu, ul menu ul, ul menu menu, ol ul ul, ol ul menu, ol ol ul, ol ol menu, ol menu ul, ol menu menu, menu ul ul, menu ul menu, menu ol ul, menu ol menu, menu menu ul, menu menu menu { list-style-type: square; }
+    ul ul, ul ol, ul menu, ol ul, ol ol, ol menu, menu ul, menu ol, menu menu { margin-top: 0; margin-bottom: 0; }
     li { display: list-item; }
 
     table {
