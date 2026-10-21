@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="../assets/reset.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="el" class="wrap">
+    <table>
+      <tr>
+        <th>Name</th>
+        <th colspan="2">Details</th>
+      </tr>
+      <tr>
+        <td rowspan="2">Left cell spanning two rows</td>
+        <td class="vt">top</td>
+        <td>
+          <div>middle</div>
+          <div>two lines</div>
+          <div>three lines</div>
+        </td>
+      </tr>
+      <tr>
+        <td class="vb">bottom</td>
+        <td class="vl">base</td>
+      </tr>
+    </table>
+    <table>
+      <tr>
+        <td class="vl">small</td>
+        <td class="vl big">Big</td>
+        <td class="vl">small</td>
+      </tr>
+    </table>
+    <table class="fixed">
+      <caption class="cap">Fixed layout</caption>
+      <tr>
+        <td class="w60">aaa bbb ccc ddd</td>
+        <td>wraps in the share of the table it gets</td>
+      </tr>
+      <tr>
+        <td>x</td>
+        <td>y</td>
+      </tr>
+    </table>
+    <table>
+      <caption class="cap cb">Caption below</caption>
+      <tr>
+        <td>one</td>
+        <td>two</td>
+      </tr>
+    </table>
+    <div class="dt">Text in a table box</div>
+  </div>
+</body>
+</html>

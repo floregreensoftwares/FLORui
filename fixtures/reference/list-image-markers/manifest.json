@@ -1,0 +1,495 @@
+{
+    "id":  "list-image-markers",
+    "description":  "Image list markers, outside and inside: their size (the image\u0027s own, or half the ascent where it has none, as gradients do), standing on the baseline and making the first line taller, taking their width and 7px of an inside marker, coming down the content when it begins with a block, an item with nothing in it, and an image that cannot be read.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  600,
+                     "height_css_px":  420,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; display: flex; flex-wrap: wrap; align-items: flex-start; align-content: flex-start; width: 600px; height: 420px; background-color: #ffffff; font-size: 16px; } ul, ol { width: 150px; margin: 0 0 6px 0; padding: 0 0 0 44px; background-color: #f0f0f0; } .q { margin: 0; } .in { list-style-position: inside; } .out { list-style-position: outside; } .c1 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2712%27 height=%2712%27%3E%3Crect width=%2712%27 height=%2712%27 fill=%27%23d03030%27/%3E%3C/svg%3E\u0027); } .c2 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2740%27 height=%2740%27%3E%3Crect width=%2740%27 height=%2740%27 fill=%27%232060d0%27/%3E%3C/svg%3E\u0027); } .c3 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%278%27 height=%2730%27%3E%3Crect width=%278%27 height=%2730%27 fill=%27%2320a040%27/%3E%3C/svg%3E\u0027); } .c4 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27100%27 height=%2720%27%3E%3Crect width=%27100%27 height=%2720%27 fill=%27%23c08000%27/%3E%3C/svg%3E\u0027); } .c5 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2712%27 height=%2712%27%3E%3Crect width=%2712%27 height=%2712%27 fill=%27%23d03030%27/%3E%3C/svg%3E\u0027); } .c6 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2740%27 height=%2740%27%3E%3Crect width=%2740%27 height=%2740%27 fill=%27%232060d0%27/%3E%3C/svg%3E\u0027); } .c7 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%278%27 height=%2730%27%3E%3Crect width=%278%27 height=%2730%27 fill=%27%2320a040%27/%3E%3C/svg%3E\u0027); } .c8 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27100%27 height=%2720%27%3E%3Crect width=%27100%27 height=%2720%27 fill=%27%23c08000%27/%3E%3C/svg%3E\u0027); } .c9 { list-style-image: linear-gradient(red, blue); } .c10 { list-style-image: linear-gradient(red, blue); } .c11 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 20 10%27%3E%3Crect width=%2720%27 height=%2710%27 fill=%27%238030a0%27/%3E%3C/svg%3E\u0027); } .c12 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 20 10%27%3E%3Crect width=%2720%27 height=%2710%27 fill=%27%238030a0%27/%3E%3C/svg%3E\u0027); } .c13 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2730%27%3E%3Crect width=%2730%27 height=%2710%27 fill=%27%2330a0a0%27/%3E%3C/svg%3E\u0027); } .c14 { list-style-image: url(\u0027no/such/file.png\u0027); } .c15 { list-style-image: url(\u0027no/such/file.png\u0027); } .c16 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2740%27 height=%2740%27%3E%3Crect width=%2740%27 height=%2740%27 fill=%27%232060d0%27/%3E%3C/svg%3E\u0027); } .c17 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2740%27 height=%2740%27%3E%3Crect width=%2740%27 height=%2740%27 fill=%27%232060d0%27/%3E%3C/svg%3E\u0027); } .c18 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2740%27 height=%2740%27%3E%3Crect width=%2740%27 height=%2740%27 fill=%27%232060d0%27/%3E%3C/svg%3E\u0027); } .c19 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2740%27 height=%2740%27%3E%3Crect width=%2740%27 height=%2740%27 fill=%27%232060d0%27/%3E%3C/svg%3E\u0027); } .c20 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2740%27 height=%2740%27%3E%3Crect width=%2740%27 height=%2740%27 fill=%27%232060d0%27/%3E%3C/svg%3E\u0027); } .c21 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2740%27 height=%2740%27%3E%3Crect width=%2740%27 height=%2740%27 fill=%27%232060d0%27/%3E%3C/svg%3E\u0027); } .c22 { list-style-image: url(\u0027data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%2720%27 height=%2720%27%3E%3Crect width=%2720%27 height=%2720%27 fill=%27%23d03030%27/%3E%3C/svg%3E\u0027); } .c23 { list-style-image: url(\u0027no/such/file.png\u0027); } .c24 { list-style-image: url(\u0027no/such/file.png\u0027); }",
+                   "children":  [
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c1 out",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c2 out",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c3 out",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c4 out",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c5 in",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c6 in",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c7 in",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c8 in",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c9 out",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c10 in",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c11 out",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c12 in",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c13 in",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c14 out",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c15 in",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c16 out",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "p",
+                                                                                  "class":  "q",
+                                                                                  "css":  "",
+                                                                                  "text":  "Hello",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c17 in",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "p",
+                                                                                  "class":  "q",
+                                                                                  "css":  "",
+                                                                                  "text":  "Hello",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c18 out",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "Hi",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "p",
+                                                                                  "class":  "q",
+                                                                                  "css":  "",
+                                                                                  "text":  "Hello",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c19 out",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello wrapped text long enough to take two lines in the box",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c20 in",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello wrapped text long enough to take two lines in the box",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c21 out",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "next",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "c22 out",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "one",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "two",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "three",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ol",
+                                        "class":  "c23 out",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ol",
+                                        "class":  "c24 in",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  5,
+                           "geometry_tolerance_px":  0.5,
+                           "channel_tolerance":  0,
+                           "reason":  "The same font through two rasterizers, which differ in anti-aliasing on every glyph."
+                       }
+}

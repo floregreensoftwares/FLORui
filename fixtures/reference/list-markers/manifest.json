@@ -1,0 +1,429 @@
+{
+    "id":  "list-markers",
+    "description":  "List items with their markers outside: discs, circles and squares by the depth of the list, decimal, roman, alphabetic and other numbering, the start, the reversing and the value of ordered lists, markers of a string or of no kind, and markers beside the first line of items with blocks in them.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  760,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 760px; background-color: #ffffff; font-size: 16px; } ul, ol { margin: 0 0 6px 0; } .lr { list-style-type: lower-roman; } .ua { list-style-type: upper-alpha; } .lg { list-style-type: lower-greek; } .dz { list-style-type: decimal-leading-zero; } .str { list-style-type: \"→ \"; } .no { list-style-type: none; } .sq { list-style-type: square; } .ci { list-style-type: circle; } .big { font-size: 32px; } .col { color: #d05040; }",
+                   "children":  [
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "One"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Two",
+                                                                              {
+                                                                                  "tag":  "ul",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   {
+                                                                                                       "tag":  "li",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+                                                                                                                        "Nested"
+                                                                                                                    ]
+                                                                                                   },
+                                                                                                   {
+                                                                                                       "tag":  "li",
+                                                                                                       "class":  "",
+                                                                                                       "css":  "",
+                                                                                                       "text":  "",
+                                                                                                       "children":  [
+                                                                                                                        "Nested",
+                                                                                                                        {
+                                                                                                                            "tag":  "ul",
+                                                                                                                            "class":  "",
+                                                                                                                            "css":  "",
+                                                                                                                            "text":  "",
+                                                                                                                            "children":  [
+                                                                                                                                             {
+                                                                                                                                                 "tag":  "li",
+                                                                                                                                                 "class":  "",
+                                                                                                                                                 "css":  "",
+                                                                                                                                                 "text":  "",
+                                                                                                                                                 "children":  [
+                                                                                                                                                                  "Deeper"
+                                                                                                                                                              ]
+                                                                                                                                             }
+                                                                                                                                         ]
+                                                                                                                        }
+                                                                                                                    ]
+                                                                                                   }
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "big col",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Big"
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ol",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "One"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Two"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Three"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Four"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Five"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Six"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Seven"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Eight"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Nine"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Ten"
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ol",
+                                        "class":  "lr",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Roman"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Roman"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Roman"
+                                                                          ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "start",
+                                                          "3"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "ol",
+                                        "class":  "ua",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Back"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Back"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Ten"
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "value",
+                                                                               "10"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Next"
+                                                                          ]
+                                                         }
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "reversed",
+                                                          ""
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "str",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "A string"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "no",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "None"
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "sq",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Square"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "ci",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Circle"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   "A block"
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+                                                                                                   "Another"
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ol",
+                                        "class":  "lg",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Greek"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Greek"
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ol",
+                                        "class":  "dz",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Zero"
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              "Zero"
+                                                                          ]
+                                                         }
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  4.5,
+                           "geometry_tolerance_px":  0.5,
+                           "reason":  "The text of the markers is the same Open Sans through two rasterizers, which differ in anti-aliasing and hinting on every glyph, and the rings of circle markers are drawn with another anti-aliasing; the boxes of the list and its items are exact."
+                       }
+}

@@ -1,0 +1,153 @@
+{
+    "id":  "float-text-wrap",
+    "description":  "float: text wraps around left and right floats with margins, a float taller than the lines beside it, clear moving a box below the floats, floats of different heights stacking in rows, a float among the text of a paragraph, and flow-root containing its floats.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  460,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 460px; background-color: #ffffff; } .p { width: 200px; margin: 0 0 8px 10px; font-size: 16px; line-height: 20px; background-color: #e4e4e4; } .l { float: left; width: 50px; height: 50px; background-color: #d05040; } .r { float: right; width: 50px; height: 30px; margin: 5px 10px; background-color: #4070d0; } .t { float: left; width: 60px; height: 70px; background-color: #40a060; } .s { float: left; width: 90px; height: 24px; background-color: #e0b030; } .m { float: left; width: 90px; height: 40px; background-color: #8050c0; } .cl { clear: both; height: 6px; background-color: #202020; } .fr { display: flow-root; background-color: #c8d8f0; } .in { float: right; width: 40px; height: 40px; background-color: #d05040; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "l",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         "The quick brown fox jumps over the lazy dog and keeps running across the field until it is out of sight."
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "r",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         "The quick brown fox jumps over the lazy dog and keeps running across the field."
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "cl",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "t",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "s",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "m",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         "Short text beside stacked floats of different heights."
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "cl",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "Text before ",
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "in",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         "and text after the float in the same paragraph, which keeps flowing around it."
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p fr",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "l",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         "Contained"
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  10.5,
+                           "geometry_tolerance_px":  0.5,
+                           "reason":  "The text is the same Open Sans through two rasterizers, which differ in anti-aliasing and hinting on every glyph (a plain paragraph with no float differs by the same share of pixels); the boxes of the floats and the position of every line are exact."
+                       }
+}

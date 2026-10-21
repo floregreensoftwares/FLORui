@@ -14,8 +14,8 @@ use std::collections::HashMap;
 use florui_style::{ComputedStyle, GridTemplate, SubgridNames};
 use taffy::util::ResolveOrZero;
 use taffy::{
-    DetailedGridInfo, DetailedGridItemsInfo, DetailedGridTracksInfo, DetailedLayoutInfo,
-    GridTemplateComponent, MaxTrackSizingFunction, MinTrackSizingFunction, TrackSizingFunction,
+    DetailedGridInfo, DetailedGridItemsInfo, DetailedGridTracksInfo, GridTemplateComponent,
+    MaxTrackSizingFunction, MinTrackSizingFunction, TrackSizingFunction,
 };
 
 use super::*;
@@ -246,18 +246,12 @@ fn hold_lines(lines: (u16, u16), tracks: u16) -> (u16, u16) {
     (start, end)
 }
 
-fn grid_info(tree: &TaffyTree<LeafContext>, id: taffy::NodeId) -> Option<&DetailedGridInfo> {
-    match tree.detailed_layout_info(id) {
-        DetailedLayoutInfo::Grid(info) => Some(info),
-        _ => None,
-    }
+fn grid_info(tree: &FlorTree, id: taffy::NodeId) -> Option<&DetailedGridInfo> {
+    tree.grid_info(id)
 }
 
 /// The children Taffy places as grid items, in the order it lists them.
-fn in_flow_children(
-    tree: &TaffyTree<LeafContext>,
-    id: taffy::NodeId,
-) -> Result<Vec<taffy::NodeId>, LayoutError> {
+fn in_flow_children(tree: &FlorTree, id: taffy::NodeId) -> Result<Vec<taffy::NodeId>, LayoutError> {
     let mut out = Vec::new();
     for child in tree.children(id).map_err(LayoutError)? {
         let style = tree.style(child).map_err(LayoutError)?;
@@ -303,16 +297,18 @@ pub(crate) fn resolve(
     font: &mut florui_text::Font,
     arena: &Tree,
     styles: &StyleMap,
-    tree: &mut TaffyTree<LeafContext>,
+    tree: &mut FlorTree,
     id_of: &dyn Fn(NodeId) -> Option<taffy::NodeId>,
     roots: &[taffy::NodeId],
     available: Size<AvailableSpace>,
     count: usize,
 ) -> Result<(), LayoutError> {
     // Nearly no document has one: nothing to build then.
-    if !styles.iter().any(|(_, style)| {
-        style.grid_template_columns.is_subgrid() || style.grid_template_rows.is_subgrid()
-    }) {
+    if !styles.may_have_subgrid()
+        || !styles.iter().any(|(_, style)| {
+            style.grid_template_columns.is_subgrid() || style.grid_template_rows.is_subgrid()
+        })
+    {
         return Ok(());
     }
     let is_subgrid = |node: NodeId, axis: Axis| -> bool {
@@ -321,8 +317,13 @@ pub(crate) fn resolve(
         };
         let in_a_grid = layout_parent(arena, node)
             .and_then(|parent| styles.get(&parent))
-            .is_some_and(|parent| parent.display == StyleDisplay::Grid);
-        style.display == StyleDisplay::Grid
+            .is_some_and(|parent| {
+                matches!(
+                    parent.display,
+                    StyleDisplay::Grid | StyleDisplay::InlineGrid
+                )
+            });
+        matches!(style.display, StyleDisplay::Grid | StyleDisplay::InlineGrid)
             && in_a_grid
             && !matches!(
                 style.position,
@@ -400,7 +401,7 @@ impl Ctx<'_> {
 /// The whole tree again, from its roots.
 fn relayout_all(
     font: &mut florui_text::Font,
-    tree: &mut TaffyTree<LeafContext>,
+    tree: &mut FlorTree,
     ctx: &Ctx<'_>,
 ) -> Result<(), LayoutError> {
     for &root in ctx.roots {
@@ -414,7 +415,7 @@ fn relayout_all(
 /// many such grids quadratic.
 fn layout_top(
     font: &mut florui_text::Font,
-    tree: &mut TaffyTree<LeafContext>,
+    tree: &mut FlorTree,
     top: taffy::NodeId,
     around: Size<AvailableSpace>,
 ) -> Result<(), LayoutError> {
@@ -424,7 +425,7 @@ fn layout_top(
 
 fn probe_top(
     font: &mut florui_text::Font,
-    tree: &mut TaffyTree<LeafContext>,
+    tree: &mut FlorTree,
     ctx: &Ctx<'_>,
     top: taffy::NodeId,
 ) -> Result<(), LayoutError> {

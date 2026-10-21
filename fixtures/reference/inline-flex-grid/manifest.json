@@ -1,0 +1,263 @@
+{
+    "id":  "inline-flex-grid",
+    "description":  "inline-flex and inline-grid are one atomic box in a line: they size to their items, sit on the baseline of their first item (an empty one by its bottom edge, a column on its first line), and a block of wrapped text beside one still sits on its own last line.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  270,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 270px; background-color: #ffffff; font-size: 16px; line-height: 22px; } .p { width: 320px; margin: 0 0 6px 10px; } .f { display: inline-flex; background-color: #e4e4e4; } .g { display: inline-grid; grid-template-columns: 40px 50px; background-color: #e4e4e4; } .c { display: inline-flex; flex-direction: column; background-color: #e4e4e4; } .e { display: inline-flex; width: 30px; height: 12px; background-color: #e4e4e4; } .w { display: inline-block; width: 60px; background-color: #e4e4e4; } .a { width: 30px; height: 30px; background-color: #d05040; } .b { width: 20px; height: 14px; background-color: #40a060; } .t { background-color: #c0d0f0; } .big { font-size: 28px; line-height: 34px; background-color: #f0d890; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "t",
+                                                             "css":  "",
+                                                             "text":  "before",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "f",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "a",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "b",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         " after"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "t",
+                                                             "css":  "",
+                                                             "text":  "grid",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "g",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "a",
+                                                                                  "css":  "",
+                                                                                  "text":  "",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "b",
+                                                                                  "css":  "",
+                                                                                  "text":  "x",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         " after"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "t",
+                                                             "css":  "",
+                                                             "text":  "column",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "c",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "one",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "two",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         " after"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "t",
+                                                             "css":  "",
+                                                             "text":  "empty",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "e",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " after"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "t",
+                                                             "css":  "",
+                                                             "text":  "mixed",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "f",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "big",
+                                                                                  "css":  "",
+                                                                                  "text":  "Big",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              },
+                                                                              {
+                                                                                  "tag":  "div",
+                                                                                  "class":  "",
+                                                                                  "css":  "",
+                                                                                  "text":  "small",
+                                                                                  "children":  [
+
+                                                                                               ]
+                                                                              }
+                                                                          ]
+                                                         },
+                                                         " after"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "p",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "t",
+                                                             "css":  "",
+                                                             "text":  "block",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "w",
+                                                             "css":  "",
+                                                             "text":  "alpha beta gamma",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " after"
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  6,
+                           "geometry_tolerance_px":  0.5,
+                           "channel_tolerance":  0,
+                           "reason":  "Every box matches Chromium to the pixel; the remaining difference is text anti-aliasing, as in the other fixtures that render text."
+                       }
+}

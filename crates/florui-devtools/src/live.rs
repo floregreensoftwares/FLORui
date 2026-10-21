@@ -86,6 +86,21 @@ fn display_name(display: Display) -> &'static str {
         Display::InlineBlock => "inline-block",
         Display::Grid => "grid",
         Display::None => "none",
+        Display::FlowRoot => "flow-root",
+        Display::InlineFlex => "inline-flex",
+        Display::InlineGrid => "inline-grid",
+        Display::Table => "table",
+        Display::InlineTable => "inline-table",
+        Display::TableRowGroup => "table-row-group",
+        Display::TableHeaderGroup => "table-header-group",
+        Display::TableFooterGroup => "table-footer-group",
+        Display::TableRow => "table-row",
+        Display::TableColumn => "table-column",
+        Display::TableColumnGroup => "table-column-group",
+        Display::TableCell => "table-cell",
+        Display::TableCaption => "table-caption",
+        Display::ListItem => "list-item",
+        Display::Contents => "contents",
     }
 }
 
