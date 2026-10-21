@@ -6,7 +6,7 @@ use crate::interaction::InteractionState;
 use crate::state_reach::StateReach;
 use crate::style_map::StyleMap;
 use crate::stylesheet_parse::Rule;
-use crate::stylo::{StyloTree, compute_with_tree, restyle_nodes, shared_lock};
+use crate::stylo::{StyloTree, compute_with_tree, restyle_first_lines, restyle_nodes, shared_lock};
 use crate::tree::{Arena, NodeId};
 
 /// The cascade for a caller that runs it again and again on the same tree.
@@ -131,7 +131,7 @@ impl StyleSession {
         let Some(kept) = self.kept.as_mut() else {
             return (StyleMap::new(), None);
         };
-        let styles = compute_with_tree(&kept.tree, rules, viewport, timeline, &[]);
+        let styles = compute_with_tree(&kept.tree, arena, rules, viewport, timeline, &[]);
         kept.last = timeline.is_still().then(|| Last {
             rules: rules_key,
             viewport,
@@ -187,6 +187,18 @@ fn restyle_what_changed(
     for (id, style) in styled {
         nodes.push(id);
         styles.insert_shared(id, style);
+    }
+    let lines = kept.tree.first_lines_reaching(&nodes);
+    if !lines.is_empty() {
+        nodes.extend(restyle_first_lines(
+            &kept.tree,
+            arena,
+            &mut styles,
+            &lines,
+            rules,
+            viewport,
+            timeline,
+        ));
     }
     last.styles = styles.clone();
     Some((styles, Some(nodes)))
