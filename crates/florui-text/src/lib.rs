@@ -794,6 +794,11 @@ pub struct InlineLayout {
     /// Where each inline element has text, one per element and line it
     /// appears on, in line order.
     pub fragments: Vec<InlineFragment>,
+    /// When the first line of the context has a style of its own (see
+    /// [`InlineElement::first_line`]), how many elements there were: the elements of the
+    /// first line are numbered from there, element `n + i` being element `i` as it is on
+    /// the first line.
+    pub first_line: Option<usize>,
 }
 
 /// The part of an inline element on one line: its content area, from where
