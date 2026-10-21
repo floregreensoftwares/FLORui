@@ -224,6 +224,14 @@ fn strip_comments(text: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// Where the comment that starts at `at` ends: its last byte, or the end of the text.
+fn css_comment_end(bytes: &[u8], at: usize) -> usize {
+    bytes[at + 2..]
+        .windows(2)
+        .position(|pair| pair == b"*/")
+        .map_or(bytes.len().saturating_sub(1), |end| at + 2 + end + 1)
+}
+
 /// Where the brace opened at `open` is closed.
 fn matching_brace(bytes: &[u8], open: usize) -> usize {
     let mut depth = 0usize;
@@ -236,6 +244,9 @@ fn matching_brace(bytes: &[u8], open: usize) -> usize {
                 if depth == 0 {
                     return at;
                 }
+            }
+            b'/' if bytes.get(at + 1) == Some(&b'*') => {
+                at = css_comment_end(bytes, at);
             }
             q @ (b'"' | b'\'') => {
                 at += 1;
@@ -399,6 +410,17 @@ mod tests {
         assert_eq!(rewritten.letters.numbers.len(), 1);
         let plain = rewrite_stylesheet(".a { color: red }");
         assert!(matches!(plain.css, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn a_comment_in_a_rule_does_not_start_a_string() {
+        let rewritten = rewrite_stylesheet(
+            ".a { color: red; /* don't */ } .b::first-line { color: blue } \
+             .c::first-letter { color: red }",
+        );
+        assert_eq!(rewritten.lines.numbers.len(), 1);
+        assert_eq!(rewritten.letters.numbers.len(), 1);
+        assert!(rewritten.css.starts_with(".a { color: red; /* don't */ }"));
     }
 
     #[test]
