@@ -1491,8 +1491,14 @@ fn has_line_marker(styles: &StyleMap, node: NodeId) -> bool {
 /// Whether the lines of a node with no children are laid out as an inline formatting
 /// context and not as plain text: it has a marker in its first line, or a first line of
 /// its own.
-fn has_line_context(styles: &StyleMap, node: NodeId) -> bool {
-    has_line_marker(styles, node) || styles.get(&node).is_some_and(|s| s.first_line.is_some())
+fn has_line_context(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
+    // A replaced element or a control draws itself, whatever line it is in.
+    let draws_itself = matches!(
+        arena.tag(node),
+        "img" | "icon" | "svg" | "input" | "textarea" | "select" | "br"
+    );
+    has_line_marker(styles, node)
+        || (!draws_itself && styles.get(&node).is_some_and(|s| s.first_line.is_some()))
 }
 
 /// What the marker of a list item takes in its first line.
@@ -3472,7 +3478,8 @@ fn build_node(
         match step {
             BuildStep::Visit(node) => {
                 let arena_children = flow_children(arena, styles, node);
-                let leaf = (arena.children(node).is_empty() && !has_line_context(styles, node))
+                let leaf = (arena.children(node).is_empty()
+                    && !has_line_context(arena, styles, node))
                     || arena.tag(node) == "svg";
                 let kind = if leaf {
                     LayoutKind::Blocks
@@ -3481,7 +3488,8 @@ fn build_node(
                 };
                 // An inline `<svg>` is a replaced box: what is in it is drawn with it.
                 let is_svg = arena.tag(node) == "svg";
-                let id = if (arena.children(node).is_empty() && !has_line_context(styles, node))
+                let id = if (arena.children(node).is_empty()
+                    && !has_line_context(arena, styles, node))
                     || is_svg
                 {
                     let style = to_taffy_style(styles.get(&node));
