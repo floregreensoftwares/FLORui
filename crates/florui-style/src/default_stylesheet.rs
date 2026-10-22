@@ -353,6 +353,12 @@ const CSS: &str = "
         overflow-wrap: break-word;
     }
 
+    /* The placeholder of a text field is its `::before`: see the placeholder
+       adapter. Its gray is the one Chromium draws it in. */
+    :where(input, textarea)::before {
+        color: #757575;
+    }
+
     pre {
         margin-top: 1em;
         margin-bottom: 1em;

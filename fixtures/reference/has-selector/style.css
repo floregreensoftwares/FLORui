@@ -1,0 +1,15 @@
+.wrap { position: relative; width: 340px; height: 440px; background-color: #ffffff; }
+.wrap > div { margin: 0 0 3px 10px; width: 150px; height: 14px; background-color: #d8d8d8; }
+.wrap > div > div, .wrap > div > span { display: block; width: 20px; height: 8px; background-color: #999999; }
+.wrap div div div { width: 10px; }
+.a:has(.x) { background-color: #40a060; }
+.b:has(> .x) { background-color: #40a060; }
+.c:has(+ .y) { background-color: #40a060; }
+.d:has(~ .y) { background-color: #40a060; }
+.e:has(.x, .y) { background-color: #40a060; }
+.f:has(.p .q) { background-color: #40a060; }
+.g:not(:has(.x)) { background-color: #40a060; }
+.h:has(#i) { background-color: #d05040; }
+.h.j { background-color: #4070d0; }
+.k:has(span:first-child) { background-color: #40a060; }
+.m:has(span:empty) { background-color: #40a060; }

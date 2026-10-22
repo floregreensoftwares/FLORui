@@ -1351,6 +1351,16 @@ pub struct ComputedStyle {
     /// (see `scroll_behavior_adapter`); unlike a custom property it does
     /// not inherit. It animates programmatic scrolls of this element.
     pub scroll_behavior_smooth: bool,
+    /// The style of the `::placeholder` of a text field, from the rules written
+    /// for it (see [`crate::placeholder_adapter`]) and the default sheet's; `None`
+    /// for any other node.
+    pub placeholder: Option<std::sync::Arc<ComputedStyle>>,
+    /// The style of the `::selection` of a text field; `None` where no rule gave
+    /// it one.
+    pub selection: Option<std::sync::Arc<ComputedStyle>>,
+    /// Inherited `caret-color`, read from the mirrored property (real `caret-color` is
+    /// not in the servo build of the style engine); `None` is `auto`, the text color.
+    pub caret_color: Option<Rgba>,
     /// `content`, which a `::before` or `::after` is generated from; any other
     /// box ignores it.
     pub content: crate::content::Content,
@@ -1585,6 +1595,9 @@ impl ComputedStyle {
             aspect_ratio: _,
             appearance: _,
             resize: _,
+            placeholder,
+            selection,
+            caret_color,
             scroll_behavior_smooth: _,
             content: _,
             quotes: _,
@@ -1609,6 +1622,9 @@ impl ComputedStyle {
         self.backdrop_blur = *backdrop_blur;
         self.cursor_pointer = *cursor_pointer;
         self.placeholder_color = *placeholder_color;
+        self.placeholder.clone_from(placeholder);
+        self.selection.clone_from(selection);
+        self.caret_color = *caret_color;
         self.empty_cells = *empty_cells;
     }
 

@@ -111,6 +111,11 @@ struct NodeSlot {
     /// number have the same state in every ancestor. See
     /// [`StyloTree::number_contexts`].
     context: Cell<u32>,
+    /// The `:has()` this node has, by number, as the classes `florui-has-N` the
+    /// rules were rewritten to (see [`crate::has_adapter`]).
+    has: std::cell::RefCell<Vec<usize>>,
+    /// Whether the node holds text, which `:empty` counts as content.
+    has_text: bool,
     /// [`NodeSlot::identity`], worked out once: the elements do not change in a kept tree.
     identity_hash: std::cell::OnceCell<u64>,
     /// For the node of a first letter, the slot of the element it is the first letter
@@ -151,6 +156,11 @@ pub(crate) struct StyloTree {
     /// Whether any `style` attribute declares `scroll-behavior`, which needs
     /// the same user-agent reset an author sheet declaring it does.
     uses_inline_scroll_behavior: bool,
+    /// Whether the last cascade gave any node a `:has()`, so the next one knows
+    /// whether there is anything to take away.
+    has_given: Cell<bool>,
+    /// The slot of the parent of each slot.
+    parents: Vec<Option<usize>>,
     /// The `::before` and `::after` boxes of each node, by slot, where the arena
     /// has them; empty when it has none.
     generated: Vec<[Option<NodeId>; 2]>,
@@ -351,6 +361,8 @@ impl StyloTree {
                 style_pdb: arena.style_attr(id).map(parse_inline_style),
                 state: Cell::new(node_state),
                 context: Cell::new(0),
+                has: std::cell::RefCell::new(Vec::new()),
+                has_text: !arena.text_content(id).is_empty(),
                 identity_hash: std::cell::OnceCell::new(),
                 fl_owner: arena.first_letter_owner(id).map(|owner| index_of[owner]),
                 fl: std::cell::RefCell::new(Vec::new()),
@@ -395,6 +407,10 @@ impl StyloTree {
                 .style_attr(id)
                 .is_some_and(|css| css.to_ascii_lowercase().contains("scroll-behavior"))
         });
+        let parents: Vec<Option<usize>> = order
+            .iter()
+            .map(|&id| arena.style_parent(id).map(|parent| index_of[parent]))
+            .collect();
         let generated = if arena.has_generated() {
             order
                 .iter()
@@ -419,11 +435,13 @@ impl StyloTree {
             index_of,
             order,
             uses_inline_scroll_behavior,
+            has_given: Cell::new(false),
+            parents,
             generated,
             first_letters,
             first_lines,
         };
-        tree.number_contexts(arena);
+        tree.number_contexts();
         (tree, primary_root)
     }
 
@@ -436,12 +454,12 @@ impl StyloTree {
     /// cells for the same. Nodes with the same number have the same state in every
     /// ancestor, and share. (What a sibling before a node has is covered by
     /// Stylo's own check of the selectors with a sibling combinator.)
-    fn number_contexts(&self, arena: &Arena) {
+    fn number_contexts(&self) {
         let mut numbers: HashMap<(u32, u64, u64), u32> = HashMap::new();
         let mut of_slot: Vec<u32> = vec![0; self.slots.len()];
-        for (index, &id) in self.order.iter().enumerate() {
+        for index in 0..self.order.len() {
             // What is above: the number of the parent, and the parent's own state.
-            let above = match arena.style_parent(id).map(|parent| self.index_of[parent]) {
+            let above = match self.parents[index] {
                 Some(parent) => (
                     of_slot[parent],
                     self.slots[parent].state.get().bits(),
@@ -473,7 +491,7 @@ impl StyloTree {
             *slot.data.borrow_mut() = ElementData::default();
             slot.dirty_descendants.set(false);
         }
-        self.number_contexts(arena);
+        self.number_contexts();
     }
 
     /// How many nodes the tree has.
@@ -535,7 +553,7 @@ impl StyloTree {
             }
         }
         if !changed.is_empty() {
-            self.number_contexts(arena);
+            self.number_contexts();
         }
         changed
     }
@@ -878,6 +896,9 @@ impl<'a> SelectorsElement for StyloNode<'a> {
         name: &AtomIdent,
         case_sensitivity: selectors::attr::CaseSensitivity,
     ) -> bool {
+        if let Some(number) = crate::has_adapter::number_of_class(name.as_ref()) {
+            return self.0.has.borrow().contains(&number);
+        }
         let line = self.0.tag == FIRST_LINE_TAG;
         if let Some(number) = crate::first_letter_adapter::number_of_class(name.as_ref(), line) {
             return self.0.fl.borrow().contains(&number);
@@ -901,7 +922,7 @@ impl<'a> SelectorsElement for StyloNode<'a> {
     }
 
     fn is_empty(&self) -> bool {
-        self.0.children.is_empty()
+        self.0.children.is_empty() && !self.0.has_text
     }
 
     fn is_root(&self) -> bool {
@@ -990,6 +1011,10 @@ impl<'a> TElement for StyloNode<'a> {
     {
         for class in &self.0.classes {
             let atom = Atom::from(class.as_str());
+            callback(AtomIdent::cast(&atom));
+        }
+        for number in self.0.has.borrow().iter() {
+            let atom = Atom::from(format!("florui-has-{number}").as_str());
             callback(AtomIdent::cast(&atom));
         }
         let prefix = if self.0.tag == FIRST_LINE_TAG {
@@ -1638,6 +1663,107 @@ fn first_line_styles(
     }
 }
 
+/// Gives each node the `:has()` it has: for every one the rules hold, the
+/// arguments are matched against the nodes below the node (or after it, and
+/// below them) with the engine's own selector matching, `:scope` being the node.
+/// The result is read back as the classes the rules were rewritten to.
+fn evaluate_has(tree: &StyloTree, rules: &[Rule]) -> bool {
+    let mut numbers: Vec<usize> = rules
+        .iter()
+        .flat_map(|rule| rule.has_specs().iter().copied())
+        .collect();
+    numbers.sort_unstable();
+    numbers.dedup();
+    if numbers.is_empty() && !tree.has_given.get() {
+        return false;
+    }
+    for slot in &tree.slots {
+        slot.has.borrow_mut().clear();
+    }
+    tree.has_given.set(false);
+    if numbers.is_empty() {
+        return true;
+    }
+    let url_data: style::stylesheets::UrlExtraData = url::Url::parse("about:florui")
+        .expect("a fixed, valid URL literal")
+        .into();
+    let mut caches = selectors::matching::SelectorCaches::default();
+    for number in numbers {
+        let Some(spec) = crate::has_adapter::spec(number) else {
+            continue;
+        };
+        let parsed: Vec<_> = spec
+            .relative
+            .iter()
+            .filter_map(|relative| {
+                let list =
+                    style::selector_parser::SelectorParser::parse_author_origin_no_namespace(
+                        &relative.selector,
+                        &url_data,
+                    )
+                    .ok()?;
+                Some((list, relative.siblings))
+            })
+            .collect();
+        for slot in &tree.slots {
+            let mut context = selectors::matching::MatchingContext::new(
+                selectors::matching::MatchingMode::Normal,
+                None,
+                &mut caches,
+                QuirksMode::NoQuirks,
+                selectors::matching::NeedsSelectorFlags::No,
+                selectors::matching::MatchingForInvalidation::No,
+            );
+            context.scope_element = Some(OpaqueElement::new(slot));
+            let found = parsed.iter().any(|(list, siblings)| {
+                let mut matches = |candidate: &NodeSlot| {
+                    let node = StyloNode(candidate);
+                    list.slice().iter().any(|selector| {
+                        selectors::matching::matches_selector(
+                            selector,
+                            0,
+                            None,
+                            &node,
+                            &mut context,
+                        )
+                    })
+                };
+                if *siblings {
+                    // SAFETY: the pointers of a tree point into its own slots.
+                    let Some(parent) = slot.parent.map(|p| unsafe { &*p }) else {
+                        return false;
+                    };
+                    parent.children[slot.sibling_index + 1..]
+                        .iter()
+                        .any(|&sibling| any_in_subtree(unsafe { &*sibling }, &mut matches))
+                } else {
+                    slot.children
+                        .iter()
+                        .any(|&child| any_in_subtree(unsafe { &*child }, &mut matches))
+                }
+            });
+            if found {
+                slot.has.borrow_mut().push(number);
+                tree.has_given.set(true);
+            }
+        }
+    }
+    true
+}
+
+/// Whether `test` holds for `root` or a node below it.
+fn any_in_subtree(root: &NodeSlot, test: &mut impl FnMut(&NodeSlot) -> bool) -> bool {
+    let mut stack = vec![root];
+    while let Some(slot) = stack.pop() {
+        if test(slot) {
+            return true;
+        }
+        // SAFETY: the pointers of a tree point into its own slots.
+        stack.extend(slot.children.iter().map(|&child| unsafe { &*child }));
+    }
+    false
+}
+
 /// The cascade over a tree already built and set to the state to style it in.
 pub(crate) fn compute_with_tree(
     tree: &StyloTree,
@@ -1649,6 +1775,12 @@ pub(crate) fn compute_with_tree(
 ) -> StyleMap {
     // One entry per node: growing a table of styles this big copies every
     // entry it already holds each time it doubles.
+    if evaluate_has(tree, rules) {
+        // The classes a node has can tell two nodes apart that the numbering took
+        // for the same.
+        tree.number_contexts();
+    }
+    // After the `:has()` classes, which the selectors of a first letter or line may hold.
     evaluate_first_letters(tree, rules);
     let mut result = StyleMap::with_capacity(tree.order.len());
     with_style_context(
@@ -1664,6 +1796,7 @@ pub(crate) fn compute_with_tree(
             // `ElementData`, so no address is reused while the map is alive.
             let mut hidden = HiddenStyles::new();
             let mut converted = Converted::new();
+            let mut fields = FieldStyles::default();
             // Level by level, so an ancestor's style is already committed to
             // its `ElementData` when a descendant resolves and Stylo's style
             // sharing cache sees every node of one depth together. One bloom
@@ -1689,7 +1822,8 @@ pub(crate) fn compute_with_tree(
                         result.insert_shared(node, style);
                     },
                 );
-                result.insert_shared(id, styled.style);
+                let style = with_field_pseudos(&styled, shared, &mut converted, &mut fields);
+                result.insert_shared(id, style);
             }
             let mut replaced = Vec::new();
             first_line_styles(
@@ -1732,6 +1866,7 @@ pub(crate) fn restyle_nodes(
         |shared, thread_local, timeline| {
             let mut hidden = HiddenStyles::new();
             let mut converted = Converted::new();
+            let mut fields = FieldStyles::default();
             let mut work: std::collections::BTreeSet<(usize, usize)> = start
                 .iter()
                 .map(|&index| (tree.slots[index].depth, index))
@@ -1780,7 +1915,8 @@ pub(crate) fn restyle_nodes(
                         styled.push((generated, style));
                     },
                 );
-                styled.push((id, node.style));
+                let style = with_field_pseudos(&node, shared, &mut converted, &mut fields);
+                styled.push((id, style));
             }
             styled
         },
@@ -1920,6 +2056,66 @@ struct Styled {
     primary: Arc<ComputedValues>,
     /// The values of the node's `::before` and `::after`, where a rule gave it one.
     pseudos: [Option<Arc<ComputedValues>>; 2],
+    /// For a text field, the values of its `::placeholder` (which the rules are
+    /// rewritten to put on the `::before` of a field, see
+    /// [`crate::placeholder_adapter`]) and of its `::selection`.
+    field_pseudos: [Option<Arc<ComputedValues>>; 2],
+}
+
+/// The styles of text fields that carry the style of their `::placeholder` and
+/// `::selection`, by the cascaded values of the three, and what keeps those
+/// addresses from being reused while the map is alive.
+#[derive(Default)]
+struct FieldStyles {
+    styles: HashMap<(usize, usize, usize), std::sync::Arc<ComputedStyle>>,
+    kept: Vec<Arc<ComputedValues>>,
+}
+
+/// `styled.style`, with the style of the `::placeholder` and the `::selection` of
+/// a text field in it.
+fn with_field_pseudos(
+    styled: &Styled,
+    shared: &SharedStyleContext<'_>,
+    converted: &mut Converted,
+    fields: &mut FieldStyles,
+) -> std::sync::Arc<ComputedStyle> {
+    if styled.field_pseudos.iter().all(Option::is_none) {
+        return std::sync::Arc::clone(&styled.style);
+    }
+    let address = |values: &Option<Arc<ComputedValues>>| {
+        values
+            .as_ref()
+            .map_or(0, |values| &**values as *const ComputedValues as usize)
+    };
+    let key = (
+        &*styled.primary as *const ComputedValues as usize,
+        address(&styled.field_pseudos[0]),
+        address(&styled.field_pseudos[1]),
+    );
+    if let Some(style) = fields.styles.get(&key) {
+        return std::sync::Arc::clone(style);
+    }
+    let viewport = shared.stylist.device().au_viewport_size();
+    let viewport_px = (viewport.width.to_f32_px(), viewport.height.to_f32_px());
+    let mut convert = |values: &Option<Arc<ComputedValues>>| {
+        values.as_ref().map(|values| {
+            fields.kept.push(Arc::clone(values));
+            std::sync::Arc::clone(
+                converted
+                    .entry(&**values as *const ComputedValues)
+                    .or_insert_with(|| std::sync::Arc::new(to_computed_style(values, viewport_px))),
+            )
+        })
+    };
+    let placeholder = convert(&styled.field_pseudos[0]);
+    let selection = convert(&styled.field_pseudos[1]);
+    fields.kept.push(Arc::clone(&styled.primary));
+    let mut style = (*styled.style).clone();
+    style.placeholder = placeholder;
+    style.selection = selection;
+    let style = std::sync::Arc::new(style);
+    fields.styles.insert(key, std::sync::Arc::clone(&style));
+    style
 }
 
 /// Runs `walk` with what the cascade of `tree` needs: a stylist holding the
@@ -2040,6 +2236,14 @@ fn style_node<'t>(
         thread_local,
     };
     let styles = resolve_sharing_styles(&mut context, target);
+    let field_pseudos = if matches!(target.0.tag, "input" | "textarea") {
+        [
+            styles.pseudos.get(&PseudoElement::Before).cloned(),
+            styles.pseudos.get(&PseudoElement::Selection).cloned(),
+        ]
+    } else {
+        [None, None]
+    };
     let pseudos = [
         styles.pseudos.get(&PseudoElement::Before).cloned(),
         styles.pseudos.get(&PseudoElement::After).cloned(),
@@ -2117,6 +2321,7 @@ fn style_node<'t>(
         style,
         previous: old_values,
         primary,
+        field_pseudos,
         pseudos,
     }
 }
@@ -2685,6 +2890,9 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
         resize: to_resize(values),
         placeholder_color: to_placeholder_color(values),
         scroll_behavior_smooth: to_scroll_behavior_smooth(values),
+        placeholder: None,
+        selection: None,
+        caret_color: mirrored(values, "caret-color").and_then(|css| parse_color(&css)),
         content: to_content(values),
         quotes: to_quotes(values),
         first_line: None,
@@ -5844,7 +6052,18 @@ impl NodeSlot {
     /// A hash of what a selector with an ancestor in it can tell this node by: its tag,
     /// its id, its classes and its attributes.
     fn identity(&self) -> u64 {
-        *self.identity_hash.get_or_init(|| self.hash_identity())
+        let base = *self.identity_hash.get_or_init(|| self.hash_identity());
+        let has = self.has.borrow();
+        if has.is_empty() {
+            return base;
+        }
+        // The `:has()` it has changes with the tree below it and the state, so it is
+        // not part of what is kept.
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        base.hash(&mut hasher);
+        has.hash(&mut hasher);
+        hasher.finish()
     }
 
     fn hash_identity(&self) -> u64 {

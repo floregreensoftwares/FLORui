@@ -42,6 +42,7 @@ pub(crate) const MIRRORED: &[&str] = &[
     "font-synthesis-small-caps",
     "font-synthesis-position",
     "text-decoration-thickness",
+    "caret-color",
     "text-underline-offset",
     "text-underline-position",
     "text-decoration-skip-ink",

@@ -625,6 +625,34 @@ mod tests {
         }
 
         #[test]
+        fn a_selector_with_a_has_is_a_subject_of_a_first_line_and_a_first_letter() {
+            let tree: Element = view! {
+                <div>
+                    <p class="p"><span class="m" />{"Hello world"}</p>
+                    <p class="p">{"Plain text"}</p>
+                </div>
+            };
+            let (arena, styles) = styled(
+                &tree,
+                ".p:has(.m)::first-line { color: #ff0000 } .p:has(.m)::first-letter { font-size: 30px }",
+            );
+            let [with, without] = arena.children(arena.roots()[0])[..] else {
+                panic!("two paragraphs");
+            };
+            assert_eq!(
+                styles[&with].first_line.as_ref().map(|s| s.color),
+                Some(Rgba::opaque(255, 0, 0))
+            );
+            assert!(styles[&without].first_line.is_none());
+            let letters: Vec<f32> = arena
+                .find_all(|tree, id| tree.generated(id) == Some(Pseudo::FirstLetter))
+                .iter()
+                .map(|id| styles[id].font_size)
+                .collect();
+            assert_eq!(letters.iter().filter(|&&size| size == 30.0).count(), 1);
+        }
+
+        #[test]
         fn a_partial_restyle_gives_the_same_lines_as_a_whole_cascade() {
             let tree: Element = view! {
                 <p class="p">{"Plain "}<em class="e">{"emphasis"}</em>{" text"}</p>

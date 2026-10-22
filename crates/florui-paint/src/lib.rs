@@ -1400,9 +1400,8 @@ const NO_BORDER_SIDE: florui_style::BorderSide = florui_style::BorderSide {
     style: florui_style::BorderLineStyle::Solid,
 };
 
-/// A fixed selection-highlight color for an editable `<input>` — real
-/// `caret-color`/`::selection` CSS is a documented, deliberate gap this
-/// slice leaves for later; every input highlights identically for now.
+/// The selection-highlight color of an editable `<input>` that no `::selection`
+/// rule gives a background of its own.
 const TEXT_INPUT_SELECTION_COLOR: Rgba = Rgba {
     r: 0x3a,
     g: 0x84,
@@ -1435,6 +1434,23 @@ const SPINNER_HOVER: Rgba = Rgba::opaque(99, 99, 99);
 /// Edge's default placeholder color, `rgb(117, 117, 117)`, whatever the
 /// field's own text color is.
 const PLACEHOLDER_COLOR: Rgba = Rgba::opaque(117, 117, 117);
+
+/// The color a field's placeholder is drawn in: `--florui-placeholder-color` where it is
+/// set, else the `::placeholder` of the field, with its `opacity`.
+fn placeholder_color(style: Option<&ComputedStyle>) -> Rgba {
+    let Some(style) = style else {
+        return PLACEHOLDER_COLOR;
+    };
+    if let Some(color) = style.placeholder_color {
+        return color;
+    }
+    let Some(placeholder) = style.placeholder.as_deref() else {
+        return PLACEHOLDER_COLOR;
+    };
+    let mut color = placeholder.color;
+    color.a = (f32::from(color.a) * placeholder.opacity.clamp(0.0, 1.0)).round() as u8;
+    color
+}
 
 /// Width of a textarea's vertical scrollbar, and of the resize corner
 /// that shortens it.
@@ -4789,6 +4805,11 @@ fn paint_node(
                         y1 * scale_factor,
                     )
                 };
+                let selection_style = style.and_then(|s| s.selection.as_deref());
+                let selection_background = selection_style
+                    .map(|s| s.background_color)
+                    .filter(|color| color.a > 0)
+                    .unwrap_or(TEXT_INPUT_SELECTION_COLOR);
                 // Behind the text -- real CSS/browser selection highlight
                 // paints under the glyphs it covers, not over them.
                 for &rect in &paint.selection_rects {
@@ -4799,7 +4820,7 @@ fn paint_node(
                         content_y + sy0,
                         sx1 - sx0,
                         sy1 - sy0,
-                        TEXT_INPUT_SELECTION_COLOR,
+                        selection_background,
                         clip,
                     );
                 }
@@ -4842,15 +4863,38 @@ fn paint_node(
                     clip,
                 );
                 decorate(buffer, decoration::Phase::LineThrough);
+                // A selection that sets its own text color shows the glyphs it covers in it.
+                if let Some(selected) = selection_style
+                    .map(|s| s.color)
+                    .filter(|selected| Some(*selected) != style.map(|s| s.color))
+                {
+                    for &rect in &paint.selection_rects {
+                        let (sx0, sy0, sx1, sy1) = scaled(rect);
+                        if let Some(mask) = padding_box_mask(
+                            buffer,
+                            (content_x + sx0, content_y + sy0, sx1 - sx0, sy1 - sy0),
+                            NO_BORDER,
+                            clip,
+                        ) {
+                            paint_shaped_runs(
+                                buffer,
+                                &paint.runs,
+                                content_x,
+                                content_y,
+                                selected,
+                                scale_factor,
+                                Some(&mask),
+                            );
+                        }
+                    }
+                }
                 if let Some(placeholder) = &paint.placeholder {
                     paint_shaped_runs(
                         buffer,
                         placeholder,
                         content_x,
                         content_y,
-                        style
-                            .and_then(|s| s.placeholder_color)
-                            .unwrap_or(PLACEHOLDER_COLOR),
+                        placeholder_color(style),
                         scale_factor,
                         clip,
                     );
@@ -4881,7 +4925,7 @@ fn paint_node(
                         content_y + cy0,
                         (cx1 - cx0).max(TEXT_INPUT_CARET_WIDTH * scale_factor),
                         cy1 - cy0,
-                        color,
+                        style.and_then(|s| s.caret_color).unwrap_or(color),
                         clip,
                     );
                 }
@@ -10755,11 +10799,21 @@ mod tests {
         placeholder: Option<Vec<florui_text::ShapedRun>>,
         extra_css: &str,
     ) -> Canvas {
+        paint_text_field_with(runs, placeholder, Vec::new(), extra_css, "")
+    }
+
+    fn paint_text_field_with(
+        runs: Vec<florui_text::ShapedRun>,
+        placeholder: Option<Vec<florui_text::ShapedRun>>,
+        selection_rects: Vec<(f32, f32, f32, f32)>,
+        extra_css: &str,
+        more_rules: &str,
+    ) -> Canvas {
         let tree: Element = view! { <input type="text" class="f" /> };
         let arena = Arena::build(&tree);
         let css = format!(
             ".f {{ width: 60px; height: 20px; border: none; padding: 0px; \
-             background-color: #ffffff; color: #000000; {extra_css} }}"
+             background-color: #ffffff; color: #000000; {extra_css} }} {more_rules}"
         );
         let rules = florui_style::parse_stylesheet(&css).unwrap();
         let styles = florui_style::compute(
@@ -10779,7 +10833,7 @@ mod tests {
             TextInputPaint {
                 runs,
                 caret_rect: None,
-                selection_rects: Vec::new(),
+                selection_rects,
                 compose_rect: None,
                 show_caret: false,
                 spinner: None,
@@ -10831,6 +10885,77 @@ mod tests {
             "the placeholder's own gray, not the text color"
         );
         assert_eq!(outside, 0, "nothing is painted past the 60px field");
+    }
+
+    #[test]
+    fn a_placeholder_rule_recolors_the_placeholder_and_its_opacity_lightens_it() {
+        let mut font = Font::load_embedded();
+        let runs = font
+            .shape(
+                florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 16.0, 400.0),
+                "Hint",
+            )
+            .runs;
+        let strongest_red = |buffer: &Canvas| {
+            (0..60)
+                .flat_map(|x| (0..20).map(move |y| (x, y)))
+                .map(|(x, y)| pixel_rgb(buffer, x, y))
+                .map(|[r, g, ..]| i32::from(r) - i32::from(g))
+                .max()
+                .expect("a pixel")
+        };
+        let solid = paint_text_field_with(
+            Vec::new(),
+            Some(runs.clone()),
+            Vec::new(),
+            "",
+            ".f::placeholder { color: #ff0000 }",
+        );
+        let faded = paint_text_field_with(
+            Vec::new(),
+            Some(runs),
+            Vec::new(),
+            "",
+            ".f::placeholder { color: #ff0000; opacity: 0.5 }",
+        );
+        assert_eq!(strongest_red(&solid), 255);
+        let half = strongest_red(&faded);
+        assert!((100..=140).contains(&half), "half of the red: {half}");
+    }
+
+    #[test]
+    fn a_selection_rule_colors_the_highlight_and_the_glyphs_it_covers() {
+        let mut font = Font::load_embedded();
+        let runs = font
+            .shape(
+                florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 16.0, 400.0),
+                "Hi",
+            )
+            .runs;
+        let rect = vec![(0.0, 0.0, 30.0, 20.0)];
+        let plain = paint_text_field_with(runs.clone(), None, rect.clone(), "", "");
+        let styled = paint_text_field_with(
+            runs,
+            None,
+            rect,
+            "",
+            ".f::selection { background-color: #00c000; color: #ffffff }",
+        );
+        let greens = |buffer: &Canvas| {
+            (0..30)
+                .flat_map(|x| (0..20).map(move |y| (x, y)))
+                .filter(|&(x, y)| pixel_rgb(buffer, x, y) == [0, 192, 0])
+                .count()
+        };
+        let whites = |buffer: &Canvas| {
+            (0..30)
+                .flat_map(|x| (0..20).map(move |y| (x, y)))
+                .filter(|&(x, y)| pixel_rgb(buffer, x, y) == [255, 255, 255])
+                .count()
+        };
+        assert_eq!(greens(&plain), 0, "the default highlight is blue");
+        assert!(greens(&styled) > 300, "{}", greens(&styled));
+        assert!(whites(&styled) > 10, "the glyphs are white on the green");
     }
 
     #[test]
@@ -11250,6 +11375,94 @@ mod tests {
         assert!(
             found_caret,
             "expected a red caret pixel past x={past_text} (text width {text_width})"
+        );
+    }
+
+    #[test]
+    fn the_caret_takes_the_caret_color_where_the_text_has_another() {
+        let tree: Element = view! { <input type="text" value="Hi" style="color: #ff0000; caret-color: #00ff00; width: 60px;" /> };
+        let arena = Arena::build(&tree);
+        let rules = florui_style::parse_stylesheet("").unwrap();
+        let styles = florui_style::compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            florui_style::Viewport::default(),
+            &mut florui_style::AnimationTimeline::default(),
+        );
+        let mut font = Font::load_embedded();
+        let layouts =
+            florui_layout::compute_layout(&mut font, &arena, &styles, Size::MAX_CONTENT).unwrap();
+
+        let node = arena.roots()[0];
+        let width = layouts[&node].width.ceil() as u32 + 10;
+        let height = layouts[&node].height.ceil() as u32;
+
+        // A caret placed 4px past the text's own measured width -- past
+        // every real glyph, so any red pixel there can only be the caret,
+        // not anti-aliased glyph ink.
+        let text_width = font
+            .measure(
+                florui_text::TextStyle::new(florui_text::FontFamily::SansSerif, 16.0, 400.0),
+                "Hi",
+            )
+            .width;
+        let mut text_inputs = HashMap::new();
+        text_inputs.insert(
+            node,
+            TextInputPaint {
+                runs: font
+                    .shape(
+                        florui_text::TextStyle::new(
+                            florui_text::FontFamily::SansSerif,
+                            16.0,
+                            400.0,
+                        ),
+                        "Hi",
+                    )
+                    .runs,
+                caret_rect: Some((text_width + 4.0, 0.0, text_width + 4.0, height as f32)),
+                selection_rects: Vec::new(),
+                compose_rect: None,
+                show_caret: true,
+                spinner: None,
+                scroll: (0.0, 0.0),
+                placeholder: None,
+                scrollbar: None,
+                resizer: false,
+            },
+        );
+
+        let buffer = paint_to_buffer_with_desktop_extras(
+            &mut font,
+            width,
+            height,
+            Rgba::opaque(0, 0, 0),
+            &arena,
+            &styles,
+            &layouts,
+            1.0,
+            Some(&text_inputs),
+            None,
+        );
+
+        // Scanned only past the text's own measured width plus a small
+        // margin -- real glyph ink never extends past its own advance by
+        // more than a pixel or two, so any red pixel out here can only be
+        // the caret, not anti-aliased text.
+        let past_text = (text_width.ceil() as u32 + 2).min(width);
+        let mut found_caret = false;
+        for py in 0..height {
+            for px in past_text..width {
+                let pixel = pixel_rgb(&buffer, px, py);
+                if pixel[1] > 0x80 && pixel[0] < 0x40 && pixel[2] < 0x40 {
+                    found_caret = true;
+                }
+            }
+        }
+        assert!(
+            found_caret,
+            "expected a green caret pixel past x={past_text} (text width {text_width})"
         );
     }
 
