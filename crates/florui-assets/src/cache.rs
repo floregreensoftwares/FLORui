@@ -171,7 +171,8 @@ impl AssetCache {
         params: DecodeParams,
     ) -> Result<Arc<RasterImage>, AssetError> {
         let id = source.identity()?;
-        self.get_or_decode_with(id, params, source.path().map(Path::to_owned), || {
+        // The application's own file or bytes: an SVG in it may name other files.
+        self.get_or_decode_with(id, params, source.path().map(Path::to_owned), true, || {
             source.read_bytes()
         })
     }
@@ -192,7 +193,9 @@ impl AssetCache {
     }
 
     /// Like [`Self::get_or_load`] for bytes that are already in memory under `id`, such
-    /// as a download's: a cached decode is returned, a decode under way is waited for,
+    /// as a download's, which someone else wrote: an SVG among them is parsed without
+    /// reading the files it names, and `id` should be an [`AssetId::Url`] (any other is
+    /// kept under a key of its own, not the one of the file or asset it names): a cached decode is returned, a decode under way is waited for,
     /// and otherwise `bytes` are decoded in one of the decode slots and cached. The
     /// image is shared and dropped like any other.
     pub fn get_or_decode(
@@ -203,7 +206,14 @@ impl AssetCache {
     ) -> Result<Arc<RasterImage>, AssetError> {
         // The same ceiling as for a file or an embedded asset, whatever limit the download had.
         crate::limits::check_source_len(bytes.len() as u64, None)?;
-        self.get_or_decode_with(id, params, None, || Ok(Cow::Borrowed(bytes)))
+        // Bytes someone else wrote: an SVG in them may not read files, whatever `id` is, and
+        // they are kept under a key of their own, never the key of a real file or asset that
+        // a later load of it would find them under.
+        let id = match id {
+            AssetId::Url(url) => AssetId::Url(url),
+            other => AssetId::Url(format!("bytes:{other:?}")),
+        };
+        self.get_or_decode_with(id, params, None, false, || Ok(Cow::Borrowed(bytes)))
     }
 
     fn get_or_decode_with<'b>(
@@ -211,6 +221,7 @@ impl AssetCache {
         id: AssetId,
         params: DecodeParams,
         path: Option<PathBuf>,
+        trusted: bool,
         read: impl FnOnce() -> Result<Cow<'b, [u8]>, AssetError>,
     ) -> Result<Arc<RasterImage>, AssetError> {
         let key = CacheKey { id, params };
@@ -260,9 +271,7 @@ impl AssetCache {
             let result = {
                 let _slot = DecodeSlot::take();
                 let read = read.take().expect("only the thread that leads decodes");
-                // A download is someone else's document; a file or embedded asset is the
-                // application's own.
-                decode(read, params, !matches!(key.id, AssetId::Url(_)), path)
+                decode(read, params, trusted, path)
             };
             let decoded = result.and_then(|image| {
                 let (needed, held) = (image.retained_bytes(), self.held_bytes());
@@ -757,8 +766,15 @@ mod tests {
         let drawn = |image: &RasterImage| image.rgba.chunks(4).any(|pixel| pixel[3] != 0);
         let cache = AssetCache::new();
         let params = DecodeParams::Rasterized(fit);
+        let own: &'static [u8] = Box::leak(outer.clone().into_bytes().into_boxed_slice());
         let trusted = cache
-            .get_or_decode(AssetId::Embedded("own"), outer.as_bytes(), params)
+            .get_or_load(
+                &AssetSource::Embedded {
+                    id: "own",
+                    bytes: own,
+                },
+                params,
+            )
             .unwrap();
         assert!(
             drawn(&trusted),
@@ -838,5 +854,36 @@ mod tests {
             "the old one is not handed back for the new"
         );
         assert_ne!(first.rgba, second.rgba);
+    }
+
+    #[test]
+    fn bytes_given_under_the_id_of_a_file_never_become_what_loading_that_file_finds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_svg(&dir, "real.svg");
+        let cache = AssetCache::new();
+        let id = AssetSource::Path(&path).identity().unwrap();
+        let other = BLUE_CIRCLE_SVG.replace("#3366ff", "#ff0000");
+        let given = cache
+            .get_or_decode(id, other.as_bytes(), DecodeParams::Native)
+            .unwrap_err();
+        // (Not a raster image: the point is the key, below.)
+        assert!(matches!(given, AssetError::Raster(_)));
+        let svg = DecodeParams::Rasterized(crate::svg::RasterFit::Stretch {
+            width: 4,
+            height: 4,
+        });
+        let theirs = cache
+            .get_or_decode(
+                AssetSource::Path(&path).identity().unwrap(),
+                other.as_bytes(),
+                svg,
+            )
+            .unwrap();
+        let ours = cache.get_or_load(&AssetSource::Path(&path), svg).unwrap();
+        assert!(!Arc::ptr_eq(&theirs, &ours));
+        assert_ne!(
+            theirs.rgba, ours.rgba,
+            "the file's own decode, not the given bytes'"
+        );
     }
 }

@@ -46,6 +46,15 @@ fn idle(fetcher: &Fetcher) -> bool {
 }
 
 #[test]
+fn a_size_limit_above_what_any_source_may_be_is_brought_down_to_it() {
+    let fetcher = Fetcher::new(NetConfig {
+        max_bytes: u64::MAX,
+        ..config()
+    });
+    assert_eq!(fetcher.config().max_bytes, MAX_SOURCE_BYTES);
+}
+
+#[test]
 fn an_image_is_downloaded_with_its_type() {
     let server = Server::start(|_| Reply::ok("image/png", png()));
     let fetched = fetcher().fetch(&server.url("/a.png")).unwrap();
@@ -743,6 +752,63 @@ mod caching {
         fetcher.fetch(&url).unwrap();
         let (renewed, _) = disk.lookup(&url, unix_now()).unwrap();
         assert_eq!((renewed.fresh_for, renewed.stale_if_error), (60, 600));
+    }
+
+    #[test]
+    fn a_picture_the_origin_says_is_gone_is_not_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let gone = std::sync::atomic::AtomicBool::new(false);
+        let server = Server::start(move |_| {
+            if gone.swap(true, Ordering::SeqCst) {
+                Reply::status(410)
+            } else {
+                Reply::ok("image/png", png())
+                    .header("ETag", "\"v1\"")
+                    .header("Cache-Control", "max-age=0, stale-while-revalidate=600")
+            }
+        });
+        let url = server.url("/cover.png");
+        let fetcher = Fetcher::new(cached_config(&dir));
+        fetcher.fetch(&url).unwrap();
+        // Served stale, and the revalidation behind it learns the picture is gone.
+        assert_eq!(fetcher.fetch(&url).unwrap().origin, Origin::Stale);
+        let disk = fetcher.inner.disk.as_ref().unwrap();
+        assert!(wait_until(|| disk.lookup_entry(&url, unix_now()).is_none()));
+        assert_eq!(fetcher.fetch(&url).unwrap_err(), FetchError::Status(410));
+    }
+
+    #[test]
+    fn a_304_for_a_body_that_vanished_is_followed_by_a_request_for_the_picture() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache_dir = dir.path().to_owned();
+        let server = Server::start(move |request| {
+            if request.headers.contains_key("if-none-match") {
+                // Another process drops the body while the server answers 304.
+                for item in std::fs::read_dir(&cache_dir).unwrap().flatten() {
+                    if item.path().extension().is_some_and(|e| e == "body") {
+                        let _ = std::fs::remove_file(item.path());
+                    }
+                }
+                Reply::status(304)
+            } else {
+                Reply::ok("image/png", png())
+                    .header("ETag", "\"v1\"")
+                    .header("Cache-Control", "max-age=0")
+            }
+        });
+        let url = server.url("/cover.png");
+        let fetcher = Fetcher::new(cached_config(&dir));
+        fetcher.fetch(&url).unwrap();
+        let again = fetcher.fetch(&url).unwrap();
+        assert_eq!(
+            (again.origin, again.bytes.clone()),
+            (Origin::Network, png())
+        );
+        assert_eq!(
+            server.hits(),
+            3,
+            "asked, confirmed, asked for the picture itself"
+        );
     }
 
     #[test]

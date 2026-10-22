@@ -492,15 +492,18 @@ fn start_remote(
     cache: &Arc<florui_assets::AssetCache>,
     executor: &dyn Executor,
 ) {
-    use florui_assets::{AssetError, AssetId, DecodeParams};
+    use florui_assets::{AssetError, DecodeParams};
 
     // The address as it is requested, so that the same picture written twice is one.
     let src = florui_assets::url_image::remote_address(src);
     let Some(entry) = entries.get_mut(key) else {
         return;
     };
-    let id = AssetId::Url(src.to_owned());
-    if let Some(image) = cache.cached(&id, DecodeParams::Native) {
+    // A picture that is alive in the cache is shared as it is, as a memory cache is, without
+    // asking the server; the latest download of this address is the one looked for.
+    if let Some(image) = florui_assets::url_image::latest_download(src)
+        .and_then(|id| cache.cached(&id, DecodeParams::Native))
+    {
         entry.state = ImageState::Ready(image);
         return;
     }
@@ -537,6 +540,10 @@ fn start_remote(
             Ok(fetched) => {
                 florui_reactive::blocking::spawn_blocking(move || {
                     if florui_assets::Format::sniff(&fetched.bytes).is_some() {
+                        // Under an identity with the digest of these bytes in it: a decode
+                        // of an older version, still alive in another window, is never
+                        // handed back for them.
+                        let id = florui_assets::url_image::register_download(&url, &fetched.bytes);
                         return cache
                             .get_or_decode(id, &fetched.bytes, DecodeParams::Native)
                             .map(Downloaded::Raster);

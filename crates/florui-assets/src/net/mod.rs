@@ -107,7 +107,8 @@ pub struct NetConfig {
     pub total_timeout: Duration,
     /// Redirects followed before giving up. 5.
     pub max_redirects: u32,
-    /// The largest body accepted. [`MAX_SOURCE_BYTES`].
+    /// The largest body accepted, and never more than [`MAX_SOURCE_BYTES`], the ceiling of
+    /// every source: a larger one could not be decoded. [`MAX_SOURCE_BYTES`].
     pub max_bytes: u64,
     /// Requests running at once. 8.
     pub max_concurrent: usize,
@@ -195,6 +196,10 @@ pub struct Stats {
 }
 
 type Outcome = Result<Arc<Fetched>, FetchError>;
+/// What one request came to: the answer, and the entry to write to the disk cache once the
+/// answer has been delivered (the writing and the scan after it are not for the callbacks to
+/// wait on).
+type Answer = (Fetched, Option<Entry>);
 type Callback = Box<dyn FnOnce(Outcome) + Send>;
 
 /// One request in the queue or running, and everyone waiting for its answer.
@@ -251,6 +256,8 @@ struct Inner {
     /// When the background revalidation of an address last failed, so that an origin that is
     /// down is not asked again at every use of its stale copy.
     refresh_failed: Mutex<HashMap<String, Instant>>,
+    /// Responses delivered whose writing to the disk cache is not done yet.
+    pending_stores: AtomicU64,
 }
 
 /// Loads images from the network under the limits of a [`NetConfig`]. Cheap to clone;
@@ -283,7 +290,9 @@ impl Drop for FetchTicket {
 }
 
 impl Fetcher {
-    pub fn new(config: NetConfig) -> Self {
+    pub fn new(mut config: NetConfig) -> Self {
+        // A body larger than this could not be decoded: the ceiling of every other source.
+        config.max_bytes = config.max_bytes.min(MAX_SOURCE_BYTES);
         let disk = config
             .cache_dir
             .clone()
@@ -297,6 +306,7 @@ impl Fetcher {
                 cache_hits: AtomicU64::new(0),
                 revalidated: AtomicU64::new(0),
                 refresh_failed: Mutex::default(),
+                pending_stores: AtomicU64::new(0),
                 config,
             }),
         }
@@ -398,13 +408,20 @@ impl Fetcher {
         })
     }
 
-    /// [`Self::submit`] and wait for the answer on this thread.
+    /// [`Self::submit`] and wait for the answer on this thread. Unlike a callback, which runs
+    /// as soon as the answer is in, this also waits for the answer to be written to the disk
+    /// cache (a moment at most), so that asking again finds it there.
     pub fn fetch(&self, url: &str) -> Outcome {
         let (sender, receiver) = std::sync::mpsc::channel();
         let _ticket = self.submit(url, move |outcome| {
             let _ = sender.send(outcome);
         })?;
-        receiver.recv().unwrap_or(Err(FetchError::Cancelled))
+        let outcome = receiver.recv().unwrap_or(Err(FetchError::Cancelled));
+        let give_up = Instant::now() + Duration::from_secs(5);
+        while self.inner.pending_stores.load(Ordering::SeqCst) > 0 && Instant::now() < give_up {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        outcome
     }
 }
 
@@ -514,9 +531,15 @@ impl Inner {
             };
             // A panic in the client or a decoder must not take the worker (and with it one of
             // the few places for requests) down with it.
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run(&job)))
-                .unwrap_or_else(|_| Err(FetchError::Transport("the request panicked".to_owned())))
-                .map(Arc::new);
+            let (outcome, to_store) =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run(&job))) {
+                    Ok(Ok((fetched, entry))) => (Ok(Arc::new(fetched)), entry),
+                    Ok(Err(error)) => (Err(error), None),
+                    Err(_) => (
+                        Err(FetchError::Transport("the request panicked".to_owned())),
+                        None,
+                    ),
+                };
             let waiters = {
                 let mut queue = self.lock();
                 if let Some(count) = queue.running_by_host.get_mut(&job.host) {
@@ -555,12 +578,23 @@ impl Inner {
                     failed.insert(job.url.clone(), Instant::now());
                 }
             }
+            if to_store.is_some() && outcome.is_ok() {
+                self.pending_stores.fetch_add(1, Ordering::SeqCst);
+            }
             for (_, callback) in waiters {
                 // The callback is the caller's; one that panics does not stop the others.
                 let outcome = outcome.clone();
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
                     callback(outcome)
                 }));
+            }
+            // Written now that everyone waiting has the picture: the writing, and the look at
+            // the size of the directory every so often, are not on their way.
+            if let (Some(entry), Ok(fetched)) = (&to_store, &outcome) {
+                if let Some(disk) = &self.disk {
+                    disk.store(entry, &fetched.bytes);
+                }
+                self.pending_stores.fetch_sub(1, Ordering::SeqCst);
             }
             if matches!(&outcome, Ok(fetched) if fetched.origin == Origin::Stale) {
                 self.enqueue_refresh(&job);
@@ -597,7 +631,7 @@ impl Inner {
         queue.waiting.push_back(job);
     }
 
-    fn run(&self, job: &Job) -> Result<Fetched, FetchError> {
+    fn run(&self, job: &Job) -> Result<Answer, FetchError> {
         if job.cancel.load(Ordering::SeqCst) {
             return Err(FetchError::Cancelled);
         }
@@ -620,11 +654,14 @@ impl Inner {
         {
             if let Some(body) = self.disk.as_ref().and_then(|disk| disk.read_body(entry)) {
                 self.cache_hits.fetch_add(1, Ordering::Relaxed);
-                return Ok(Fetched {
-                    bytes: body,
-                    content_type: stored.and_then(|entry| entry.content_type),
-                    origin,
-                });
+                return Ok((
+                    Fetched {
+                        bytes: body,
+                        content_type: stored.and_then(|entry| entry.content_type),
+                        origin,
+                    },
+                    None,
+                ));
             }
             // Gone since it was found (replaced, or dropped for room): there is nothing to
             // confirm, and a conditional request would come back 304 for a body that is not
@@ -637,18 +674,21 @@ impl Inner {
             && let Some(entry) = stored.take_if(|entry| entry.may_serve_on_error(now))
             && let Some(body) = self.disk.as_ref().and_then(|disk| disk.read_body(&entry))
         {
-            return Ok(Fetched {
-                bytes: body,
-                content_type: entry.content_type,
-                origin: Origin::StaleOnError,
-            });
+            return Ok((
+                Fetched {
+                    bytes: body,
+                    content_type: entry.content_type,
+                    origin: Origin::StaleOnError,
+                },
+                None,
+            ));
         }
         outcome
     }
 
     /// Asks the server (with the validators of `stored`, if any) and keeps the answer. A
     /// `304` takes the stored copy to answer with.
-    fn request(&self, job: &Job, stored: &mut Option<Entry>) -> Result<Fetched, FetchError> {
+    fn request(&self, job: &Job, stored: &mut Option<Entry>) -> Result<Answer, FetchError> {
         if let Some(reason) = &self.network().error {
             return Err(FetchError::Transport(reason.clone()));
         }
@@ -706,9 +746,10 @@ impl Inner {
             };
             // The copy the 304 vouches for is read now, if it is still there.
             let Some(body) = self.disk.as_ref().and_then(|disk| disk.read_body(&entry)) else {
-                return Err(FetchError::Transport(
-                    "the stored copy the server confirmed is gone".to_owned(),
-                ));
+                // Replaced or dropped since it was found (the directory is shared with other
+                // processes): there is nothing to confirm, so ask for the picture itself.
+                *stored = None;
+                return self.request(job, stored);
             };
             let before = entry.clone();
             self.revalidated.fetch_add(1, Ordering::Relaxed);
@@ -744,13 +785,23 @@ impl Inner {
                     disk.remove(&entry.url);
                 }
             }
-            return Ok(Fetched {
-                bytes: body,
-                content_type: entry.content_type,
-                origin: Origin::Revalidated,
-            });
+            return Ok((
+                Fetched {
+                    bytes: body,
+                    content_type: entry.content_type,
+                    origin: Origin::Revalidated,
+                },
+                None,
+            ));
         }
         if status != 200 {
+            // The picture is gone from the origin: the copy kept would go on being served
+            // from its stale windows, and take room.
+            if matches!(status, 404 | 410)
+                && let Some(disk) = &self.disk
+            {
+                disk.remove(&job.url);
+            }
             return Err(FetchError::Status(status));
         }
         // What the headers already say is not an image is refused before the body is read: a
@@ -758,34 +809,35 @@ impl Inner {
         check_declared(content_type.as_deref())?;
         let bytes = self.read_body(response.body_mut(), job)?;
         check_content(content_type.as_deref(), &bytes)?;
+        let mut to_store = None;
         if let Some(disk) = &self.disk {
             let policy = policy_of(etag.as_deref(), last_modified.as_deref());
             if policy.store {
-                disk.store(
-                    &Entry {
-                        url: job.url.clone(),
-                        etag,
-                        last_modified,
-                        content_type: content_type.clone(),
-                        stored_at: received_at,
-                        fresh_for: policy.fresh_for,
-                        stale_while_revalidate: policy.stale_while_revalidate,
-                        stale_if_error: policy.stale_if_error,
-                        length: bytes.len() as u64,
-                        // Named when it is stored.
-                        body_id: 0,
-                    },
-                    &bytes,
-                );
+                to_store = Some(Entry {
+                    url: job.url.clone(),
+                    etag,
+                    last_modified,
+                    content_type: content_type.clone(),
+                    stored_at: received_at,
+                    fresh_for: policy.fresh_for,
+                    stale_while_revalidate: policy.stale_while_revalidate,
+                    stale_if_error: policy.stale_if_error,
+                    length: bytes.len() as u64,
+                    // Named when it is stored.
+                    body_id: 0,
+                });
             } else {
                 disk.remove(&job.url);
             }
         }
-        Ok(Fetched {
-            bytes,
-            content_type,
-            origin: Origin::Network,
-        })
+        Ok((
+            Fetched {
+                bytes,
+                content_type,
+                origin: Origin::Network,
+            },
+            to_store,
+        ))
     }
 
     /// Sends the request and follows redirects by hand; the response it returns is not a
@@ -1010,20 +1062,30 @@ fn map_io_error(error: std::io::Error) -> FetchError {
     FetchError::Transport(error.to_string())
 }
 
-/// The part of [`check_content`] that needs no bytes: a declared type that is not an image
-/// type, or one with no decoder here, fails; no type, a generic one or a supported one passes.
-fn check_declared(content_type: Option<&str>) -> Result<(), FetchError> {
-    let Some(declared) = content_type
+/// The media type of a `Content-Type` value, lower-case and without its parameters; `None`
+/// when there is none.
+fn media_type(content_type: Option<&str>) -> Option<String> {
+    content_type
         .and_then(|value| value.split(';').next())
         .map(|media| media.trim().to_ascii_lowercase())
         .filter(|media| !media.is_empty())
-    else {
+}
+
+/// A type that says nothing about what the bytes are, which the bytes then decide.
+fn is_generic(media: &str) -> bool {
+    matches!(
+        media,
+        "application/octet-stream" | "binary/octet-stream" | "application/x-unknown"
+    )
+}
+
+/// The part of [`check_content`] that needs no bytes: a declared type that is not an image
+/// type, or one with no decoder here, fails; no type, a generic one or a supported one passes.
+fn check_declared(content_type: Option<&str>) -> Result<(), FetchError> {
+    let Some(declared) = media_type(content_type) else {
         return Ok(());
     };
-    if matches!(
-        declared.as_str(),
-        "application/octet-stream" | "binary/octet-stream" | "application/x-unknown"
-    ) {
+    if is_generic(&declared) {
         return Ok(());
     }
     let supported = declared.starts_with("image/")
@@ -1039,10 +1101,7 @@ fn check_declared(content_type: Option<&str>) -> Result<(), FetchError> {
 
 /// Judges a response by its media type and its bytes together; see the module doc.
 fn check_content(content_type: Option<&str>, bytes: &[u8]) -> Result<(), FetchError> {
-    let declared = content_type
-        .and_then(|value| value.split(';').next())
-        .map(|media| media.trim().to_ascii_lowercase())
-        .filter(|media| !media.is_empty());
+    let declared = media_type(content_type);
     let found = url_image::sniff_strict(bytes);
     let found_name = match found {
         Some(Format::Raster) => crate::raster::Format::sniff(bytes).map(|format| match format {
@@ -1060,10 +1119,7 @@ fn check_content(content_type: Option<&str>, bytes: &[u8]) -> Result<(), FetchEr
     let Some(declared) = declared else {
         return found.map(|_| ()).ok_or_else(|| not_an_image("unknown"));
     };
-    if matches!(
-        declared.as_str(),
-        "application/octet-stream" | "binary/octet-stream" | "application/x-unknown"
-    ) {
+    if is_generic(&declared) {
         return found.map(|_| ()).ok_or_else(|| not_an_image(&declared));
     }
     if !declared.starts_with("image/") {

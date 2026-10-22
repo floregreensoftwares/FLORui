@@ -105,6 +105,17 @@ pub fn download_id(url: &str, bytes: &[u8]) -> crate::AssetId {
     crate::remote_image::download_id(remote_address(url), bytes)
 }
 
+/// [`download_id`], remembering that these bytes are the latest download of `url`, so that
+/// [`latest_download`] can find a picture that is still alive without downloading it again.
+pub fn register_download(url: &str, bytes: &[u8]) -> crate::AssetId {
+    crate::remote_image::register_download(remote_address(url), bytes)
+}
+
+/// The identity of the latest download of `url` that was registered, if any.
+pub fn latest_download(url: &str) -> Option<crate::AssetId> {
+    crate::remote_image::latest_download(remote_address(url))
+}
+
 /// The address as it is requested and keyed: without the white space around it (ASCII only)
 /// and without the `#fragment`, which is not sent, so that the same picture written twice
 /// is one picture.

@@ -116,6 +116,9 @@ struct Store {
     reported: std::collections::HashSet<String>,
     /// Failures since the failed slots were last counted.
     failed_since_trim: u32,
+    /// What is to be said on standard error, said once the lock is let go: a blocked
+    /// terminal must not hold up the threads that paint.
+    said: Vec<(String, String)>,
 }
 
 impl Store {
@@ -125,7 +128,7 @@ impl Store {
             self.reported.clear();
         }
         if self.reported.insert(url.to_owned()) {
-            report(url, reason);
+            self.said.push((url.to_owned(), reason.to_owned()));
         }
     }
 
@@ -198,10 +201,18 @@ static LISTENERS: Mutex<Vec<(u64, Listener)>> = Mutex::new(Vec::new());
 static NEXT_LISTENER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 fn with_store<T>(work: impl FnOnce(&mut Store) -> T) -> T {
-    let mut guard = STORE
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    work(guard.get_or_insert_with(Store::default))
+    let (result, said) = {
+        let mut guard = STORE
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let store = guard.get_or_insert_with(Store::default);
+        let result = work(store);
+        (result, std::mem::take(&mut store.said))
+    };
+    for (url, reason) in said {
+        report(&url, &reason);
+    }
+    result
 }
 
 /// Whether `url` is one this module loads.
@@ -508,6 +519,32 @@ pub(crate) fn download_id(url: &str, bytes: &[u8]) -> crate::AssetId {
     cache_id(url, digest(bytes))
 }
 
+/// The digest of the latest download of each address that was decoded, so that a picture
+/// still alive in a cache can be found again without downloading it.
+static LATEST: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
+
+/// [`download_id`], remembering that these bytes are the latest of `url`.
+pub(crate) fn register_download(url: &str, bytes: &[u8]) -> crate::AssetId {
+    let sum = digest(bytes);
+    let mut latest = LATEST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let latest = latest.get_or_insert_with(HashMap::new);
+    if latest.len() >= MOST_REPORTED {
+        latest.clear();
+    }
+    latest.insert(url.to_owned(), sum);
+    cache_id(url, sum)
+}
+
+/// The identity of the latest download of `url` that was registered.
+pub(crate) fn latest_download(url: &str) -> Option<crate::AssetId> {
+    let latest = LATEST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    latest.as_ref()?.get(url).map(|sum| cache_id(url, *sum))
+}
+
 /// A digest of `bytes` that only has to tell two downloads apart.
 fn digest(bytes: &[u8]) -> u64 {
     use std::hash::Hasher as _;
@@ -600,63 +637,12 @@ fn finish(
             Built::Unchanged { .. } => {}
         }
         match (was, built) {
-            (Was::Pending, Built::Loaded(loaded, size, sum, stale)) => {
-                let bytes = retained(&loaded, size);
-                store.held += bytes;
-                let mut loaded = loaded;
-                loaded.version = new_generation;
-                store.slots.insert(
-                    url.to_owned(),
-                    Slot::Ready {
-                        generation: new_generation,
-                        loaded: Arc::new(loaded),
-                        bytes,
-                        used,
-                        used_at: Instant::now(),
-                        digest: sum,
-                        checked_at: Instant::now(),
-                        recheck_after: if stale {
-                            RECHECK_AFTER_STALE
-                        } else {
-                            RECHECK_AFTER
-                        },
-                        refresh: None,
-                    },
-                );
-                store.evict(url);
+            (Was::Pending | Was::Refreshed, Built::Loaded(loaded, size, sum, stale)) => {
+                install_ready(store, url, loaded, size, sum, stale, new_generation, used);
                 true
             }
             (Was::Pending, _) => {
                 store.fail(url);
-                true
-            }
-            (Was::Refreshed, Built::Loaded(loaded, size, sum, stale)) => {
-                let bytes = retained(&loaded, size);
-                if let Some(Slot::Ready { bytes: old, .. }) = store.slots.remove(url) {
-                    store.held -= old;
-                }
-                store.held += bytes;
-                let mut loaded = loaded;
-                loaded.version = new_generation;
-                store.slots.insert(
-                    url.to_owned(),
-                    Slot::Ready {
-                        generation: new_generation,
-                        loaded: Arc::new(loaded),
-                        bytes,
-                        used,
-                        used_at: Instant::now(),
-                        digest: sum,
-                        checked_at: Instant::now(),
-                        recheck_after: if stale {
-                            RECHECK_AFTER_STALE
-                        } else {
-                            RECHECK_AFTER
-                        },
-                        refresh: None,
-                    },
-                );
-                store.evict(url);
                 true
             }
             (Was::Refreshed, built) => {
@@ -686,6 +672,48 @@ fn finish(
     if changed {
         notify();
     }
+}
+
+/// Puts a loaded picture in the slot of `url`, in place of whatever was there (a request for
+/// it, or the older picture it replaces), and lets go of pictures to make room.
+#[cfg(feature = "net")]
+#[allow(clippy::too_many_arguments)]
+fn install_ready(
+    store: &mut Store,
+    url: &str,
+    mut loaded: Loaded,
+    encoded: u64,
+    digest: u64,
+    stale: bool,
+    generation: u64,
+    used: u64,
+) {
+    let bytes = retained(&loaded, encoded);
+    if let Some(Slot::Ready { bytes: old, .. }) = store.slots.remove(url) {
+        store.held -= old;
+    }
+    store.held += bytes;
+    loaded.version = generation;
+    store.slots.insert(
+        url.to_owned(),
+        Slot::Ready {
+            generation,
+            loaded: Arc::new(loaded),
+            bytes,
+            used,
+            used_at: Instant::now(),
+            digest,
+            checked_at: Instant::now(),
+            // Loaded from a stale copy, with a fresh one being fetched behind it: soon again.
+            recheck_after: if stale {
+                RECHECK_AFTER_STALE
+            } else {
+                RECHECK_AFTER
+            },
+            refresh: None,
+        },
+    );
+    store.evict(url);
 }
 
 /// What the picture holds on to once loaded.
@@ -1303,5 +1331,18 @@ mod tests {
             store.slots.get(url),
             Some(Slot::Failed { .. })
         )));
+    }
+
+    #[test]
+    fn the_latest_registered_download_of_an_address_is_the_one_found_again() {
+        let url = "http://example.invalid/latest-test.png";
+        assert_eq!(latest_download(url), None);
+        let first = register_download(url, b"first");
+        assert_eq!(latest_download(url), Some(first.clone()));
+        let second = register_download(url, b"second");
+        assert_ne!(first, second, "different bytes, different identity");
+        assert_eq!(latest_download(url), Some(second));
+        // The same bytes again are the same identity.
+        assert_eq!(register_download(url, b"first"), first);
     }
 }
