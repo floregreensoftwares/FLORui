@@ -131,8 +131,16 @@ const CSS: &str = "
     }
 
     span, a, b, i, u, s, del, ins, mark, sub, sup, kbd, samp, var, cite, dfn, abbr,
-    time, data, code, em, strong, small {
+    time, data, code, em, strong, small, q {
         display: inline;
+    }
+
+    q::before {
+        content: open-quote;
+    }
+
+    q::after {
+        content: close-quote;
     }
 
     em, i, cite, dfn, var, address {

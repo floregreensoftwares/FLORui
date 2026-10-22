@@ -1,0 +1,17 @@
+.wrap { position: relative; width: 340px; height: 360px; background-color: #ffffff; color: #101010; font-size: 14px; line-height: 18px; }
+.wrap > div { margin: 0 0 6px 10px; background-color: #e8e8e8; width: 320px; }
+.n::before { content: "NOTE: "; color: #c02020; font-weight: 700; }
+.b::after { content: ""; display: block; height: 12px; background-color: #d05040; }
+.a::before { content: attr(data-label) ": "; }
+.a::after { content: " (" attr(data-n) ")"; }
+.q::before { content: open-quote; }
+.q::after { content: close-quote; }
+.f { display: flex; gap: 4px; }
+.f::before { content: ""; width: 20px; height: 20px; background-color: #4070d0; }
+.f::after { content: ""; width: 20px; height: 20px; background-color: #40a060; }
+.r { position: relative; height: 30px; }
+.r::after { content: ""; position: absolute; right: 4px; top: 4px; width: 10px; height: 10px; background-color: #40a060; }
+.i::before { content: "x"; display: inline-block; width: 20px; padding: 2px; background-color: #cccccc; }
+.z::before { content: none; display: block; height: 20px; background-color: #ff0000; }
+.u { text-transform: uppercase; letter-spacing: 1px; }
+.u::before { content: "up "; }

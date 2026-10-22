@@ -58,6 +58,9 @@ pub enum InlineItem {
 
 struct ArenaNode {
     tag: &'static str,
+    /// Which pseudo-element this node is the box of, for a node the arena
+    /// itself built beside the elements (see [`crate::PseudoSlots`]).
+    generated: Option<crate::Pseudo>,
     /// Where the element was written, if `view!` recorded it. See
     /// [`Arena::source`].
     source: florui::Provenance,
@@ -215,6 +218,10 @@ pub struct Tree {
     /// [`Arena::rebuild`] finds them the same and only brings text and
     /// handlers up to date.
     shape_id: u64,
+    /// The elements built with a `::before` and an `::after` node.
+    slots: crate::PseudoSlots,
+    /// The nodes that are the boxes of pseudo-elements, in document order.
+    generated_nodes: Vec<NodeId>,
 }
 
 /// Where the next [`Tree::style_shape`] number comes from.
@@ -255,7 +262,7 @@ impl std::ops::Deref for Arena {
 }
 
 impl Arena {
-    fn empty() -> Self {
+    fn empty(slots: crate::PseudoSlots) -> Self {
         Arena {
             tree: Tree {
                 nodes: Vec::new(),
@@ -263,6 +270,8 @@ impl Arena {
                 document_root_count: 0,
                 root_tag_counts: Vec::new(),
                 shape_id: NEXT_SHAPE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                slots,
+                generated_nodes: Vec::new(),
             },
             handlers: Vec::new(),
         }
@@ -285,9 +294,62 @@ struct Frame<'a> {
     elements: &'a [Element],
     index: usize,
     parent: Option<NodeId>,
+    /// The element whose children these are, which gets its `::after` node
+    /// when they are done.
+    closes: Option<NodeId>,
 }
 
 impl Tree {
+    /// Whether an element with this tag and these attributes is built with a
+    /// `::before` and an `::after` node.
+    fn wants_generated(&self, tag: &str, attrs: &[(String, String)]) -> bool {
+        !self.slots.is_empty() && self.slots.wants(tag, attrs)
+    }
+
+    /// The node of the pseudo-element `pseudo` of `parent`, if it has one.
+    pub fn generated_child(&self, parent: NodeId, pseudo: crate::Pseudo) -> Option<NodeId> {
+        self.nodes[parent]
+            .children
+            .iter()
+            .copied()
+            .find(|&child| self.nodes[child].generated == Some(pseudo))
+    }
+
+    /// Which pseudo-element the node is the box of, when it is one.
+    pub fn generated(&self, id: NodeId) -> Option<crate::Pseudo> {
+        self.nodes[id].generated
+    }
+
+    /// The children of `id` that are elements of the tree it was built from, not
+    /// boxes the arena added for a pseudo-element.
+    pub fn element_children(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
+        self.nodes[id]
+            .children
+            .iter()
+            .copied()
+            .filter(|&child| self.nodes[child].generated.is_none())
+    }
+
+    /// [`Self::element_children`] as a slice, borrowed when the arena has no
+    /// pseudo-element boxes.
+    pub fn element_child_ids(&self, id: NodeId) -> std::borrow::Cow<'_, [NodeId]> {
+        if self.generated_nodes.is_empty() {
+            std::borrow::Cow::Borrowed(&self.nodes[id].children)
+        } else {
+            std::borrow::Cow::Owned(self.element_children(id).collect())
+        }
+    }
+
+    /// How many nodes the arena holds, boxes of pseudo-elements included.
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Whether any node is a pseudo-element box.
+    pub fn has_generated(&self) -> bool {
+        !self.generated_nodes.is_empty()
+    }
+
     /// Whether a child with tag `child_tag` under `parent` is disabled by
     /// `parent`'s own `<fieldset disabled>`, or by one already disabling
     /// `parent` itself.
@@ -632,7 +694,13 @@ impl Arena {
     /// pass, before any portal becomes a real root, so every document
     /// root precedes every portal root regardless of nesting depth.
     pub fn build(root: &Element) -> Self {
-        let mut arena = Arena::empty();
+        Self::build_with(root, &crate::PseudoSlots::default())
+    }
+
+    /// [`Self::build`], with a `::before` and an `::after` node under each element
+    /// `slots` names.
+    pub fn build_with(root: &Element, slots: &crate::PseudoSlots) -> Self {
+        let mut arena = Arena::empty(slots.clone());
         let mut next_level = Vec::new();
         arena.push_all(std::slice::from_ref(root), &mut next_level);
         arena.tree.document_root_count = arena.tree.roots.len();
@@ -646,7 +714,7 @@ impl Arena {
     /// rather than a single one with `Portal`s inside it. `overlays`
     /// itself may still contain `Portal`s of its own.
     pub fn build_with_overlays(document: &Element, overlays: &Element) -> Self {
-        let mut arena = Arena::empty();
+        let mut arena = Arena::empty(crate::PseudoSlots::default());
         let mut next_level = Vec::new();
         arena.push_all(std::slice::from_ref(document), &mut next_level);
         arena.tree.document_root_count = arena.tree.roots.len();
@@ -662,10 +730,15 @@ impl Arena {
     /// place and [`Tree::style_shape`] stays. Otherwise the arena is built
     /// anew. Returns whether it was kept.
     pub fn rebuild(&mut self, root: &Element) -> bool {
-        if self.refresh(root) {
+        self.rebuild_with(root, &crate::PseudoSlots::default())
+    }
+
+    /// [`Self::rebuild`] for an arena built with `slots`.
+    pub fn rebuild_with(&mut self, root: &Element, slots: &crate::PseudoSlots) -> bool {
+        if self.tree.slots == *slots && self.refresh(root) {
             return true;
         }
-        *self = Arena::build(root);
+        *self = Arena::build_with(root, slots);
         false
     }
 
@@ -701,6 +774,146 @@ impl Arena {
                 .all(|(node, &used)| node.inline_items.len() == used)
     }
 
+    /// Gives each `::before` and `::after` box the text its `content` says, which
+    /// is known only once the cascade has run: `attr()` reads the element the box
+    /// belongs to and the quotation marks follow how deep the boxes before it
+    /// nest. A box that `display: none` hides, or whose `content` is `normal` or
+    /// `none`, holds nothing and does not count in the nesting.
+    pub fn apply_generated(&mut self, styles: &crate::StyleMap) {
+        use crate::content::{Content, ContentItem};
+
+        if self.tree.generated_nodes.is_empty() {
+            return;
+        }
+        let mut depth = 0usize;
+        for index in 0..self.tree.generated_nodes.len() {
+            let id = self.tree.generated_nodes[index];
+            let owner = self.tree.nodes[id].parent;
+            let mut text = String::new();
+            if let (Some(style), Some(owner)) = (styles.get(&id), owner)
+                && style.display != crate::Display::None
+                && let Content::Items(items) = &style.content
+            {
+                for item in items.iter() {
+                    match item {
+                        ContentItem::Text(value) => text.push_str(value),
+                        ContentItem::Attr(name) => {
+                            if let Some(value) = self.tree.attr(owner, name) {
+                                text.push_str(value);
+                            }
+                        }
+                        ContentItem::OpenQuote => {
+                            if let Some((open, _)) = style.quotes.pair(depth) {
+                                text.push_str(open);
+                            }
+                            depth += 1;
+                        }
+                        ContentItem::CloseQuote => {
+                            depth = depth.saturating_sub(1);
+                            if let Some((_, close)) = style.quotes.pair(depth) {
+                                text.push_str(close);
+                            }
+                        }
+                        ContentItem::NoOpenQuote => depth += 1,
+                        ContentItem::NoCloseQuote => depth = depth.saturating_sub(1),
+                        ContentItem::Counter { .. }
+                        | ContentItem::Counters { .. }
+                        | ContentItem::Image(_) => {}
+                    }
+                }
+            }
+            let node = &mut self.tree.nodes[id];
+            let unchanged = match node.inline_items.as_slice() {
+                [] => text.is_empty(),
+                [InlineItem::Text(held)] => *held == text,
+                _ => false,
+            };
+            if !unchanged {
+                node.inline_items.clear();
+                if !text.is_empty() {
+                    node.inline_items.push(InlineItem::Text(text.clone()));
+                }
+                node.text = text;
+            }
+        }
+    }
+
+    /// Checks that the next node is the box of `pseudo` under `owner`, taking
+    /// the place of the inline item it should be.
+    fn refresh_generated(
+        &mut self,
+        owner: NodeId,
+        pseudo: crate::Pseudo,
+        state: &mut Refresh,
+    ) -> bool {
+        let id = state.next;
+        state.next += 1;
+        let Some(node) = self.tree.nodes.get(id) else {
+            return false;
+        };
+        if node.generated != Some(pseudo) || node.parent != Some(owner) {
+            return false;
+        }
+        let used = state.cursor[owner];
+        if self.tree.nodes[owner].inline_items.get(used) != Some(&InlineItem::Element(id)) {
+            return false;
+        }
+        state.cursor[owner] = used + 1;
+        true
+    }
+
+    /// Adds the box of `pseudo` as the last child of `owner`, with no text yet:
+    /// it is given what its `content` says after the cascade.
+    fn push_generated(&mut self, owner: NodeId, pseudo: crate::Pseudo) {
+        let id = self.tree.nodes.len();
+        let in_disabled_fieldset = self.tree.nodes[owner].in_disabled_fieldset;
+        self.tree.generated_nodes.push(id);
+        self.tree.nodes.push(ArenaNode {
+            tag: pseudo.tag(),
+            generated: Some(pseudo),
+            source: florui::Provenance::none(),
+            attrs: Vec::new(),
+            classes: Vec::new(),
+            id: None,
+            disabled: false,
+            in_disabled_fieldset,
+            checked: false,
+            indeterminate: false,
+            range_min: 0.0,
+            range_max: 100.0,
+            range_step: 1.0,
+            range_value: 50.0,
+            selected: false,
+            active: false,
+            open: false,
+            group_label: None,
+            multiple: false,
+            style: None,
+            value: None,
+            input_type: None,
+            name: None,
+            label_for: None,
+            accessible_label: None,
+            role: None,
+            set_size: None,
+            position_in_set: None,
+            href: None,
+            src: None,
+            alt: None,
+            text: String::new(),
+            inline_items: Vec::new(),
+            parent: Some(owner),
+            children: Vec::new(),
+            tag_ordinal: 0,
+            child_tag_counts: Vec::new(),
+        });
+        self.handlers.push(NodeHandlers::default());
+        self.tree.nodes[owner].children.push(id);
+        self.tree.nodes[owner]
+            .inline_items
+            .push(InlineItem::Element(id));
+    }
+
     fn refresh_all<'a>(
         &mut self,
         root_elements: &'a [Element],
@@ -711,10 +924,17 @@ impl Arena {
             elements: root_elements,
             index: 0,
             parent: None,
+            closes: None,
         }];
         while let Some(frame) = stack.last_mut() {
             let Some(element) = frame.elements.get(frame.index) else {
+                let closes = frame.closes;
                 stack.pop();
+                if let Some(owner) = closes
+                    && !self.refresh_generated(owner, crate::Pseudo::After, state)
+                {
+                    return false;
+                }
                 continue;
             };
             frame.index += 1;
@@ -754,10 +974,15 @@ impl Arena {
                         }
                         None => state.roots += 1,
                     }
+                    let wants = self.tree.wants_generated(node.tag, &node.attrs);
+                    if wants && !self.refresh_generated(id, crate::Pseudo::Before, state) {
+                        return false;
+                    }
                     stack.push(Frame {
                         elements: &node.children,
                         index: 0,
                         parent: Some(id),
+                        closes: wants.then_some(id),
                     });
                 }
                 Element::Fragment(nested) => {
@@ -765,6 +990,7 @@ impl Arena {
                         elements: nested,
                         index: 0,
                         parent,
+                        closes: None,
                     });
                 }
                 Element::Portal(children) => {
@@ -816,11 +1042,16 @@ impl Arena {
             elements: root_elements,
             index: 0,
             parent: None,
+            closes: None,
         }];
 
         while let Some(frame) = stack.last_mut() {
             let Some(element) = frame.elements.get(frame.index) else {
+                let closes = frame.closes;
                 stack.pop();
+                if let Some(owner) = closes {
+                    self.push_generated(owner, crate::Pseudo::After);
+                }
                 continue;
             };
             frame.index += 1;
@@ -852,6 +1083,7 @@ impl Arena {
                     let range_max = attr_f32(&node.attrs, "max", 100.0);
                     self.tree.nodes.push(ArenaNode {
                         tag: node.tag,
+                        generated: None,
                         source: node.source,
                         attrs: node.attrs.clone(),
                         classes: class_list(&node.attrs),
@@ -906,10 +1138,15 @@ impl Arena {
                         }
                         None => self.tree.roots.push(id),
                     }
+                    let wants = self.tree.wants_generated(node.tag, &node.attrs);
+                    if wants {
+                        self.push_generated(id, crate::Pseudo::Before);
+                    }
                     stack.push(Frame {
                         elements: &node.children,
                         index: 0,
                         parent: Some(id),
+                        closes: wants.then_some(id),
                     });
                 }
                 Element::Fragment(nested) => {
@@ -917,6 +1154,7 @@ impl Arena {
                         elements: nested,
                         index: 0,
                         parent,
+                        closes: None,
                     });
                 }
                 Element::Portal(children) => {
