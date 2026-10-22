@@ -130,6 +130,9 @@ pub(crate) enum UserEvent {
     /// waiting for; the loop only has to run once more.
     #[cfg(target_os = "linux")]
     DisplayServer,
+    /// A picture named by a `url(...)` finished downloading, or failed to: every window
+    /// lays out and paints again, since any of them may use it.
+    ImagesLoaded,
     /// A [`crate::WindowControls::open_file_dialog`]/`save_file_dialog`
     /// call's background thread finished — routed back through the event
     /// loop so the app's own `on_result` callback runs on the UI thread,
@@ -333,6 +336,16 @@ fn install_tray_waker(event_loop: &EventLoop<UserEvent>) {
 #[cfg(not(target_os = "linux"))]
 fn install_tray_waker(_event_loop: &EventLoop<UserEvent>) {}
 
+/// Lets a picture that a `url(...)` named, and that finished downloading on a thread of
+/// the fetcher, wake this loop to lay out and paint again; see
+/// [`florui_assets::url_image::on_remote_change`].
+fn install_image_waker(event_loop: &EventLoop<UserEvent>) {
+    let proxy = event_loop.create_proxy();
+    florui_assets::url_image::on_remote_change(move || {
+        let _ = proxy.send_event(UserEvent::ImagesLoaded);
+    });
+}
+
 fn run_windows_with(
     initial: Vec<WindowSpec>,
     observer: Option<SharedObserver>,
@@ -342,6 +355,7 @@ fn run_windows_with(
         .map_err(RunError::EventLoop)?;
     event_loop.set_control_flow(ControlFlow::Wait);
     install_tray_waker(&event_loop);
+    install_image_waker(&event_loop);
 
     let mut host = DesktopHost {
         windows: HashMap::new(),
@@ -421,6 +435,7 @@ pub fn run_single_instance(
                 .map_err(RunError::EventLoop)?;
             event_loop.set_control_flow(ControlFlow::Wait);
             install_tray_waker(&event_loop);
+            install_image_waker(&event_loop);
 
             let activation_queue = Rc::new(RefCell::new(ActivationQueue::default()));
             let proxy = event_loop.create_proxy();
@@ -2563,6 +2578,11 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
         match event {
             UserEvent::Dirty(id) => {
                 if let Some(state) = self.windows.get_mut(&id) {
+                    state.update_and_request_redraw();
+                }
+            }
+            UserEvent::ImagesLoaded => {
+                for state in self.windows.values_mut() {
                     state.update_and_request_redraw();
                 }
             }

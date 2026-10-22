@@ -115,7 +115,7 @@ fn with_store<T>(work: impl FnOnce(&mut Store) -> T) -> T {
 }
 
 /// Whether `url` is one this module loads.
-pub(crate) fn is_remote(url: &str) -> bool {
+pub fn is_remote(url: &str) -> bool {
     let start = url.get(..8).unwrap_or(url).to_ascii_lowercase();
     start.starts_with("http://") || start.starts_with("https://")
 }

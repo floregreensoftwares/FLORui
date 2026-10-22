@@ -80,7 +80,7 @@ pub fn identity(url: &str) -> String {
     }
 }
 
-pub use crate::remote_image::on_change as on_remote_change;
+pub use crate::remote_image::{is_remote, on_change as on_remote_change};
 
 /// What was found when an image was last read, and the file's stamp then.
 type Kept = (Stamp, Option<Arc<Loaded>>);

@@ -39,12 +39,34 @@
 //!
 //! ## Source resolution
 //!
-//! `src` is read as a plain filesystem path, resolved by the OS the same
-//! way any relative `std::fs` call already is (relative to the process's
-//! current working directory) — no build-time asset embedding for `<img>`
-//! sources exists yet (that would follow `florui-icon`'s own
-//! `embed`-at-build-time pattern, in a later delivery), and no URL
-//! parsing.
+//! `src` is a plain filesystem path, resolved by the OS the same way any
+//! relative `std::fs` call already is (relative to the process's current
+//! working directory) -- no build-time asset embedding for `<img>` sources
+//! exists yet (that would follow `florui-icon`'s own `embed`-at-build-time
+//! pattern, in a later delivery) -- or, when it starts with `http://` or
+//! `https://`, a network source.
+//!
+//! ### Network sources
+//!
+//! A network `src` needs the `net` feature; without it the image fails at
+//! once with [`florui_assets::FetchError::Unavailable`]. Its loading
+//! contract (timeouts, redirects, the size cap while streaming, the media type
+//! against the bytes, the HTTP disk cache, the bounded queue) is the one of
+//! `florui_assets::net`, and every picture of the process shares that fetcher.
+//!
+//! - The type is not taken from the extension, which a URL often lacks:
+//!   the response's bytes say whether it is a raster image or an SVG.
+//! - A picture that is already decoded and alive in the cache is used without
+//!   a request.
+//! - An `<img>` that unmounts, or whose `src` changes, cancels its request
+//!   (the entry holds the request's ticket): one still queued is never sent,
+//!   one running stops at its next read.
+//! - Decoding goes through the same [`florui_assets::AssetCache`] and decode
+//!   slots as a file, so the decoded image is shared between windows and
+//!   dropped when the last `<img>` holding it goes.
+//! - A failure is the same state as an unreadable file: no pixels, the
+//!   reason logged once and available from [`ImageRegistry::error`], and the
+//!   size CSS gives the box (a broken image has no intrinsic size).
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -92,6 +114,13 @@ impl std::error::Error for ImageLoadError {
     }
 }
 
+/// What cancels a download when it is dropped: held by the `<img>` it was started for, so
+/// an `<img>` that unmounts or changes `src` takes its request out of the queue or stops it.
+#[cfg(feature = "net")]
+type Ticket = florui_assets::net::FetchTicket;
+#[cfg(not(feature = "net"))]
+type Ticket = ();
+
 /// One `<img>`'s own current load state.
 enum ImageState {
     Pending,
@@ -130,6 +159,12 @@ struct ImageEntry {
     /// don't resize anything) doesn't keep re-rasterizing identical
     /// output on every single frame.
     svg_rasterized_at: Option<florui_assets::RasterFit>,
+    /// A network source only: the request, which the entry's drop cancels.
+    #[cfg_attr(not(feature = "net"), allow(dead_code))]
+    ticket: Option<Ticket>,
+    /// A network SVG only: the downloaded document, kept so that rasterizing it at another
+    /// size does not download it again (a path is read again, cheaply, from disk).
+    svg_bytes: Option<Arc<Vec<u8>>>,
 }
 
 /// Real load state for every currently-live `<img>`, keyed by structural
@@ -190,8 +225,23 @@ impl ImageRegistry {
                     state: ImageState::Pending,
                     svg_intrinsic_size: None,
                     svg_rasterized_at: None,
+                    ticket: None,
+                    svg_bytes: None,
                 },
             );
+
+            if florui_assets::url_image::is_remote(src) {
+                start_remote(
+                    &mut entries,
+                    &self.entries,
+                    &key,
+                    generation,
+                    src,
+                    cache,
+                    executor,
+                );
+                continue;
+            }
 
             let path = PathBuf::from(src);
             match classify_format(&path) {
@@ -301,7 +351,7 @@ impl ImageRegistry {
         cache: &Arc<florui_assets::AssetCache>,
         executor: &dyn Executor,
     ) {
-        let generation = {
+        let (generation, downloaded) = {
             let mut entries = self.entries.borrow_mut();
             let Some(entry) = entries.get_mut(key) else {
                 return;
@@ -310,7 +360,7 @@ impl ImageRegistry {
                 return;
             }
             entry.svg_rasterized_at = Some(fit);
-            entry.generation
+            (entry.generation, entry.svg_bytes.clone())
         };
 
         let path = PathBuf::from(src);
@@ -319,11 +369,16 @@ impl ImageRegistry {
         let key_for_task = key.clone();
         let src_for_task = src.to_string();
         executor.spawn(Box::pin(async move {
-            let result = florui_reactive::blocking::spawn_blocking(move || {
-                cache.get_or_load(
+            let result = florui_reactive::blocking::spawn_blocking(move || match downloaded {
+                Some(bytes) => cache.get_or_decode(
+                    florui_assets::AssetId::Url(path.to_string_lossy().into_owned()),
+                    &bytes,
+                    florui_assets::DecodeParams::Rasterized(fit),
+                ),
+                None => cache.get_or_load(
                     &florui_assets::AssetSource::Path(&path),
                     florui_assets::DecodeParams::Rasterized(fit),
-                )
+                ),
             })
             .await;
             commit(
@@ -377,6 +432,140 @@ impl ImageRegistry {
             ImageState::Pending | ImageState::Ready(_) => None,
         }
     }
+}
+
+/// Without the `net` feature a network source fails at once, saying why.
+#[cfg(not(feature = "net"))]
+fn start_remote(
+    entries: &mut HashMap<FocusPath, ImageEntry>,
+    _shared: &Rc<RefCell<HashMap<FocusPath, ImageEntry>>>,
+    key: &FocusPath,
+    _generation: u64,
+    src: &str,
+    _cache: &Arc<florui_assets::AssetCache>,
+    _executor: &dyn Executor,
+) {
+    let error = ImageLoadError::Asset(florui_assets::AssetError::Fetch {
+        url: src.to_owned(),
+        error: florui_assets::FetchError::Unavailable,
+    });
+    eprintln!("florui-platform: <img src=\"{src}\"> failed to load: {error}");
+    if let Some(entry) = entries.get_mut(key) {
+        entry.state = ImageState::Failed(Arc::new(error));
+    }
+}
+
+/// What a downloaded picture became.
+#[cfg(feature = "net")]
+enum Downloaded {
+    Raster(Arc<florui_assets::RasterImage>),
+    /// Parsed far enough to know its size; rasterized later, when layout knows the size
+    /// it is drawn at.
+    Svg {
+        intrinsic: florui_assets::Size2D,
+        bytes: Arc<Vec<u8>>,
+    },
+}
+
+/// Starts downloading a network `src`: the request goes to the shared fetcher, whose
+/// queue and limits are the process's own, and its ticket is kept in the entry so that
+/// the entry going away (the `<img>` unmounted, or `src` changed) cancels it. A picture
+/// that is already decoded and alive in `cache` is used without any request.
+///
+/// The download finishes on a thread of the fetcher and wakes the task below through
+/// [`delivery`]; decoding then runs in a decode slot like any other image.
+#[cfg(feature = "net")]
+fn start_remote(
+    entries: &mut HashMap<FocusPath, ImageEntry>,
+    shared: &Rc<RefCell<HashMap<FocusPath, ImageEntry>>>,
+    key: &FocusPath,
+    generation: u64,
+    src: &str,
+    cache: &Arc<florui_assets::AssetCache>,
+    executor: &dyn Executor,
+) {
+    use florui_assets::{AssetError, AssetId, DecodeParams};
+
+    let Some(entry) = entries.get_mut(key) else {
+        return;
+    };
+    let id = AssetId::Url(src.to_owned());
+    if let Some(image) = cache.cached(&id, DecodeParams::Native) {
+        entry.state = ImageState::Ready(image);
+        return;
+    }
+    let (sender, receiver) = crate::delivery::delivery();
+    let ticket = florui_assets::net::shared_fetcher().submit(src, move |outcome| {
+        sender.send(outcome);
+    });
+    let ticket = match ticket {
+        Ok(ticket) => ticket,
+        Err(error) => {
+            let error = ImageLoadError::Asset(AssetError::Fetch {
+                url: src.to_owned(),
+                error,
+            });
+            eprintln!("florui-platform: <img src=\"{src}\"> failed to load: {error}");
+            entry.state = ImageState::Failed(Arc::new(error));
+            return;
+        }
+    };
+    entry.ticket = Some(ticket);
+
+    let cache = Arc::clone(cache);
+    let entries_for_task = Rc::clone(shared);
+    let key_for_task = key.clone();
+    let src_for_task = src.to_owned();
+    executor.spawn(Box::pin(async move {
+        // `None`: the request was cancelled, and with it this entry's interest.
+        let Some(outcome) = receiver.await else {
+            return;
+        };
+        let url = src_for_task.clone();
+        let result = match outcome {
+            Err(error) => Err(AssetError::Fetch { url, error }),
+            Ok(fetched) => {
+                florui_reactive::blocking::spawn_blocking(move || {
+                    if florui_assets::Format::sniff(&fetched.bytes).is_some() {
+                        return cache
+                            .get_or_decode(id, &fetched.bytes, DecodeParams::Native)
+                            .map(Downloaded::Raster);
+                    }
+                    let text = std::str::from_utf8(&fetched.bytes)
+                        .map_err(|_| AssetError::InvalidUtf8 { path: None })?;
+                    let image = florui_assets::parse_svg(text)?;
+                    Ok(Downloaded::Svg {
+                        intrinsic: image.intrinsic_size,
+                        bytes: Arc::new(fetched.bytes.clone()),
+                    })
+                })
+                .await
+            }
+        };
+        let mut entries = entries_for_task.borrow_mut();
+        let Some(entry) = entries.get_mut(&key_for_task) else {
+            return;
+        };
+        if entry.generation != generation {
+            return;
+        }
+        entry.ticket = None;
+        match result {
+            Ok(Downloaded::Raster(image)) => entry.state = ImageState::Ready(image),
+            Ok(Downloaded::Svg { intrinsic, bytes }) => {
+                entry.svg_intrinsic_size = Some(Size {
+                    width: intrinsic.width,
+                    height: intrinsic.height,
+                });
+                entry.svg_bytes = Some(bytes);
+            }
+            Err(error) => {
+                let error = ImageLoadError::Asset(error);
+                eprintln!("florui-platform: <img src=\"{src_for_task}\"> failed to load: {error}");
+                entry.state = ImageState::Failed(Arc::new(error));
+            }
+        }
+    }));
 }
 
 enum Format {
@@ -818,5 +1007,243 @@ mod tests {
         registry.sync(&arena, &cache, &executor);
         assert!(registry.intrinsic_size(&key).is_none());
         assert_eq!(registry.entries.borrow().len(), 0);
+    }
+
+    #[cfg(feature = "net")]
+    mod network {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        use super::*;
+        use crate::test_http::{Server, configure_fetcher as configure};
+
+        const NO_DELAY: Duration = Duration::ZERO;
+
+        fn load_one(
+            tree: &Element,
+        ) -> (
+            Arena,
+            ImageRegistry,
+            Arc<florui_assets::AssetCache>,
+            LocalExecutor,
+        ) {
+            configure();
+            let arena = Arena::build(tree);
+            let registry = ImageRegistry::new();
+            let cache = Arc::new(florui_assets::AssetCache::new());
+            let executor = LocalExecutor::new();
+            registry.sync(&arena, &cache, &executor);
+            (arena, registry, cache, executor)
+        }
+
+        #[test]
+        fn a_png_over_http_loads_and_reports_its_real_intrinsic_size() {
+            let server = Server::start(|_| (200, "image/png", png_bytes(17, 9), NO_DELAY));
+            // No extension to go by: the bytes say what it is.
+            let src = server.url("/avatar?id=3");
+            let tree: Element = view! { <img src={src} /> };
+            let (arena, registry, _cache, executor) = load_one(&tree);
+            let key = FocusPath::of(&arena, arena.roots()[0]);
+            assert!(registry.intrinsic_size(&key).is_none(), "not ready yet");
+            assert!(wait_until(|| {
+                executor.run_until_stalled();
+                registry.decoded(&key).is_some()
+            }));
+            assert_eq!(
+                registry.intrinsic_size(&key),
+                Some(Size {
+                    width: 17.0,
+                    height: 9.0
+                })
+            );
+            assert_eq!(server.seen(), ["/avatar?id=3"]);
+        }
+
+        #[test]
+        fn a_picture_already_decoded_and_alive_is_not_downloaded_again() {
+            let server = Server::start(|_| (200, "image/png", png_bytes(4, 4), NO_DELAY));
+            let tree: Element = view! { <img src={server.url("/a.png")} /> };
+            let (arena, registry, cache, executor) = load_one(&tree);
+            let key = FocusPath::of(&arena, arena.roots()[0]);
+            assert!(wait_until(|| {
+                executor.run_until_stalled();
+                registry.decoded(&key).is_some()
+            }));
+            let held = registry.decoded(&key).unwrap();
+            // Another registry, as another window has: the decode is shared.
+            let other = ImageRegistry::new();
+            other.sync(&arena, &cache, &executor);
+            let again = other.decoded(&key).expect("ready at once");
+            assert!(Arc::ptr_eq(&held, &again));
+            assert_eq!(server.seen().len(), 1);
+        }
+
+        #[test]
+        fn an_svg_over_http_reports_its_size_and_rasterizes_at_the_requested_fit() {
+            let svg = SVG_TEXT.as_bytes().to_vec();
+            let server = Server::start(move |_| (200, "image/svg+xml", svg.clone(), NO_DELAY));
+            let src = server.url("/logo.svg");
+            let tree: Element = view! { <img src={src.clone()} /> };
+            let (arena, registry, cache, executor) = load_one(&tree);
+            let key = FocusPath::of(&arena, arena.roots()[0]);
+            assert!(wait_until(|| {
+                executor.run_until_stalled();
+                registry.intrinsic_size(&key).is_some()
+            }));
+            assert_eq!(
+                registry.intrinsic_size(&key),
+                Some(Size {
+                    width: 100.0,
+                    height: 50.0
+                })
+            );
+            let fit = florui_assets::RasterFit::Stretch {
+                width: 40,
+                height: 20,
+            };
+            registry.request_raster(&key, &src, fit, &cache, &executor);
+            assert!(wait_until(|| {
+                executor.run_until_stalled();
+                registry.decoded(&key).is_some()
+            }));
+            let raster = registry.decoded(&key).unwrap();
+            assert_eq!((raster.width, raster.height), (40, 20));
+            // Rasterizing used the document that was already here.
+            assert_eq!(server.seen().len(), 1);
+        }
+
+        #[test]
+        fn a_status_that_is_not_a_success_fails_the_image_with_the_reason() {
+            let server = Server::start(|_| (404, "text/plain", b"gone".to_vec(), NO_DELAY));
+            let tree: Element = view! { <img src={server.url("/missing.png")} /> };
+            let (arena, registry, _cache, executor) = load_one(&tree);
+            let key = FocusPath::of(&arena, arena.roots()[0]);
+            assert!(wait_until(|| {
+                executor.run_until_stalled();
+                registry.error(&key).is_some()
+            }));
+            assert!(matches!(
+                &*registry.error(&key).unwrap(),
+                ImageLoadError::Asset(florui_assets::AssetError::Fetch {
+                    error: florui_assets::FetchError::Status(404),
+                    ..
+                })
+            ));
+            assert!(registry.decoded(&key).is_none());
+            assert!(registry.intrinsic_size(&key).is_none());
+        }
+
+        #[test]
+        fn a_page_served_as_an_image_fails_before_any_decoder() {
+            let server = Server::start(|_| (200, "text/html", b"<html></html>".to_vec(), NO_DELAY));
+            let tree: Element = view! { <img src={server.url("/a.png")} /> };
+            let (arena, registry, _cache, executor) = load_one(&tree);
+            let key = FocusPath::of(&arena, arena.roots()[0]);
+            assert!(wait_until(|| {
+                executor.run_until_stalled();
+                registry.error(&key).is_some()
+            }));
+            assert!(matches!(
+                &*registry.error(&key).unwrap(),
+                ImageLoadError::Asset(florui_assets::AssetError::Fetch {
+                    error: florui_assets::FetchError::NotAnImage { .. },
+                    ..
+                })
+            ));
+        }
+
+        #[test]
+        fn an_image_that_unmounts_takes_its_queued_request_with_it() {
+            let slow = Arc::new(AtomicUsize::new(0));
+            let counter = Arc::clone(&slow);
+            let server = Server::start(move |path| {
+                counter.fetch_add(1, Ordering::SeqCst);
+                let delay = if path == "/first.png" {
+                    Duration::from_millis(400)
+                } else {
+                    NO_DELAY
+                };
+                (200, "image/png", png_bytes(2, 2), delay)
+            });
+            configure();
+            let both: Element = view! {
+                <div>
+                    <img src={server.url("/first.png")} />
+                    <img src={server.url("/dropped.png")} />
+                </div>
+            };
+            let arena = Arena::build(&both);
+            let registry = ImageRegistry::new();
+            let cache = Arc::new(florui_assets::AssetCache::new());
+            let executor = LocalExecutor::new();
+            registry.sync(&arena, &cache, &executor);
+            // The first is running; the second is queued behind it (one request at a
+            // time). The next render has only the first.
+            assert!(wait_until(|| !server.seen().is_empty()));
+            let only_first: Element = view! {
+                <div>
+                    <img src={server.url("/first.png")} />
+                </div>
+            };
+            let arena = Arena::build(&only_first);
+            registry.sync(&arena, &cache, &executor);
+            let key = FocusPath::of(&arena, arena.find_all(|a, id| a.tag(id) == "img")[0]);
+            assert!(wait_until(|| {
+                executor.run_until_stalled();
+                registry.decoded(&key).is_some()
+            }));
+            std::thread::sleep(Duration::from_millis(200));
+            assert_eq!(server.seen(), ["/first.png"]);
+        }
+
+        #[test]
+        fn a_changed_src_cancels_the_request_for_the_old_one() {
+            let server = Server::start(|path| {
+                let delay = if path == "/first.png" {
+                    Duration::from_millis(400)
+                } else {
+                    NO_DELAY
+                };
+                (200, "image/png", png_bytes(2, 2), delay)
+            });
+            configure();
+            let before: Element = view! { <img src={server.url("/first.png")} /> };
+            let arena = Arena::build(&before);
+            let registry = ImageRegistry::new();
+            let cache = Arc::new(florui_assets::AssetCache::new());
+            let executor = LocalExecutor::new();
+            registry.sync(&arena, &cache, &executor);
+            assert!(wait_until(|| !server.seen().is_empty()));
+            let after: Element = view! { <img src={server.url("/second.png")} /> };
+            let arena = Arena::build(&after);
+            registry.sync(&arena, &cache, &executor);
+            let key = FocusPath::of(&arena, arena.roots()[0]);
+            assert!(wait_until(|| {
+                executor.run_until_stalled();
+                registry.decoded(&key).is_some()
+            }));
+            let image = registry.decoded(&key).unwrap();
+            assert_eq!((image.width, image.height), (2, 2));
+            assert_eq!(server.seen(), ["/first.png", "/second.png"]);
+        }
+    }
+
+    #[cfg(not(feature = "net"))]
+    #[test]
+    fn without_the_net_feature_a_network_src_fails_with_the_reason() {
+        let tree: Element = view! { <img src="https://example.com/cover.jpg" /> };
+        let arena = Arena::build(&tree);
+        let registry = ImageRegistry::new();
+        let cache = Arc::new(florui_assets::AssetCache::new());
+        let executor = LocalExecutor::new();
+        registry.sync(&arena, &cache, &executor);
+        let key = FocusPath::of(&arena, arena.roots()[0]);
+        assert!(matches!(
+            &*registry.error(&key).expect("failed at once"),
+            ImageLoadError::Asset(florui_assets::AssetError::Fetch {
+                error: florui_assets::FetchError::Unavailable,
+                ..
+            })
+        ));
     }
 }

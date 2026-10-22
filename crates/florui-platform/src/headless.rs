@@ -1618,4 +1618,57 @@ mod tests {
         plain.press_key(TestKey::Tab);
         assert_eq!(green(&plain.frame()), 0, "the default highlight is blue");
     }
+
+    #[cfg(feature = "net")]
+    #[test]
+    fn a_background_image_from_the_network_paints_once_it_has_arrived() {
+        use std::time::{Duration, Instant};
+
+        use crate::test_http::Server;
+
+        crate::test_http::configure_fetcher();
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            4,
+            4,
+            image::Rgba([255, 0, 0, 255]),
+        ))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+        let server =
+            Server::start(move |_| (200, "image/png", png.clone(), Duration::from_millis(150)));
+        let css = format!(
+            ".cover {{ width: 40px; height: 40px; background-image: url({}); \
+             background-size: 100% 100%; }}",
+            server.url("/cover.png")
+        );
+        let mut window = HeadlessWindow::new(
+            &css,
+            || Element::node("div", vec![("class".into(), "cover".into())], vec![]),
+            HeadlessOptions {
+                width: 100.0,
+                height: 100.0,
+                ..HeadlessOptions::default()
+            },
+        )
+        .expect("the stylesheet parses");
+        let red_at = |frame: &HeadlessFrame| {
+            let at = (20 * frame.width as usize + 20) * 4;
+            frame.rgba[at..at + 4] == [255, 0, 0, 255]
+        };
+        // Asking did not wait for the download: the first frame is there without it.
+        let started = Instant::now();
+        assert!(!red_at(&window.frame()));
+        assert!(started.elapsed() < Duration::from_millis(140));
+        // The host paints again when told a picture arrived; here, the test does.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut arrived = false;
+        while Instant::now() < deadline && !arrived {
+            std::thread::sleep(Duration::from_millis(20));
+            window.update();
+            arrived = red_at(&window.frame());
+        }
+        assert!(arrived, "the picture was never painted");
+        assert_eq!(server.seen(), ["/cover.png"]);
+    }
 }
