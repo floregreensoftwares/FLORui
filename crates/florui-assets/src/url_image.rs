@@ -97,22 +97,22 @@ pub fn identity(url: &str) -> String {
 
 pub use crate::remote_image::{Subscription, is_remote, on_change as on_remote_change};
 
-/// The identity to decode the bytes of one download of `url` under in an [`crate::AssetCache`]:
+/// The key to decode the bytes of one download of `url` under in an [`crate::AssetCache`]:
 /// the address and a digest of the bytes, so that a document the server replaced and the one
 /// before it are different entries and neither is handed back for the other while the old one
 /// is still alive.
-pub fn download_id(url: &str, bytes: &[u8]) -> crate::AssetId {
-    crate::remote_image::download_id(&remote_address(url), bytes)
+pub fn download_key(url: &str, bytes: &[u8]) -> String {
+    crate::remote_image::download_key(&remote_address(url), bytes)
 }
 
-/// [`download_id`], remembering that these bytes are the latest download of `url`, so that
+/// [`download_key`], remembering that these bytes are the latest download of `url`, so that
 /// [`latest_download`] can find a picture that is still alive without downloading it again.
-pub fn register_download(url: &str, bytes: &[u8]) -> crate::AssetId {
+pub fn register_download(url: &str, bytes: &[u8]) -> String {
     crate::remote_image::register_download(&remote_address(url), bytes)
 }
 
 /// The identity of the latest download of `url` that was registered, if any.
-pub fn latest_download(url: &str) -> Option<crate::AssetId> {
+pub fn latest_download(url: &str) -> Option<String> {
     crate::remote_image::latest_download(&remote_address(url))
 }
 
@@ -146,16 +146,6 @@ pub fn remote_address(url: &str) -> String {
         known.insert(url.to_owned(), normal.clone());
     });
     normal
-}
-
-/// Marks the picture `url` names as in use, which a picture that is not asked for by
-/// [`load`] on every paint (one whose drawing is kept, as a border image's is) must do for
-/// itself: a remote picture that looks left alone is let go to make room, and is not asked
-/// for again to see whether the server changed it. Costs nothing for a file or a `data:` URL.
-pub fn touch(url: &str) {
-    if crate::remote_image::is_remote(url) {
-        let _ = crate::remote_image::load(&remote_address(url));
-    }
 }
 
 /// What was found when an image was last read, and the file's stamp then.

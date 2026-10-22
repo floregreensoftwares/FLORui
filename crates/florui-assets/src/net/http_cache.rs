@@ -546,19 +546,22 @@ impl DiskCache {
 }
 
 /// The hash a file of this cache is named for, if `name` is one: `<hash>.meta`,
-/// `<hash>.<id>.body` or `<hash>.tmp<pid>-<n>`, with a hash and an id of 16 hexadecimal digits.
+/// `<hash>.<id>.body`, or the temporary file of either (`<hash>.tmp<pid>-<n>`,
+/// `<hash>.<id>.tmp<pid>-<n>`), with a hash and an id of 16 hexadecimal digits.
 fn ours(name: &str) -> Option<String> {
     let hex16 = |part: &str| part.len() == 16 && part.bytes().all(|b| b.is_ascii_hexdigit());
+    let temporary = |part: &str| {
+        part.strip_prefix("tmp").is_some_and(|rest| {
+            !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+        })
+    };
     let parts: Vec<&str> = name.split('.').collect();
     let fits = match parts.as_slice() {
         [hash, "meta"] => hex16(hash),
         [hash, id, "body"] => hex16(hash) && hex16(id),
-        [hash, temporary] => {
-            hex16(hash)
-                && temporary.strip_prefix("tmp").is_some_and(|rest| {
-                    !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit() || b == b'-')
-                })
-        }
+        // The temporary file of a metadata file, and of a body file (whose name has the id).
+        [hash, part] => hex16(hash) && temporary(part),
+        [hash, id, part] => hex16(hash) && hex16(id) && temporary(part),
         _ => false,
     };
     fits.then(|| parts[0].to_owned())
@@ -950,8 +953,10 @@ mod tests {
         let old_temporary = leave("0000000000000002.tmp123-4", Some(long_ago));
         let young_body = leave("0000000000000003.00000000000000a3.body", None);
         let young_temporary = leave("0000000000000004.tmp123-5", None);
+        // The temporary file of a body has the id in its name.
+        let old_temporary_body = leave("0000000000000005.00000000000000a5.tmp77-2", Some(long_ago));
         cache.evict();
-        assert!(!old_body.exists() && !old_temporary.exists());
+        assert!(!old_body.exists() && !old_temporary.exists() && !old_temporary_body.exists());
         assert!(
             young_body.exists() && young_temporary.exists(),
             "may be in flight"
@@ -1081,6 +1086,8 @@ mod tests {
             "0000000000000001.body",
             "0000000000000001.xyz.body",
             "0000000000000001.0000000000000002.bodyx",
+            "0000000000000001.0000000000000002.tmp",
+            "0000000000000001.zz.tmp1-1",
             "readme.meta",
             "photo.png",
         ];

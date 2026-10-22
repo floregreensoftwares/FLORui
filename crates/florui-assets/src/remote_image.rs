@@ -273,11 +273,70 @@ fn notify() {
 
 /// Text that stands for the state `url` is in, for keys of things made from it.
 pub(crate) fn identity(url: &str) -> String {
-    let generation = with_store(|store| store.slots.get(url).map(Slot::generation));
+    // Asking for the identity of a picture counts as using it: a picture whose kept drawing
+    // is found by its identity, without a load, must not look left alone (and be let go for
+    // room) or go for ever without being asked for again. Cheaper than a call of its own,
+    // in the one lock this takes.
+    let rechecking = recheck_enabled();
+    let (generation, request) = with_store(|store| {
+        store.clock += 1;
+        let clock = store.clock;
+        let next = store.next_generation + 1;
+        let request = match store.slots.get_mut(url) {
+            Some(slot @ Slot::Ready { .. }) => mark_used(slot, clock, rechecking, next),
+            _ => None,
+        };
+        if request.is_some() {
+            store.next_generation = next;
+        }
+        (store.slots.get(url).map(Slot::generation), request)
+    });
+    if let Some(request) = request {
+        begin(url, request);
+    }
     match generation {
         Some(generation) => identity_at(url, generation),
         None => format!("{url}@remote-none"),
     }
+}
+
+/// What to do once the lock is let go: nothing may be started while it is held, because the
+/// fetcher can answer before it returns, and the answer takes the lock.
+struct Request {
+    generation: u64,
+    refresh: bool,
+}
+
+/// Starts the request `request` describes, and records what that came to.
+fn begin(url: &str, request: Request) {
+    let started = start(url, request.generation);
+    with_store(|store| attach(store, url, request.generation, request.refresh, started));
+}
+
+/// Marks a ready picture as just used, and, if it is due to be asked for again, says so: the
+/// request that is then to be made (`next` is the generation it will have).
+fn mark_used(slot: &mut Slot, clock: u64, rechecking: bool, next: u64) -> Option<Request> {
+    let Slot::Ready {
+        used,
+        used_at,
+        checked_at,
+        recheck_after,
+        refresh,
+        ..
+    } = slot
+    else {
+        return None;
+    };
+    *used = clock;
+    *used_at = Instant::now();
+    if rechecking && refresh.is_none() && checked_at.elapsed() >= *recheck_after {
+        *refresh = Some((next, None));
+        return Some(Request {
+            generation: next,
+            refresh: true,
+        });
+    }
+    None
 }
 
 /// The identity of `url` at `version`, which a picture carries (see `Loaded::version`).
@@ -290,37 +349,18 @@ pub(crate) fn identity_at(url: &str, version: u64) -> String {
 /// at once and asked for again in the background.
 pub(crate) fn load(url: &str) -> Option<Arc<Loaded>> {
     let rechecking = recheck_enabled();
-    /// What to do once the lock is let go: nothing may be started while it is held, because
-    /// the fetcher can answer before it returns, and the answer takes the lock.
-    struct Request {
-        generation: u64,
-        refresh: bool,
-    }
     let (answer, request) = with_store(|store| {
         store.clock += 1;
         let clock = store.clock;
         let next = store.next_generation + 1;
         let mut request = None;
         let answer = match store.slots.get_mut(url) {
-            Some(Slot::Ready {
-                loaded,
-                used,
-                used_at,
-                checked_at,
-                recheck_after,
-                refresh,
-                ..
-            }) => {
-                *used = clock;
-                *used_at = Instant::now();
-                if rechecking && refresh.is_none() && checked_at.elapsed() >= *recheck_after {
-                    *refresh = Some((next, None));
-                    request = Some(Request {
-                        generation: next,
-                        refresh: true,
-                    });
+            Some(slot @ Slot::Ready { .. }) => {
+                request = mark_used(slot, clock, rechecking, next);
+                match slot {
+                    Slot::Ready { loaded, .. } => Some(Arc::clone(loaded)),
+                    _ => None,
                 }
-                Some(Arc::clone(loaded))
             }
             Some(Slot::Pending { .. }) => None,
             Some(Slot::Failed { at, .. }) if at.elapsed() < RETRY_AFTER => None,
@@ -344,13 +384,8 @@ pub(crate) fn load(url: &str) -> Option<Arc<Loaded>> {
         }
         (answer, request)
     });
-    if let Some(Request {
-        generation,
-        refresh,
-    }) = request
-    {
-        let started = start(url, generation);
-        with_store(|store| attach(store, url, generation, refresh, started));
+    if let Some(request) = request {
+        begin(url, request);
     }
     answer
 }
@@ -446,7 +481,12 @@ fn start(url: &str, generation: u64) -> Started {
 }
 
 fn report(url: &str, reason: &str) {
-    let shown: String = url.chars().take(80).collect();
+    // The address is someone else's text: control characters in it must not reach a terminal.
+    let shown: String = url
+        .chars()
+        .take(80)
+        .flat_map(char::escape_default)
+        .collect();
     eprintln!("florui-assets: the image url({shown}) cannot be used: {reason}");
 }
 
@@ -459,13 +499,13 @@ fn cache() -> &'static AssetCache {
 /// A few threads that decode what the fetcher has downloaded, as many as there are decode
 /// slots (see `AssetCache`), so none of them waits for a slot that others hold.
 #[cfg(feature = "net")]
-mod decoder {
+pub(crate) mod decoder {
     use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
     use std::sync::{Arc, Mutex, OnceLock};
 
-    type Job = Box<dyn FnOnce() + Send>;
+    pub(crate) type Job = Box<dyn FnOnce() + Send>;
 
-    pub(super) fn run(job: Job) {
+    pub(crate) fn run(job: Job) {
         // A few jobs wait, no more: each owns the body of a download, and when decoding falls
         // behind, the downloads wait for it (the thread that sends is a fetcher's) instead of
         // piling up what they fetched.
@@ -521,21 +561,21 @@ enum Built {
 /// bytes, so a picture the server replaced is a different entry from the old one (which may
 /// still be alive, held by what is painting it) and neither can be handed back for the
 /// other, whatever runs at the same time.
-pub(crate) fn cache_id(url: &str, digest: u128) -> crate::AssetId {
-    crate::AssetId::Url(format!("{url}\u{0}{digest:032x}"))
+pub(crate) fn cache_key(url: &str, digest: u128) -> String {
+    format!("{url}\u{0}{digest:032x}")
 }
 
-/// The identity to decode the bytes of one download of `url` under: see [`cache_id`].
-pub(crate) fn download_id(url: &str, bytes: &[u8]) -> crate::AssetId {
-    cache_id(url, digest(bytes))
+/// The key to decode the bytes of one download of `url` under: see [`cache_key`].
+pub(crate) fn download_key(url: &str, bytes: &[u8]) -> String {
+    cache_key(url, digest(bytes))
 }
 
 /// The digest of the latest download of each address that was decoded, so that a picture
 /// still alive in a cache can be found again without downloading it.
 static LATEST: Mutex<Option<HashMap<String, u128>>> = Mutex::new(None);
 
-/// [`download_id`], remembering that these bytes are the latest of `url`.
-pub(crate) fn register_download(url: &str, bytes: &[u8]) -> crate::AssetId {
+/// [`download_key`], remembering that these bytes are the latest of `url`.
+pub(crate) fn register_download(url: &str, bytes: &[u8]) -> String {
     let sum = digest(bytes);
     let mut latest = LATEST
         .lock()
@@ -545,15 +585,15 @@ pub(crate) fn register_download(url: &str, bytes: &[u8]) -> crate::AssetId {
         latest.clear();
     }
     latest.insert(url.to_owned(), sum);
-    cache_id(url, sum)
+    cache_key(url, sum)
 }
 
 /// The identity of the latest download of `url` that was registered.
-pub(crate) fn latest_download(url: &str) -> Option<crate::AssetId> {
+pub(crate) fn latest_download(url: &str) -> Option<String> {
     let latest = LATEST
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    latest.as_ref()?.get(url).map(|sum| cache_id(url, *sum))
+    latest.as_ref()?.get(url).map(|sum| cache_key(url, *sum))
 }
 
 /// A digest of `bytes` that tells two downloads apart: the start of their SHA-256, which a
@@ -616,7 +656,7 @@ fn finish(
             }
             let size = fetched.bytes.len() as u64;
             match crate::url_image::build(&fetched.bytes, None, false, |bytes| {
-                cache().get_or_decode(cache_id(url, sum), bytes, DecodeParams::Native)
+                cache().get_or_decode(&cache_key(url, sum), bytes, DecodeParams::Native)
             }) {
                 Ok(loaded) => Built::Loaded(
                     loaded,
@@ -701,6 +741,15 @@ fn finish(
             (Was::Gone, _) => false,
         }
     });
+    // Each download of an address is an entry of its own in the cache, and the ones nobody
+    // holds any more are only dead weight there: swept every so often.
+    static FINISHED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if FINISHED
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        .is_multiple_of(32)
+    {
+        cache().compact();
+    }
     if changed {
         notify();
     }
@@ -890,12 +939,12 @@ mod tests {
     #[test]
     fn two_downloads_of_one_address_with_different_bytes_do_not_share_a_decode() {
         assert_ne!(
-            cache_id("http://example.invalid/a.png", 1),
-            cache_id("http://example.invalid/a.png", 2)
+            cache_key("http://example.invalid/a.png", 1),
+            cache_key("http://example.invalid/a.png", 2)
         );
         assert_eq!(
-            cache_id("http://example.invalid/a.png", 1),
-            cache_id("http://example.invalid/a.png", 1)
+            cache_key("http://example.invalid/a.png", 1),
+            cache_key("http://example.invalid/a.png", 1)
         );
     }
 
@@ -1104,7 +1153,7 @@ mod tests {
             let bytes = png_of(2, 2);
             let sum = digest(&bytes);
             let loaded = crate::url_image::build(&bytes, None, false, |b| {
-                cache().get_or_decode(cache_id(url, sum), b, DecodeParams::Native)
+                cache().get_or_decode(&cache_key(url, sum), b, DecodeParams::Native)
             })
             .unwrap();
             with_store(|store| {
@@ -1230,7 +1279,7 @@ mod tests {
             let bytes = png_of(2, 2);
             let sum = digest(&bytes);
             let loaded = crate::url_image::build(&bytes, None, false, |b| {
-                cache().get_or_decode(cache_id(url, sum), b, DecodeParams::Native)
+                cache().get_or_decode(&cache_key(url, sum), b, DecodeParams::Native)
             })
             .unwrap();
             with_store(|store| {
@@ -1288,13 +1337,14 @@ mod tests {
         }
 
         #[test]
-        fn touching_a_remote_picture_marks_it_in_use_and_touching_anything_else_does_nothing() {
+        fn asking_for_the_identity_of_a_remote_picture_marks_it_in_use_and_of_anything_else_does_nothing()
+         {
             direct();
             let url = "http://example.invalid/touched.png";
             let bytes = png_of(2, 2);
             let sum = digest(&bytes);
             let loaded = crate::url_image::build(&bytes, None, false, |b| {
-                cache().get_or_decode(cache_id(url, sum), b, DecodeParams::Native)
+                cache().get_or_decode(&cache_key(url, sum), b, DecodeParams::Native)
             })
             .unwrap();
             with_store(|store| {
@@ -1313,15 +1363,15 @@ mod tests {
                     },
                 );
             });
-            crate::url_image::touch(url);
+            crate::url_image::identity(url);
             let in_use = with_store(|store| match store.slots.get(url) {
                 Some(Slot::Ready { used_at, .. }) => used_at.elapsed() < IN_USE,
                 _ => false,
             });
             assert!(in_use, "asked for lately");
             let before = with_store(|store| store.slots.len());
-            crate::url_image::touch("assets/a.png");
-            crate::url_image::touch("data:image/png;base64,AAAA");
+            crate::url_image::identity("assets/a.png");
+            crate::url_image::identity("data:image/png;base64,AAAA");
             assert_eq!(with_store(|store| store.slots.len()), before);
         }
 

@@ -380,26 +380,14 @@ impl Fetcher {
             if let Err(error) = spawned {
                 queue.workers -= 1;
                 if queue.workers == 0 {
-                    // No thread can ever run what is queued (the process is at its limit
-                    // of threads), so everything waiting fails now rather than never
-                    // finishing. The callbacks run here, before `submit` returns.
-                    let failed = std::mem::take(&mut queue.waiting);
-                    queue.jobs.clear();
-                    drop(queue);
-                    let reason = FetchError::Transport(format!(
+                    // No thread can ever run what is queued (the process is at its limit of
+                    // threads), and what is queued is this request: it is taken back out, and
+                    // the call fails, with nothing called back on this thread.
+                    queue.waiting.retain(|queued| !Arc::ptr_eq(queued, &job));
+                    queue.jobs.remove(&job.key());
+                    return Err(FetchError::Transport(format!(
                         "could not start a thread for the request: {error}"
-                    ));
-                    for job in failed {
-                        let waiters = std::mem::take(
-                            &mut *job
-                                .waiters
-                                .lock()
-                                .unwrap_or_else(|poison| poison.into_inner()),
-                        );
-                        for (_, callback) in waiters {
-                            callback(Err(reason.clone()));
-                        }
-                    }
+                    )));
                 }
             }
         }

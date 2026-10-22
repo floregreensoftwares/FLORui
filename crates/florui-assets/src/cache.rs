@@ -192,35 +192,35 @@ impl AssetCache {
         found
     }
 
+    /// [`Self::cached`] for the key of a download (see [`Self::get_or_decode`]).
+    pub fn cached_url(&self, url: &str, params: DecodeParams) -> Option<Arc<RasterImage>> {
+        self.cached(&AssetId::Url(url.to_owned()), params)
+    }
+
     /// Like [`Self::get_or_load`] for bytes that are already in memory, such as a download's:
     /// a cached decode is returned, a decode under way is waited for, and otherwise `bytes`
     /// are decoded in one of the decode slots and cached. The image is shared and dropped like
     /// any other.
     ///
     /// The bytes are someone else's: an SVG among them is parsed without reading the files it
-    /// names, whatever `id` is. `id` stands for the bytes, not only for where they came from:
-    /// the same id with other bytes gets back the first decode while it is alive, so a
-    /// download of an address that can change should be decoded under
-    /// [`crate::url_image::download_id`], which has a digest of the bytes in it. `id` should be an [`AssetId::Url`]; any other is kept under a
-    /// `Url` key made from it (so `cached` and `invalidate` with the id that was passed will
-    /// not find it), never under the key of the file or asset that it names, which a later
-    /// load of that file would find these bytes under.
+    /// names, and they are kept under a key of their own (`url`), never the key of a file or an
+    /// asset that a later load of it would find them under.
+    ///
+    /// `url` stands for the bytes, not only for where they came from: the same key with other
+    /// bytes gets back the first decode while it is alive, so a download of an address that can
+    /// change should be decoded under [`crate::url_image::download_key`], which has a digest of
+    /// the bytes in it.
     pub fn get_or_decode(
         &self,
-        id: AssetId,
+        url: &str,
         bytes: &[u8],
         params: DecodeParams,
     ) -> Result<Arc<RasterImage>, AssetError> {
         // The same ceiling as for a file or an embedded asset, whatever limit the download had.
         crate::limits::check_source_len(bytes.len() as u64, None)?;
-        // Bytes someone else wrote: an SVG in them may not read files, whatever `id` is, and
-        // they are kept under a key of their own, never the key of a real file or asset that
-        // a later load of it would find them under.
-        let id = match id {
-            AssetId::Url(url) => AssetId::Url(url),
-            other => AssetId::Url(format!("bytes:{other:?}")),
-        };
-        self.get_or_decode_with(id, params, None, false, || Ok(Cow::Borrowed(bytes)))
+        self.get_or_decode_with(AssetId::Url(url.to_owned()), params, None, false, || {
+            Ok(Cow::Borrowed(bytes))
+        })
     }
 
     fn get_or_decode_with<'b>(
@@ -706,54 +706,54 @@ mod tests {
     #[test]
     fn bytes_decoded_under_a_url_are_shared_while_held_and_dropped_after() {
         let cache = AssetCache::new();
-        let id = AssetId::Url("https://example.com/cover.jpg".to_string());
-        assert!(cache.cached(&id, DecodeParams::Native).is_none());
+        let url = "https://example.com/cover.jpg";
+        assert!(cache.cached_url(url, DecodeParams::Native).is_none());
         let bytes = encoded(image::ImageFormat::Jpeg);
         let first = cache
-            .get_or_decode(id.clone(), &bytes, DecodeParams::Native)
+            .get_or_decode(url, &bytes, DecodeParams::Native)
             .unwrap();
         assert_eq!((first.width, first.height), (48, 32));
         let second = cache
-            .get_or_decode(id.clone(), &bytes, DecodeParams::Native)
+            .get_or_decode(url, &bytes, DecodeParams::Native)
             .unwrap();
         assert!(Arc::ptr_eq(&first, &second));
         assert!(Arc::ptr_eq(
             &first,
-            &cache.cached(&id, DecodeParams::Native).unwrap()
+            &cache.cached_url(url, DecodeParams::Native).unwrap()
         ));
         drop((first, second));
-        assert!(cache.cached(&id, DecodeParams::Native).is_none());
+        assert!(cache.cached_url(url, DecodeParams::Native).is_none());
     }
 
     #[test]
     fn bytes_that_are_not_an_image_fail_under_a_url_and_nothing_is_cached() {
         let cache = AssetCache::new();
-        let id = AssetId::Url("https://example.com/not-an-image".to_string());
+        let url = "https://example.com/not-an-image";
         let error = cache
-            .get_or_decode(id.clone(), b"nope", DecodeParams::Native)
+            .get_or_decode(url, b"nope", DecodeParams::Native)
             .unwrap_err();
         assert!(matches!(error, AssetError::Raster(_)));
-        assert!(cache.cached(&id, DecodeParams::Native).is_none());
+        assert!(cache.cached_url(url, DecodeParams::Native).is_none());
     }
 
     #[test]
     fn an_svg_from_a_url_rasterizes_per_requested_size() {
         use crate::svg::RasterFit;
         let cache = AssetCache::new();
-        let id = AssetId::Url("https://example.com/icon.svg".to_string());
+        let url = "https://example.com/icon.svg";
         let fit = RasterFit::Stretch {
             width: 20,
             height: 20,
         };
         let image = cache
             .get_or_decode(
-                id.clone(),
+                url,
                 BLUE_CIRCLE_SVG.as_bytes(),
                 DecodeParams::Rasterized(fit),
             )
             .unwrap();
         assert_eq!((image.width, image.height), (20, 20));
-        assert!(cache.cached(&id, DecodeParams::Native).is_none());
+        assert!(cache.cached_url(url, DecodeParams::Native).is_none());
     }
 
     #[test]
@@ -788,11 +788,7 @@ mod tests {
             "the application's own document reads the file"
         );
         let downloaded = cache
-            .get_or_decode(
-                AssetId::Url("https://example.com/a.svg".to_owned()),
-                outer.as_bytes(),
-                params,
-            )
+            .get_or_decode("https://example.com/a.svg", outer.as_bytes(), params)
             .unwrap();
         assert!(!drawn(&downloaded), "a download does not");
     }
@@ -822,11 +818,7 @@ mod tests {
         let cache = AssetCache::new();
         let too_big = vec![0u8; (crate::limits::MAX_SOURCE_BYTES + 1) as usize];
         let error = cache
-            .get_or_decode(
-                AssetId::Url("https://example.com/huge".to_owned()),
-                &too_big,
-                DecodeParams::Native,
-            )
+            .get_or_decode("https://example.com/huge", &too_big, DecodeParams::Native)
             .unwrap_err();
         assert!(matches!(error, AssetError::SourceTooLarge { .. }));
     }
@@ -844,14 +836,14 @@ mod tests {
         let url = "https://example.com/logo.svg";
         let first = cache
             .get_or_decode(
-                crate::url_image::download_id(url, old.as_bytes()),
+                &crate::url_image::download_key(url, old.as_bytes()),
                 old.as_bytes(),
                 fit,
             )
             .unwrap();
         let second = cache
             .get_or_decode(
-                crate::url_image::download_id(url, new.as_bytes()),
+                &crate::url_image::download_key(url, new.as_bytes()),
                 new.as_bytes(),
                 fit,
             )
@@ -864,27 +856,17 @@ mod tests {
     }
 
     #[test]
-    fn bytes_given_under_the_id_of_a_file_never_become_what_loading_that_file_finds() {
+    fn bytes_given_under_the_text_of_a_files_path_never_become_what_loading_that_file_finds() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_svg(&dir, "real.svg");
         let cache = AssetCache::new();
-        let id = AssetSource::Path(&path).identity().unwrap();
         let other = BLUE_CIRCLE_SVG.replace("#3366ff", "#ff0000");
-        let given = cache
-            .get_or_decode(id, other.as_bytes(), DecodeParams::Native)
-            .unwrap_err();
-        // (Not a raster image: the point is the key, below.)
-        assert!(matches!(given, AssetError::Raster(_)));
         let svg = DecodeParams::Rasterized(crate::svg::RasterFit::Stretch {
             width: 4,
             height: 4,
         });
         let theirs = cache
-            .get_or_decode(
-                AssetSource::Path(&path).identity().unwrap(),
-                other.as_bytes(),
-                svg,
-            )
+            .get_or_decode(&path.display().to_string(), other.as_bytes(), svg)
             .unwrap();
         let ours = cache.get_or_load(&AssetSource::Path(&path), svg).unwrap();
         assert!(!Arc::ptr_eq(&theirs, &ours));
