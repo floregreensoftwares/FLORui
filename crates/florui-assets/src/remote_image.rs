@@ -196,6 +196,10 @@ impl Store {
             let Some((_, url)) = oldest else { return };
             if let Some(Slot::Ready { bytes, .. }) = self.slots.remove(&url) {
                 self.held -= bytes;
+                florui_profile::gauge::sub(
+                    florui_profile::gauge::Gauge::RemoteImages,
+                    usize::try_from(bytes).unwrap_or(usize::MAX),
+                );
             }
         }
     }
@@ -595,10 +599,12 @@ pub(crate) mod decoder {
             }
             *queued += weight;
         }
+        florui_profile::gauge::add(florui_profile::gauge::Gauge::DecodeQueue, weight);
         let job: Job = Box::new(move || {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
             let (queued, freed) = &QUEUED;
             *queued.lock().unwrap_or_else(|poison| poison.into_inner()) -= weight;
+            florui_profile::gauge::sub(florui_profile::gauge::Gauge::DecodeQueue, weight);
             freed.notify_all();
         });
         static QUEUE: OnceLock<Sender<Job>> = OnceLock::new();
@@ -866,8 +872,16 @@ fn install_ready(
     let bytes = retained(&loaded, encoded);
     if let Some(Slot::Ready { bytes: old, .. }) = store.slots.remove(url) {
         store.held -= old;
+        florui_profile::gauge::sub(
+            florui_profile::gauge::Gauge::RemoteImages,
+            usize::try_from(old).unwrap_or(usize::MAX),
+        );
     }
     store.held += bytes;
+    florui_profile::gauge::add(
+        florui_profile::gauge::Gauge::RemoteImages,
+        usize::try_from(bytes).unwrap_or(usize::MAX),
+    );
     loaded.version = generation;
     store.slots.insert(
         url.to_owned(),
@@ -1260,6 +1274,38 @@ mod tests {
                 crate::url_image::load(&url);
             }
             assert_eq!(server.hits(), 2);
+        }
+
+        #[test]
+        fn a_picture_that_is_let_in_shows_in_the_memory_readings() {
+            let url = "http://example.invalid/gauge.png";
+            let bytes = png_of(8, 8);
+            let sum = digest(&bytes);
+            let loaded = crate::url_image::build(&bytes, None, false, |b| {
+                cache().get_or_decode(&cache_key(url, sum), b, DecodeParams::Native)
+            })
+            .unwrap();
+            let mut store = Store::default();
+            install_ready(
+                &mut store,
+                url,
+                loaded,
+                bytes.len() as u64,
+                sum,
+                false,
+                1,
+                1,
+            );
+            assert!(store.held > 0);
+            if florui_profile::ENABLED {
+                let reading = florui_profile::gauge::read()
+                    .into_iter()
+                    .find(|reading| reading.gauge == florui_profile::gauge::Gauge::RemoteImages)
+                    .unwrap();
+                // Other tests add and take away their own pictures at the same time, so only
+                // the most it has held, which never goes down, is certain.
+                assert!(reading.peak as u64 >= store.held);
+            }
         }
 
         #[test]
