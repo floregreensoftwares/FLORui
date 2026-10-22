@@ -224,3 +224,36 @@ fn the_lines_of_a_sideways_lr_box_stack_from_the_left_and_start_at_the_bottom() 
         "the second item",
     );
 }
+
+#[test]
+fn floats_in_a_vertical_box_go_to_the_top_and_the_bottom_of_its_first_line() {
+    let css = ".v { writing-mode: vertical-rl; height: 100px; width: 150px; font-size: 14px; \
+        line-height: 18px; } \
+        .fl { float: left; width: 20px; height: 30px; } .fr { float: right; width: 20px; height: 30px; } \
+        .blk { width: 18px; height: 40px; }";
+    let tree = div(
+        "v",
+        vec![
+            div("fl", vec![]),
+            div("fr", vec![]),
+            div("blk", vec![]),
+            text("text that wraps around the floats in this vertical box for sure"),
+        ],
+    );
+    let laid = lay_out(&tree, css);
+    rect_near(
+        laid.rect("fl"),
+        (130.0, 0.0, 20.0, 30.0),
+        "float left is at the top",
+    );
+    rect_near(
+        laid.rect("fr"),
+        (130.0, 70.0, 20.0, 30.0),
+        "float right is at the bottom",
+    );
+    rect_near(
+        laid.rect("blk"),
+        (132.0, 0.0, 18.0, 40.0),
+        "a block ignores the floats",
+    );
+}

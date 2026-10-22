@@ -492,7 +492,7 @@ pub(crate) struct Run<'a> {
 
 impl Run<'_> {
     /// The style of `id` as its parent's algorithm reads it.
-    fn item_style(&self, id: NodeId) -> &Style {
+    pub(crate) fn item_style(&self, id: NodeId) -> &Style {
         let node = self.tree.live(id);
         node.item_view(node.parent_flow)
     }

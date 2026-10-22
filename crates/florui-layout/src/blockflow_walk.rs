@@ -54,7 +54,7 @@ impl Run<'_> {
         let (style, children, inline) = {
             let node = self.tree.node(id);
             (
-                node.style.clone(),
+                node.content_view().clone(),
                 node.children.clone(),
                 matches!(
                     node.context,
@@ -115,7 +115,15 @@ impl Run<'_> {
                             self.hide(child, order);
                         }
                     }
-                    Part::Absolute => absolutes.push((child, order, at(g.pb.left, y_abs))),
+                    Part::Absolute => {
+                        // Where it would be in the flow: against the start edge.
+                        let x = if g.rtl {
+                            g.width - g.pb.right
+                        } else {
+                            g.pb.left
+                        };
+                        absolutes.push((child, order, at(x, y_abs)));
+                    }
                     Part::Float => {
                         let pending = if walk.collapsing_first && collapse.start {
                             0.0
@@ -233,6 +241,7 @@ impl Run<'_> {
                     static_pos,
                     area,
                     at(g.border.left, g.border.top),
+                    g.rtl,
                 );
                 reach.width = reach.width.max(extent.width);
                 reach.height = reach.height.max(extent.height);
@@ -271,7 +280,7 @@ impl Run<'_> {
         inner_w: f32,
         order: u32,
     ) -> Placed {
-        let style = self.tree.node(id).style.clone();
+        let style = self.item_style(id).clone();
         let margins = margins_of(&style, inner_w);
         let non_auto = or_zero(margins);
         let own = own_of(
@@ -288,7 +297,7 @@ impl Run<'_> {
             .unwrap_or(stretch)
             .maybe_clamp(own.min.width, own.max.width)
             .max(own.pb.left + own.pb.right);
-        let (margin_left, margin_right) = auto_margins(margins, stretch - width);
+        let (margin_left, margin_right) = auto_margins(margins, stretch - width, g.rtl);
         let known_height = own.size.height.maybe_clamp(own.min.height, own.max.height);
         let clear = clear_sides(style.clear);
         let inset = inset_offset(
@@ -318,6 +327,7 @@ impl Run<'_> {
                 },
                 collapsible: Line::TRUE,
                 root: false,
+                rtl: style.direction == taffy::Direction::Rtl,
             };
             let checkpoint = bfc.floats.len();
             let out = self.block(bfc, id, &geo);
@@ -390,10 +400,9 @@ impl Run<'_> {
         inner_w: f32,
         order: u32,
     ) -> Placed {
-        let node = self.tree.node(id);
-        let style = node.style.clone();
+        let style = self.item_style(id).clone();
         let replaced = matches!(
-            node.context,
+            self.tree.node(id).context,
             Some(LeafContext::Image(_) | LeafContext::Fixed(_))
         );
         let margins = margins_of(&style, inner_w);
@@ -464,7 +473,7 @@ impl Run<'_> {
             }
             break (left, room, output, output.size.width);
         };
-        let (margin_left, margin_right) = auto_margins(margins, room - width);
+        let (margin_left, margin_right) = auto_margins(margins, room - width, g.rtl);
         let x = left - g.x + margin_left;
         let y_block = y - g.y;
         if bfc.commit {
@@ -520,7 +529,7 @@ impl Run<'_> {
 
     /// Lays out the float `id` of the block `g` and measures its margin box.
     pub(crate) fn float_box(&mut self, bfc: &Bfc, g: &Geo, id: NodeId, inner_w: f32) -> FloatBox {
-        let style = self.tree.node(id).style.clone();
+        let style = self.item_style(id).clone();
         let basis = Size {
             width: Some(inner_w),
             height: g.basis.height,
@@ -630,8 +639,9 @@ impl Run<'_> {
         static_pos: taffy::Point<f32>,
         area: Size<f32>,
         offset: taffy::Point<f32>,
+        rtl: bool,
     ) -> Size<f32> {
-        let style = self.tree.node(id).style.clone();
+        let style = self.item_style(id).clone();
         let margin: Margins = style.margin.map(|m| m.resolve_to_option(area.width, calc));
         let own = own_of(&style, area.map(Some));
         let resolve = |side: taffy::LengthPercentageAuto, basis: f32| {
@@ -742,8 +752,11 @@ impl Run<'_> {
             bottom: margin.bottom.unwrap_or(auto_y),
         };
         let x = match (left, right) {
+            // Over-constrained, a right to left container ignores the left inset.
+            (Some(_), Some(right)) if rtl => area.width - final_size.width - right - resolved.right,
             (Some(left), _) => left + resolved.left,
             (None, Some(right)) => area.width - final_size.width - right - resolved.right,
+            (None, None) if rtl => static_pos.x - final_size.width - resolved.right - offset.x,
             (None, None) => static_pos.x - offset.x + resolved.left,
         };
         let y = match (top, bottom) {
@@ -779,14 +792,21 @@ pub(crate) struct FloatRect {
 }
 
 /// The left and right margin of a box with `free` room to spare: the auto ones
-/// share it, as long as it is not negative.
-fn auto_margins(margins: Margins, free: f32) -> (f32, f32) {
+/// share it, as long as it is not negative. With none auto the room is on the side the
+/// direction leaves it: the right, or in a right to left box the left.
+fn auto_margins(margins: Margins, free: f32, rtl: bool) -> (f32, f32) {
     let count = margins.left.is_none() as u8 + margins.right.is_none() as u8;
     let each = if count > 0 {
         free.max(0.0) / f32::from(count)
     } else {
         0.0
     };
+    if count == 0 && rtl {
+        return (
+            margins.left.unwrap_or(0.0) + free,
+            margins.right.unwrap_or(0.0),
+        );
+    }
     (margins.left.unwrap_or(each), margins.right.unwrap_or(each))
 }
 
