@@ -114,7 +114,7 @@ use skrifa::outline::DrawSettings;
 use skrifa::outline::OutlinePen;
 use skrifa::{FontRef, GlyphId, MetadataProvider};
 use tiny_skia::{
-    FillRule, FilterQuality, IntRect, Mask, Paint, PathBuilder, Pixmap, PixmapPaint,
+    FillRule, FilterQuality, IntRect, Mask, Paint, PathBuilder, Pixmap, PixmapPaint, PixmapRef,
     PremultipliedColorU8, Rect, Transform,
 };
 
@@ -5307,14 +5307,32 @@ fn paint_image(
     if rect.width <= 0.0 || rect.height <= 0.0 || image.width == 0 || image.height == 0 {
         return;
     }
-    let Some(source) = premultiplied_pixmap(image) else {
+    // The copy of the image nearest the size it is drawn at, premultiplied once
+    // when the image was decoded: nothing is made per frame, however many pictures
+    // the page holds, and what is left to scale is less than a half.
+    let level = image.level_for(
+        (rect.width * scale_factor).ceil().max(1.0) as u32,
+        (rect.height * scale_factor).ceil().max(1.0) as u32,
+    );
+    let Some(source) = PixmapRef::from_bytes(level.pixels, level.width, level.height) else {
         return;
+    };
+    // A picture drawn at its own size is copied; one that is scaled is smoothed, as a
+    // browser draws a picture that is not asked for crisp pixels (the default of the
+    // blit is the nearest pixel, which turns a picture drawn smaller than it is into
+    // scattered samples).
+    let scaled = level.width != (rect.width * scale_factor).round() as u32
+        || level.height != (rect.height * scale_factor).round() as u32;
+    let quality = if scaled {
+        FilterQuality::Bilinear
+    } else {
+        FilterQuality::Nearest
     };
     blit_image(
         buffer,
-        &source,
-        content_x,
-        content_y,
+        source,
+        quality,
+        (content_x, content_y),
         rect,
         scale_factor,
         clip,
@@ -5324,9 +5342,9 @@ fn paint_image(
 /// [`paint_image`] of pixels that are premultiplied already.
 fn blit_image(
     buffer: &mut Surface,
-    source: &Pixmap,
-    content_x: f32,
-    content_y: f32,
+    source: PixmapRef<'_>,
+    quality: FilterQuality,
+    (content_x, content_y): (f32, f32),
     rect: florui_layout::BoxLayout,
     scale_factor: f32,
     clip: Option<&Mask>,
@@ -5350,14 +5368,13 @@ fn blit_image(
         (rect.height * scale_factor) / source.height() as f32,
     )
     .post_translate(lx, ly);
-    buffer.pixmap.draw_pixmap(
-        0,
-        0,
-        source.as_ref(),
-        &PixmapPaint::default(),
-        transform,
-        clip,
-    );
+    let paint = PixmapPaint {
+        quality,
+        ..PixmapPaint::default()
+    };
+    buffer
+        .pixmap
+        .draw_pixmap(0, 0, source, &paint, transform, clip);
 }
 
 /// An inline svg's straight pixels, held weakly (they go when the renderer lets
@@ -5386,11 +5403,7 @@ fn inline_svg_pixmap(rgba: &std::rc::Rc<Vec<u8>>, size: (u32, u32)) -> Option<st
     }) {
         return Some(found);
     }
-    let image = florui_assets::RasterImage {
-        rgba: rgba.to_vec(),
-        width: size.0,
-        height: size.1,
-    };
+    let image = florui_assets::RasterImage::new(rgba.to_vec(), size.0, size.1);
     let pixmap = std::rc::Rc::new(premultiplied_pixmap(&image)?);
     INLINE_SVGS.with(|kept| {
         let mut kept = kept.borrow_mut();
@@ -5435,7 +5448,15 @@ fn paint_inline_svg(
         height: size.1 as f32 / scale_factor,
         margin: florui_layout::BoxMargin::ZERO,
     };
-    blit_image(buffer, &pixmap, x, y, rect, scale_factor, clip);
+    blit_image(
+        buffer,
+        Pixmap::as_ref(&pixmap),
+        FilterQuality::Nearest,
+        (x, y),
+        rect,
+        scale_factor,
+        clip,
+    );
 }
 
 /// `florui_assets::RasterImage::rgba` is straight (non-premultiplied)
@@ -7885,11 +7906,7 @@ mod tests {
         for _ in 0..(width * height) {
             pixels.extend_from_slice(&rgba);
         }
-        std::sync::Arc::new(florui_assets::RasterImage {
-            rgba: pixels,
-            width,
-            height,
-        })
+        std::sync::Arc::new(florui_assets::RasterImage::new(pixels, width, height))
     }
 
     /// A real `<img>`, painted through the exact same `paint_nodes`/
@@ -7942,6 +7959,54 @@ mod tests {
         for (x, y) in [(0, 0), (39, 0), (0, 19), (39, 19), (20, 10)] {
             assert_eq!(pixel_rgb(&buffer, x, y), [255, 0, 0], "at ({x}, {y})");
         }
+    }
+
+    /// Columns of black and white a pixel wide, 400 x 300.
+    fn striped_image() -> ImagePaint {
+        let mut pixels = Vec::with_capacity(400 * 300 * 4);
+        for _y in 0..300 {
+            for x in 0..400 {
+                let value = if x % 2 == 0 { 0 } else { 255 };
+                pixels.extend_from_slice(&[value, value, value, 255]);
+            }
+        }
+        std::sync::Arc::new(florui_assets::RasterImage::new(pixels, 400, 300))
+    }
+
+    #[test]
+    fn a_picture_drawn_much_smaller_is_averaged_and_not_a_scatter_of_samples() {
+        // One pixel stripes shrunk to a quarter: the nearest pixel would give pure
+        // black or pure white at every point, the average is the gray between.
+        let (buffer, _) = paint_img(
+            ".pic { display: block; width: 100px; height: 75px; }",
+            100,
+            75,
+            striped_image(),
+        );
+        for (x, y) in [(10, 10), (11, 10), (50, 40), (51, 40), (90, 70)] {
+            let [r, g, b] = pixel_rgb(&buffer, x, y);
+            assert!(
+                (100..=155).contains(&r) && r == g && g == b,
+                "gray at ({x}, {y}), not {r},{g},{b}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_picture_painted_again_reuses_what_it_made_the_first_time() {
+        let image = striped_image();
+        let first = image.level_for(100, 75).pixels.as_ptr();
+        let (_buffer, _) = paint_img(
+            ".pic { display: block; width: 100px; height: 75px; }",
+            100,
+            75,
+            std::sync::Arc::clone(&image),
+        );
+        assert_eq!(
+            image.level_for(100, 75).pixels.as_ptr(),
+            first,
+            "the copy for that size is made once and kept with the image"
+        );
     }
 
     #[test]

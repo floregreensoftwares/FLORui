@@ -21,6 +21,10 @@ pub const MAX_SOURCE_BYTES: u64 = 64 * 1024 * 1024;
 /// today.
 pub const MAX_RASTER_DIMENSION: u32 = 8192;
 
+/// Ceiling on what decoding one raster image may allocate, in bytes: an 8192 x 8192
+/// image is 256 MiB of pixels, and the decoder's own buffers come on top.
+pub const MAX_DECODE_BYTES: u64 = 512 * 1024 * 1024;
+
 pub(crate) fn check_source_len(byte_len: u64, path: Option<&Path>) -> Result<(), AssetError> {
     if byte_len > MAX_SOURCE_BYTES {
         return Err(AssetError::SourceTooLarge {

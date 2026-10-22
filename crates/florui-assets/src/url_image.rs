@@ -1,6 +1,6 @@
 //! The images a `url(...)` names in a stylesheet: where their bytes come from (a file path
 //! read against the working directory, as `<img src>` is, or a `data:` URL carried in the
-//! stylesheet itself) and what they decode to (a PNG or an SVG), with the size a box that
+//! stylesheet itself) and what they decode to (a raster image or an SVG), with the size a box that
 //! has no size of its own is given.
 //!
 //! Loading happens on the thread that needs the image first, and the result is kept for
@@ -25,7 +25,7 @@ pub enum Source {
 }
 
 /// What an image says of its own size: a side it has, and the ratio of its sides when it
-/// has one. A PNG has both sides; an SVG has the ones it declares, and a ratio from them or
+/// has one. A raster image has both sides; an SVG has the ones it declares, and a ratio from them or
 /// from its `viewBox`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Natural {
@@ -113,13 +113,14 @@ pub fn load(url: &str) -> Option<Arc<Loaded>> {
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Format {
-    Png,
+    /// A PNG, JPEG, WebP or GIF: the decoder tells them apart by their first bytes.
+    Raster,
     Svg,
 }
 
 fn sniff(bytes: &[u8]) -> Option<Format> {
-    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
-        return Some(Format::Png);
+    if crate::raster::Format::sniff(bytes).is_some() {
+        return Some(Format::Raster);
     }
     let text = bytes
         .iter()
@@ -139,15 +140,17 @@ fn read(url: &str) -> Result<Loaded, String> {
             .and_then(|e| e.to_str())
             .map(str::to_ascii_lowercase)
         {
-            Some(ext) if ext == "png" => Some(Format::Png),
             Some(ext) if ext == "svg" => Some(Format::Svg),
+            Some(ext) if crate::raster::Format::of_extension(&ext).is_some() => {
+                Some(Format::Raster)
+            }
             _ => None,
         };
         (bytes, hinted)
     };
     match hinted.or_else(|| sniff(&bytes)) {
-        Some(Format::Png) => {
-            let image = crate::decode_png(&bytes).map_err(|e| e.to_string())?;
+        Some(Format::Raster) => {
+            let image = crate::decode_raster(&bytes).map_err(|e| e.to_string())?;
             let (width, height) = (image.width as f32, image.height as f32);
             Ok(Loaded {
                 source: Source::Raster(image),
@@ -169,7 +172,7 @@ fn read(url: &str) -> Result<Loaded, String> {
                 intrinsic,
             })
         }
-        None => Err("only PNG and SVG images are supported".to_string()),
+        None => Err("only PNG, JPEG, WebP, GIF and SVG images are supported".to_string()),
     }
 }
 
@@ -268,8 +271,8 @@ fn data_url(url: &str) -> Result<(Vec<u8>, Option<Format>), String> {
     let base64 = parts.any(|part| part.eq_ignore_ascii_case("base64"));
     let hinted = if media.contains("svg") {
         Some(Format::Svg)
-    } else if media.contains("png") {
-        Some(Format::Png)
+    } else if crate::raster::Format::of_media_type(&media).is_some() {
+        Some(Format::Raster)
     } else {
         None
     };
@@ -338,6 +341,45 @@ mod tests {
         format!(
             "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' {attributes}><rect width='30' height='20' fill='red'/></svg>"
         )
+    }
+
+    fn encoded(format: image::ImageFormat, media: &str) -> String {
+        let image = image::RgbImage::from_pixel(10, 5, image::Rgb([20, 120, 220]));
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(&mut std::io::Cursor::new(&mut bytes), format)
+            .expect("an encoded image");
+        format!(
+            "data:{media};base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        )
+    }
+
+    #[test]
+    fn a_data_url_jpeg_webp_or_gif_loads_with_its_own_size() {
+        for (format, media) in [
+            (image::ImageFormat::Jpeg, "image/jpeg"),
+            (image::ImageFormat::WebP, "image/webp"),
+            (image::ImageFormat::Gif, "image/gif"),
+            // A media type that names nothing: the bytes do.
+            (image::ImageFormat::Jpeg, "application/octet-stream"),
+        ] {
+            let loaded = load(&encoded(format, media)).unwrap_or_else(|| panic!("{media}"));
+            assert_eq!(loaded.intrinsic, (10.0, 5.0), "{media}");
+            assert!(matches!(loaded.source, Source::Raster(_)));
+        }
+    }
+
+    #[test]
+    fn a_file_with_a_jpeg_extension_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cover.JPG");
+        let image = image::RgbImage::from_pixel(12, 8, image::Rgb([200, 30, 30]));
+        image::DynamicImage::ImageRgb8(image)
+            .save_with_format(&path, image::ImageFormat::Jpeg)
+            .unwrap();
+        let loaded = load(path.to_str().unwrap()).expect("a JPEG file");
+        assert_eq!(loaded.intrinsic, (12.0, 8.0));
     }
 
     #[test]

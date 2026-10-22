@@ -25,10 +25,15 @@
 //!
 //! ## Format support
 //!
-//! - **Raster**: PNG only, via the `image` crate — the only raster format
-//!   any consumer of this crate has actually needed so far (see
-//!   `florui-icon`'s own prior scope). Adding another format is a feature
-//!   flag plus a dispatch arm in `raster.rs`, not a redesign.
+//! - **Raster**: PNG, JPEG, WebP and GIF (the first frame of an animated one),
+//!   via the `image` crate, whose decoders are pure Rust. The size is read
+//!   from the header and checked before a pixel is decoded, a JPEG is turned
+//!   by its Exif orientation, and a decoded image keeps what painting needs
+//!   (premultiplied pixels and a chain of smaller copies, see
+//!   [`RasterImage::level_for`]) so a page with many of them paints each
+//!   without work per frame. Colour profiles are ignored (the pixels are taken
+//!   as sRGB). Adding another format is a feature flag plus a name in
+//!   [`raster::Format`], not a redesign.
 //! - **Vector**: SVG, via `resvg`/`usvg`/`tiny-skia`. This was already a
 //!   dependency of `florui-icon` (window/app icon rasterization) before
 //!   this crate existed, so reusing it here is a zero-net-new-dependency
@@ -60,7 +65,7 @@ mod watch;
 
 pub use cache::{AssetCache, DecodeParams};
 pub use error::AssetError;
-pub use raster::{RasterImage, decode_png};
+pub use raster::{Format, Level, RasterImage, decode_png, decode_raster};
 pub use source::{AssetId, AssetSource};
 pub use svg::{
     ObjectBounds, RasterFit, Size2D, SvgFonts, VectorImage, parse_svg, parse_svg_with_fonts,
