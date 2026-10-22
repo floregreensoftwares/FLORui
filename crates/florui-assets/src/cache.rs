@@ -340,8 +340,13 @@ fn decode<'b>(
     path: Option<PathBuf>,
 ) -> Result<RasterImage, AssetError> {
     let parse = |text: &str| parse_svg_for(trusted, text);
-    let text = |bytes: Cow<'_, [u8]>| {
-        String::from_utf8(bytes.into_owned()).map_err(|_| AssetError::InvalidUtf8 { path })
+    let text = |bytes: Cow<'b, [u8]>| match bytes {
+        Cow::Borrowed(bytes) => std::str::from_utf8(bytes)
+            .map(Cow::Borrowed)
+            .map_err(|_| AssetError::InvalidUtf8 { path }),
+        Cow::Owned(bytes) => String::from_utf8(bytes)
+            .map(Cow::Owned)
+            .map_err(|_| AssetError::InvalidUtf8 { path }),
     };
     match params {
         DecodeParams::Native => {

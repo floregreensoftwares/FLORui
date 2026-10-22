@@ -37,6 +37,16 @@ pub enum Downloaded {
 pub struct DownloadTicket {
     #[cfg(feature = "net")]
     _ticket: crate::net::FetchTicket,
+    /// Set when the ticket is dropped, for a download that has arrived and waits to be
+    /// decoded, which the ticket of the fetch can no longer take back.
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for DownloadTicket {
+    fn drop(&mut self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// The raster image of the latest download of `url` that is still alive in `cache`, if there
@@ -60,33 +70,48 @@ pub fn start(
 ) -> Result<DownloadTicket, AssetError> {
     let address = crate::url_image::remote_address(url);
     let (cache, owned) = (Arc::clone(cache), address.clone());
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let for_job = Arc::clone(&cancelled);
     let ticket = crate::net::shared_fetcher()
         .submit(&address, move |outcome| {
             // Decoding is for threads of its own, not the fetcher's, which are for downloads.
-            crate::remote_image::decoder::run(Box::new(move || {
-                let failed = |error| AssetError::Fetch {
-                    url: owned.clone(),
-                    error,
-                };
-                let result = match outcome {
-                    Err(error) => Err(failed(error)),
-                    Ok(fetched) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        decode(&owned, &cache, fetched)
-                    }))
-                    .unwrap_or_else(|_| {
-                        Err(failed(crate::FetchError::Transport(
-                            "the decoder panicked".to_owned(),
-                        )))
-                    }),
-                };
-                on_done(result);
-            }));
+            let weight = outcome.as_ref().map_or(0, |fetched| fetched.bytes.len());
+            crate::remote_image::decoder::run(
+                Box::new(move || {
+                    // Dropped while it waited to be decoded: nobody wants it any more.
+                    if for_job.load(std::sync::atomic::Ordering::SeqCst) {
+                        return;
+                    }
+                    let failed = |error| AssetError::Fetch {
+                        url: owned.clone(),
+                        error,
+                    };
+                    let result = match outcome {
+                        Err(error) => Err(failed(error)),
+                        Ok(fetched) => {
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                decode(&owned, &cache, fetched)
+                            }))
+                            .unwrap_or_else(|_| {
+                                Err(failed(crate::FetchError::Transport(
+                                    "the decoder panicked".to_owned(),
+                                )))
+                            })
+                        }
+                    };
+                    on_done(result);
+                }),
+                weight,
+            );
         })
         .map_err(|error| AssetError::Fetch {
             url: address.clone(),
             error,
         })?;
-    Ok(DownloadTicket { _ticket: ticket })
+    Ok(DownloadTicket {
+        _ticket: ticket,
+        cancelled,
+    })
 }
 
 /// Without the `net` feature every address fails at once, saying why.

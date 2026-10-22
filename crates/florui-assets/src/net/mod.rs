@@ -577,12 +577,15 @@ impl Inner {
             }
             // Written now that everyone waiting has the picture: the writing, and the look at
             // the size of the directory every so often, are not on their way.
-            if let (Some(entry), Ok(fetched), Some(disk)) = (&to_store, &outcome, &self.disk) {
-                disk.store(entry, &fetched.bytes);
-            }
-            if matches!(&outcome, Ok(fetched) if fetched.origin == Origin::Stale) {
-                self.enqueue_refresh(&job);
-            }
+            // A panic here must still release whoever waits for the job to be finished.
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                if let (Some(entry), Ok(fetched), Some(disk)) = (&to_store, &outcome, &self.disk) {
+                    disk.store(entry, &fetched.bytes);
+                }
+                if matches!(&outcome, Ok(fetched) if fetched.origin == Origin::Stale) {
+                    self.enqueue_refresh(&job);
+                }
+            }));
             // Everything this job had to do is done.
             *job.finished
                 .0
