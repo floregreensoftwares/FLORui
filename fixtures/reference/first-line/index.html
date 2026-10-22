@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="../assets/reset.css">
+  <style>
+    @font-face { font-family: "Open Sans"; font-style: italic; font-weight: 300 800; src: url("../assets/OpenSans-Italic-Variable.ttf"); }
+  </style>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="el" class="wrap">
+    <div class="a">Plain text with an <em>emphasis</em> and a <a href="#">link</a> that goes on for a while and wraps to a second line of this paragraph.</div>
+    <div class="b">A larger first line which has to be broken again because the words are wider than before, then normal text on the rest of the lines.</div>
+    <div class="c">an uppercase first line with spaced letters, and the rest stays as it was written in lowercase text.</div>
+    <div class="d">
+      <p style="margin: 0">Paragraph inside the div, long enough to need a second line to show where it ends.</p>
+    </div>
+    <div class="e">Background kept but margin, padding and border ignored on the first line of this paragraph that wraps.</div>
+    <div class="f">First letter and first line together, with a long text that wraps to more lines of normal size.</div>
+    <div class="g">A taller first line through line height, followed by lines of the normal height in the same paragraph.</div>
+    <div class="h">Box <span style="display: inline-block; background: #ccc; width: 30px">ib</span> then <span style="font-size: 1.5em; color: #208040">big</span> and some more words to wrap it onto a second line.</div>
+  </div>
+</body>
+</html>

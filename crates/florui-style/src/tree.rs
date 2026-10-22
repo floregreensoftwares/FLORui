@@ -61,6 +61,13 @@ struct ArenaNode {
     /// Which pseudo-element this node is the box of, for a node the arena
     /// itself built beside the elements (see [`crate::PseudoSlots`]).
     generated: Option<crate::Pseudo>,
+    /// For the node of a first letter, the element whose first letter it is.
+    fl_owner: Option<NodeId>,
+    /// The letters a first-letter node has taken from the text after it, so that
+    /// what the text said can be had again.
+    fl_held: String,
+    /// The node of the first line of an element that has one.
+    first_line: Option<NodeId>,
     /// Where the element was written, if `view!` recorded it. See
     /// [`Arena::source`].
     source: florui::Provenance,
@@ -225,6 +232,10 @@ pub struct Tree {
     slots: crate::PseudoSlots,
     /// The nodes that are the boxes of pseudo-elements, in document order.
     generated_nodes: Vec<NodeId>,
+    /// The nodes that are first letters, in document order.
+    first_letter_nodes: Vec<NodeId>,
+    /// The nodes that are first lines, in document order.
+    first_line_nodes: Vec<NodeId>,
 }
 
 /// Where the next [`Tree::style_shape`] number comes from.
@@ -275,6 +286,8 @@ impl Arena {
                 shape_id: NEXT_SHAPE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
                 slots,
                 generated_nodes: Vec::new(),
+                first_letter_nodes: Vec::new(),
+                first_line_nodes: Vec::new(),
             },
             handlers: Vec::new(),
         }
@@ -336,7 +349,10 @@ impl Tree {
     /// [`Self::element_children`] as a slice, borrowed when the arena has no
     /// pseudo-element boxes.
     pub fn element_child_ids(&self, id: NodeId) -> std::borrow::Cow<'_, [NodeId]> {
-        if self.generated_nodes.is_empty() {
+        if self.generated_nodes.is_empty()
+            && self.first_letter_nodes.is_empty()
+            && self.first_line_nodes.is_empty()
+        {
             std::borrow::Cow::Borrowed(&self.nodes[id].children)
         } else {
             std::borrow::Cow::Owned(self.element_children(id).collect())
@@ -351,6 +367,67 @@ impl Tree {
     /// Whether any node is a pseudo-element box.
     pub fn has_generated(&self) -> bool {
         !self.generated_nodes.is_empty()
+    }
+
+    /// Whether any node is a first letter or a first line.
+    pub fn has_first_letters(&self) -> bool {
+        !self.first_letter_nodes.is_empty() || !self.first_line_nodes.is_empty()
+    }
+
+    /// The first-letter nodes, in document order.
+    pub fn first_letter_nodes(&self) -> &[NodeId] {
+        &self.first_letter_nodes
+    }
+
+    /// The node a node is styled as a child of: its parent, but for the first letter
+    /// in a box of `::before` or `::after`, which has no node of its own for the style
+    /// engine, the element the box belongs to.
+    pub fn style_parent(&self, id: NodeId) -> Option<NodeId> {
+        let parent = self.nodes[id].parent?;
+        if self.nodes[id].generated == Some(crate::Pseudo::FirstLetter)
+            && matches!(
+                self.nodes[parent].generated,
+                Some(crate::Pseudo::Before | crate::Pseudo::After)
+            )
+        {
+            return self.nodes[parent].parent;
+        }
+        Some(parent)
+    }
+
+    /// The element a first-letter or first-line node is that of.
+    pub fn first_letter_owner(&self, id: NodeId) -> Option<NodeId> {
+        self.nodes[id].fl_owner
+    }
+
+    /// The first-letter nodes among the children of `id`, and its first line.
+    pub fn first_letter_children(&self, id: NodeId) -> impl Iterator<Item = NodeId> + '_ {
+        self.nodes[id]
+            .children
+            .iter()
+            .copied()
+            .filter(|&child| self.nodes[child].generated == Some(crate::Pseudo::FirstLetter))
+            .chain(self.nodes[id].first_line)
+    }
+
+    /// The node of the first line of `id`, when it has one.
+    pub fn first_line_child(&self, id: NodeId) -> Option<NodeId> {
+        self.nodes[id].first_line
+    }
+
+    /// The first-line nodes, in document order.
+    pub fn first_line_nodes(&self) -> &[NodeId] {
+        &self.first_line_nodes
+    }
+
+    /// Whether an element with this tag and attributes is given a first letter.
+    fn wants_first_letter(&self, tag: &str, attrs: &[(String, String)]) -> bool {
+        self.slots.wants_first_letter(tag, attrs)
+    }
+
+    /// Whether an element with this tag and attributes is given a first line.
+    fn wants_first_line(&self, tag: &str, attrs: &[(String, String)]) -> bool {
+        self.slots.wants_first_line(tag, attrs)
     }
 
     /// Whether a child with tag `child_tag` under `parent` is disabled by
@@ -789,9 +866,6 @@ impl Arena {
     pub fn apply_generated(&mut self, styles: &crate::StyleMap) {
         use crate::content::{Content, ContentItem};
 
-        if self.tree.generated_nodes.is_empty() {
-            return;
-        }
         let mut depth = 0usize;
         for index in 0..self.tree.generated_nodes.len() {
             let id = self.tree.generated_nodes[index];
@@ -829,19 +903,113 @@ impl Arena {
                     }
                 }
             }
-            let node = &mut self.tree.nodes[id];
-            let unchanged = match node.inline_items.as_slice() {
-                [] => text.is_empty(),
-                [InlineItem::Text(held)] => *held == text,
-                _ => false,
+            // The first letter of the box, when it has one, stays its first item, with
+            // the text whole again for it to take its letters from.
+            let first_letter = match self.tree.nodes[id].inline_items.first() {
+                Some(InlineItem::Element(child))
+                    if self.tree.nodes[*child].generated == Some(crate::Pseudo::FirstLetter) =>
+                {
+                    Some(*child)
+                }
+                _ => None,
             };
+            if let Some(child) = first_letter {
+                let letter = &mut self.tree.nodes[child];
+                letter.inline_items.clear();
+                letter.text.clear();
+                letter.fl_held.clear();
+            }
+            let node = &mut self.tree.nodes[id];
+            let unchanged = first_letter.is_none()
+                && match node.inline_items.as_slice() {
+                    [] => text.is_empty(),
+                    [InlineItem::Text(held)] => *held == text,
+                    _ => false,
+                };
             if !unchanged {
                 node.inline_items.clear();
+                if let Some(child) = first_letter {
+                    node.inline_items.push(InlineItem::Element(child));
+                }
                 if !text.is_empty() {
                     node.inline_items.push(InlineItem::Text(text.clone()));
                 }
                 node.text = text;
             }
+        }
+        self.apply_first_letters(styles);
+    }
+
+    /// Gives each first-letter node the letters of the text after it, which are taken
+    /// out of that text, where a rule applies to it and the block it is the first letter
+    /// of has one; every other node holds nothing and leaves the text whole.
+    fn apply_first_letters(&mut self, styles: &crate::StyleMap) {
+        use crate::Display as D;
+
+        // The blocks that have their first letter already: the text of the `::before` of
+        // a block comes first, so a block never has two.
+        let mut lettered: Vec<NodeId> = Vec::new();
+        for index in 0..self.tree.first_letter_nodes.len() {
+            let id = self.tree.first_letter_nodes[index];
+            let (Some(owner), Some(parent)) =
+                (self.tree.nodes[id].fl_owner, self.tree.nodes[id].parent)
+            else {
+                continue;
+            };
+            let mut active = !lettered.contains(&owner)
+                && styles.get(&id).is_some_and(|s| s.display != D::None)
+                && styles.get(&owner).is_some_and(|s| {
+                    matches!(
+                        s.display,
+                        D::Block | D::FlowRoot | D::InlineBlock | D::ListItem | D::TableCell
+                    )
+                });
+            // Only blocks and inline boxes lie between the text and the block.
+            let mut at = parent;
+            while active && at != owner {
+                active = styles.get(&at).is_some_and(|s| {
+                    matches!(
+                        s.display,
+                        D::Block | D::FlowRoot | D::ListItem | D::Inline | D::Contents
+                    )
+                });
+                match self.tree.nodes[at].parent {
+                    Some(up) => at = up,
+                    None => active = false,
+                }
+            }
+            let Some(position) = self.tree.nodes[parent]
+                .inline_items
+                .iter()
+                .position(|item| *item == InlineItem::Element(id))
+            else {
+                continue;
+            };
+            let held = std::mem::take(&mut self.tree.nodes[id].fl_held);
+            let letters = match self.tree.nodes[parent].inline_items.get_mut(position + 1) {
+                Some(InlineItem::Text(next)) => {
+                    let full = format!("{held}{next}");
+                    let take = if active {
+                        crate::first_letter::first_letter_len(&full)
+                    } else {
+                        0
+                    };
+                    let (letters, rest) = full.split_at(take);
+                    *next = rest.to_owned();
+                    letters.to_owned()
+                }
+                _ => held,
+            };
+            let node = &mut self.tree.nodes[id];
+            node.inline_items.clear();
+            if !letters.is_empty() {
+                node.inline_items.push(InlineItem::Text(letters.clone()));
+            }
+            node.text.clone_from(&letters);
+            if !letters.is_empty() {
+                lettered.push(owner);
+            }
+            node.fl_held = letters;
         }
     }
 
@@ -878,6 +1046,9 @@ impl Arena {
         self.tree.nodes.push(ArenaNode {
             tag: pseudo.tag(),
             generated: Some(pseudo),
+            fl_owner: None,
+            fl_held: String::new(),
+            first_line: None,
             has_text: false,
             source: florui::Provenance::none(),
             attrs: Vec::new(),
@@ -922,12 +1093,105 @@ impl Arena {
             .push(InlineItem::Element(id));
     }
 
+    /// Adds the text `value` to the inline items of `parent`, with the text item
+    /// that ends them when there is one.
+    fn push_inline_text(&mut self, parent: NodeId, value: &str) {
+        match self.tree.nodes[parent].inline_items.last_mut() {
+            Some(InlineItem::Text(existing)) => existing.push_str(value),
+            _ => self.tree.nodes[parent]
+                .inline_items
+                .push(InlineItem::Text(value.to_owned())),
+        }
+    }
+
+    /// Adds the node of the first letter of `owner`, in the element `parent` the
+    /// text it takes its letters from is in, as an inline item of its own.
+    fn push_first_letter(&mut self, owner: NodeId, parent: NodeId) {
+        let id = self.tree.nodes.len();
+        self.push_generated(parent, crate::Pseudo::FirstLetter);
+        // `push_generated` put the node among the boxes of `::before` and `::after`.
+        self.tree.generated_nodes.pop();
+        self.tree.first_letter_nodes.push(id);
+        self.tree.nodes[id].fl_owner = Some(owner);
+    }
+
+    /// Adds the node of the first line of `owner`, which is no child of it and no part
+    /// of what it holds: it is there for the style of the line to be worked out on.
+    fn push_first_line(&mut self, owner: NodeId) {
+        let id = self.tree.nodes.len();
+        self.push_generated(owner, crate::Pseudo::FirstLine);
+        self.tree.generated_nodes.pop();
+        self.tree.nodes[owner].inline_items.pop();
+        self.tree.nodes[owner].children.pop();
+        self.tree.nodes[owner].first_line = Some(id);
+        self.tree.first_line_nodes.push(id);
+        self.tree.nodes[id].fl_owner = Some(owner);
+    }
+
+    /// Checks that the next node is the first line of `owner`.
+    fn refresh_first_line(&mut self, owner: NodeId, state: &mut Refresh) -> bool {
+        let id = state.next;
+        state.next += 1;
+        self.tree.nodes.get(id).is_some_and(|node| {
+            node.generated == Some(crate::Pseudo::FirstLine)
+                && node.parent == Some(owner)
+                && node.fl_owner == Some(owner)
+        })
+    }
+
+    /// [`Self::refresh_generated`] for the node of a first letter, which has no text
+    /// yet, as one just built.
+    fn refresh_first_letter(&mut self, owner: NodeId, parent: NodeId, state: &mut Refresh) -> bool {
+        let id = state.next;
+        state.next += 1;
+        let Some(node) = self.tree.nodes.get_mut(id) else {
+            return false;
+        };
+        if node.generated != Some(crate::Pseudo::FirstLetter)
+            || node.parent != Some(parent)
+            || node.fl_owner != Some(owner)
+        {
+            return false;
+        }
+        node.text.clear();
+        node.inline_items.clear();
+        node.fl_held.clear();
+        let used = state.cursor[parent];
+        if self.tree.nodes[parent].inline_items.get(used) != Some(&InlineItem::Element(id)) {
+            return false;
+        }
+        state.cursor[parent] = used + 1;
+        true
+    }
+
+    /// The text of `value` written in place of the text items `parent` was built
+    /// with. False when it does not fit them.
+    fn refresh_text(&mut self, parent: NodeId, value: &str, state: &mut Refresh) -> bool {
+        let used = state.cursor[parent];
+        let items = &mut self.tree.nodes[parent].inline_items;
+        if used > 0
+            && let Some(InlineItem::Text(existing)) = items.get_mut(used - 1)
+        {
+            existing.push_str(value);
+            true
+        } else if let Some(InlineItem::Text(existing)) = items.get_mut(used) {
+            existing.push_str(value);
+            state.cursor[parent] = used + 1;
+            true
+        } else {
+            false
+        }
+    }
+
     fn refresh_all<'a>(
         &mut self,
         root_elements: &'a [Element],
         next_level: &mut Vec<&'a [Element]>,
         state: &mut Refresh,
     ) -> bool {
+        // The element whose first letter is to be taken from the next text, and how
+        // deep its own children are on the stack.
+        let mut pending: Option<(NodeId, usize)> = None;
         let mut stack = vec![Frame {
             elements: root_elements,
             index: 0,
@@ -938,6 +1202,9 @@ impl Arena {
             let Some(element) = frame.elements.get(frame.index) else {
                 let closes = frame.closes;
                 stack.pop();
+                if pending.is_some_and(|(_, depth)| stack.len() < depth) {
+                    pending = None;
+                }
                 if let Some(owner) = closes
                     && !self.refresh_generated(owner, crate::Pseudo::After, state)
                 {
@@ -982,9 +1249,20 @@ impl Arena {
                         }
                         None => state.roots += 1,
                     }
+                    if self.tree.wants_first_line(node.tag, &node.attrs)
+                        && !self.refresh_first_line(id, state)
+                    {
+                        return false;
+                    }
                     let wants = self.tree.wants_generated(node.tag, &node.attrs);
                     if wants && !self.refresh_generated(id, crate::Pseudo::Before, state) {
                         return false;
+                    }
+                    if wants && self.tree.wants_first_letter(node.tag, &node.attrs) {
+                        let before = state.next - 1;
+                        if !self.refresh_first_letter(id, before, state) {
+                            return false;
+                        }
                     }
                     stack.push(Frame {
                         elements: &node.children,
@@ -992,6 +1270,11 @@ impl Arena {
                         parent: Some(id),
                         closes: wants.then_some(id),
                     });
+                    if pending.is_none() && self.tree.wants_first_letter(node.tag, &node.attrs) {
+                        pending = Some((id, stack.len()));
+                    } else if pending.is_some() && blocks_first_letter(node.tag) {
+                        pending = None;
+                    }
                 }
                 Element::Fragment(nested) => {
                     stack.push(Frame {
@@ -1006,16 +1289,17 @@ impl Arena {
                 }
                 Element::Text(value) => {
                     if let Some(p) = parent {
-                        let used = state.cursor[p];
-                        let items = &mut self.tree.nodes[p].inline_items;
-                        if used > 0
-                            && let Some(InlineItem::Text(existing)) = items.get_mut(used - 1)
-                        {
-                            existing.push_str(value);
-                        } else if let Some(InlineItem::Text(existing)) = items.get_mut(used) {
-                            existing.push_str(value);
-                            state.cursor[p] = used + 1;
-                        } else {
+                        let (space, rest) = split_leading_space(value);
+                        let ok = match pending {
+                            Some((owner, _)) if !rest.is_empty() => {
+                                pending = None;
+                                (space.is_empty() || self.refresh_text(p, space, state))
+                                    && self.refresh_first_letter(owner, p, state)
+                                    && self.refresh_text(p, rest, state)
+                            }
+                            _ => self.refresh_text(p, value, state),
+                        };
+                        if !ok {
                             return false;
                         }
                         self.tree.nodes[p].text.push_str(value);
@@ -1046,6 +1330,9 @@ impl Arena {
     /// content into `next_level` for [`Self::drain_levels`] to expand
     /// into a real root afterward.
     fn push_all<'a>(&mut self, root_elements: &'a [Element], next_level: &mut Vec<&'a [Element]>) {
+        // The element whose first letter is to be taken from the next text, and how
+        // deep its own children are on the stack.
+        let mut pending: Option<(NodeId, usize)> = None;
         let mut stack = vec![Frame {
             elements: root_elements,
             index: 0,
@@ -1057,6 +1344,9 @@ impl Arena {
             let Some(element) = frame.elements.get(frame.index) else {
                 let closes = frame.closes;
                 stack.pop();
+                if pending.is_some_and(|(_, depth)| stack.len() < depth) {
+                    pending = None;
+                }
                 if let Some(owner) = closes {
                     self.push_generated(owner, crate::Pseudo::After);
                 }
@@ -1093,6 +1383,9 @@ impl Arena {
                     self.tree.nodes.push(ArenaNode {
                         tag: node.tag,
                         generated: None,
+                        fl_owner: None,
+                        fl_held: String::new(),
+                        first_line: None,
                         source: node.source,
                         attrs: node.attrs.clone(),
                         classes: class_list(&node.attrs),
@@ -1148,9 +1441,17 @@ impl Arena {
                         }
                         None => self.tree.roots.push(id),
                     }
+                    if self.tree.wants_first_line(node.tag, &node.attrs) {
+                        self.push_first_line(id);
+                    }
                     let wants = self.tree.wants_generated(node.tag, &node.attrs);
                     if wants {
                         self.push_generated(id, crate::Pseudo::Before);
+                        if self.tree.wants_first_letter(node.tag, &node.attrs) {
+                            // The text of the `::before` comes first in the block.
+                            let before = self.tree.nodes.len() - 1;
+                            self.push_first_letter(id, before);
+                        }
                     }
                     stack.push(Frame {
                         elements: &node.children,
@@ -1158,6 +1459,11 @@ impl Arena {
                         parent: Some(id),
                         closes: wants.then_some(id),
                     });
+                    if pending.is_none() && self.tree.wants_first_letter(node.tag, &node.attrs) {
+                        pending = Some((id, stack.len()));
+                    } else if pending.is_some() && blocks_first_letter(node.tag) {
+                        pending = None;
+                    }
                 }
                 Element::Fragment(nested) => {
                     stack.push(Frame {
@@ -1172,11 +1478,17 @@ impl Arena {
                 }
                 Element::Text(value) => {
                     if let Some(p) = parent {
-                        match self.tree.nodes[p].inline_items.last_mut() {
-                            Some(InlineItem::Text(existing)) => existing.push_str(value),
-                            _ => self.tree.nodes[p]
-                                .inline_items
-                                .push(InlineItem::Text(value.clone())),
+                        let (space, rest) = split_leading_space(value);
+                        match pending {
+                            Some((owner, _)) if !rest.is_empty() => {
+                                pending = None;
+                                if !space.is_empty() {
+                                    self.push_inline_text(p, space);
+                                }
+                                self.push_first_letter(owner, p);
+                                self.push_inline_text(p, rest);
+                            }
+                            _ => self.push_inline_text(p, value),
                         }
                     }
                 }
@@ -1283,6 +1595,39 @@ fn attr_f32(attrs: &[(String, String)], name: &str, default: f32) -> f32 {
     attr_value(attrs, name)
         .and_then(|value| value.parse().ok())
         .unwrap_or(default)
+}
+
+/// `value` split after the white space it starts with.
+fn split_leading_space(value: &str) -> (&str, &str) {
+    let end = value
+        .char_indices()
+        .find(|(_, c)| !matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{c}'))
+        .map_or(value.len(), |(at, _)| at);
+    value.split_at(end)
+}
+
+/// Whether an element with this tag is something other than text where a line
+/// starts, so the first line of a block that starts with it has no first letter.
+fn blocks_first_letter(tag: &str) -> bool {
+    matches!(
+        tag,
+        "img"
+            | "input"
+            | "icon"
+            | "svg"
+            | "br"
+            | "textarea"
+            | "select"
+            | "button"
+            | "hr"
+            | "table"
+            | "video"
+            | "audio"
+            | "canvas"
+            | "iframe"
+            | "object"
+            | "embed"
+    )
 }
 
 fn collect_text(children: &[Element]) -> String {

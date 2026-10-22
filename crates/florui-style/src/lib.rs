@@ -40,6 +40,8 @@ pub mod content;
 mod counter_style;
 mod default_stylesheet;
 mod error;
+mod first_letter;
+mod first_letter_adapter;
 mod focus;
 mod generated;
 mod grid;

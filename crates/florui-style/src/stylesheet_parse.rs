@@ -55,7 +55,7 @@ pub struct Rule(
     Arc<RuleKind>,
     bool,
     Arc<Vec<crate::counter_style::CounterStyle>>,
-    Arc<[crate::generated::Subject]>,
+    Arc<crate::generated::Extras>,
     Arc<[usize]>,
 );
 
@@ -140,7 +140,28 @@ impl Rule {
 
     /// The elements this rule gives a `::before` or `::after` box through `content`.
     pub(crate) fn pseudo_subjects(&self) -> &[crate::generated::Subject] {
-        &self.3
+        &self.3.pseudo
+    }
+
+    /// The elements this rule gives a `::first-letter` node.
+    pub(crate) fn first_letter_subjects(&self) -> &[crate::generated::Subject] {
+        &self.3.first_letter
+    }
+
+    /// The numbers of the selectors this rule holds a `::first-letter` of, which were
+    /// rewritten into classes (see [`crate::first_letter_adapter`]).
+    pub(crate) fn first_letter_numbers(&self) -> &[usize] {
+        &self.3.first_letter_numbers
+    }
+
+    /// The elements this rule gives a `::first-line` node.
+    pub(crate) fn first_line_subjects(&self) -> &[crate::generated::Subject] {
+        &self.3.first_line
+    }
+
+    /// The numbers of the selectors this rule holds a `::first-line` of.
+    pub(crate) fn first_line_numbers(&self) -> &[usize] {
+        &self.3.first_line_numbers
     }
 
     /// The numbers of the `:has()` this rule held, which were replaced by classes
@@ -251,9 +272,24 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
     } else {
         css
     };
+    let (css, letters, lines) = if origin == Origin::Author {
+        let rewritten = crate::first_letter_adapter::rewrite_stylesheet(&css);
+        let (letters, lines) = (rewritten.letters, rewritten.lines);
+        match rewritten.css {
+            std::borrow::Cow::Owned(text) => (std::borrow::Cow::Owned(text), letters, lines),
+            std::borrow::Cow::Borrowed(_) => (css, letters, lines),
+        }
+    } else {
+        (css, Default::default(), Default::default())
+    };
     let css = css.as_ref();
-    let pseudo_subjects: Arc<[crate::generated::Subject]> =
-        crate::generated::subjects_in(css).into();
+    let pseudo_subjects: Arc<crate::generated::Extras> = Arc::new(crate::generated::Extras {
+        pseudo: crate::generated::subjects_in(css),
+        first_letter: letters.subjects,
+        first_letter_numbers: letters.numbers,
+        first_line: lines.subjects,
+        first_line_numbers: lines.numbers,
+    });
     let container_blocks = container_query_adapter::extract_container_queries(css);
     let lower_css = css.to_ascii_lowercase();
     if !container_blocks.is_empty()

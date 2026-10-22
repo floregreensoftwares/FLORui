@@ -1,0 +1,9 @@
+.wrap { position: relative; width: 340px; height: 560px; background-color: #ffffff; color: #101010; font-size: 14px; line-height: 18px; }
+.wrap > div { margin: 0 0 6px 10px; width: 320px; background-color: #e8e8e8; }
+.a::first-letter { font-size: 32px; color: #c02020; }
+.b::first-letter { float: left; font-size: 40px; line-height: 40px; margin-right: 4px; color: #2040c0; }
+.c::first-letter { background-color: #ffd0d0; padding: 0 4px; font-weight: bold; }
+.d::first-letter { text-transform: uppercase; color: #208040; }
+.e::before { content: "Note: "; color: #208040; }
+.e::first-letter { font-size: 32px; color: #c02020; }
+.f { display: flex; }

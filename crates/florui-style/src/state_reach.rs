@@ -41,6 +41,20 @@ impl StateReach {
             ))
             .chain(rules.iter().cloned());
         for rule in sheets {
+            // Which blocks a `::first-letter` or `::first-line` rule is for is worked out
+            // before a cascade, from selectors that no longer name the state they read.
+            if rule
+                .first_letter_numbers()
+                .iter()
+                .chain(rule.first_line_numbers())
+                .any(|&number| {
+                    crate::first_letter_adapter::subject(number).is_some_and(|subject| {
+                        crate::first_letter_adapter::mentions_state(&subject)
+                    })
+                })
+            {
+                reach.everything = true;
+            }
             // A `:has()` that names a state is a class of the element it is asked
             // of that a change deep below it flips: no selector shows where from.
             if rule.has_specs().iter().any(|&number| {

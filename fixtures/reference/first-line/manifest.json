@@ -1,0 +1,171 @@
+{
+    "id":  "first-line",
+    "description":  "::first-line: a bold colored line that takes the em and the link in it, a larger line that is broken again with the rest left as it was, text-transform and letter-spacing, a block that is the first thing in the block above, a background kept while margin, padding and border are ignored, the first letter inside the first line, a taller line through line-height, and an inline-block and a relative font size in the line.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  700,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 700px; background-color: #ffffff; color: #101010; font-size: 14px; line-height: 18px; } .wrap \u003e div { margin: 0 0 6px 10px; width: 320px; background-color: #e8e8e8; } .a::first-line { color: #c02020; font-weight: bold; } .b::first-line { font-size: 22px; color: #2040c0; } .c::first-line { text-transform: uppercase; letter-spacing: 1px; } .d::first-line { color: #208040; font-weight: bold; } .e::first-line { background-color: #ffd0d0; margin-left: 30px; padding: 0 10px; border: 2px solid red; } .f::first-line { font-size: 20px; color: #c02020; } .f::first-letter { color: #2040c0; } .g::first-line { line-height: 36px; } .h::first-line { color: #c02020; font-size: 20px; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "Plain text with an ",
+                                                         {
+                                                             "tag":  "em",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "emphasis",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " and a ",
+                                                         {
+                                                             "tag":  "a",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "link",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "href",
+                                                                               "#"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         " that goes on for a while and wraps to a second line of this paragraph."
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b",
+                                        "css":  "",
+                                        "text":  "A larger first line which has to be broken again because the words are wider than before, then normal text on the rest of the lines.",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c",
+                                        "css":  "",
+                                        "text":  "an uppercase first line with spaced letters, and the rest stays as it was written in lowercase text.",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "d",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "p",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Paragraph inside the div, long enough to need a second line to show where it ends.",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "style",
+                                                                               "margin: 0"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "e",
+                                        "css":  "",
+                                        "text":  "Background kept but margin, padding and border ignored on the first line of this paragraph that wraps.",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "f",
+                                        "css":  "",
+                                        "text":  "First letter and first line together, with a long text that wraps to more lines of normal size.",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "g",
+                                        "css":  "",
+                                        "text":  "A taller first line through line height, followed by lines of the normal height in the same paragraph.",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "h",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "Box ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "ib",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "style",
+                                                                               "display: inline-block; background: #ccc; width: 30px"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         " then ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "big",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "style",
+                                                                               "font-size: 1.5em; color: #208040"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         " and some more words to wrap it onto a second line."
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  15,
+                           "geometry_tolerance_px":  0.5,
+                           "channel_tolerance":  0,
+                           "reason":  "Measured against Chromium 155 on Windows: every box is where Chromium puts it, the first lines break at the same words, and 13.6% of the pixels differ, the anti-aliasing of text and of the bold and larger glyphs. Without the first line the same fixture measures 35.7%, so it fails."
+                       }
+}

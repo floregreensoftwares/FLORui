@@ -118,11 +118,26 @@ struct NodeSlot {
     has_text: bool,
     /// [`NodeSlot::identity`], worked out once: the elements do not change in a kept tree.
     identity_hash: std::cell::OnceCell<u64>,
+    /// For the node of a first letter, the slot of the element it is the first letter
+    /// of.
+    fl_owner: Option<usize>,
+    /// The first-letter selectors the owner matches, by number, as the classes
+    /// `florui-fl-N` the rules were rewritten to (see [`crate::first_letter_adapter`]).
+    fl: std::cell::RefCell<Vec<usize>>,
+    /// Whether the node is a first letter in a box of `::before` or `::after`, which
+    /// inherits from that box and not from the element.
+    fl_in_box: bool,
+    /// The values of the `::before` and `::after` of the node: a first letter in the box of
+    /// the `::before` inherits from the first, and a first line works out the style of both.
+    pseudo_values: std::cell::RefCell<[Option<Arc<ComputedValues>>; 2]>,
     data: AtomicRefCell<ElementData>,
     dirty_descendants: Cell<bool>,
     local_name: BorrowedLocalName,
     namespace: BorrowedNamespaceUrl,
 }
+
+/// The tag of the node of a first line.
+const FIRST_LINE_TAG: &str = "florui-first-line";
 
 /// Owns every node's [`NodeSlot`] in one `Vec` sized exactly once up
 /// front, so pushing never reallocates and the raw pointers `NodeSlot`s
@@ -149,6 +164,10 @@ pub(crate) struct StyloTree {
     /// The `::before` and `::after` boxes of each node, by slot, where the arena
     /// has them; empty when it has none.
     generated: Vec<[Option<NodeId>; 2]>,
+    /// The slots of the first-letter nodes.
+    first_letters: Vec<usize>,
+    /// The slots of the first-line nodes.
+    first_lines: Vec<usize>,
 }
 
 /// Where the number of a node's context sits in the state style sharing sees:
@@ -322,13 +341,15 @@ impl StyloTree {
         for &id in &order {
             let node_state = node_state_of(arena, state, id);
             let parent_stable = arena
-                .parent(id)
+                .style_parent(id)
                 .map(|parent_id| stable_ids[index_of[parent_id]]);
             let stable_id = timeline.stable_id(parent_stable, arena.tag(id), ordinal[id]);
             stable_ids.push(stable_id);
             slots.push(NodeSlot {
                 parent: None,
-                depth: arena.parent(id).map_or(0, |p| slots[index_of[p]].depth + 1),
+                depth: arena
+                    .style_parent(id)
+                    .map_or(0, |p| slots[index_of[p]].depth + 1),
                 sibling_index: 0,
                 children: Vec::new(),
                 tag: arena.tag(id),
@@ -343,6 +364,13 @@ impl StyloTree {
                 has: std::cell::RefCell::new(Vec::new()),
                 has_text: !arena.text_content(id).is_empty(),
                 identity_hash: std::cell::OnceCell::new(),
+                fl_owner: arena.first_letter_owner(id).map(|owner| index_of[owner]),
+                fl: std::cell::RefCell::new(Vec::new()),
+                fl_in_box: arena.first_letter_owner(id).is_some()
+                    && arena
+                        .parent(id)
+                        .is_some_and(|p| arena.generated(p).is_some()),
+                pseudo_values: std::cell::RefCell::new([None, None]),
                 data: AtomicRefCell::new(ElementData::default()),
                 dirty_descendants: Cell::new(false),
                 local_name: arena.tag(id).into(),
@@ -354,7 +382,7 @@ impl StyloTree {
         // Vec has stopped growing, so parent/child pointers can be taken.
         for (index, &id) in order.iter().enumerate() {
             let parent_ptr = arena
-                .parent(id)
+                .style_parent(id)
                 .map(|parent_id| &slots[index_of[parent_id]] as *const NodeSlot);
             let element_children = arena.element_child_ids(id);
             let children_ptrs: Vec<*const NodeSlot> = element_children
@@ -381,7 +409,7 @@ impl StyloTree {
         });
         let parents: Vec<Option<usize>> = order
             .iter()
-            .map(|&id| arena.parent(id).map(|parent| index_of[parent]))
+            .map(|&id| arena.style_parent(id).map(|parent| index_of[parent]))
             .collect();
         let generated = if arena.has_generated() {
             order
@@ -396,6 +424,12 @@ impl StyloTree {
         } else {
             Vec::new()
         };
+        let (first_lines, first_letters): (Vec<usize>, Vec<usize>) = slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.fl_owner.is_some())
+            .map(|(index, _)| index)
+            .partition(|&index| slots[index].tag == FIRST_LINE_TAG);
         let tree = Self {
             slots,
             index_of,
@@ -404,6 +438,8 @@ impl StyloTree {
             has_given: Cell::new(false),
             parents,
             generated,
+            first_letters,
+            first_lines,
         };
         tree.number_contexts();
         (tree, primary_root)
@@ -463,6 +499,38 @@ impl StyloTree {
         self.slots.len()
     }
 
+    /// Where the slot a pointer to it names sits.
+    fn slot_index(&self, slot: *const NodeSlot) -> usize {
+        (slot as usize - self.slots.as_ptr() as usize) / std::mem::size_of::<NodeSlot>()
+    }
+
+    /// The slots of the first lines of the blocks that have one of `nodes` in them, or are
+    /// one of them.
+    pub(crate) fn first_lines_reaching(&self, nodes: &[NodeId]) -> Vec<usize> {
+        let mut lines: Vec<usize> = Vec::new();
+        for &node in nodes {
+            let mut at = self
+                .index_of
+                .get(node)
+                .copied()
+                .filter(|&index| index != usize::MAX);
+            while let Some(index) = at {
+                if let Some(&line) = self
+                    .first_lines
+                    .iter()
+                    .find(|&&line| self.slots[line].fl_owner == Some(index))
+                    && !lines.contains(&line)
+                {
+                    lines.push(line);
+                }
+                at = self.slots[index]
+                    .parent
+                    .map(|parent| self.slot_index(parent));
+            }
+        }
+        lines
+    }
+
     /// Where `node` sits in the tree, and the node at a place.
     pub(crate) fn slot_of(&self, node: NodeId) -> usize {
         self.index_of[node]
@@ -499,6 +567,12 @@ impl StyloTree {
         let mut stack = vec![id];
         while let Some(id) = stack.pop() {
             order.push(id);
+            if arena.has_first_letters() {
+                order.extend(arena.first_letter_children(id));
+                if let Some(before) = arena.generated_child(id, crate::Pseudo::Before) {
+                    order.extend(arena.first_letter_children(before));
+                }
+            }
             stack.extend(arena.element_child_ids(id).iter().rev());
         }
     }
@@ -825,6 +899,10 @@ impl<'a> SelectorsElement for StyloNode<'a> {
         if let Some(number) = crate::has_adapter::number_of_class(name.as_ref()) {
             return self.0.has.borrow().contains(&number);
         }
+        let line = self.0.tag == FIRST_LINE_TAG;
+        if let Some(number) = crate::first_letter_adapter::number_of_class(name.as_ref(), line) {
+            return self.0.fl.borrow().contains(&number);
+        }
         self.0
             .classes
             .iter()
@@ -937,6 +1015,15 @@ impl<'a> TElement for StyloNode<'a> {
         }
         for number in self.0.has.borrow().iter() {
             let atom = Atom::from(format!("florui-has-{number}").as_str());
+            callback(AtomIdent::cast(&atom));
+        }
+        let prefix = if self.0.tag == FIRST_LINE_TAG {
+            "ll"
+        } else {
+            "fl"
+        };
+        for number in self.0.fl.borrow().iter() {
+            let atom = Atom::from(format!("florui-{prefix}-{number}").as_str());
             callback(AtomIdent::cast(&atom));
         }
     }
@@ -1248,7 +1335,14 @@ fn compute_in_layout_state(
         return StyleMap::new();
     }
     let (tree, _primary_root) = StyloTree::new(arena, state, timeline);
-    compute_with_tree(&tree, rules, viewport, timeline, container_query_signature)
+    compute_with_tree(
+        &tree,
+        arena,
+        rules,
+        viewport,
+        timeline,
+        container_query_signature,
+    )
 }
 
 /// The specificities of the selectors of `text`, or `None` when it does not
@@ -1261,6 +1355,312 @@ pub(crate) fn parse_selector_list(text: &str) -> Option<Vec<u32>> {
         style::selector_parser::SelectorParser::parse_author_origin_no_namespace(text, &url_data)
             .ok()?;
     Some(list.slice().iter().map(|s| s.specificity()).collect())
+}
+
+/// Gives each first-letter and first-line node the selectors its owner matches, with
+/// the engine's own selector matching, so the rules rewritten for them apply.
+fn evaluate_first_letters(tree: &StyloTree, rules: &[Rule]) {
+    evaluate_pseudo_nodes(
+        tree,
+        &tree.first_letters,
+        rules
+            .iter()
+            .flat_map(|rule| rule.first_letter_numbers().iter().copied())
+            .collect(),
+    );
+    evaluate_pseudo_nodes(
+        tree,
+        &tree.first_lines,
+        rules
+            .iter()
+            .flat_map(|rule| rule.first_line_numbers().iter().copied())
+            .collect(),
+    );
+}
+
+/// [`evaluate_first_letters`] for the nodes `nodes` of one pseudo-element, whose rules
+/// hold the selectors `numbers`.
+fn evaluate_pseudo_nodes(tree: &StyloTree, nodes: &[usize], mut numbers: Vec<usize>) {
+    if nodes.is_empty() {
+        return;
+    }
+    numbers.sort_unstable();
+    numbers.dedup();
+    for &index in nodes {
+        tree.slots[index].fl.borrow_mut().clear();
+    }
+    if numbers.is_empty() {
+        return;
+    }
+    let url_data: style::stylesheets::UrlExtraData = url::Url::parse("about:florui")
+        .expect("a fixed, valid URL literal")
+        .into();
+    let parsed: Vec<_> = numbers
+        .iter()
+        .filter_map(|&number| {
+            let text = crate::first_letter_adapter::subject(number)?;
+            let list = style::selector_parser::SelectorParser::parse_author_origin_no_namespace(
+                &text, &url_data,
+            )
+            .ok()?;
+            Some((number, list))
+        })
+        .collect();
+    let mut caches = selectors::matching::SelectorCaches::default();
+    for &index in nodes {
+        let slot = &tree.slots[index];
+        let Some(owner) = slot.fl_owner else {
+            continue;
+        };
+        let owner = StyloNode(&tree.slots[owner]);
+        let mut context = selectors::matching::MatchingContext::new(
+            selectors::matching::MatchingMode::Normal,
+            None,
+            &mut caches,
+            QuirksMode::NoQuirks,
+            selectors::matching::NeedsSelectorFlags::No,
+            selectors::matching::MatchingForInvalidation::No,
+        );
+        for (number, list) in &parsed {
+            let matched = list.slice().iter().any(|selector| {
+                selectors::matching::matches_selector(selector, 0, None, &owner, &mut context)
+            });
+            if matched {
+                slot.fl.borrow_mut().push(*number);
+            }
+        }
+    }
+}
+
+/// The values `values` cascade to when their parent has the values `parent` instead of
+/// the ones it was styled under: the rules that matched are kept.
+fn recascade(
+    shared: &SharedStyleContext<'_>,
+    element: StyloNode<'_>,
+    pseudo: Option<&PseudoElement>,
+    values: &ComputedValues,
+    parent: &ComputedValues,
+) -> Arc<ComputedValues> {
+    let mut conditions = style::rule_cache::RuleCacheConditions::default();
+    shared.stylist.cascade_style_and_visited(
+        Some(element),
+        pseudo,
+        CascadeInputs::new_from_style(values),
+        &shared.guards,
+        Some(parent),
+        Some(parent),
+        style::properties::cascade::FirstLineReparenting::No,
+        None,
+        &mut conditions,
+    )
+}
+
+/// What takes the style a node has on the first line.
+type PutStyle<'a> = dyn FnMut(NodeId, &std::sync::Arc<ComputedStyle>, Option<&ComputedValues>) + 'a;
+
+/// Gives the nodes on the first line of each block that a `::first-line` rule matches
+/// (`lines` are the slots of the nodes of those first lines) the style they have there,
+/// as `first_line` of the style they have elsewhere: the block gets the style of its line
+/// and what flows in the line inherits from that. So does a block that is the first thing
+/// in a block, as the first line of the outer one is its first line. `style_of` is the
+/// style a node has elsewhere, `out` takes the nodes whose style is to be replaced.
+fn first_line_styles(
+    tree: &StyloTree,
+    arena: &Arena,
+    shared: &SharedStyleContext<'_>,
+    lines: &[usize],
+    style_of: &dyn Fn(NodeId) -> Option<std::sync::Arc<ComputedStyle>>,
+    mut out: impl FnMut(NodeId, std::sync::Arc<ComputedStyle>),
+) {
+    use FlorDisplay as D;
+
+    let viewport = shared.stylist.device().au_viewport_size();
+    let viewport_px = (viewport.width.to_f32_px(), viewport.height.to_f32_px());
+    let mut put =
+        |id: NodeId, normal: &std::sync::Arc<ComputedStyle>, alt: Option<&ComputedValues>| {
+            if alt.is_none() && normal.first_line.is_none() {
+                return;
+            }
+            let mut style = (**normal).clone();
+            style.first_line =
+                alt.map(|values| std::sync::Arc::new(to_computed_style(values, viewport_px)));
+            out(id, std::sync::Arc::new(style));
+        };
+    let is_block_container = |display: D| {
+        matches!(
+            display,
+            D::Block | D::FlowRoot | D::InlineBlock | D::ListItem | D::TableCell
+        )
+    };
+    // The first lines taken in by a block above them.
+    let mut done: Vec<usize> = Vec::new();
+    for &line in lines {
+        if done.contains(&line) {
+            continue;
+        }
+        let line_slot = &tree.slots[line];
+        let Some(owner) = line_slot.fl_owner else {
+            continue;
+        };
+        let owner_id = tree.order[owner];
+        let owner_style = style_of(owner_id);
+        let applies = !line_slot.fl.borrow().is_empty()
+            && owner_style
+                .as_ref()
+                .is_some_and(|style| is_block_container(style.display));
+        let line_values = line_slot.data.borrow().styles.primary.clone();
+        // The block, then everything below it: what the line reaches gets a style, and
+        // what it does not loses the one an earlier cascade gave it.
+        let mut stack: Vec<(usize, Option<Arc<ComputedValues>>, bool)> = Vec::new();
+        if let Some(normal) = &owner_style {
+            let alt = if applies { line_values } else { None };
+            put(owner_id, normal, alt.as_deref());
+            stack.push((owner, alt, true));
+        }
+        while let Some((at, alt, block)) = stack.pop() {
+            let node = tree.order[at];
+            let boxes = tree.generated.get(at).copied().unwrap_or([None, None]);
+            // Whether the lines of the block have started: text, or an inline, comes before.
+            let mut started = false;
+            let inline_box = |position: usize, started: &mut bool, put: &mut PutStyle| {
+                let Some(boxed) = boxes[position] else {
+                    return;
+                };
+                let Some(normal) = style_of(boxed) else {
+                    return;
+                };
+                let values = tree.slots[at].pseudo_values.borrow()[position].clone();
+                let reached = match (&alt, values) {
+                    (Some(alt), Some(values)) if normal.display == D::Inline => {
+                        let pseudo = if position == 0 {
+                            PseudoElement::Before
+                        } else {
+                            PseudoElement::After
+                        };
+                        Some(recascade(
+                            shared,
+                            StyloNode(&tree.slots[at]),
+                            Some(&pseudo),
+                            &values,
+                            alt,
+                        ))
+                    }
+                    _ => None,
+                };
+                put(boxed, &normal, reached.as_deref());
+                if normal.display == D::Inline && normal.content.generates_box() {
+                    *started = true;
+                }
+                // The first letter in the box inherits from it.
+                for item in arena.inline_items(boxed) {
+                    let crate::tree::InlineItem::Element(letter) = item else {
+                        continue;
+                    };
+                    if arena.generated(*letter) != Some(crate::Pseudo::FirstLetter) {
+                        continue;
+                    }
+                    let slot = tree.index_of[*letter];
+                    let Some(letter_style) = style_of(*letter) else {
+                        continue;
+                    };
+                    let values = tree.slots[slot].data.borrow().styles.primary.clone();
+                    let reached = match (&reached, values) {
+                        (Some(alt), Some(values)) if letter_style.display == D::Inline => Some(
+                            recascade(shared, StyloNode(&tree.slots[slot]), None, &values, alt),
+                        ),
+                        _ => None,
+                    };
+                    put(*letter, &letter_style, reached.as_deref());
+                }
+            };
+            inline_box(0, &mut started, &mut put);
+            for item in arena.inline_items(node) {
+                let child = match item {
+                    crate::tree::InlineItem::Text(text) => {
+                        started |= !text.trim().is_empty();
+                        continue;
+                    }
+                    crate::tree::InlineItem::Element(child) => *child,
+                };
+                // The boxes of `::before` and `::after` are dealt with apart.
+                if matches!(
+                    arena.generated(child),
+                    Some(crate::Pseudo::Before | crate::Pseudo::After)
+                ) {
+                    continue;
+                }
+                let slot = tree.index_of[child];
+                if slot == usize::MAX {
+                    continue;
+                }
+                let Some(normal) = style_of(child) else {
+                    continue;
+                };
+                let out_of_flow = normal.float != crate::cascade::Float::None
+                    || matches!(
+                        normal.position,
+                        crate::cascade::Position::Absolute | crate::cascade::Position::Fixed
+                    );
+                let values = tree.slots[slot].data.borrow().styles.primary.clone();
+                let mut reached: Option<Arc<ComputedValues>> = None;
+                let mut child_block = false;
+                match normal.display {
+                    D::None => {}
+                    _ if out_of_flow => {}
+                    D::Inline | D::Contents => {
+                        started = true;
+                        if let (Some(alt), Some(values)) = (&alt, &values) {
+                            reached = Some(recascade(
+                                shared,
+                                StyloNode(&tree.slots[slot]),
+                                None,
+                                values,
+                                alt,
+                            ));
+                        }
+                    }
+                    D::Block | D::ListItem if block && !started => {
+                        // The first line of the block above is the first line of this one.
+                        started = true;
+                        child_block = true;
+                        if let (Some(alt), Some(values)) = (&alt, &values) {
+                            let base =
+                                recascade(shared, StyloNode(&tree.slots[slot]), None, values, alt);
+                            // With a first line of its own, which has what is in the first
+                            // line above for a parent.
+                            let own = tree
+                                .first_lines
+                                .iter()
+                                .copied()
+                                .find(|&own| tree.slots[own].fl_owner == Some(slot));
+                            reached = Some(match own {
+                                Some(own) if !tree.slots[own].fl.borrow().is_empty() => {
+                                    done.push(own);
+                                    let own_values =
+                                        tree.slots[own].data.borrow().styles.primary.clone();
+                                    match own_values {
+                                        Some(own_values) => recascade(
+                                            shared,
+                                            StyloNode(&tree.slots[own]),
+                                            None,
+                                            &own_values,
+                                            &base,
+                                        ),
+                                        None => base,
+                                    }
+                                }
+                                _ => base,
+                            });
+                        }
+                    }
+                    _ => started = true,
+                }
+                put(child, &normal, reached.as_deref());
+                stack.push((slot, reached, child_block));
+            }
+            inline_box(1, &mut started, &mut put);
+        }
+    }
 }
 
 /// Gives each node the `:has()` it has: for every one the rules hold, the
@@ -1367,6 +1767,7 @@ fn any_in_subtree(root: &NodeSlot, test: &mut impl FnMut(&NodeSlot) -> bool) -> 
 /// The cascade over a tree already built and set to the state to style it in.
 pub(crate) fn compute_with_tree(
     tree: &StyloTree,
+    arena: &Arena,
     rules: &[Rule],
     viewport: FlorViewport,
     timeline: &mut AnimationTimeline,
@@ -1379,6 +1780,8 @@ pub(crate) fn compute_with_tree(
         // for the same.
         tree.number_contexts();
     }
+    // After the `:has()` classes, which the selectors of a first letter or line may hold.
+    evaluate_first_letters(tree, rules);
     let mut result = StyleMap::with_capacity(tree.order.len());
     with_style_context(
         tree,
@@ -1420,6 +1823,18 @@ pub(crate) fn compute_with_tree(
                     },
                 );
                 let style = with_field_pseudos(&styled, shared, &mut converted, &mut fields);
+                result.insert_shared(id, style);
+            }
+            let mut replaced = Vec::new();
+            first_line_styles(
+                tree,
+                arena,
+                shared,
+                &tree.first_lines,
+                &|id| result.get_shared(&id).cloned(),
+                |id, style| replaced.push((id, style)),
+            );
+            for (id, style) in replaced {
                 result.insert_shared(id, style);
             }
         },
@@ -1478,6 +1893,17 @@ pub(crate) fn restyle_nodes(
                         work.insert((tree.slots[child_index].depth, child_index));
                     }
                 }
+                // The first letters in the node inherit from it.
+                if arena.has_first_letters() {
+                    let in_box = arena
+                        .generated_child(id, crate::Pseudo::Before)
+                        .into_iter()
+                        .flat_map(|before| arena.first_letter_children(before));
+                    for child in arena.first_letter_children(id).chain(in_box) {
+                        let child_index = tree.index_of[child];
+                        work.insert((tree.slots[child_index].depth, child_index));
+                    }
+                }
                 generated_styles(
                     tree,
                     id,
@@ -1495,6 +1921,37 @@ pub(crate) fn restyle_nodes(
             styled
         },
     )
+}
+
+/// Gives again the first-line styles of the blocks `lines` (slots of first-line nodes)
+/// hold, in `styles`, after the nodes below them were styled again. Returns the nodes
+/// whose style changed.
+pub(crate) fn restyle_first_lines(
+    tree: &StyloTree,
+    arena: &Arena,
+    styles: &mut StyleMap,
+    lines: &[usize],
+    rules: &[Rule],
+    viewport: FlorViewport,
+    timeline: &mut AnimationTimeline,
+) -> Vec<NodeId> {
+    let mut replaced = Vec::new();
+    with_style_context(tree, rules, viewport, timeline, &[], |shared, _, _| {
+        first_line_styles(
+            tree,
+            arena,
+            shared,
+            lines,
+            &|id| styles.get_shared(&id).cloned(),
+            |id, style| replaced.push((id, style)),
+        );
+    });
+    let mut nodes = Vec::with_capacity(replaced.len());
+    for (id, style) in replaced {
+        nodes.push(id);
+        styles.insert_shared(id, style);
+    }
+    nodes
 }
 
 /// Whether a node whose style was `old` and is now `new` may have changed what
@@ -1791,6 +2248,8 @@ fn style_node<'t>(
         styles.pseudos.get(&PseudoElement::Before).cloned(),
         styles.pseudos.get(&PseudoElement::After).cloned(),
     ];
+    // What a first letter in the box of the `::before` inherits from.
+    *target.0.pseudo_values.borrow_mut() = pseudos.clone();
     let viewport = shared.stylist.device().au_viewport_size();
     let viewport_px = (viewport.width.to_f32_px(), viewport.height.to_f32_px());
 
@@ -1879,7 +2338,12 @@ fn resolve_sharing_styles<'a>(
         .insert_parents_recovering(element, element.0.depth);
 
     let parent: Option<StyloNode<'a>> = TElement::traversal_parent(&element);
-    let parent_style = parent.and_then(|p| p.borrow_data().map(|d| d.styles.primary().clone()));
+    let mut parent_style = parent.and_then(|p| p.borrow_data().map(|d| d.styles.primary().clone()));
+    if element.0.fl_in_box
+        && let Some(before) = parent.and_then(|p| p.0.pseudo_values.borrow()[0].clone())
+    {
+        parent_style = Some(before);
+    }
     let mut layout_parent = parent;
     let mut layout_parent_style = parent_style.clone();
     while let Some(style) = &layout_parent_style {
@@ -1900,7 +2364,9 @@ fn resolve_sharing_styles<'a>(
         (None, None) => true,
         _ => false,
     };
-    let may_share = layout_parent_is_parent && element.0.context.get() != OVERFLOW_CONTEXT;
+    let may_share = layout_parent_is_parent
+        && !element.0.fl_in_box
+        && element.0.context.get() != OVERFLOW_CONTEXT;
     let mut target = StyleSharingTarget::new(element);
     if may_share && let Some(shared) = target.share_style_if_possible(context) {
         return shared.into();
@@ -2429,6 +2895,7 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
         caret_color: mirrored(values, "caret-color").and_then(|css| parse_color(&css)),
         content: to_content(values),
         quotes: to_quotes(values),
+        first_line: None,
     }
 }
 

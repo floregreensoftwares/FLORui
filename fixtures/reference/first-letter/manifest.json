@@ -1,0 +1,168 @@
+{
+    "id":  "first-letter",
+    "description":  "::first-letter: a larger colored letter, punctuation around it taken in, the letter in an inline element or a nested block, no letter for punctuation alone, a flex container, a block that starts with an inline-block or an image; a wrapping paragraph; a floated drop cap; a background and padding on the letter; text-transform.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  560,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 560px; background-color: #ffffff; color: #101010; font-size: 14px; line-height: 18px; } .wrap \u003e div { margin: 0 0 6px 10px; width: 320px; background-color: #e8e8e8; } .a::first-letter { font-size: 32px; color: #c02020; } .b::first-letter { float: left; font-size: 40px; line-height: 40px; margin-right: 4px; color: #2040c0; } .c::first-letter { background-color: #ffd0d0; padding: 0 4px; font-weight: bold; } .d::first-letter { text-transform: uppercase; color: #208040; } .e::before { content: \"Note: \"; color: #208040; } .e::first-letter { font-size: 32px; color: #c02020; } .f { display: flex; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "Hello world",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "\"Quoted\" start",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "em",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Hello",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " in an em"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "!!! no letter",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Nested block text",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " after"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "Box",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "style",
+                                                                               "display: inline-block"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         " then text"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a f",
+                                        "css":  "",
+                                        "text":  "Flex container",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "A longer paragraph that wraps onto a second line to show that only the first one has a larger letter.",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b",
+                                        "css":  "",
+                                        "text":  "A drop cap floated to the left of the lines of this paragraph, which wraps around it for a few lines of text.",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c",
+                                        "css":  "",
+                                        "text":  "Padded letter with a background",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "d",
+                                        "css":  "",
+                                        "text":  "lowercase letter made upper",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "e",
+                                        "css":  "",
+                                        "text":  "text after a generated box",
+                                        "children":  [
+
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  9,
+                           "geometry_tolerance_px":  0.5,
+                           "channel_tolerance":  0,
+                           "reason":  "Measured against Chromium 155 on Windows: every box is where Chromium puts it and 8.5% of the pixels differ, the anti-aliasing of text and of the large letters. Without the first letter the same fixture measures 31.1%, so it fails."
+                       }
+}

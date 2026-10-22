@@ -380,7 +380,8 @@ impl LayoutCache {
                 Step::Visit(node) => {
                     let arena_children = flow_children(arena, styles, node);
                     // An inline `<svg>` is a leaf: what is in it is drawn with it.
-                    let leaf = (arena.children(node).is_empty() && !has_line_marker(styles, node))
+                    let leaf = (arena.children(node).is_empty()
+                        && !has_line_context(arena, styles, node))
                         || arena.tag(node) == "svg";
                     let kind = if leaf {
                         LayoutKind::Blocks
