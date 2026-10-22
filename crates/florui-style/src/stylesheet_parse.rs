@@ -55,6 +55,7 @@ pub struct Rule(
     Arc<RuleKind>,
     bool,
     Arc<Vec<crate::counter_style::CounterStyle>>,
+    Arc<[crate::generated::Subject]>,
     Arc<[usize]>,
 );
 
@@ -137,10 +138,15 @@ impl Rule {
         self.1
     }
 
+    /// The elements this rule gives a `::before` or `::after` box through `content`.
+    pub(crate) fn pseudo_subjects(&self) -> &[crate::generated::Subject] {
+        &self.3
+    }
+
     /// The numbers of the `:has()` this rule held, which were replaced by classes
     /// (see [`crate::has_adapter`]).
     pub(crate) fn has_specs(&self) -> &[usize] {
-        &self.3
+        &self.4
     }
 
     /// Every `@container` block this rule's own CSS contains, in source
@@ -237,7 +243,17 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
         (css, Vec::new())
     };
     let has_specs: Arc<[usize]> = has_specs.into();
+    let css = if origin == Origin::Author {
+        match crate::placeholder_adapter::rewrite_stylesheet(&css) {
+            std::borrow::Cow::Owned(rewritten) => std::borrow::Cow::Owned(rewritten),
+            std::borrow::Cow::Borrowed(_) => css,
+        }
+    } else {
+        css
+    };
     let css = css.as_ref();
+    let pseudo_subjects: Arc<[crate::generated::Subject]> =
+        crate::generated::subjects_in(css).into();
     let container_blocks = container_query_adapter::extract_container_queries(css);
     let lower_css = css.to_ascii_lowercase();
     if !container_blocks.is_empty()
@@ -253,6 +269,7 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
             }),
             uses_scroll_behavior,
             counter_styles,
+            pseudo_subjects,
             has_specs,
         ));
     }
@@ -260,6 +277,7 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
         Arc::new(RuleKind::Static(parse_str(css, origin))),
         uses_scroll_behavior,
         counter_styles,
+        pseudo_subjects,
         has_specs,
     ))
 }

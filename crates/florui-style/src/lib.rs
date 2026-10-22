@@ -36,10 +36,12 @@ mod cascade;
 pub mod clip;
 mod color;
 mod container_query_adapter;
+pub mod content;
 mod counter_style;
 mod default_stylesheet;
 mod error;
 mod focus;
+mod generated;
 mod grid;
 mod has_adapter;
 mod height_media_adapter;
@@ -49,6 +51,7 @@ mod list;
 mod mask_box_image;
 mod mask_values;
 mod matrix;
+mod placeholder_adapter;
 mod property_mirror;
 mod reduced_motion_adapter;
 mod rounded;
@@ -90,6 +93,7 @@ pub use counter_style::{
 };
 pub use error::StyleError;
 pub use focus::FocusPath;
+pub use generated::{Pseudo, PseudoSlots};
 pub use grid::{
     GridArea, GridAutoFlow, GridBreadth, GridLimit, GridPlacement, GridRepeat, GridRepeatCount,
     GridTemplate, GridTemplateAreas, GridTemplateComponent, GridTrackSize, SubgridNames,

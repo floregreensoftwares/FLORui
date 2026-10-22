@@ -131,8 +131,16 @@ const CSS: &str = "
     }
 
     span, a, b, i, u, s, del, ins, mark, sub, sup, kbd, samp, var, cite, dfn, abbr,
-    time, data, code, em, strong, small {
+    time, data, code, em, strong, small, q {
         display: inline;
+    }
+
+    q::before {
+        content: open-quote;
+    }
+
+    q::after {
+        content: close-quote;
     }
 
     em, i, cite, dfn, var, address {
@@ -337,6 +345,12 @@ const CSS: &str = "
         font-size: 13.3333px;
         white-space: pre-wrap;
         overflow-wrap: break-word;
+    }
+
+    /* The placeholder of a text field is its `::before`: see the placeholder
+       adapter. Its gray is the one Chromium draws it in. */
+    :where(input, textarea)::before {
+        color: #757575;
     }
 
     pre {

@@ -1578,4 +1578,44 @@ mod tests {
             "a new size is painted whole"
         );
     }
+
+    #[test]
+    fn a_selection_rule_colors_the_highlight_of_the_selected_text_of_a_field() {
+        let css = "input { width: 140px; height: 30px; border: none; padding: 0px; \
+                   background-color: #ffffff; color: #000000; } \
+                   input::selection { background-color: #00c000; color: #ffffff }";
+        let mut window = HeadlessWindow::new(
+            css,
+            || view! { <input id="f" type="text" value="hello" /> },
+            HeadlessOptions {
+                width: 160.0,
+                height: 40.0,
+                ..HeadlessOptions::default()
+            },
+        )
+        .expect("the stylesheet parses");
+        let green = |frame: &HeadlessFrame| {
+            frame
+                .rgba
+                .chunks_exact(4)
+                .filter(|p| p[0] < 40 && p[1] > 160 && p[2] < 40)
+                .count()
+        };
+        // A field takes the focus with its text selected.
+        window.press_key(TestKey::Tab);
+        let count = green(&window.frame());
+        assert!(count > 100, "the highlight is the rule's green: {count}");
+        let mut plain = HeadlessWindow::new(
+            css.split("input::selection").next().unwrap_or(css),
+            || view! { <input id="f" type="text" value="hello" /> },
+            HeadlessOptions {
+                width: 160.0,
+                height: 40.0,
+                ..HeadlessOptions::default()
+            },
+        )
+        .expect("the stylesheet parses");
+        plain.press_key(TestKey::Tab);
+        assert_eq!(green(&plain.frame()), 0, "the default highlight is blue");
+    }
 }

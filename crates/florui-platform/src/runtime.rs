@@ -43,6 +43,9 @@ pub struct UiRuntime {
     scope: ComponentScope,
     dirty: DirtyFlag,
     rules: Vec<Rule>,
+    /// The elements the arena is built with `::before` and `::after` boxes for, which
+    /// the rules decide.
+    pseudo_slots: florui_style::PseudoSlots,
     root: Box<dyn Fn() -> Element>,
     interaction: InteractionState,
     /// Feeds `:link`/`:visited` into every [`Self::rebuild_interaction`]
@@ -287,10 +290,12 @@ impl UiRuntime {
         animation_timeline.set_auto_suppress_motion(respect_reduced_motion);
         animation_timeline.set_os_prefers_reduced_motion(initial_os_prefers_reduced_motion);
         animation_timeline.set_prefers_dark_color_scheme(initial_prefers_dark_color_scheme);
+        let pseudo_slots = florui_style::PseudoSlots::from_rules(&rules);
         let mut runtime = Self {
             scope,
             dirty,
             rules,
+            pseudo_slots,
             root: Box::new(root),
             interaction: InteractionState::new(),
             visited_links: VisitedLinks::new(),
@@ -410,6 +415,7 @@ impl UiRuntime {
     /// way a fresh render from scratch would. Does not itself re-render;
     /// call [`Self::update`] afterward to see the new rules take effect.
     pub fn set_rules(&mut self, rules: Vec<Rule>) {
+        self.pseudo_slots = florui_style::PseudoSlots::from_rules(&rules);
         self.rules = rules;
         self.layout_cache.forget_styles();
     }
@@ -590,7 +596,7 @@ impl UiRuntime {
         }
         {
             let _span = florui_profile::span(florui_profile::Phase::ArenaBuild);
-            self.arena.rebuild(&tree);
+            self.arena.rebuild_with(&tree, &self.pseudo_slots);
         }
         let sync_span = florui_profile::span(florui_profile::Phase::Sync);
         self.drop_validation_bubble_if_orphaned();
@@ -611,7 +617,7 @@ impl UiRuntime {
         } = florui_layout::compute_with_style_cached(
             &mut self.layout_cache,
             &mut self.font,
-            &self.arena,
+            &mut self.arena,
             &self.rules,
             &self.interaction,
             resolved_viewport,

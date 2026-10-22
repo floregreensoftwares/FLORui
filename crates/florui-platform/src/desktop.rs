@@ -723,7 +723,10 @@ pub(crate) fn build_text_input_paint(
             .then(|| arena.attr(node, "placeholder"))
             .flatten()
             .map(|text| {
-                let text_style = florui_layout::node_text_style(style);
+                // The placeholder is shaped in the font of its `::placeholder`.
+                let text_style = florui_layout::node_text_style(
+                    style.and_then(|s| s.placeholder.as_deref()).or(style),
+                );
                 if arena.tag(node) == "textarea" {
                     let width = registry.viewport(id).0.max(1.0);
                     font.shape_wrapped(text_style, text, width).runs
