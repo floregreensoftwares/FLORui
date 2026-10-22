@@ -41,6 +41,20 @@ pub(crate) struct Policy {
     pub stale_while_revalidate: u64,
     /// For how long after that it may be used when fetching a fresh copy fails.
     pub stale_if_error: u64,
+    /// Which of the above the headers said, and which were filled in (a lifetime from the
+    /// age of the file, a window of none): a `304` that says nothing about one leaves the
+    /// stored response's own.
+    pub given: Given,
+}
+
+/// What a response's headers set, as opposed to what is assumed when they say nothing.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Given {
+    pub lifetime: bool,
+    pub stale_while_revalidate: bool,
+    pub stale_if_error: bool,
+    /// `no-cache` or `must-revalidate`: no stale window.
+    pub revalidate: bool,
 }
 
 /// The headers [`Policy::of`] reads.
@@ -64,6 +78,12 @@ impl Policy {
             fresh_for: 0,
             stale_while_revalidate: 0,
             stale_if_error: 0,
+            given: Given {
+                lifetime: true,
+                stale_while_revalidate: true,
+                stale_if_error: true,
+                revalidate: true,
+            },
         };
         if headers
             .vary
@@ -75,6 +95,7 @@ impl Policy {
         let mut no_cache = false;
         let mut must_revalidate = false;
         let (mut while_revalidating, mut if_error) = (0, 0);
+        let mut given = Given::default();
         for directive in headers.cache_control.unwrap_or("").split(',') {
             let directive = directive.trim().to_ascii_lowercase();
             let (name, value) = match directive.split_once('=') {
@@ -83,17 +104,32 @@ impl Policy {
             };
             match name {
                 "no-store" => return never,
-                "no-cache" => no_cache = true,
-                "must-revalidate" | "proxy-revalidate" => must_revalidate = true,
-                "stale-while-revalidate" => {
-                    while_revalidating = value.and_then(|v| v.parse().ok()).unwrap_or(0)
+                "no-cache" => {
+                    no_cache = true;
+                    given.lifetime = true;
+                    given.revalidate = true;
                 }
-                "stale-if-error" => if_error = value.and_then(|v| v.parse().ok()).unwrap_or(0),
+                "must-revalidate" | "proxy-revalidate" => {
+                    must_revalidate = true;
+                    given.revalidate = true;
+                }
+                "stale-while-revalidate" => {
+                    while_revalidating = value.and_then(|v| v.parse().ok()).unwrap_or(0);
+                    given.stale_while_revalidate = true;
+                }
+                "stale-if-error" => {
+                    if_error = value.and_then(|v| v.parse().ok()).unwrap_or(0);
+                    given.stale_if_error = true;
+                }
                 // A malformed value makes the response stale at once, the safe reading.
-                "max-age" => max_age = Some(value.and_then(|v| v.parse::<u64>().ok()).unwrap_or(0)),
+                "max-age" => {
+                    max_age = Some(value.and_then(|v| v.parse::<u64>().ok()).unwrap_or(0));
+                    given.lifetime = true;
+                }
                 _ => {}
             }
         }
+        given.lifetime |= headers.expires.is_some();
         let has_validator = headers.etag.is_some() || headers.last_modified.is_some();
         let date = headers.date.and_then(parse_date).unwrap_or(now);
         let mut fresh_for = if no_cache {
@@ -124,6 +160,7 @@ impl Policy {
             fresh_for,
             stale_while_revalidate,
             stale_if_error,
+            given,
         }
     }
 }
@@ -263,6 +300,8 @@ pub(crate) struct DiskCache {
     dir: PathBuf,
     max_bytes: u64,
     stores: AtomicU32,
+    /// What was written since the directory was last looked at.
+    written: std::sync::atomic::AtomicU64,
 }
 
 /// FNV-1a over the URL: stable across runs and Rust versions, which `DefaultHasher` does
@@ -283,6 +322,7 @@ impl DiskCache {
             max_bytes,
             // So that the first store looks at what an earlier run left.
             stores: AtomicU32::new(SCAN_EVERY - 1),
+            written: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -340,8 +380,15 @@ impl DiskCache {
             self.remove(url);
             return;
         }
-        if self.stores.fetch_add(1, Ordering::Relaxed) + 1 >= SCAN_EVERY {
+        // Often enough that the directory cannot run far over its budget: every few stores,
+        // and whenever a quarter of the budget has been written since the last look.
+        let written =
+            self.written.fetch_add(body.len() as u64, Ordering::Relaxed) + body.len() as u64;
+        if self.stores.fetch_add(1, Ordering::Relaxed) + 1 >= SCAN_EVERY
+            || written >= self.max_bytes / 4
+        {
             self.stores.store(0, Ordering::Relaxed);
+            self.written.store(0, Ordering::Relaxed);
             self.evict();
         }
     }
@@ -698,18 +745,19 @@ mod tests {
     #[test]
     fn the_least_recently_used_entries_go_when_the_directory_is_over_budget() {
         let dir = tempfile::tempdir().unwrap();
-        // Room for about four 1000-byte bodies; no single body over a quarter of it.
-        let cache = DiskCache::new(dir.path().to_owned(), 5000);
+        // Written under a large budget, so that nothing is dropped while it is filled.
+        let filling = DiskCache::new(dir.path().to_owned(), 1 << 20);
         let body = vec![7u8; 1000];
         let urls: Vec<String> = (0..8)
             .map(|n| format!("https://example.com/{n}.png"))
             .collect();
         for (n, url) in urls.iter().enumerate() {
-            cache.store(&entry(url, 1000), &body);
+            filling.store(&entry(url, 1000), &body);
             // Older entries are older on disk too.
-            touch(&cache.meta_path(url), NOW + n as u64);
+            touch(&filling.meta_path(url), NOW + n as u64);
         }
-        cache.stores.store(SCAN_EVERY, Ordering::Relaxed);
+        // Room for about four 1000-byte bodies; no single body over a quarter of it.
+        let cache = DiskCache::new(dir.path().to_owned(), 5000);
         cache.evict();
         let kept: Vec<bool> = urls
             .iter()
@@ -724,6 +772,29 @@ mod tests {
             .map(|item| item.metadata().unwrap().len())
             .sum();
         assert!(total <= 5000, "{total} bytes left");
+    }
+
+    #[test]
+    fn a_quarter_of_the_budget_written_asks_for_a_look_before_the_sixteenth_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = DiskCache::new(dir.path().to_owned(), 8000);
+        let body = vec![1u8; 1000];
+        // Each is a quarter of the budget at most; ten of them are well over the budget, and
+        // far fewer stores than the usual interval.
+        for n in 0..10 {
+            let url = format!("https://example.com/{n}.png");
+            cache.store(&entry(&url, 1000), &body);
+            touch(&cache.meta_path(&url), NOW + n as u64);
+        }
+        let total: u64 = fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|item| item.metadata().unwrap().len())
+            .sum();
+        assert!(
+            total <= 8000 + 2 * 1300,
+            "{total} bytes, far over the budget"
+        );
     }
 
     #[test]

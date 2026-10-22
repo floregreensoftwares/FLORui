@@ -285,12 +285,7 @@ pub(crate) fn build(
         Some(Format::Svg) => {
             let text =
                 std::str::from_utf8(bytes).map_err(|_| "the SVG is not UTF-8".to_string())?;
-            let image = if trusted {
-                crate::parse_svg(text)
-            } else {
-                crate::parse_svg_untrusted(text)
-            }
-            .map_err(|e| e.to_string())?;
+            let image = crate::parse_svg_for(trusted, text).map_err(|e| e.to_string())?;
             let intrinsic = (image.intrinsic_size.width, image.intrinsic_size.height);
             Ok(Loaded {
                 version: 0,

@@ -74,8 +74,16 @@ fn source_pixels(
 ) -> Option<std::rc::Rc<Pixmap>> {
     // A picture is drawn at its own size, whatever the area: boxes of any size
     // that share it share the one drawing.
-    let (identity, size) = match image {
-        BackgroundImage::Url(url) => (image_source::identity(url), (0, 0)),
+    // The picture is loaded first and keyed by itself, so that the key cannot describe a
+    // newer picture than the pixels drawn from it.
+    let loaded = match image {
+        BackgroundImage::Url(url) => Some(image_source::load(url)?),
+        _ => None,
+    };
+    let (identity, size) = match (image, &loaded) {
+        (BackgroundImage::Url(url), Some(loaded)) => {
+            (image_source::identity_of(url, loaded), (0, 0))
+        }
         _ => (String::new(), (area.0.to_bits(), area.1.to_bits())),
     };
     let key = format!(
@@ -95,7 +103,7 @@ fn source_pixels(
     }) {
         return Some(found);
     }
-    let pixels = std::rc::Rc::new(draw_source(image, area, scale)?);
+    let pixels = std::rc::Rc::new(draw_source(image, loaded.as_deref(), area, scale)?);
     DRAWN.with(|drawn| {
         let mut drawn = drawn.borrow_mut();
         if drawn.len() >= KEPT {
@@ -108,14 +116,19 @@ fn source_pixels(
 
 /// The source drawn at the size it is sliced at: a gradient over the area, a
 /// picture at its own size (both in painted pixels).
-fn draw_source(image: &BackgroundImage, area: (f32, f32), scale: f32) -> Option<Pixmap> {
+fn draw_source(
+    image: &BackgroundImage,
+    loaded: Option<&image_source::Loaded>,
+    area: (f32, f32),
+    scale: f32,
+) -> Option<Pixmap> {
     let shader = match image {
         BackgroundImage::Url(url) => {
-            let loaded = image_source::load(url)?;
+            let loaded = loaded?;
             let (width, height) = loaded.intrinsic;
             let tile = image_source::tile(
                 url,
-                &loaded,
+                loaded,
                 (width * scale).round().max(1.0) as u32,
                 (height * scale).round().max(1.0) as u32,
             )?;

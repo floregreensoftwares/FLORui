@@ -8,9 +8,7 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 use crate::error::AssetError;
 use crate::raster::{RasterImage, decode_raster};
 use crate::source::{AssetId, AssetSource};
-use crate::svg::{
-    RasterFit, parse_svg, parse_svg_untrusted, rasterize_svg, substitute_current_color,
-};
+use crate::svg::{RasterFit, parse_svg_for, rasterize_svg, substitute_current_color};
 
 /// Which decode a cache entry holds the result of. A raster image (PNG, JPEG,
 /// WebP, GIF) decodes once at its native size regardless of how it
@@ -318,13 +316,7 @@ fn decode<'b>(
     params: DecodeParams,
     trusted: bool,
 ) -> Result<RasterImage, AssetError> {
-    let parse = |text: &str| {
-        if trusted {
-            parse_svg(text)
-        } else {
-            parse_svg_untrusted(text)
-        }
-    };
+    let parse = |text: &str| parse_svg_for(trusted, text);
     let text = |bytes: Cow<'_, [u8]>| {
         String::from_utf8(bytes.into_owned()).map_err(|_| AssetError::InvalidUtf8 { path: None })
     };

@@ -94,21 +94,32 @@ fn is_private_v6(a: Ipv6Addr) -> bool {
     if let Some(mapped) = a.to_ipv4_mapped() {
         return is_private_v4(mapped);
     }
-    let first = a.segments()[0];
+    let segments = a.segments();
+    let first = segments[0];
+    let embedded = |high: u16, low: u16| Ipv4Addr::from((u32::from(high) << 16) | u32::from(low));
     a.is_loopback()
         || a.is_unspecified()
         || a.is_multicast()
+        // ::/96, IPv4-compatible (deprecated) and the addresses next to ::1.
+        || segments[..6] == [0, 0, 0, 0, 0, 0]
         // fc00::/7, unique local.
         || (first & 0xfe00) == 0xfc00
-        // fe80::/10, link-local.
+        // fe80::/10, link-local, and fec0::/10, site-local (deprecated).
         || (first & 0xffc0) == 0xfe80
+        || (first & 0xffc0) == 0xfec0
         // 2001:db8::/32, documentation.
-        || (first == 0x2001 && a.segments()[1] == 0x0db8)
-        // 64:ff9b::/96 (NAT64) carries an IPv4 address in its last 32 bits.
-        || (a.segments()[..6] == [0x64, 0xff9b, 0, 0, 0, 0]
-            && is_private_v4(Ipv4Addr::from(
-                (u32::from(a.segments()[6]) << 16) | u32::from(a.segments()[7]),
-            )))
+        || (first == 0x2001 && segments[1] == 0x0db8)
+        // 2001::/32, Teredo, which carries a server and a client IPv4 address.
+        || (first == 0x2001 && segments[1] == 0)
+        // 2002::/16, 6to4: the IPv4 address is in the next 32 bits.
+        || (first == 0x2002 && is_private_v4(embedded(segments[1], segments[2])))
+        // 100::/64, discard-only.
+        || segments[..4] == [0x100, 0, 0, 0]
+        // 64:ff9b::/96 (NAT64) carries an IPv4 address in its last 32 bits; 64:ff9b:1::/48 is
+        // for local use.
+        || (segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0]
+            && is_private_v4(embedded(segments[6], segments[7])))
+        || segments[..3] == [0x64, 0xff9b, 1]
 }
 
 #[cfg(test)]
@@ -147,6 +158,15 @@ mod tests {
             "::ffff:10.1.2.3",
             "64:ff9b::7f00:1",
             "2001:db8::1",
+            "2002:7f00:1::",
+            "2002:0a00:1::",
+            "2002:c0a8:1::1",
+            "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+            "::127.0.0.1",
+            "::7f00:1",
+            "fec0::1",
+            "100::1",
+            "64:ff9b:1::1",
         ] {
             assert!(private(address), "{address}");
         }
@@ -168,6 +188,8 @@ mod tests {
             "2a00:1450:4001::200e",
             "::ffff:8.8.8.8",
             "64:ff9b::808:808",
+            "2002:0808:0808::1",
+            "2001:4860:4860::8888",
         ] {
             assert!(!private(address), "{address}");
         }
