@@ -76,6 +76,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy -p florui-assets -p florui-platform --features florui-assets/net,florui-platform/net --all-targets -- -D warnings
 
   # Without debug info the workspace's test binaries fit the runner's disk
   # (with it they come to about 30 GB).
@@ -94,6 +95,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
       - run: cargo test --workspace --doc
+      # The network source is behind a feature that the workspace build leaves off.
+      - run: cargo test -p florui-assets --features net
+      - run: cargo test -p florui-platform --features net --lib
 
   # The Chromium-dependent tests on Linux, against the Linux build of the pinned
   # Chrome for Testing. Chromium cannot start its sandbox on the runner's
