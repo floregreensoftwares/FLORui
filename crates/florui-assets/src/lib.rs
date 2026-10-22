@@ -16,12 +16,12 @@
 //! consuming layer, not here, the same way this crate has no opinion on
 //! *when* a repaint happens, only on what pixels a source decodes to.
 //!
-//! There is no remote/HTTP source in this delivery. [`source::AssetSource`]
-//! has exactly two variants — a local path and an embedded byte slice —
-//! and adding a network-backed one is explicitly deferred: it would need
-//! its own loading-boundary contract (retry policy, offline behavior,
-//! transport failure diagnostics) that doesn't exist yet, not a silent
-//! third `AssetSource` case bolted onto a local/embedded-shaped API.
+//! A network source is not an [`source::AssetSource`] variant: that type is a local
+//! path or embedded bytes, and a download has a loading contract of its own (timeouts,
+//! redirects, a size cap while streaming, the media type against the bytes, an HTTP
+//! disk cache, bounded and cancellable requests). It lives in the `net` module behind
+//! the `net` feature, which hands back the bytes of an image; those decode through
+//! [`AssetCache::get_or_decode`], under an [`AssetId::Url`], like any other source.
 //!
 //! ## Format support
 //!
@@ -56,6 +56,8 @@
 mod cache;
 mod error;
 pub mod limits;
+#[cfg(feature = "net")]
+pub mod net;
 mod raster;
 mod source;
 mod svg;
@@ -64,7 +66,7 @@ pub mod url_image;
 mod watch;
 
 pub use cache::{AssetCache, DecodeParams};
-pub use error::AssetError;
+pub use error::{AssetError, FetchError};
 pub use raster::{Format, Level, RasterImage, decode_png, decode_raster};
 pub use source::{AssetId, AssetSource};
 pub use svg::{

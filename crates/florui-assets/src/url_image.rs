@@ -112,13 +112,13 @@ pub fn load(url: &str) -> Option<Arc<Loaded>> {
     loaded
 }
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Format {
+pub(crate) enum Format {
     /// A PNG, JPEG, WebP or GIF: the decoder tells them apart by their first bytes.
     Raster,
     Svg,
 }
 
-fn sniff(bytes: &[u8]) -> Option<Format> {
+pub(crate) fn sniff(bytes: &[u8]) -> Option<Format> {
     if crate::raster::Format::sniff(bytes).is_some() {
         return Some(Format::Raster);
     }
