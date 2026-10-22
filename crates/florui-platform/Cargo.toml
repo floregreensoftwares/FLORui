@@ -12,6 +12,11 @@ name = "florui_platform"
 default = ["desktop"]
 # Records update traces in a release build too, for profiling.
 profiling = ["florui/profiling", "florui-profile/profiling"]
+# Loads `https://` and `http://` sources of `<img src>` and `url(...)`: an HTTP
+# client with TLS, a disk cache and a bounded request queue. Off by default, so
+# an application that never loads from the network links none of it; without it
+# such a source fails to load with the reason. See `network`.
+net = ["florui-assets/net"]
 # winit/softbuffer/notify/wgpu/pollster are only needed by the desktop
 # host, not by the window-independent UiRuntime — a mobile or game host
 # driving UiRuntime on its own shouldn't have to pull them in.

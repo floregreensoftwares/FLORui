@@ -23,6 +23,8 @@
 
 mod auto_id;
 mod components;
+#[cfg(feature = "net")]
+mod delivery;
 mod focus;
 mod focus_observer;
 mod form;
@@ -31,6 +33,8 @@ mod icon;
 mod image;
 mod list_keys;
 mod menu_keys;
+#[cfg(feature = "net")]
+pub mod network;
 mod position_observer;
 mod runtime;
 mod scroll;
@@ -39,6 +43,8 @@ mod select;
 mod size_observer;
 #[cfg(all(test, feature = "desktop", target_os = "windows"))]
 mod test_event_loop;
+#[cfg(all(test, feature = "net"))]
+mod test_http;
 mod text_input;
 mod textarea_resize;
 mod validation_bubble;
