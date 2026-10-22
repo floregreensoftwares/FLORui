@@ -39,6 +39,11 @@ static BACKDROP_FILTER_ENABLED: LazyLock<()> =
 static CONTAINER_QUERIES_ENABLED: LazyLock<()> =
     LazyLock::new(|| stylo_config::set_bool("layout.container-queries.enabled", true));
 
+/// `writing-mode` is a real Stylo property in the servo build, off by default behind this
+/// runtime pref.
+static WRITING_MODE_ENABLED: LazyLock<()> =
+    LazyLock::new(|| stylo_config::set_bool("layout.writing-mode.enabled", true));
+
 /// How many distinct substituted-text results a [`RuleKind::Dynamic`] keeps
 /// parsed at once. A resize only produces a new entry when it crosses a
 /// `min-height`/`max-height` breakpoint or a container-query threshold, so
@@ -228,6 +233,7 @@ pub(crate) fn parse_stylesheet_with_origin(css: &str, origin: Origin) -> Result<
     LazyLock::force(&GRID_ENABLED);
     LazyLock::force(&BACKDROP_FILTER_ENABLED);
     LazyLock::force(&CONTAINER_QUERIES_ENABLED);
+    LazyLock::force(&WRITING_MODE_ENABLED);
     // The counter styles of the author are read here, and the rules left out for the engine.
     let (counter_styled, counter_styles) = if origin == Origin::Author {
         crate::counter_style::extract_rules(css)

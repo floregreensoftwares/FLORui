@@ -92,6 +92,9 @@ mod table_structure;
 mod table_tests;
 mod transform;
 mod tree;
+mod vertical;
+#[cfg(test)]
+mod vertical_tests;
 
 #[cfg(test)]
 mod contents_tests;
@@ -399,6 +402,7 @@ pub fn text_style_of(style: &ComputedStyle) -> florui_text::TextStyle {
         to_text_direction(style.direction),
         to_bidi_mode(style.unicode_bidi),
     )
+    .with_orientation(to_orientation(style))
     .with_line_height(line_height)
     .with_spacing(style.letter_spacing, style.word_spacing)
     .with_align(align)
@@ -440,6 +444,19 @@ fn to_text_direction(direction: florui_style::Direction) -> florui_text::TextDir
     match direction {
         florui_style::Direction::Ltr => florui_text::TextDirection::Ltr,
         florui_style::Direction::Rtl => florui_text::TextDirection::Rtl,
+    }
+}
+
+/// How the characters stand in the lines of a vertical writing mode.
+fn to_orientation(style: &ComputedStyle) -> florui_text::Orientation {
+    use florui_style::TextOrientation as Css;
+    if !style.writing_mode.is_vertical() {
+        return florui_text::Orientation::Horizontal;
+    }
+    match style.text_orientation {
+        Css::Mixed => florui_text::Orientation::Mixed,
+        Css::Upright => florui_text::Orientation::Upright,
+        Css::Sideways => florui_text::Orientation::Sideways,
     }
 }
 
@@ -1856,6 +1873,22 @@ fn flatten_items(
                                 }
                             }
                         };
+                        // In the lines of a vertical writing mode the box is turned with them: it
+                        // is as wide in the line as it is tall on the page, and it is centred on
+                        // the middle of the line, as its text is.
+                        let (width, height, baseline) = if styles
+                            .get(&context.nodes[0])
+                            .is_some_and(|s| s.writing_mode.is_vertical())
+                        {
+                            let line = font.measure(context.elements[element].style, "x");
+                            (
+                                height,
+                                width,
+                                width / 2.0 + line.baseline - line.height / 2.0,
+                            )
+                        } else {
+                            (width, height, baseline)
+                        };
                         context.items.push(InlineContentItem::Box {
                             child: *child,
                             width,
@@ -1898,6 +1931,15 @@ fn flatten_items(
                             });
                         }
                         let sides = |style: &ComputedStyle, end: bool| {
+                            // In a vertical writing mode the start of the line is the top of
+                            // the page.
+                            let turned;
+                            let style = if style.writing_mode.is_vertical() {
+                                turned = style.turned();
+                                &turned
+                            } else {
+                                style
+                            };
                             if end == rtl {
                                 (
                                     style.padding.left + style.border.left.width,
@@ -1972,10 +2014,17 @@ pub struct InlineShaped {
     /// The parent element of each element; the container's own is `0`, and so is the parent
     /// of the container as it is on the first line.
     pub parents: Vec<usize>,
+    /// For the lines of a vertical writing mode, the style of each element turned as the lines
+    /// see it (see [`ComputedStyle::turned`]); empty for horizontal lines.
+    turned: Vec<Option<ComputedStyle>>,
 }
 
 impl InlineShaped {
-    fn new(layout: std::sync::Arc<florui_text::InlineLayout>, context: &InlineContext) -> Self {
+    fn new(
+        layout: std::sync::Arc<florui_text::InlineLayout>,
+        context: &InlineContext,
+        styles: &StyleMap,
+    ) -> Self {
         let mut nodes = context.nodes.clone();
         let mut parents: Vec<usize> = context.elements.iter().map(|e| e.parent).collect();
         if let Some(count) = layout.first_line {
@@ -1988,15 +2037,29 @@ impl InlineShaped {
                 });
             }
         }
-        Self {
+        let mut shaped = Self {
             layout,
             nodes,
             parents,
+            turned: Vec::new(),
+        };
+        let vertical = styles
+            .get(&context.nodes[0])
+            .is_some_and(|style| style.writing_mode.is_vertical());
+        if vertical {
+            shaped.turned = (0..shaped.nodes.len())
+                .map(|element| shaped.style(styles, element).map(ComputedStyle::turned))
+                .collect();
         }
+        shaped
     }
 
-    /// The style `element` has where it is: on the first line, that of the first line.
-    pub fn style<'a>(&self, styles: &'a StyleMap, element: usize) -> Option<&'a ComputedStyle> {
+    /// The style `element` has where it is: on the first line, that of the first line. In the
+    /// lines of a vertical writing mode, turned as the lines see it.
+    pub fn style<'a>(&'a self, styles: &'a StyleMap, element: usize) -> Option<&'a ComputedStyle> {
+        if let Some(turned) = self.turned.get(element) {
+            return turned.as_ref();
+        }
         let style = styles.get(&self.nodes[element])?;
         match self.layout.first_line {
             Some(count) if element >= count => Some(style.first_line.as_deref().unwrap_or(style)),
@@ -2075,6 +2138,7 @@ pub fn shape_anonymous_block(
     Some(InlineShaped::new(
         shape_context(font, &context, wrap_width, slots.as_deref()),
         &context,
+        styles,
     ))
 }
 
@@ -2100,6 +2164,7 @@ pub fn shape_inline_formatting_context(
     Some(InlineShaped::new(
         shape_context(font, &context, wrap_width, slots.as_deref()),
         &context,
+        styles,
     ))
 }
 
@@ -2135,6 +2200,7 @@ pub fn shape_text_in_slots(
     Some(InlineShaped::new(
         shape_context(font, &context, wrap_width, Some(&slots)),
         &context,
+        styles,
     ))
 }
 
@@ -2146,10 +2212,18 @@ fn fragment_rect(
     fragment: &florui_text::InlineFragment,
 ) -> (f32, f32, f32, f32) {
     let (above, below) = styles.get(&node).map_or((0.0, 0.0), |s| {
-        (
-            s.padding.top + s.border.top.width,
-            s.padding.bottom + s.border.bottom.width,
-        )
+        // The top of a line of a vertical writing mode is the right of the page.
+        if s.writing_mode.is_vertical() {
+            (
+                s.padding.right + s.border.right.width,
+                s.padding.left + s.border.left.width,
+            )
+        } else {
+            (
+                s.padding.top + s.border.top.width,
+                s.padding.bottom + s.border.bottom.width,
+            )
+        }
     });
     (
         fragment.x,
@@ -2359,6 +2433,9 @@ fn align_blocks(
         {
             continue;
         }
+        if tree.parent_flow(tid).is_vertical() {
+            continue;
+        }
         let layout = tree.layout(tid).map_err(LayoutError)?;
         let container = tree.layout(parent_tid).map_err(LayoutError)?;
         let room = container.size.width
@@ -2406,7 +2483,7 @@ fn collect_layouts(
         if keep {
             seen.push((node_id, tid));
         }
-        let layout = tree.layout(tid).map_err(LayoutError)?;
+        let layout = &tree.physical_layout(tid).map_err(LayoutError)?;
         if styles
             .get(&node_id)
             .is_some_and(|s| s.display == florui_style::Display::ListItem)
@@ -2546,16 +2623,46 @@ fn collect_layouts(
             continue;
         }
         let tid = id_of(*container);
+        // What follows is in the frame of the flow of the container: its lines run along
+        // the horizontal axis of that frame, and the edges are the ones of the frame.
         let layout = tree.layout(tid).map_err(LayoutError)?;
+        let flow = tree.node(tid).flow;
+        let container_width = tree.physical_width(tid);
         let container_style = styles.get(container);
-        let edge =
-            |pick: fn(&ComputedStyle) -> (f32, f32)| container_style.map_or((0.0, 0.0), pick);
-        let (padding_left, padding_right) = edge(|s| (s.padding.left, s.padding.right));
-        let (border_left, border_right) = edge(|s| (s.border.left.width, s.border.right.width));
-        let (padding_top, border_top) = edge(|s| (s.padding.top, s.border.top.width));
+        let (padding_left, padding_right, border_left, border_right, padding_top, border_top) =
+            if flow.is_vertical() {
+                use taffy::util::ResolveOrZero;
+                let view = tree.node(tid).content_view();
+                let length = |side: taffy::LengthPercentage| side.resolve_or_zero(None, |_, _| 0.0);
+                (
+                    length(view.padding.left),
+                    length(view.padding.right),
+                    length(view.border.left),
+                    length(view.border.right),
+                    length(view.padding.top),
+                    length(view.border.top),
+                )
+            } else {
+                container_style.map_or((0.0, 0.0, 0.0, 0.0, 0.0, 0.0), |s| {
+                    (
+                        s.padding.left,
+                        s.padding.right,
+                        s.border.left.width,
+                        s.border.right.width,
+                        s.padding.top,
+                        s.border.top.width,
+                    )
+                })
+            };
+        // The layout is in the frame of the parent: a box of another flow than its parent's
+        // has its sizes there turned from the frame of its lines.
+        let line_room = if tree.parent_flow(tid).is_vertical() == flow.is_vertical() {
+            layout.size.width
+        } else {
+            layout.size.height
+        };
         let content_width =
-            (layout.size.width - padding_left - padding_right - border_left - border_right)
-                .max(0.0);
+            (line_room - padding_left - padding_right - border_left - border_right).max(0.0);
         let slots = tree.line_slots(tid);
         let shaped = shape_context(font, context, content_width, slots.as_deref());
         if let Some(slots) = &slots {
@@ -2616,6 +2723,19 @@ fn collect_layouts(
                 rects[element].map_or(origin, |r| (r.0, r.1))
             }
         };
+        // A box of the lines, in the frame of the flow of the container, as it is on the
+        // screen inside the box it is placed in: whose width on the screen is its height
+        // here.
+        let physical = |parent_width: f32, rect: (f32, f32, f32, f32)| {
+            vertical::rect_to_physical(flow, parent_width, rect)
+        };
+        let width_of = |element: usize, rects: &[Option<(f32, f32, f32, f32)>]| {
+            if element == 0 {
+                container_width
+            } else {
+                rects[element].map_or(0.0, |rect| rect.3 - rect.1)
+            }
+        };
         for element in 1..count {
             let Some((x0, y0, x1, y1)) = rects[element] else {
                 continue;
@@ -2628,26 +2748,39 @@ fn collect_layouts(
             } else {
                 (x0 - parent.0, y0 - parent.1)
             };
+            let own = physical(
+                width_of(context.elements[element].parent, &rects),
+                (rx, ry, x1 - x0, y1 - y0),
+            );
             result.insert(
                 node,
                 BoxLayout {
-                    x: rx,
-                    y: ry,
-                    width: x1 - x0,
-                    height: y1 - y0,
+                    x: own.0,
+                    y: own.1,
+                    width: own.2,
+                    height: own.3,
                     margin: BoxMargin::ZERO,
                 },
             );
             // An element on several lines is hit only inside its piece of each.
             if pieces[element].len() > 1 {
                 for (number, piece) in pieces[element].iter().enumerate() {
+                    let at = physical(
+                        y1 - y0,
+                        (
+                            piece.0 - x0,
+                            piece.1 - y0,
+                            piece.2 - piece.0,
+                            piece.3 - piece.1,
+                        ),
+                    );
                     result.insert(
                         piece_id(node, number),
                         BoxLayout {
-                            x: piece.0 - x0,
-                            y: piece.1 - y0,
-                            width: piece.2 - piece.0,
-                            height: piece.3 - piece.1,
+                            x: at.0,
+                            y: at.1,
+                            width: at.2,
+                            height: at.3,
                             margin: BoxMargin::ZERO,
                         },
                     );
@@ -2656,8 +2789,8 @@ fn collect_layouts(
             content_extents.insert(
                 node,
                 ContentExtent {
-                    width: x1 - x0,
-                    height: y1 - y0,
+                    width: own.2,
+                    height: own.3,
                 },
             );
         }
@@ -2711,6 +2844,8 @@ fn collect_layouts(
                 } else {
                     (positioned.x - parent.0, positioned.y - parent.1)
                 };
+                let (x, y, width, height) =
+                    physical(width_of(element, &rects), (x, y, width, height));
                 result.insert(
                     child,
                     BoxLayout {
@@ -2748,18 +2883,23 @@ fn collect_layouts(
                 let parent = origin_of(*element, &rects);
                 (at.0 - origin.0 - parent.0, at.1 - origin.1 - parent.1)
             };
+            let (x, y, width, height) = physical(
+                width_of(*element, &rects),
+                (x, y, float.size.width, float.size.height),
+            );
+            let margin = vertical::sides_to_physical(float.margin, flow);
             result.insert(
                 *child,
                 BoxLayout {
                     x,
                     y,
-                    width: float.size.width,
-                    height: float.size.height,
+                    width,
+                    height,
                     margin: BoxMargin {
-                        top: float.margin.top,
-                        right: float.margin.right,
-                        bottom: float.margin.bottom,
-                        left: float.margin.left,
+                        top: margin.top,
+                        right: margin.right,
+                        bottom: margin.bottom,
+                        left: margin.left,
                     },
                 },
             );
@@ -3697,6 +3837,7 @@ fn build_node(
                                 context.clone(),
                                 &float_ids,
                             )?;
+                            tree.set_flow(leaf, flow_of(styles, node))?;
                             let key = anonymous_id(node, run_number);
                             run_number += 1;
                             taffy_ids.insert(key, leaf);
@@ -3772,8 +3913,18 @@ fn register(
 ) -> Result<(), taffy::TaffyError> {
     tree.set_role(id, table::role_of(arena, styles, node))?;
     tree.set_marker(id, marker_rise(font, arena, styles, node))?;
+    tree.set_flow(id, flow_of(styles, node))?;
     taffy_ids.insert(node, id);
     Ok(())
+}
+
+/// The writing mode of `node`, the frame its content is laid out in.
+pub(crate) fn flow_of(styles: &StyleMap, node: NodeId) -> vertical::Flow {
+    styles
+        .get(&node)
+        .map_or(vertical::Flow::Horizontal, |style| {
+            vertical::Flow::of(style.writing_mode)
+        })
 }
 
 /// What the image marker outside the list item `node` puts above its content, when that is

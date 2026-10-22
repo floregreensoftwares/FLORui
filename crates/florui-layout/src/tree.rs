@@ -8,6 +8,7 @@
 //! lays the node out. Nodes are never rounded: text is shaped at the exact
 //! widths layout found (see `compute_layout_with_content_extents`).
 
+use std::cell::OnceCell;
 use std::collections::HashMap;
 
 use taffy::util::{MaybeResolve, ResolveOrZero};
@@ -21,6 +22,7 @@ use taffy::{
 
 use super::{LeafContext, LeafScratch, measure_leaf};
 use crate::table::Role;
+use crate::vertical::{self as flow, Flow};
 
 pub(crate) type TreeResult<T> = Result<T, TaffyError>;
 
@@ -52,6 +54,12 @@ pub(crate) struct Node {
     pub(crate) border: Option<[f32; 4]>,
     /// What the image marker outside the item puts above the first baseline of its content.
     pub(crate) marker: Option<MarkerRise>,
+    /// The writing mode of the node: the frame its content is laid out in.
+    pub(crate) flow: Flow,
+    /// `style` as the algorithms of the content of the node read it, when its flow is
+    /// vertical; and as its parent's read it, when the flow of the parent is.
+    content: OnceCell<Box<Style>>,
+    item: OnceCell<Box<Style>>,
 }
 
 /// The image marker outside a list item whose content is blocks. It stands on the baseline of
@@ -83,7 +91,44 @@ impl Node {
             grid: None,
             border: None,
             marker: None,
+            flow: Flow::Horizontal,
+            content: OnceCell::new(),
+            item: OnceCell::new(),
         }
+    }
+
+    /// The style the algorithms that lay out the content of the node read: its own, with
+    /// the axes of a vertical flow turned.
+    pub(crate) fn content_view(&self) -> &Style {
+        view(&self.style, &self.content, self.flow)
+    }
+
+    /// The style the algorithm of the parent reads, when the parent's `flow` is the one
+    /// the node is laid out in.
+    pub(crate) fn item_view(&self, parent_flow: Flow) -> &Style {
+        // A box of another flow than its parent's is as wide as its content, as a table is,
+        // not as wide as the room: what fills it is its own lines, not the parent's.
+        let across = self.flow.is_vertical() != parent_flow.is_vertical();
+        if !parent_flow.is_vertical() && !across {
+            return &self.style;
+        }
+        self.item.get_or_init(|| {
+            let mut style = if parent_flow.is_vertical() {
+                flow::view_of(&self.style, parent_flow)
+            } else {
+                self.style.clone()
+            };
+            style.item_is_table |= across;
+            Box::new(style)
+        })
+    }
+}
+
+fn view<'a>(style: &'a Style, cell: &'a OnceCell<Box<Style>>, flow: Flow) -> &'a Style {
+    if flow.is_vertical() {
+        cell.get_or_init(|| Box::new(flow::view_of(style, flow)))
+    } else {
+        style
     }
 }
 
@@ -221,7 +266,9 @@ impl FlorTree {
     ) -> TreeResult<NodeId> {
         let id = self.insert(Node::new(style, None));
         for &child in children {
-            self.get_mut(child)?.parent = Some(id);
+            let child = self.get_mut(child)?;
+            child.parent = Some(id);
+            child.item = OnceCell::new();
         }
         self.live_mut(id).children = children.to_vec();
         Ok(id)
@@ -258,7 +305,9 @@ impl FlorTree {
                 self.get_mut(previous)?.children.retain(|&c| c != child);
                 self.mark_dirty(previous)?;
             }
-            self.get_mut(child)?.parent = Some(parent);
+            let node = self.get_mut(child)?;
+            node.parent = Some(parent);
+            node.item = OnceCell::new();
         }
         self.get_mut(parent)?.children = children.to_vec();
         self.mark_dirty(parent)
@@ -266,7 +315,10 @@ impl FlorTree {
 
     pub(crate) fn set_style(&mut self, id: NodeId, style: Style) -> TreeResult<()> {
         self.floats |= style.float != taffy::Float::None;
-        self.get_mut(id)?.style = style;
+        let node = self.get_mut(id)?;
+        node.style = style;
+        node.content = OnceCell::new();
+        node.item = OnceCell::new();
         self.mark_dirty(id)
     }
 
@@ -281,6 +333,30 @@ impl FlorTree {
             self.mark_dirty(id)?;
         }
         Ok(())
+    }
+
+    /// Sets the writing mode of `id`, which decides the frame its content is laid out in.
+    pub(crate) fn set_flow(&mut self, id: NodeId, flow: Flow) -> TreeResult<()> {
+        let node = self.get_mut(id)?;
+        if node.flow == flow {
+            return Ok(());
+        }
+        node.flow = flow;
+        node.content = OnceCell::new();
+        node.item = OnceCell::new();
+        for child in node.children.clone() {
+            if let Ok(child) = self.get_mut(child) {
+                child.item = OnceCell::new();
+            }
+        }
+        self.mark_dirty(id)
+    }
+
+    /// The flow of the parent of `id`, the frame the layout of `id` is in.
+    pub(crate) fn parent_flow(&self, id: NodeId) -> Flow {
+        self.live(id)
+            .parent
+            .map_or(Flow::Horizontal, |parent| self.live(parent).flow)
     }
 
     pub(crate) fn set_marker(&mut self, id: NodeId, marker: Option<MarkerRise>) -> TreeResult<()> {
@@ -322,6 +398,30 @@ impl FlorTree {
     /// The layout of `id` relative to its parent, as the last layout left it.
     pub(crate) fn layout(&self, id: NodeId) -> TreeResult<&Layout> {
         Ok(&self.get(id)?.layout)
+    }
+
+    /// The layout of `id` as it is on the screen: what the last layout made in the frame
+    /// of the flow of its parent, turned to the screen's axes.
+    pub(crate) fn physical_layout(&self, id: NodeId) -> TreeResult<Layout> {
+        let node = self.get(id)?;
+        let frame = self.parent_flow(id);
+        if !frame.is_vertical() {
+            return Ok(node.layout);
+        }
+        let width = node
+            .parent
+            .map_or(0.0, |parent| self.physical_width(parent));
+        Ok(flow::layout_to_physical(&node.layout, frame, width))
+    }
+
+    /// How wide the border box of `id` is on the screen.
+    pub(crate) fn physical_width(&self, id: NodeId) -> f32 {
+        let size = self.live(id).layout.size;
+        if self.parent_flow(id).is_vertical() {
+            size.height
+        } else {
+            size.width
+        }
     }
 
     /// The room of each line of the inline content of `id`, if a float narrowed any.
@@ -384,6 +484,11 @@ pub(crate) struct Run<'a> {
 }
 
 impl Run<'_> {
+    /// The style of `id` as its parent's algorithm reads it.
+    fn item_style(&self, id: NodeId) -> &Style {
+        self.tree.live(id).item_view(self.tree.parent_flow(id))
+    }
+
     pub(crate) fn child_layout(
         &mut self,
         node_id: NodeId,
@@ -395,31 +500,50 @@ impl Run<'_> {
             return compute_hidden_layout(self, node_id);
         }
         let output = compute_cached_layout(self, node_id, inputs, |run, node_id, inputs| {
-            let node = run.tree.live(node_id);
-            let (display, has_children) = (node.style.display, !node.children.is_empty());
-            if node.role.is_table() {
-                return run.compute_table(node_id, inputs);
-            }
-            let output = if matches!(display, Display::Block | Display::FlowRoot)
-                && run.region_has_float(node_id)
+            // A box whose content flows the other way is laid out in the frame of its own
+            // flow, and tells its parent what it made of the room in the parent's.
+            if run.tree.live(node_id).flow.is_vertical()
+                != run.tree.parent_flow(node_id).is_vertical()
             {
-                run.flow_region_root(node_id, inputs)
-            } else {
-                match (display, has_children) {
-                    (Display::None, _) => compute_hidden_layout(run, node_id),
-                    (Display::Block, true) => compute_block_layout(run, node_id, inputs, block_ctx),
-                    (Display::FlowRoot, true) => compute_block_layout(run, node_id, inputs, None),
-                    (Display::Flex, true) => compute_flexbox_layout(run, node_id, inputs),
-                    (Display::Grid, true) => compute_grid_layout(run, node_id, inputs),
-                    (_, false) => run.measure(node_id, inputs),
-                }
-            };
-            run.raise_for_marker(node_id, &inputs, output)
+                let output = run.layout_content(node_id, flow::transpose_input(inputs), block_ctx);
+                return flow::transpose_output(output);
+            }
+            run.layout_content(node_id, inputs, block_ctx)
         });
         if inputs.run_mode == RunMode::PerformLayout {
             self.tree.live_mut(node_id).baseline = output.baselines.first;
         }
         output
+    }
+
+    /// Lays out the content of a node with the algorithm its display asks for, in the
+    /// frame its flow gives and the sizes of that frame.
+    fn layout_content(
+        &mut self,
+        node_id: NodeId,
+        inputs: LayoutInput,
+        block_ctx: Option<&mut BlockContext<'_>>,
+    ) -> LayoutOutput {
+        let node = self.tree.live(node_id);
+        let (display, has_children) = (node.style.display, !node.children.is_empty());
+        if node.role.is_table() {
+            return self.compute_table(node_id, inputs);
+        }
+        let output = if matches!(display, Display::Block | Display::FlowRoot)
+            && self.region_has_float(node_id)
+        {
+            self.flow_region_root(node_id, inputs)
+        } else {
+            match (display, has_children) {
+                (Display::None, _) => compute_hidden_layout(self, node_id),
+                (Display::Block, true) => compute_block_layout(self, node_id, inputs, block_ctx),
+                (Display::FlowRoot, true) => compute_block_layout(self, node_id, inputs, None),
+                (Display::Flex, true) => compute_flexbox_layout(self, node_id, inputs),
+                (Display::Grid, true) => compute_grid_layout(self, node_id, inputs),
+                (_, false) => self.measure(node_id, inputs),
+            }
+        };
+        self.raise_for_marker(node_id, &inputs, output)
     }
 
     /// What a list item with an image marker outside it is, which the marker puts down: the
@@ -506,7 +630,16 @@ impl Run<'_> {
             // them is of the layout of a block that has them.
             tree.live_mut(node_id).slots = None;
         }
-        let Node { style, context, .. } = tree.live_mut(node_id);
+        let Node {
+            style,
+            context,
+            content,
+            flow,
+            ..
+        } = tree.live_mut(node_id);
+        let flow = *flow;
+        // The sides and the sizes in the frame the content of the leaf is laid out in.
+        let style = view(style, content, flow);
         let mut context = context.as_mut();
         let mut measured_baseline = None;
         // Only a text leaf reads or writes its slot: touching the map for
@@ -527,6 +660,13 @@ impl Run<'_> {
             + style.padding.bottom.resolve_or_zero(None, |_, _| 0.0)
             + style.border.top.resolve_or_zero(None, |_, _| 0.0)
             + style.border.bottom.resolve_or_zero(None, |_, _| 0.0);
+        // What has a size of its own (a picture, a control) is not turned with the lines: its
+        // width is its width on the page, so it is measured as the page has it.
+        let upright = flow.is_vertical()
+            && matches!(
+                context.as_deref(),
+                Some(LeafContext::Fixed(_) | LeafContext::Image(_))
+            );
         let mut output = compute_leaf_layout(
             inputs,
             style,
@@ -536,6 +676,17 @@ impl Run<'_> {
                     width: known_dimensions.width.map(|w| (w - across).max(0.0)),
                     height: known_dimensions.height.map(|h| (h - down).max(0.0)),
                 };
+                if upright {
+                    let size = measure_leaf(
+                        font,
+                        shaping_cache,
+                        context.as_deref_mut(),
+                        flow::swapped(known_dimensions),
+                        flow::swapped(available_space),
+                        &mut measured_baseline,
+                    );
+                    return flow::swapped(size);
+                }
                 measure_leaf(
                     font,
                     shaping_cache,
@@ -610,7 +761,7 @@ impl LayoutPartialTree for Run<'_> {
     type CustomIdent = String;
 
     fn get_core_container_style(&self, node_id: NodeId) -> Self::CoreContainerStyle<'_> {
-        &self.tree.live(node_id).style
+        self.tree.live(node_id).content_view()
     }
 
     fn set_unrounded_layout(&mut self, node_id: NodeId, layout: &Layout) {
@@ -651,11 +802,11 @@ impl LayoutBlockContainer for Run<'_> {
         Self: 'a;
 
     fn get_block_container_style(&self, node_id: NodeId) -> Self::BlockContainerStyle<'_> {
-        &self.tree.live(node_id).style
+        self.tree.live(node_id).content_view()
     }
 
     fn get_block_child_style(&self, child_node_id: NodeId) -> Self::BlockItemStyle<'_> {
-        &self.tree.live(child_node_id).style
+        self.item_style(child_node_id)
     }
 
     fn compute_block_child_layout(
@@ -679,11 +830,11 @@ impl LayoutFlexboxContainer for Run<'_> {
         Self: 'a;
 
     fn get_flexbox_container_style(&self, node_id: NodeId) -> Self::FlexboxContainerStyle<'_> {
-        &self.tree.live(node_id).style
+        self.tree.live(node_id).content_view()
     }
 
     fn get_flexbox_child_style(&self, child_node_id: NodeId) -> Self::FlexboxItemStyle<'_> {
-        &self.tree.live(child_node_id).style
+        self.item_style(child_node_id)
     }
 }
 
@@ -698,11 +849,11 @@ impl LayoutGridContainer for Run<'_> {
         Self: 'a;
 
     fn get_grid_container_style(&self, node_id: NodeId) -> Self::GridContainerStyle<'_> {
-        &self.tree.live(node_id).style
+        self.tree.live(node_id).content_view()
     }
 
     fn get_grid_child_style(&self, child_node_id: NodeId) -> Self::GridItemStyle<'_> {
-        &self.tree.live(child_node_id).style
+        self.item_style(child_node_id)
     }
 
     fn set_detailed_grid_info(&mut self, node_id: NodeId, info: DetailedGridInfo) {

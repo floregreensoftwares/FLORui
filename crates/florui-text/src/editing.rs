@@ -365,10 +365,12 @@ impl Font {
                         id: glyph.id,
                         x: glyph.x,
                         y: glyph.y,
+                        advance: glyph.advance,
                     })
                     .collect();
                 let synthesis = synthesis_of(run, editor.3);
                 runs.push(ShapedRun {
+                    upright: false,
                     font: run.font().clone(),
                     font_size: run.font_size(),
                     normalized_coords: run.normalized_coords().to_vec(),

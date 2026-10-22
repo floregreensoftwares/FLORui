@@ -2903,6 +2903,8 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
             crate::Direction::Ltr
         },
         unicode_bidi: to_unicode_bidi(values),
+        writing_mode: to_writing_mode(values),
+        text_orientation: to_text_orientation(values),
     }
 }
 
@@ -5194,6 +5196,23 @@ fn to_direction(values: &ComputedValues) -> crate::Direction {
     match values.get_inherited_box().clone_direction() {
         T::Ltr => crate::Direction::Ltr,
         T::Rtl => crate::Direction::Rtl,
+    }
+}
+
+fn to_writing_mode(values: &ComputedValues) -> crate::WritingMode {
+    use style::computed_values::writing_mode::T;
+    match values.get_inherited_box().clone_writing_mode() {
+        T::HorizontalTb => crate::WritingMode::HorizontalTb,
+        T::VerticalRl => crate::WritingMode::VerticalRl,
+        T::VerticalLr => crate::WritingMode::VerticalLr,
+    }
+}
+
+fn to_text_orientation(values: &ComputedValues) -> crate::TextOrientation {
+    match mirrored(values, "text-orientation").as_deref() {
+        Some("upright") => crate::TextOrientation::Upright,
+        Some("sideways" | "sideways-right") => crate::TextOrientation::Sideways,
+        _ => crate::TextOrientation::Mixed,
     }
 }
 

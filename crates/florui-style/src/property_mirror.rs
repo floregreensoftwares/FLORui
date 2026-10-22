@@ -24,6 +24,7 @@ use cssparser::{Parser, ParserInput, Token};
 
 /// The properties carried as `--florui-<name>` as written.
 pub(crate) const MIRRORED: &[&str] = &[
+    "text-orientation",
     "list-style-type",
     "counter-reset",
     "counter-increment",

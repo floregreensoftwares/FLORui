@@ -53,7 +53,10 @@ mod ellipsis;
 mod features;
 pub use inline::{InlineElement, InlineItem, LineEnv, LineSlot, LineSource, LineTrace};
 mod bidi;
+mod orientation;
+mod upright;
 pub use bidi::{BidiMode, TextDirection, element_frame, first_strong, is_rtl_char};
+pub use orientation::Orientation;
 mod inline;
 mod inline_memo;
 mod settings;
@@ -288,6 +291,8 @@ pub struct TextStyle {
     pub direction: TextDirection,
     /// `unicode-bidi`.
     pub bidi: BidiMode,
+    /// `text-orientation`, for the text of a vertical writing mode.
+    pub orientation: Orientation,
 }
 
 /// A font with no italic is not slanted by hand.
@@ -317,6 +322,7 @@ impl TextStyle {
             no_synthesis: 0,
             direction: TextDirection::Ltr,
             bidi: BidiMode::Normal,
+            orientation: Orientation::Horizontal,
             family,
             font_size,
             font_weight,
@@ -352,6 +358,12 @@ impl TextStyle {
     pub fn with_direction(mut self, direction: TextDirection, bidi: BidiMode) -> Self {
         self.direction = direction;
         self.bidi = bidi;
+        self
+    }
+
+    /// `text-orientation`, for the text of a vertical writing mode.
+    pub fn with_orientation(mut self, orientation: Orientation) -> Self {
+        self.orientation = orientation;
         self
     }
 
@@ -439,7 +451,8 @@ impl TextStyle {
                 | ((self.word_break as u32) << 3)
                 | ((self.overflow_wrap as u32) << 5)
                 | ((self.direction as u32) << 8)
-                | ((self.bidi as u32) << 9),
+                | ((self.bidi as u32) << 9)
+                | ((self.orientation as u32) << 12),
         ]
     }
 
@@ -618,6 +631,16 @@ impl TextStyle {
         }
     }
 
+    /// The OpenType features of the characters that stand upright in a vertical line: those
+    /// of the style, and the forms the font has for vertical text (the punctuation of the East
+    /// Asian scripts sits in another corner of its cell).
+    pub(crate) fn upright_features(&self) -> String {
+        match self.feature_source() {
+            Some(css) => format!("{css}, \"vert\" 1"),
+            None => "\"vert\" 1".to_owned(),
+        }
+    }
+
     /// The Parley properties that differ from Parley's own defaults, so a
     /// plain style adds nothing to the builder. An inline run leaves the line
     /// height out: its lines are measured by [`Font::shape_inline`] itself.
@@ -685,6 +708,8 @@ pub struct ShapedGlyph {
     pub id: u32,
     pub x: f32,
     pub y: f32,
+    /// How far the glyph advances its line: the cell it stands in.
+    pub advance: f32,
 }
 
 /// What a run's font lacks that is made up by hand: the tangent of the angle it
@@ -749,6 +774,9 @@ pub struct ShapedRun {
     /// For a run of an inline context, the element the text belongs to
     /// (see [`InlineElement`]); `0` everywhere else.
     pub element: usize,
+    /// Whether the glyphs stand upright in the line of a vertical writing mode, each turned
+    /// back in its cell, which is as wide as its advance.
+    pub upright: bool,
     /// Where the run starts on its line and how far it advances.
     pub x: f32,
     pub width: f32,
@@ -756,11 +784,82 @@ pub struct ShapedRun {
     pub line: u32,
 }
 
+/// Where a line is in the block that holds it: the top of its box, and how tall it is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineBox {
+    pub top: f32,
+    pub height: f32,
+}
+
+impl LineBox {
+    /// How far the line moves down when the lines of a block `extent` tall are put in the
+    /// opposite order of stacking, each box keeping its size: where the lines of a vertical
+    /// `vertical-lr` box are, since they stack the other way from how their letters are tilted.
+    fn mirrored_by(self, extent: f32) -> f32 {
+        extent - 2.0 * self.top - self.height
+    }
+}
+
+impl ShapedText {
+    /// The lines in the opposite order of stacking in a block `extent` tall: each moves as a
+    /// whole to where the mirror of its box is.
+    pub fn mirror_lines(&mut self, extent: f32) {
+        let shifts: Vec<f32> = self
+            .lines
+            .iter()
+            .map(|line| line.mirrored_by(extent))
+            .collect();
+        for run in &mut self.runs {
+            let shift = shifts.get(run.line as usize).copied().unwrap_or(0.0);
+            for glyph in &mut run.glyphs {
+                glyph.y += shift;
+            }
+        }
+        for (line, shift) in self.lines.iter_mut().zip(shifts) {
+            line.top += shift;
+        }
+    }
+}
+
+impl InlineLayout {
+    /// [`ShapedText::mirror_lines`] for the runs, boxes and fragments of an inline context.
+    pub fn mirror_lines(&mut self, extent: f32) {
+        let shifts: Vec<f32> = self
+            .lines
+            .iter()
+            .map(|line| line.mirrored_by(extent))
+            .collect();
+        let shift_of = |line: u32| shifts.get(line as usize).copied().unwrap_or(0.0);
+        for run in &mut self.runs {
+            let shift = shift_of(run.line);
+            for glyph in &mut run.glyphs {
+                glyph.y += shift;
+            }
+        }
+        for fragment in &mut self.fragments {
+            fragment.y += shift_of(fragment.line);
+        }
+        for positioned in &mut self.boxes {
+            let line = self
+                .lines
+                .iter()
+                .position(|line| positioned.y < line.top + line.height - 0.01)
+                .unwrap_or(self.lines.len().saturating_sub(1));
+            positioned.y += shifts.get(line).copied().unwrap_or(0.0);
+        }
+        for (line, shift) in self.lines.iter_mut().zip(&shifts) {
+            line.top += shift;
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ShapedText {
     pub runs: Vec<ShapedRun>,
     pub width: f32,
     pub height: f32,
+    /// The boxes of the lines, in order.
+    pub lines: Vec<LineBox>,
 }
 
 /// One piece of a real inline formatting context, in source order — either
@@ -808,6 +907,8 @@ pub struct InlineLayout {
     pub last_baseline: f32,
     pub runs: Vec<ShapedRun>,
     pub boxes: Vec<PositionedBox>,
+    /// The boxes of the lines, in order.
+    pub lines: Vec<LineBox>,
     /// Where each inline element has text, one per element and line it
     /// appears on, in line order.
     pub fragments: Vec<InlineFragment>,
@@ -992,6 +1093,8 @@ pub struct Font {
     style_metrics: FxHashMap<(u32, u32, u32, u32), inline::StyleMetrics>,
     /// The width of U+2007 per em, by family.
     spacer_em: [Option<f32>; 2],
+    /// How far a character advances alone, by family, size, weight and the character.
+    upright_advances: FxHashMap<(u32, u32, u32, char), f32>,
     /// Whether the first font that answers to a family has a feature, by the
     /// family's name and the feature.
     feature_support: FxHashMap<(String, [u8; 4]), bool>,
@@ -1039,6 +1142,7 @@ impl Font {
             inline_memo: inline_memo::InlineMemo::with_capacity(inline_memo::INLINE_MEMO_BYTES),
             style_metrics: FxHashMap::default(),
             spacer_em: [None; 2],
+            upright_advances: FxHashMap::default(),
             feature_support: FxHashMap::default(),
             generation: 0,
         }
@@ -1073,6 +1177,7 @@ impl Font {
             inline_memo: inline_memo::InlineMemo::with_capacity(inline_memo::INLINE_MEMO_BYTES),
             style_metrics: FxHashMap::default(),
             spacer_em: [None; 2],
+            upright_advances: FxHashMap::default(),
             feature_support: FxHashMap::default(),
             generation: seed.generation,
         }
@@ -1352,11 +1457,18 @@ impl Font {
                 runs: Vec::new(),
                 width: 0.0,
                 height: 0.0,
+                lines: Vec::new(),
             };
         };
 
         let mut runs = Vec::new();
+        let mut lines = Vec::new();
         for (line_number, line) in layout.lines().enumerate() {
+            let metrics = line.metrics();
+            lines.push(LineBox {
+                top: metrics.block_min_coord,
+                height: metrics.block_max_coord - metrics.block_min_coord,
+            });
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(glyph_run) = item else {
                     continue;
@@ -1368,10 +1480,12 @@ impl Font {
                         id: glyph.id,
                         x: glyph.x,
                         y: glyph.y,
+                        advance: glyph.advance,
                     })
                     .collect();
                 let synthesis = synthesis_of(run, no_synthesis);
                 runs.push(ShapedRun {
+                    upright: glyph_run.style().brush == upright::UPRIGHT_BRUSH,
                     font: run.font().clone(),
                     font_size: run.font_size(),
                     normalized_coords: run.normalized_coords().to_vec(),
@@ -1391,6 +1505,7 @@ impl Font {
             runs,
             width: layout.width(),
             height: height_without_final_break(&layout),
+            lines,
         }
     }
 
@@ -1474,6 +1589,7 @@ impl Font {
         };
         let shift = before.len();
         let text = framed.as_ref();
+        let cells = self.upright_cells(style, prepared.text.as_ref());
         let mut builder = self
             .layout_cx
             .ranged_builder(&mut self.font_cx, text, 1.0, true);
@@ -1497,6 +1613,20 @@ impl Font {
                 StyleProperty::FontSize(style.font_size * style.caps.scale()),
                 range.start + shift..range.end + shift,
             );
+        }
+        let features = if cells.is_empty() {
+            String::new()
+        } else {
+            style.upright_features()
+        };
+        for (range, spacing) in cells {
+            let range = range.start + shift..range.end + shift;
+            builder.push(
+                StyleProperty::FontFeatures(parley::FontFeatures::Source(features.clone().into())),
+                range.clone(),
+            );
+            builder.push(StyleProperty::LetterSpacing(spacing), range.clone());
+            builder.push(StyleProperty::Brush(upright::UPRIGHT_BRUSH), range);
         }
         builder.build(text)
     }

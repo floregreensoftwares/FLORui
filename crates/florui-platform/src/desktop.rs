@@ -3007,16 +3007,19 @@ mod tests {
                 id: 0,
                 x: 0.0,
                 y: 0.0,
+                advance: 10.0,
             },
             florui_text::ShapedGlyph {
                 id: 0,
                 x: 10.0,
                 y: 0.0,
+                advance: 10.0,
             },
             florui_text::ShapedGlyph {
                 id: 0,
                 x: 20.0,
                 y: 0.0,
+                advance: 10.0,
             },
         ];
         assert_eq!(char_index_at(&glyphs, 0.0), 0);

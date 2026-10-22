@@ -83,10 +83,10 @@ pub use cascade::{
     FlexDirection, FlexWrap, Float, FontFamily, FontStyle, FontSynthesis, FontVariantCaps,
     GlassMaterial, GlassQuality, GlassSpec, ItemAlignment, LengthPercentage, LineHeight, ObjectFit,
     Outline, OutlineStyle, OverflowWrap, Position, Resize, SizeKeyword, SkipInk, TableLayout,
-    TextAlign, TextCase, TextDecoration, TextIndent, TextOverflow, TextShadow, TextTransform,
-    TransformBox, TransformFunction, UnderlineOffset, UnderlinePosition, UnicodeBidi,
-    VerticalAlign, Viewport, Visibility, WhiteSpaceCollapse, WordBreak, compute,
-    compute_with_container_query_signature,
+    TextAlign, TextCase, TextDecoration, TextIndent, TextOrientation, TextOverflow, TextShadow,
+    TextTransform, TransformBox, TransformFunction, UnderlineOffset, UnderlinePosition,
+    UnicodeBidi, VerticalAlign, Viewport, Visibility, WhiteSpaceCollapse, WordBreak, WritingMode,
+    compute, compute_with_container_query_signature,
 };
 pub use clip::{ClipPath, ClipShape, PathSegment, ReferenceBox, ShapeRadius};
 pub use color::{ColorParseError, Rgba, parse_hex_color};

@@ -89,6 +89,43 @@ pub(crate) fn replay(
     }
 }
 
+/// [`replay`] for a glyph that stands upright in a line of a vertical writing mode: moved
+/// `shift` along the line, and turned a quarter anticlockwise about `center` (both in the
+/// glyph's own units, Y up), which the line is then turned back from.
+pub(crate) fn replay_turned(
+    builder: &mut PathBuilder,
+    (origin_x, origin_y): (f32, f32),
+    segments: &[Segment],
+    center: (f32, f32),
+    shift: f32,
+) {
+    let at = |x: f32, y: f32| {
+        let (dx, dy) = (x + shift - center.0, y - center.1);
+        (origin_x + center.0 - dy, origin_y - (center.1 + dx))
+    };
+    for segment in segments {
+        match *segment {
+            Segment::Move(x, y) => {
+                let (px, py) = at(x, y);
+                builder.move_to(px, py);
+            }
+            Segment::Line(x, y) => {
+                let (px, py) = at(x, y);
+                builder.line_to(px, py);
+            }
+            Segment::Quad(cx0, cy0, x, y) => {
+                let (c, p) = (at(cx0, cy0), at(x, y));
+                builder.quad_to(c.0, c.1, p.0, p.1);
+            }
+            Segment::Cubic(cx0, cy0, cx1, cy1, x, y) => {
+                let (c0, c1, p) = (at(cx0, cy0), at(cx1, cy1), at(x, y));
+                builder.cubic_to(c0.0, c0.1, c1.0, c1.1, p.0, p.1);
+            }
+            Segment::Close => builder.close(),
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, Hash)]
 struct InstanceKey {
     font: u64,
