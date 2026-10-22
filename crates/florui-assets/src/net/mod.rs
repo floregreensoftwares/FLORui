@@ -15,10 +15,11 @@
 //!   [`crate::limits::MAX_SOURCE_BYTES`] of every other source). A body sent with gzip or
 //!   brotli is decoded as it arrives and the limit counts the decoded bytes, so a
 //!   decompression bomb is cut off like any other body.
-//! - **Content.** A response whose `Content-Type` is not an image type is refused, and one
-//!   that names a format the bytes are not is refused too, so an error page served as `200`
-//!   never reaches a decoder. A missing or generic (`application/octet-stream`) type is
-//!   judged by the bytes alone.
+//! - **Content.** A response whose `Content-Type` is not an image type is refused (before its
+//!   body is read), and so is one that names an image type over bytes that are not an image, so
+//!   an error page served as `200` never reaches a decoder. Among the image formats the type
+//!   is a hint and the bytes decide, as in a browser: a WebP labelled `image/jpeg` loads. A
+//!   missing or generic (`application/octet-stream`) type is judged by the bytes alone.
 //! - **Cache.** With [`NetConfig::cache_dir`], responses are kept on disk under
 //!   `Cache-Control`, `Expires`, `Age`, `ETag` and `Last-Modified` (see the `http_cache`
 //!   module), within a byte budget. A stale response is asked again with a conditional
@@ -70,7 +71,7 @@ use url::Url;
 
 use crate::FetchError;
 use crate::limits::MAX_SOURCE_BYTES;
-use crate::url_image::{self, Format};
+use crate::url_image;
 use http_cache::{DiskCache, Entry, Headers, Policy, unix_now};
 
 /// How long after a background revalidation failed the next one is held back.
@@ -212,6 +213,9 @@ struct Job {
     cancel: AtomicBool,
     waiters: Mutex<Vec<(u64, Callback)>>,
     started: AtomicBool,
+    /// Set when everything the job had to do is done, the writing of its answer to the disk
+    /// cache included, which [`Fetcher::fetch`] waits for.
+    finished: (Mutex<bool>, std::sync::Condvar),
 }
 
 impl Job {
@@ -256,8 +260,6 @@ struct Inner {
     /// When the background revalidation of an address last failed, so that an origin that is
     /// down is not asked again at every use of its stale copy.
     refresh_failed: Mutex<HashMap<String, Instant>>,
-    /// Responses delivered whose writing to the disk cache is not done yet.
-    pending_stores: AtomicU64,
 }
 
 /// Loads images from the network under the limits of a [`NetConfig`]. Cheap to clone;
@@ -306,7 +308,6 @@ impl Fetcher {
                 cache_hits: AtomicU64::new(0),
                 revalidated: AtomicU64::new(0),
                 refresh_failed: Mutex::default(),
-                pending_stores: AtomicU64::new(0),
                 config,
             }),
         }
@@ -356,6 +357,7 @@ impl Fetcher {
                     cancel: AtomicBool::new(false),
                     waiters: Mutex::default(),
                     started: AtomicBool::new(false),
+                    finished: Default::default(),
                 });
                 queue.jobs.insert((key, false), Arc::clone(&job));
                 queue.waiting.push_back(Arc::clone(&job));
@@ -413,14 +415,14 @@ impl Fetcher {
     /// cache (a moment at most), so that asking again finds it there.
     pub fn fetch(&self, url: &str) -> Outcome {
         let (sender, receiver) = std::sync::mpsc::channel();
-        let _ticket = self.submit(url, move |outcome| {
+        let ticket = self.submit(url, move |outcome| {
             let _ = sender.send(outcome);
         })?;
         let outcome = receiver.recv().unwrap_or(Err(FetchError::Cancelled));
-        let give_up = Instant::now() + Duration::from_secs(5);
-        while self.inner.pending_stores.load(Ordering::SeqCst) > 0 && Instant::now() < give_up {
-            std::thread::sleep(Duration::from_millis(1));
-        }
+        // This request's own work, not everyone's: the job says when it is done.
+        let (done, signal) = &ticket.job.finished;
+        let done = done.lock().unwrap_or_else(|poison| poison.into_inner());
+        let _ = signal.wait_timeout_while(done, Duration::from_secs(5), |done| !*done);
         outcome
     }
 }
@@ -578,9 +580,6 @@ impl Inner {
                     failed.insert(job.url.clone(), Instant::now());
                 }
             }
-            if to_store.is_some() && outcome.is_ok() {
-                self.pending_stores.fetch_add(1, Ordering::SeqCst);
-            }
             for (_, callback) in waiters {
                 // The callback is the caller's; one that panics does not stop the others.
                 let outcome = outcome.clone();
@@ -590,15 +589,18 @@ impl Inner {
             }
             // Written now that everyone waiting has the picture: the writing, and the look at
             // the size of the directory every so often, are not on their way.
-            if let (Some(entry), Ok(fetched)) = (&to_store, &outcome) {
-                if let Some(disk) = &self.disk {
-                    disk.store(entry, &fetched.bytes);
-                }
-                self.pending_stores.fetch_sub(1, Ordering::SeqCst);
+            if let (Some(entry), Ok(fetched), Some(disk)) = (&to_store, &outcome, &self.disk) {
+                disk.store(entry, &fetched.bytes);
             }
             if matches!(&outcome, Ok(fetched) if fetched.origin == Origin::Stale) {
                 self.enqueue_refresh(&job);
             }
+            // Everything this job had to do is done.
+            *job.finished
+                .0
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = true;
+            job.finished.1.notify_all();
         }
     }
 
@@ -626,6 +628,7 @@ impl Inner {
             cancel: AtomicBool::new(false),
             waiters: Mutex::default(),
             started: AtomicBool::new(false),
+            finished: Default::default(),
         });
         queue.jobs.insert(key, Arc::clone(&job));
         queue.waiting.push_back(job);
@@ -960,6 +963,13 @@ fn parse_url(text: &str) -> Result<Url, FetchError> {
     Ok(url)
 }
 
+/// The address as the fetcher requests and keys it (scheme and host in lower case, the default
+/// port left out, dot segments resolved, no fragment), so that the same picture written two
+/// ways is one picture everywhere it is keyed. `None` if it is not an address it requests.
+pub(crate) fn normalize_address(text: &str) -> Option<String> {
+    parse_url(text).ok().map(|url| url.as_str().to_owned())
+}
+
 /// What the per-host limit counts: scheme, host and port.
 fn host_key(url: &Url) -> String {
     format!(
@@ -1079,18 +1089,19 @@ fn is_generic(media: &str) -> bool {
     )
 }
 
+/// Whether `media` is an image type that has a decoder here.
+fn is_supported_image_type(media: &str) -> bool {
+    media.starts_with("image/")
+        && (media.contains("svg") || crate::raster::Format::of_media_type(media).is_some())
+}
+
 /// The part of [`check_content`] that needs no bytes: a declared type that is not an image
 /// type, or one with no decoder here, fails; no type, a generic one or a supported one passes.
 fn check_declared(content_type: Option<&str>) -> Result<(), FetchError> {
     let Some(declared) = media_type(content_type) else {
         return Ok(());
     };
-    if is_generic(&declared) {
-        return Ok(());
-    }
-    let supported = declared.starts_with("image/")
-        && (declared.contains("svg") || crate::raster::Format::of_media_type(&declared).is_some());
-    if supported {
+    if is_generic(&declared) || is_supported_image_type(&declared) {
         Ok(())
     } else {
         Err(FetchError::NotAnImage {
@@ -1099,54 +1110,26 @@ fn check_declared(content_type: Option<&str>) -> Result<(), FetchError> {
     }
 }
 
-/// Judges a response by its media type and its bytes together; see the module doc.
+/// Judges a response by its media type and its bytes together; see the module doc. The type
+/// is a hint among the image formats (many servers label a WebP as JPEG, and a browser shows
+/// it), and the bytes decide; what neither accepts is refused: a type that is not an image
+/// type, or an image type over bytes that are not an image.
 fn check_content(content_type: Option<&str>, bytes: &[u8]) -> Result<(), FetchError> {
-    let declared = media_type(content_type);
-    let found = url_image::sniff_strict(bytes);
-    let found_name = match found {
-        Some(Format::Raster) => crate::raster::Format::sniff(bytes).map(|format| match format {
-            crate::raster::Format::Png => "PNG",
-            crate::raster::Format::Jpeg => "JPEG",
-            crate::raster::Format::Webp => "WebP",
-            crate::raster::Format::Gif => "GIF",
+    check_declared(content_type)?;
+    if url_image::sniff_strict(bytes).is_some() {
+        return Ok(());
+    }
+    match media_type(content_type) {
+        None => Err(FetchError::NotAnImage {
+            content_type: "unknown".to_owned(),
         }),
-        Some(Format::Svg) => Some("SVG"),
-        None => None,
-    };
-    let not_an_image = |media: &str| FetchError::NotAnImage {
-        content_type: media.to_owned(),
-    };
-    let Some(declared) = declared else {
-        return found.map(|_| ()).ok_or_else(|| not_an_image("unknown"));
-    };
-    if is_generic(&declared) {
-        return found.map(|_| ()).ok_or_else(|| not_an_image(&declared));
-    }
-    if !declared.starts_with("image/") {
-        return Err(not_an_image(&declared));
-    }
-    let expected = if declared.contains("svg") {
-        Some(Format::Svg)
-    } else {
-        crate::raster::Format::of_media_type(&declared).map(|_| Format::Raster)
-    };
-    let Some(expected) = expected else {
-        // An image type with no decoder here (AVIF, BMP, ICO...).
-        return Err(not_an_image(&declared));
-    };
-    // The same family is not enough for a raster image: `image/png` over JPEG bytes says
-    // one thing and shows another.
-    let same = found == Some(expected)
-        && (expected == Format::Svg
-            || crate::raster::Format::of_media_type(&declared)
-                == crate::raster::Format::sniff(bytes));
-    if same {
-        Ok(())
-    } else {
-        Err(FetchError::ContentTypeMismatch {
+        Some(declared) if is_generic(&declared) => Err(FetchError::NotAnImage {
+            content_type: declared,
+        }),
+        Some(declared) => Err(FetchError::ContentTypeMismatch {
             declared,
-            found: found_name.unwrap_or("not an image"),
-        })
+            found: "not an image",
+        }),
     }
 }
 

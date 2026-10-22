@@ -52,6 +52,9 @@ const MOST_FAILURES: usize = 512;
 const MOST_REPORTED: usize = 4096;
 const TRIM_EVERY: u32 = 64;
 
+/// How long until the next recheck of a picture whose last recheck downloaded it in full.
+const RECHECK_AFTER_UNCACHEABLE: Duration = Duration::from_secs(60 * 60);
+
 /// How long until the next recheck when the last one was answered with a stale copy and the
 /// fresh one was being fetched behind it.
 const RECHECK_AFTER_STALE: Duration = Duration::from_secs(30);
@@ -455,15 +458,18 @@ fn cache() -> &'static AssetCache {
 /// slots (see `AssetCache`), so none of them waits for a slot that others hold.
 #[cfg(feature = "net")]
 mod decoder {
-    use std::sync::mpsc::{Receiver, Sender, channel};
+    use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
     use std::sync::{Arc, Mutex, OnceLock};
 
     type Job = Box<dyn FnOnce() + Send>;
 
     pub(super) fn run(job: Job) {
-        static QUEUE: OnceLock<Sender<Job>> = OnceLock::new();
+        // A few jobs wait, no more: each owns the body of a download, and when decoding falls
+        // behind, the downloads wait for it (the thread that sends is a fetcher's) instead of
+        // piling up what they fetched.
+        static QUEUE: OnceLock<SyncSender<Job>> = OnceLock::new();
         let queue = QUEUE.get_or_init(|| {
-            let (sender, receiver) = channel::<Job>();
+            let (sender, receiver) = sync_channel::<Job>(16);
             let receiver: Arc<Mutex<Receiver<Job>>> = Arc::new(Mutex::new(receiver));
             let cores = std::thread::available_parallelism().map_or(2, usize::from);
             for _ in 0..(cores / 2).clamp(1, 4) {
@@ -498,8 +504,11 @@ mod decoder {
 enum Built {
     /// A request for a newer copy that found the one already shown still current. `stale`:
     /// the copy sent was a stale one from the HTTP cache, with a fresh one on its way.
+    /// `uncached`: it came from the server in full, the HTTP cache having nothing to confirm
+    /// it with (the response is not storable, or has no validator).
     Unchanged {
         stale: bool,
+        uncached: bool,
     },
     /// `stale`: it was loaded from a stale copy, with a fresh one being fetched behind it.
     Loaded(Loaded, u64, u64, bool),
@@ -587,6 +596,7 @@ fn finish(
                 // decode and nothing to paint again.
                 return Built::Unchanged {
                     stale: fetched.origin == crate::net::Origin::Stale,
+                    uncached: fetched.origin == crate::net::Origin::Network,
                 };
             }
             let size = fetched.bytes.len() as u64;
@@ -648,7 +658,10 @@ fn finish(
             (Was::Refreshed, built) => {
                 // The copy shown stays, and is asked for again after another while: soon
                 // when what came was a stale copy with a fresh one being fetched behind it.
-                let stale = matches!(built, Built::Unchanged { stale: true });
+                let (stale, uncached) = match built {
+                    Built::Unchanged { stale, uncached } => (stale, uncached),
+                    _ => (false, false),
+                };
                 if let Some(Slot::Ready {
                     refresh,
                     checked_at,
@@ -660,6 +673,10 @@ fn finish(
                     *checked_at = Instant::now();
                     *recheck_after = if stale {
                         RECHECK_AFTER_STALE
+                    } else if uncached {
+                        // The whole picture came again to find that it had not changed, so
+                        // the HTTP cache is not helping with this one: not so often.
+                        RECHECK_AFTER_UNCACHEABLE
                     } else {
                         RECHECK_AFTER
                     };
@@ -1189,6 +1206,70 @@ mod tests {
                 cache_dir: Some(std::path::PathBuf::from("cache")),
                 ..NetConfig::default()
             }));
+        }
+
+        #[test]
+        fn a_recheck_that_downloaded_the_whole_picture_to_find_it_unchanged_waits_longer() {
+            direct();
+            let url = "http://example.invalid/uncacheable.png";
+            let bytes = png_of(2, 2);
+            let sum = digest(&bytes);
+            let loaded = crate::url_image::build(&bytes, None, false, |b| {
+                cache().get_or_decode(cache_id(url, sum), b, DecodeParams::Native)
+            })
+            .unwrap();
+            with_store(|store| {
+                store.slots.insert(
+                    url.to_owned(),
+                    Slot::Ready {
+                        generation: 1,
+                        loaded: Arc::new(loaded),
+                        bytes: 1,
+                        used: 1,
+                        used_at: Instant::now(),
+                        digest: sum,
+                        checked_at: Instant::now(),
+                        recheck_after: Duration::ZERO,
+                        refresh: Some((5, None)),
+                    },
+                );
+            });
+            finish(
+                url,
+                5,
+                Ok(Arc::new(crate::net::Fetched {
+                    bytes,
+                    content_type: Some("image/png".to_owned()),
+                    origin: crate::net::Origin::Network,
+                })),
+            );
+            let wait = with_store(|store| match store.slots.get(url) {
+                Some(Slot::Ready { recheck_after, .. }) => Some(*recheck_after),
+                _ => None,
+            });
+            assert_eq!(wait, Some(RECHECK_AFTER_UNCACHEABLE));
+        }
+
+        #[test]
+        fn one_picture_written_two_ways_is_one_picture() {
+            use crate::url_image::remote_address;
+            let same = [
+                "https://example.com/a.png",
+                "  HTTPS://Example.COM:443/a.png#frag ",
+                "https://example.com/./b/../a.png",
+            ];
+            for url in same {
+                assert_eq!(remote_address(url), "https://example.com/a.png", "{url}");
+            }
+            // What is different stays different.
+            assert_ne!(
+                remote_address("https://example.com/a.png?v=2"),
+                remote_address("https://example.com/a.png")
+            );
+            assert_ne!(
+                remote_address("https://example.com:8443/a.png"),
+                remote_address("https://example.com/a.png")
+            );
         }
 
         #[test]

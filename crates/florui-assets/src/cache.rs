@@ -192,12 +192,16 @@ impl AssetCache {
         found
     }
 
-    /// Like [`Self::get_or_load`] for bytes that are already in memory under `id`, such
-    /// as a download's, which someone else wrote: an SVG among them is parsed without
-    /// reading the files it names, and `id` should be an [`AssetId::Url`] (any other is
-    /// kept under a key of its own, not the one of the file or asset it names): a cached decode is returned, a decode under way is waited for,
-    /// and otherwise `bytes` are decoded in one of the decode slots and cached. The
-    /// image is shared and dropped like any other.
+    /// Like [`Self::get_or_load`] for bytes that are already in memory, such as a download's:
+    /// a cached decode is returned, a decode under way is waited for, and otherwise `bytes`
+    /// are decoded in one of the decode slots and cached. The image is shared and dropped like
+    /// any other.
+    ///
+    /// The bytes are someone else's: an SVG among them is parsed without reading the files it
+    /// names, whatever `id` is. `id` should be an [`AssetId::Url`]; any other is kept under a
+    /// `Url` key made from it (so `cached` and `invalidate` with the id that was passed will
+    /// not find it), never under the key of the file or asset that it names, which a later
+    /// load of that file would find these bytes under.
     pub fn get_or_decode(
         &self,
         id: AssetId,
