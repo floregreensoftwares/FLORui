@@ -284,10 +284,56 @@ differs along its anti-aliased edges, because the two engines draw vectors diffe
 Limits: an image is read and decoded on the painting thread the first time a layer needs it, then kept, and
 read again when its file changes; a large image therefore pauses the first frame that shows it, so a big
 picture belongs in an `<img>`, which loads in the background. An image that cannot be read or decoded paints
-nothing and is reported once on standard error. Only PNG and SVG are supported (no other raster format,
-no `image-set()`, no `http` addresses), and a relative path is read against the working directory, which a
+nothing and is reported once on standard error. Only PNG, JPEG, WebP, GIF and SVG are supported (no
+`image-set()`), an `http` or `https` address needs the `net` feature (see "Pictures from the network"), and a relative path is read against the working directory, which a
 packaged application does not share with a development checkout, so ship textures as `data:` URLs or as
 files the application places itself.
+
+## Pictures from the network
+
+`<img src="https://...">` and `url(https://...)` in `background-image`, `border-image` and `list-style-image` load
+from the network when `florui-platform` is built with the `net` feature (off by default, so an application that
+never loads from the network links no HTTP client and no TLS). Without it such a source fails like an unreadable
+file, with the reason on standard error.
+
+```toml
+florui-platform = { version = "...", features = ["net"] }
+```
+
+```rust
+// Before the first window opens; without this the defaults apply (no disk cache).
+florui_platform::network::configure(florui_platform::network::NetConfig {
+    cache_dir: florui_platform::network::cache_dir("com.example.app"),
+    ..Default::default()
+});
+```
+
+- **Requests:** `GET` only, with no cookies and no credentials (a URL with a user name or password is refused). Connecting
+  (10 s), waiting for a response or for more of the body (15 s) and the whole request (60 s) have timeouts, and there is no
+  automatic retry. Redirects are followed up to 5 times, only to `http` and `https`, and never from `https` to `http`. The
+  proxy comes from `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`; the proxy settings that live only in the
+  operating system (the Windows configuration, a PAC file) are not read. Certificates are checked against the system store.
+- **Size and content:** the declared length and the bytes as they stream in are held to the same 64 MiB as a file. A
+  response whose `Content-Type` is not an image, or names one format over the bytes of another, is refused before a decoder
+  sees it; a missing or generic type is judged by the bytes. The format does not come from the extension.
+- **Cache:** with `cache_dir` set, responses are kept on disk under `Cache-Control`, `Expires`, `Age`, `ETag` and
+  `Last-Modified` (a stale one is asked again with a conditional request), within 256 MiB. `Vary` other than `*` is not part of the key,
+  because every request sends the same headers. A decoded picture is shared by every `<img>` and window that uses it and
+  dropped with the last one, within the same memory budget as any other image; a picture a `url(...)` holds for the next
+  frame is kept within 256 MiB, least recently used first.
+- **Concurrency:** 8 requests at once and 6 per host; the rest wait in order, and asking for a URL already in flight joins
+  it. An `<img>` that unmounts or changes `src` cancels its request: one still queued is never sent, one running stops at its next read.
+- **Failure:** the `<img>` is in the same state as one whose file cannot be read: no pixels, the reason on standard error,
+  and the size CSS gives its box. An `alt` is used for the accessible name only; no
+  fallback text is painted (nor for a file that cannot be read). A `url(...)` that fails is tried again after 30 seconds.
+- **Not covered:** `crossorigin`, credentials and cookies (there is no page origin), compressed responses, range
+  requests, and `stale-while-revalidate` / `stale-if-error` (a stale picture the server cannot confirm is an error).
+- **Tested** against a local HTTP server (statuses, redirects, size limits, content checks, the cache, the queue and
+  cancellation) and, once, against a real HTTPS host through the system
+  certificate store and an HTTP proxy; no other operating system or certificate setup was tried.
+
+A `url(...)` never waits for the download on the painting thread: the layer draws nothing (a list marker is the broken one)
+until the picture has arrived, and the window then lays out and paints again.
 
 ## Filters, clipping, masks and blending
 
