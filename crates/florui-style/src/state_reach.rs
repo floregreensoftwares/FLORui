@@ -41,6 +41,20 @@ impl StateReach {
             ))
             .chain(rules.iter().cloned());
         for rule in sheets {
+            // Which blocks a `::first-letter` or `::first-line` rule is for is worked out
+            // before a cascade, from selectors that no longer name the state they read.
+            if rule
+                .first_letter_numbers()
+                .iter()
+                .chain(rule.first_line_numbers())
+                .any(|&number| {
+                    crate::first_letter_adapter::subject(number).is_some_and(|subject| {
+                        crate::first_letter_adapter::mentions_state(&subject)
+                    })
+                })
+            {
+                reach.everything = true;
+            }
             let sheet = rule.stylesheet(viewport_height, &[], prefers_reduced_motion);
             reach.walk_rules(sheet.contents.rules.read_with(guard), guard);
         }

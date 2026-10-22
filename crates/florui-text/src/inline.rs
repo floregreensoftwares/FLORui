@@ -37,6 +37,20 @@ const SPACER: char = '\u{2007}';
 pub struct InlineElement {
     pub parent: usize,
     pub style: TextStyle,
+    /// The style the element's text has where it is on the first line of the container,
+    /// when that is not `style`.
+    pub first_line: Option<TextStyle>,
+}
+
+impl InlineElement {
+    /// An element with the same style on every line.
+    pub fn new(parent: usize, style: TextStyle) -> Self {
+        Self {
+            parent,
+            style,
+            first_line: None,
+        }
+    }
 }
 
 /// One piece of an inline context, in source order.
@@ -136,28 +150,78 @@ pub struct LineTrace {
     pub heights: Vec<f32>,
 }
 
+/// Which lines of a context a layout is, and where they start.
+#[derive(Debug, Clone, Copy, Default)]
+struct Part {
+    /// How many lines the context has before them.
+    line_base: usize,
+    /// Where the first of them starts, from the top of the context.
+    cursor: f32,
+    /// The same for the floats, which are asked about the lines as tall as they were in an
+    /// earlier pass.
+    y: f32,
+    /// How many of the lines to place; all of them when `None`.
+    take: Option<usize>,
+    /// They come after a first line that was laid out apart, so the indent of the first
+    /// line is not theirs.
+    after_first: bool,
+    /// The element that is the container, whose style gives every line its strut.
+    root: usize,
+}
+
+/// Where the first line of a layout ends.
+struct FirstLineEnd {
+    /// The end of its text.
+    text_end: usize,
+    /// Where the second line starts, for the floats.
+    y: f32,
+    /// How many floats were placed once the first line was done.
+    floats: usize,
+}
+
+/// A layout in lines.
+struct Laid {
+    layout: InlineLayout,
+    trace: LineTrace,
+    /// How many lines the text has, of which the layout holds those it was asked for.
+    lines: usize,
+    first: Option<FirstLineEnd>,
+}
+
+/// What breaking the lines of a layout in slots gave.
+struct Broken {
+    slots: Vec<LineSlot>,
+    /// Where the second line starts and how many floats were placed once the first was
+    /// done.
+    after_first: Option<(f32, usize)>,
+}
+
 /// Breaks the lines of `layout` one at a time, each in the slot `source` gives
-/// it, and returns the slots.
+/// it, and returns the slots. The layout is the lines from `base` on, which start
+/// at `y0` from the top of the context.
 fn break_in_slots(
     layout: &mut parley::Layout<[u8; 4]>,
     width: f32,
     strut_height: f32,
     source: &mut LineSource<'_>,
     shifts: &[usize],
-) -> Vec<LineSlot> {
+    base: usize,
+    y0: f32,
+) -> Broken {
     let mut slots: Vec<LineSlot> = Vec::new();
+    let mut after_first = None;
     let mut breaker = layout.break_lines();
     breaker.state_mut().set_layout_max_advance(width);
     // Where the line being built starts, and where the one before it ended.
-    let mut y = 0.0f32;
-    let mut previous_end = 0.0f32;
+    let mut y = y0;
+    let mut previous_end = y0;
     let mut deferred: Vec<u64> = Vec::new();
     // The room of the line that starts at `y`, once it is moved down as many
     // times as `shifts` says, each to the end of the next float beside it.
     let start_line =
         |source: &mut LineSource<'_>, line: usize, y: &mut f32, previous_end: f32| match source {
             LineSource::Env { env, hints } => {
-                let height = hints.get(line).copied().unwrap_or(strut_height);
+                let height = hints.get(base + line).copied().unwrap_or(strut_height);
                 for _ in 0..shifts.get(line).copied().unwrap_or(0) {
                     match env.clear_of_floats(*y, height) {
                         Some(next) if next > *y + EPSILON => *y = next,
@@ -169,7 +233,7 @@ fn break_in_slots(
                 slot
             }
             LineSource::Replay(known) => known
-                .get(line)
+                .get(base + line)
                 .copied()
                 .or_else(|| known.last().map(|last| LineSlot { drop: 0.0, ..*last }))
                 .unwrap_or(LineSlot {
@@ -192,7 +256,7 @@ fn break_in_slots(
                 slots.push(slot);
                 y += match source {
                     LineSource::Env { hints, .. } => hints
-                        .get(slots.len() - 1)
+                        .get(base + slots.len() - 1)
                         .copied()
                         .unwrap_or(data.line_height),
                     LineSource::Replay(_) => data.line_height,
@@ -202,6 +266,13 @@ fn break_in_slots(
                     for id in deferred.drain(..) {
                         env.float_below(id, y);
                     }
+                }
+                if slots.len() == 1 {
+                    let floats = match source {
+                        LineSource::Env { env, .. } => env.mark(),
+                        LineSource::Replay(_) => 0,
+                    };
+                    after_first = Some((y, floats));
                 }
                 slot = start_line(source, slots.len(), &mut y, previous_end);
                 apply(&mut breaker, slot);
@@ -227,7 +298,7 @@ fn break_in_slots(
         }
     }
     breaker.finish();
-    slots
+    Broken { slots, after_first }
 }
 
 /// The first line that holds more than the room a float left it, which a line
@@ -252,16 +323,20 @@ fn break_lines_in_slots(
     width: f32,
     strut_height: f32,
     source: &mut LineSource<'_>,
-) -> Vec<LineSlot> {
+    base: usize,
+    y0: f32,
+) -> Broken {
     let start = match source {
         LineSource::Env { env, .. } => env.mark(),
-        LineSource::Replay(_) => return break_in_slots(layout, width, strut_height, source, &[]),
+        LineSource::Replay(_) => {
+            return break_in_slots(layout, width, strut_height, source, &[], base, y0);
+        }
     };
     let mut shifts: Vec<usize> = Vec::new();
-    let mut slots = break_in_slots(layout, width, strut_height, source, &shifts);
+    let mut broken = break_in_slots(layout, width, strut_height, source, &shifts, base, y0);
     // Each pass moves one line, so there are as many as there are lines.
     for _ in 0..MOVES {
-        let Some(line) = overflowing_line(layout, &slots, width) else {
+        let Some(line) = overflowing_line(layout, &broken.slots, width) else {
             break;
         };
         shifts.resize(shifts.len().max(line + 1), 0);
@@ -269,14 +344,15 @@ fn break_lines_in_slots(
         if let LineSource::Env { env, .. } = source {
             env.rewind(start);
         }
-        let again = break_in_slots(layout, width, strut_height, source, &shifts);
-        if again == slots {
+        let again = break_in_slots(layout, width, strut_height, source, &shifts, base, y0);
+        if again.slots == broken.slots {
             // No float is left to wait for: it overflows where it is.
+            broken.after_first = again.after_first;
             break;
         }
-        slots = again;
+        broken = again;
     }
-    slots
+    broken
 }
 
 /// A font's vertical metrics at one size, which line boxes are built from.
@@ -441,11 +517,25 @@ impl Font {
         max_width: Option<f32>,
         source: Option<&mut LineSource<'_>>,
     ) -> (InlineLayout, LineTrace) {
-        let mut trace = LineTrace::default();
-        // The runs as laid out: each under its own element's white space, and
-        // a space collapses with the one before even across elements.
-        let mut previous_space = true;
-        let mut in_word = false;
+        if elements.iter().any(|element| element.first_line.is_some()) {
+            return self.shape_with_first_line(elements, items, max_width, source);
+        }
+        let runs = self.prepare_runs(elements, items, (true, false)).0;
+        let laid = self.lay_out(elements, items, &runs, max_width, source, Part::default());
+        (laid.layout, laid.trace)
+    }
+
+    /// The text of every item as it is laid out: each under its own element's white
+    /// space, and a space collapses with the one before even across elements. `state`
+    /// says whether the text before ends in a space and in a word; the state the text
+    /// ends in is returned with it.
+    fn prepare_runs<'i>(
+        &mut self,
+        elements: &[InlineElement],
+        items: &[InlineItem<'i>],
+        state: (bool, bool),
+    ) -> (Vec<crate::Prepared<'i>>, (bool, bool)) {
+        let (mut previous_space, mut in_word) = state;
         let empty = || crate::Prepared {
             text: std::borrow::Cow::Borrowed(""),
             small: Vec::new(),
@@ -455,7 +545,7 @@ impl Font {
             .iter()
             .map(|element| element.style.caps.is_synthesized() && self.caps_in_font(&element.style))
             .collect();
-        let runs: Vec<crate::Prepared<'_>> = items
+        let runs = items
             .iter()
             .map(|item| match *item {
                 InlineItem::Text { text, element } => elements[element].style.prepared(
@@ -472,11 +562,270 @@ impl Font {
                 InlineItem::Spacer { .. } | InlineItem::Float { .. } => empty(),
             })
             .collect();
+        (runs, (previous_space, in_word))
+    }
+
+    /// An inline formatting context whose container has a first line of a style of its
+    /// own, which is laid out apart: the first line is the first line of the whole text
+    /// in the style of the first line, and the lines after it are what is left of the text,
+    /// in the style it has elsewhere, as Chrome lays them out. Every element is there
+    /// twice, `n + element` being the element as it is on the first line.
+    fn shape_with_first_line(
+        &mut self,
+        elements: &[InlineElement],
+        items: &[InlineItem<'_>],
+        max_width: Option<f32>,
+        mut source: Option<&mut LineSource<'_>>,
+    ) -> (InlineLayout, LineTrace) {
+        let n = elements.len();
+        let mut both = elements.to_vec();
+        both.extend(elements.iter().map(|element| {
+            InlineElement::new(
+                n + element.parent,
+                element.first_line.unwrap_or(element.style),
+            )
+        }));
+        let on_first_line: Vec<InlineItem<'_>> = items
+            .iter()
+            .map(|item| match *item {
+                InlineItem::Text { text, element } => InlineItem::Text {
+                    text,
+                    element: n + element,
+                },
+                InlineItem::Spacer {
+                    element,
+                    inside,
+                    margin,
+                    end,
+                } => InlineItem::Spacer {
+                    element: n + element,
+                    inside,
+                    margin,
+                    end,
+                },
+                InlineItem::Box {
+                    id,
+                    width,
+                    height,
+                    baseline,
+                    element,
+                    vertical_align,
+                } => InlineItem::Box {
+                    id,
+                    width,
+                    height,
+                    baseline,
+                    element: n + element,
+                    vertical_align,
+                },
+                InlineItem::Float { id } => InlineItem::Float { id },
+            })
+            .collect();
+        let (runs, _) = self.prepare_runs(&both, &on_first_line, (true, false));
+        let mut first = self.lay_out(
+            &both,
+            &on_first_line,
+            &runs,
+            max_width,
+            source.as_deref_mut(),
+            Part {
+                take: Some(1),
+                root: n,
+                ..Part::default()
+            },
+        );
+        first.layout.first_line = Some(n);
+        let Some((text_end, rest_y, floats)) = first
+            .first
+            .as_ref()
+            .filter(|_| first.lines > 1)
+            .map(|end| (end.text_end, end.y, end.floats))
+        else {
+            return (first.layout, first.trace);
+        };
+        // The lines after the first are laid out again, so what they placed beside floats goes.
+        if let Some(LineSource::Env { env, .. }) = source.as_deref_mut() {
+            env.rewind(floats);
+        }
+
+        // Where the first line ends in the items: the first item that is wholly after it,
+        // or the one it ends in, of which `cut` bytes are on the first line.
+        let on_line: Vec<u64> = first.layout.boxes.iter().map(|b| b.id).collect();
+        let mut offset = 0usize;
+        let mut split = None;
+        for (index, (item, run)) in items.iter().zip(&runs).enumerate() {
+            let after = offset >= text_end;
+            match *item {
+                InlineItem::Text { text, element } => {
+                    let length = run.text.len();
+                    if length > 0 && after {
+                        split = Some((index, None));
+                        break;
+                    }
+                    if offset + length > text_end {
+                        let (_, state) =
+                            self.prepare_runs(&both, &on_first_line[..index], (true, false));
+                        let cut = self.source_len(
+                            &both[n + element].style,
+                            text,
+                            text_end - offset,
+                            state,
+                        );
+                        split = Some((index, Some(cut)));
+                        break;
+                    }
+                    offset += length;
+                }
+                InlineItem::Spacer { inside, margin, .. } => {
+                    if inside + margin > 0.0 {
+                        if after {
+                            split = Some((index, None));
+                            break;
+                        }
+                        offset += SPACER.len_utf8();
+                    }
+                }
+                InlineItem::Box { id, .. } | InlineItem::Float { id } => {
+                    if after && !on_line.contains(&id) {
+                        split = Some((index, None));
+                        break;
+                    }
+                }
+            }
+        }
+        let Some((split, cut)) = split else {
+            return (first.layout, first.trace);
+        };
+        let mut rest: Vec<InlineItem<'_>> = Vec::with_capacity(items.len() - split);
+        let (_, mut state) = self.prepare_runs(&both, &on_first_line[..split], (true, false));
+        match (cut, items[split]) {
+            (Some(cut), InlineItem::Text { text, element }) => {
+                let style = both[n + element].style;
+                let native = style.caps.is_synthesized() && self.caps_in_font(&style);
+                let _ = style.prepared(&text[..cut], &mut state.0, &mut state.1, native);
+                rest.push(InlineItem::Text {
+                    text: &text[cut..],
+                    element,
+                });
+                rest.extend_from_slice(&items[split + 1..]);
+            }
+            _ => rest.extend_from_slice(&items[split..]),
+        }
+        let (runs, _) = self.prepare_runs(&both, &rest, state);
+        let second = self.lay_out(
+            &both,
+            &rest,
+            &runs,
+            max_width,
+            source,
+            Part {
+                line_base: 1,
+                cursor: first.layout.height,
+                y: rest_y,
+                take: None,
+                after_first: true,
+                root: 0,
+            },
+        );
+
+        // An element cut by the end of the first line is no more at its end there than it
+        // was at its start where the next lines go on with it.
+        let reached = |items: &[InlineItem<'_>]| {
+            let mut reached = vec![false; n];
+            for item in items {
+                let element = match *item {
+                    InlineItem::Text { element, .. }
+                    | InlineItem::Spacer { element, .. }
+                    | InlineItem::Box { element, .. } => element,
+                    InlineItem::Float { .. } => continue,
+                };
+                let mut at = element;
+                loop {
+                    reached[at] = true;
+                    if at == 0 {
+                        break;
+                    }
+                    at = elements[at].parent;
+                }
+            }
+            reached
+        };
+        let in_rest = reached(&rest);
+        let in_first = reached(&items[..split + usize::from(cut.is_some())]);
+        let mut layout = first.layout;
+        for fragment in &mut layout.fragments {
+            if fragment.element >= n && in_rest[fragment.element - n] {
+                fragment.ends = false;
+            }
+        }
+        let after = second.layout;
+        layout.runs.extend(after.runs);
+        layout.boxes.extend(after.boxes);
+        layout
+            .fragments
+            .extend(after.fragments.into_iter().map(|mut fragment| {
+                if in_first[fragment.element] {
+                    fragment.starts = false;
+                }
+                fragment
+            }));
+        layout.width = layout.width.max(after.width);
+        if second.lines > 0 {
+            layout.height = after.height;
+            layout.last_baseline = after.last_baseline;
+        }
+        let mut trace = first.trace;
+        trace.slots.truncate(1);
+        trace.slots.extend(second.trace.slots);
+        trace.heights.extend(second.trace.heights);
+        (layout, trace)
+    }
+
+    /// How many bytes of `text`, written in `style` after text that left the state `state`
+    /// (whether it ends in a space and in a word), make `length` bytes of prepared text.
+    fn source_len(
+        &mut self,
+        style: &TextStyle,
+        text: &str,
+        length: usize,
+        state: (bool, bool),
+    ) -> usize {
+        let native = style.caps.is_synthesized() && self.caps_in_font(style);
+        let boundaries: Vec<usize> = text
+            .char_indices()
+            .map(|(at, _)| at)
+            .chain(std::iter::once(text.len()))
+            .collect();
+        // The prepared text of a prefix is a prefix of the prepared text, so the first
+        // prefix that is long enough is the one.
+        let at = boundaries.partition_point(|&end| {
+            let (mut space, mut word) = state;
+            style
+                .prepared(&text[..end], &mut space, &mut word, native)
+                .text
+                .len()
+                < length
+        });
+        boundaries.get(at).copied().unwrap_or(text.len())
+    }
+
+    /// Lays out `items`, which belong to `elements`, in lines: the whole of a context, or
+    /// as much of it as `part` says.
+    fn lay_out(
+        &mut self,
+        elements: &[InlineElement],
+        items: &[InlineItem<'_>],
+        runs: &[crate::Prepared<'_>],
+        max_width: Option<f32>,
+        source: Option<&mut LineSource<'_>>,
+        part: Part,
+    ) -> Laid {
+        let mut trace = LineTrace::default();
         let mut text = String::new();
         let mut spans: Vec<Span> = Vec::new();
         // The small capitals of each run, where they are in `text`.
         let mut small_caps: Vec<(Range<usize>, usize)> = Vec::new();
-        for (item, run) in items.iter().zip(&runs) {
+        for (item, run) in items.iter().zip(runs) {
             let run_text = run.text.as_ref();
             match *item {
                 InlineItem::Text { element, .. } if !run_text.is_empty() => {
@@ -509,18 +858,21 @@ impl Font {
             .iter()
             .any(|item| matches!(item, InlineItem::Box { .. }));
         if text.is_empty() && !has_box {
-            return (
-                InlineLayout {
+            return Laid {
+                layout: InlineLayout {
                     width: 0.0,
-                    height: 0.0,
+                    height: part.cursor,
                     baseline: 0.0,
                     last_baseline: 0.0,
                     runs: Vec::new(),
                     boxes: Vec::new(),
                     fragments: Vec::new(),
+                    first_line: None,
                 },
                 trace,
-            );
+                lines: 0,
+                first: None,
+            };
         }
 
         let family_names = [
@@ -531,7 +883,7 @@ impl Font {
             self.spacer_em(FontFamily::SansSerif),
             self.spacer_em(FontFamily::Monospace),
         ];
-        let root_style = elements[0].style;
+        let root_style = elements[part.root].style;
 
         let mut builder = self
             .layout_cx
@@ -541,7 +893,7 @@ impl Font {
         builder.push_default(StyleProperty::FontSize(16.0));
 
         let mut offset = 0usize;
-        for (item, run) in items.iter().zip(&runs) {
+        for (item, run) in items.iter().zip(runs) {
             let run = run.text.as_ref();
             match *item {
                 InlineItem::Text { element, .. } => {
@@ -645,16 +997,27 @@ impl Font {
 
         let mut layout: parley::Layout<[u8; 4]> = builder.build(&text);
         let (indent, options) = root_style.paragraph_indent(max_width);
+        // The lines after the first have no first line's indent.
+        let indent = if part.after_first && !options.each_line {
+            0.0
+        } else {
+            indent
+        };
         layout.set_text_indent(indent, options);
+        let mut after_first = None;
         match source {
             Some(source) => {
                 let strut = self.element_box(root_style);
-                trace.slots = break_lines_in_slots(
+                let broken = break_lines_in_slots(
                     &mut layout,
                     max_width.unwrap_or(f32::MAX),
                     strut.above + strut.below,
                     source,
+                    part.line_base,
+                    part.y,
                 );
+                trace.slots = broken.slots;
+                after_first = broken.after_first;
             }
             None => layout.break_all_lines(max_width),
         }
@@ -668,9 +1031,10 @@ impl Font {
         let mut runs = Vec::new();
         let mut boxes = Vec::new();
         let mut fragments = Vec::new();
-        let mut cursor = 0.0f32;
+        let mut cursor = part.cursor;
         let mut first_baseline = None;
         let mut last_baseline = 0.0;
+        let mut widest = 0.0f32;
         // A line break at the very end ends the line it is in, and no line comes after it.
         let ends_in_break = text.ends_with('\n')
             && layout
@@ -679,7 +1043,8 @@ impl Font {
                 .is_some_and(|line| line.text_range().is_empty());
         let line_count =
             layout.lines().count() - usize::from(ends_in_break && layout.lines().count() > 1);
-        for (line_number, line) in layout.lines().enumerate().take(line_count) {
+        let taken = part.take.map_or(line_count, |lines| lines.min(line_count));
+        for (line_number, line) in layout.lines().enumerate().take(taken) {
             cursor += trace.slots.get(line_number).map_or(0.0, |slot| slot.drop);
             let placed = place_line(
                 &line,
@@ -688,40 +1053,58 @@ impl Font {
                 elements,
                 &element_boxes,
                 items,
-                cursor,
+                (cursor, part.root),
             );
+            let number = (part.line_base + line_number) as u32;
             for (glyph_run, run_element, shift_y) in placed.runs {
                 let mut shaped = glyph_run;
                 for glyph in &mut shaped.glyphs {
                     glyph.y += shift_y;
                 }
                 shaped.element = run_element;
-                shaped.line = line_number as u32;
+                shaped.line = number;
                 runs.push(shaped);
             }
             boxes.extend(placed.boxes);
             fragments.extend(placed.fragments.into_iter().map(|mut fragment| {
-                fragment.line = line_number as u32;
+                fragment.line = number;
                 fragment
             }));
             first_baseline.get_or_insert(placed.baseline);
             last_baseline = placed.baseline;
+            let metrics = line.metrics();
+            widest = widest.max(metrics.advance - metrics.trailing_whitespace);
             trace.heights.push(placed.height);
             cursor += placed.height;
         }
+        let first = layout.lines().next().map(|line| {
+            let (y, floats) = after_first.unwrap_or((0.0, 0));
+            FirstLineEnd {
+                text_end: line.text_range().end,
+                y,
+                floats,
+            }
+        });
 
-        (
-            InlineLayout {
-                width: layout.width(),
+        Laid {
+            layout: InlineLayout {
+                width: if part.take.is_some() {
+                    widest
+                } else {
+                    layout.width()
+                },
                 height: cursor,
                 baseline: first_baseline.unwrap_or(0.0),
                 last_baseline,
                 runs,
                 boxes,
                 fragments,
+                first_line: None,
             },
             trace,
-        )
+            lines: line_count,
+            first,
+        }
     }
 
     /// Ascent, descent, line gap and x-height of a font at a size, from the
@@ -814,15 +1197,12 @@ fn flatten<'a>(
     items: &[crate::InlineContent<'a>],
     strut: TextStyle,
 ) -> (Vec<InlineElement>, Vec<InlineItem<'a>>) {
-    let mut elements = vec![InlineElement {
-        parent: 0,
-        style: strut,
-    }];
+    let mut elements = vec![InlineElement::new(0, strut)];
     let mut tree = Vec::with_capacity(items.len());
     for item in items {
         match *item {
             crate::InlineContent::Text { text, style } => {
-                elements.push(InlineElement { parent: 0, style });
+                elements.push(InlineElement::new(0, style));
                 tree.push(InlineItem::Text {
                     text,
                     element: elements.len() - 1,
@@ -880,7 +1260,7 @@ fn place_line(
     elements: &[InlineElement],
     element_boxes: &[ElementBox],
     items: &[InlineItem<'_>],
-    cursor: f32,
+    (cursor, root): (f32, usize),
 ) -> PlacedLine {
     let count = elements.len();
 
@@ -981,7 +1361,7 @@ fn place_line(
     }
     // The strut is on every line, a line of atomic boxes alone included: the
     // boxes sit on its baseline and its depth shows below them.
-    present[0] = true;
+    present[root] = true;
     for element in (1..count).rev() {
         if present[element] {
             present[elements[element].parent] = true;
@@ -1010,7 +1390,7 @@ fn place_line(
         }
         participants[element] = Some(Participant {
             parent: elements[element].parent,
-            vertical_align: if element == 0 {
+            vertical_align: if element == root {
                 VerticalAlign::Baseline
             } else {
                 style.vertical_align
@@ -1134,7 +1514,7 @@ fn place_line(
     }
 
     let baseline_for = |mut element: usize| {
-        while participants[element].is_none() && element != 0 {
+        while participants[element].is_none() && element != root {
             element = elements[element].parent;
         }
         baseline_of[element]
@@ -1168,7 +1548,7 @@ fn place_line(
         loop {
             low[element] = low[element].min(from);
             high[element] = high[element].max(to);
-            if element == 0 {
+            if element == root {
                 break;
             }
             element = elements[element].parent;
@@ -1233,7 +1613,7 @@ fn place_line(
         loop {
             first[element] = first[element].min(span.range.start);
             last[element] = last[element].max(span.range.end);
-            if element == 0 {
+            if element == root {
                 break;
             }
             element = elements[element].parent;
@@ -1288,16 +1668,13 @@ mod tests {
     /// `vertical-align`, in a 16px container, as Chrome measured them.
     fn vertical(line_height: LineHeight, size: f32, align: VerticalAlign) -> (f32, f32) {
         let elements = [
-            InlineElement {
-                parent: 0,
-                style: sans(16.0).with_line_height(line_height),
-            },
-            InlineElement {
-                parent: 0,
-                style: sans(size)
+            InlineElement::new(0, sans(16.0).with_line_height(line_height)),
+            InlineElement::new(
+                0,
+                sans(size)
                     .with_line_height(line_height)
                     .with_vertical_align(align),
-            },
+            ),
         ];
         let items = [text("ab ", 0), text("xy", 1), text(" cd", 0)];
         let layout = Font::load_embedded().shape_inline_tree(&elements, &items, Some(400.0));
@@ -1371,10 +1748,7 @@ mod tests {
     fn a_box_aligned_to_the_middle_sits_on_the_baseline_plus_half_the_x_height() {
         // Chrome: an empty 30px inline-block with vertical-align: middle makes a
         // 30px line and the text 2.281px below the top.
-        let elements = [InlineElement {
-            parent: 0,
-            style: sans(16.0),
-        }];
+        let elements = [InlineElement::new(0, sans(16.0))];
         let items = [
             text("x ", 0),
             InlineItem::Box {
@@ -1399,14 +1773,8 @@ mod tests {
         // margin: 0 8px` around "world": the span's border box starts at 44.5
         // and is 66.391 wide, and nothing breaks even in 100px.
         let elements = [
-            InlineElement {
-                parent: 0,
-                style: sans(16.0),
-            },
-            InlineElement {
-                parent: 0,
-                style: sans(16.0),
-            },
+            InlineElement::new(0, sans(16.0)),
+            InlineElement::new(0, sans(16.0)),
         ];
         let spacer = |end| InlineItem::Spacer {
             element: 1,
@@ -1437,14 +1805,8 @@ mod tests {
     #[test]
     fn justifying_a_line_does_not_stretch_a_spacer() {
         let elements = [
-            InlineElement {
-                parent: 0,
-                style: sans(16.0),
-            },
-            InlineElement {
-                parent: 0,
-                style: sans(16.0),
-            },
+            InlineElement::new(0, sans(16.0)),
+            InlineElement::new(0, sans(16.0)),
         ];
         let spacer = |end| InlineItem::Spacer {
             element: 1,
@@ -1477,14 +1839,8 @@ mod tests {
         // border and margin, then " eee", in 120px: 38.828/68.516 on the first
         // line and 0/41.375 on the second.
         let elements = [
-            InlineElement {
-                parent: 0,
-                style: sans(16.0),
-            },
-            InlineElement {
-                parent: 0,
-                style: sans(16.0),
-            },
+            InlineElement::new(0, sans(16.0)),
+            InlineElement::new(0, sans(16.0)),
         ];
         let spacer = |end| InlineItem::Spacer {
             element: 1,
@@ -1516,18 +1872,9 @@ mod tests {
         // Chrome: an outer 24px span (content area 33) holding "b ", an inner
         // 12px span (17 tall, top 13) and " d", in a 16px container: line 33.
         let elements = [
-            InlineElement {
-                parent: 0,
-                style: sans(16.0),
-            },
-            InlineElement {
-                parent: 0,
-                style: sans(24.0),
-            },
-            InlineElement {
-                parent: 1,
-                style: sans(12.0),
-            },
+            InlineElement::new(0, sans(16.0)),
+            InlineElement::new(0, sans(24.0)),
+            InlineElement::new(1, sans(12.0)),
         ];
         let items = [
             text("a ", 0),
@@ -1550,14 +1897,8 @@ mod tests {
     #[test]
     fn each_run_knows_its_element() {
         let elements = [
-            InlineElement {
-                parent: 0,
-                style: sans(16.0),
-            },
-            InlineElement {
-                parent: 0,
-                style: sans(20.0),
-            },
+            InlineElement::new(0, sans(16.0)),
+            InlineElement::new(0, sans(20.0)),
         ];
         let items = [text("one ", 0), text("two", 1), text(" three", 0)];
         let layout = Font::load_embedded().shape_inline_tree(&elements, &items, None);
@@ -1749,7 +2090,7 @@ mod tests {
         text: &str,
     ) -> (InlineLayout, LineTrace) {
         let style = style.with_line_height(LineHeight::Length(20.0));
-        let elements = [InlineElement { parent: 0, style }];
+        let elements = [InlineElement::new(0, style)];
         let items = [InlineItem::Text { text, element: 0 }];
         let mut hints: Vec<f32> = Vec::new();
         let mut result = None;
@@ -1850,10 +2191,10 @@ mod tests {
 
     #[test]
     fn a_float_item_is_put_at_the_top_of_the_line_it_is_reached_on_when_it_fits() {
-        let elements = [InlineElement {
-            parent: 0,
-            style: sans(16.0).with_line_height(LineHeight::Length(20.0)),
-        }];
+        let elements = [InlineElement::new(
+            0,
+            sans(16.0).with_line_height(LineHeight::Length(20.0)),
+        )];
         let items = [
             InlineItem::Text {
                 text: "ab ",
@@ -1891,7 +2232,7 @@ mod tests {
         };
         let (first, trace) = shaped_beside(&mut env, sans(16.0));
         let style = sans(16.0).with_line_height(LineHeight::Length(20.0));
-        let elements = [InlineElement { parent: 0, style }];
+        let elements = [InlineElement::new(0, style)];
         let items = [InlineItem::Text {
             text: FOX,
             element: 0,
@@ -1900,5 +2241,311 @@ mod tests {
         let (again, _) =
             Font::load_embedded().shape_inline_tree_in_slots(&elements, &items, 200.0, &mut source);
         assert_eq!(line_extents(&first), line_extents(&again));
+    }
+
+    /// A paragraph of plain words, wide enough for a few lines at 14px.
+    const WORDS: &str = "The quick brown fox jumps over the lazy dog and keeps running far away";
+
+    fn first_line_elements(base: TextStyle, line: TextStyle) -> [InlineElement; 1] {
+        [InlineElement {
+            first_line: Some(line),
+            ..InlineElement::new(0, base)
+        }]
+    }
+
+    fn sizes_by_line(layout: &InlineLayout) -> Vec<Vec<f32>> {
+        let lines = layout
+            .runs
+            .iter()
+            .map(|r| r.line)
+            .max()
+            .map_or(0, |l| l + 1);
+        (0..lines)
+            .map(|line| {
+                layout
+                    .runs
+                    .iter()
+                    .filter(|r| r.line == line)
+                    .map(|r| r.font_size)
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn glyph_count(layout: &InlineLayout, line: Option<u32>) -> usize {
+        layout
+            .runs
+            .iter()
+            .filter(|r| line.is_none_or(|line| r.line == line))
+            .map(|r| r.glyphs.len())
+            .sum()
+    }
+
+    #[test]
+    fn the_first_line_is_set_in_its_own_style_and_the_rest_in_the_style_of_the_text() {
+        let base = sans(14.0);
+        let elements = first_line_elements(base, sans(22.0));
+        let items = [text(WORDS, 0)];
+        let layout = Font::load_embedded().shape_inline_tree(&elements, &items, Some(200.0));
+        let sizes = sizes_by_line(&layout);
+        assert!(sizes.len() >= 3, "{sizes:?}");
+        assert!(sizes[0].iter().all(|&s| s == 22.0), "{sizes:?}");
+        assert!(sizes[1..].iter().flatten().all(|&s| s == 14.0), "{sizes:?}");
+        assert_eq!(layout.first_line, Some(1));
+        // The lines break where the style of each puts them: fewer words fit in the
+        // first line than in a line of the plain style.
+        let plain = Font::load_embedded().shape_inline_tree(
+            &[InlineElement::new(0, base)],
+            &items,
+            Some(200.0),
+        );
+        assert!(glyph_count(&layout, Some(0)) < glyph_count(&plain, Some(0)));
+        // Every glyph of the text is there once.
+        assert_eq!(glyph_count(&layout, None), glyph_count(&plain, None));
+    }
+
+    #[test]
+    fn a_first_line_style_equal_to_the_style_lays_out_the_same_lines() {
+        let base = sans(14.0);
+        let items = [text(WORDS, 0)];
+        let plain = Font::load_embedded().shape_inline_tree(
+            &[InlineElement::new(0, base)],
+            &items,
+            Some(300.0),
+        );
+        let same = Font::load_embedded().shape_inline_tree(
+            &first_line_elements(base, base),
+            &items,
+            Some(300.0),
+        );
+        assert_eq!(plain.runs.len(), same.runs.len());
+        close(plain.height, same.height);
+        close(plain.width, same.width);
+        for (a, b) in plain.runs.iter().zip(&same.runs) {
+            assert_eq!((a.line, a.glyphs.len()), (b.line, b.glyphs.len()));
+            close(a.x, b.x);
+            close(a.width, b.width);
+        }
+    }
+
+    #[test]
+    fn the_first_line_has_the_line_height_of_its_style() {
+        let base = sans(14.0).with_line_height(LineHeight::Length(18.0));
+        let line = base.with_line_height(LineHeight::Length(40.0));
+        let items = [text(WORDS, 0)];
+        let layout = Font::load_embedded().shape_inline_tree(
+            &first_line_elements(base, line),
+            &items,
+            Some(300.0),
+        );
+        let plain = Font::load_embedded().shape_inline_tree(
+            &[InlineElement::new(0, base)],
+            &items,
+            Some(300.0),
+        );
+        close(layout.height, plain.height + 22.0);
+    }
+
+    #[test]
+    fn a_centered_first_line_is_centered_in_the_width_it_has() {
+        let base = sans(14.0).with_align(TextAlign::Center);
+        let elements = first_line_elements(base, sans(14.0).with_align(TextAlign::Center));
+        let items = [text(WORDS, 0)];
+        let layout = Font::load_embedded().shape_inline_tree(&elements, &items, Some(300.0));
+        let line: Vec<&ShapedRun> = layout.runs.iter().filter(|r| r.line == 0).collect();
+        let start = line.iter().map(|r| r.x).fold(f32::MAX, f32::min);
+        let end = line.iter().map(|r| r.x + r.width).fold(0.0, f32::max);
+        // White space at the end of the line hangs: the text is centered.
+        assert!(
+            start > 1.0 && (start - (300.0 - end)).abs() < 8.0,
+            "{start} {end}"
+        );
+    }
+
+    #[test]
+    fn a_justified_first_line_is_stretched_to_the_width() {
+        let base = sans(14.0).with_align(TextAlign::Justify);
+        let elements = first_line_elements(base, base);
+        let items = [text(WORDS, 0)];
+        let layout = Font::load_embedded().shape_inline_tree(&elements, &items, Some(300.0));
+        let plain = Font::load_embedded().shape_inline_tree(
+            &[InlineElement::new(0, base)],
+            &items,
+            Some(300.0),
+        );
+        let end = |layout: &InlineLayout| {
+            layout
+                .runs
+                .iter()
+                .filter(|r| r.line == 0)
+                .map(|r| r.x + r.width)
+                .fold(0.0, f32::max)
+        };
+        // The first line is stretched to the width like a line of the plain style.
+        assert!(end(&plain) > 295.0, "{}", end(&plain));
+        close(end(&layout), end(&plain));
+    }
+
+    #[test]
+    fn an_element_the_first_line_ends_in_is_cut_there_and_goes_on_below() {
+        let base = sans(14.0);
+        let elements = [
+            InlineElement {
+                first_line: Some(sans(20.0)),
+                ..InlineElement::new(0, base)
+            },
+            InlineElement {
+                first_line: Some(sans(20.0)),
+                ..InlineElement::new(0, base)
+            },
+        ];
+        let items = [
+            text("Words before ", 0),
+            InlineItem::Spacer {
+                element: 1,
+                inside: 4.0,
+                margin: 0.0,
+                end: false,
+            },
+            text("and then an element with a good many more words in it", 1),
+            InlineItem::Spacer {
+                element: 1,
+                inside: 4.0,
+                margin: 0.0,
+                end: true,
+            },
+            text(" and after", 0),
+        ];
+        let layout = Font::load_embedded().shape_inline_tree(&elements, &items, Some(260.0));
+        let on_first: Vec<&InlineFragment> = layout
+            .fragments
+            .iter()
+            .filter(|f| f.line == 0 && f.element == 2 + 1)
+            .collect();
+        let below: Vec<&InlineFragment> = layout
+            .fragments
+            .iter()
+            .filter(|f| f.line == 1 && f.element == 1)
+            .collect();
+        assert_eq!(on_first.len(), 1, "{:?}", layout.fragments);
+        assert_eq!(below.len(), 1, "{:?}", layout.fragments);
+        assert!(on_first[0].starts && !on_first[0].ends);
+        assert!(!below[0].starts, "it started on the first line");
+        let last = layout
+            .fragments
+            .iter()
+            .rfind(|f| f.element == 1)
+            .expect("the element has fragments");
+        assert!(last.ends, "and ends where its text does");
+    }
+
+    #[test]
+    fn text_that_fits_the_first_line_alone_is_one_line_in_its_style() {
+        let elements = first_line_elements(sans(14.0), sans(20.0));
+        let items = [text("short", 0)];
+        let layout = Font::load_embedded().shape_inline_tree(&elements, &items, Some(300.0));
+        assert_eq!(sizes_by_line(&layout), vec![vec![20.0]]);
+        assert_eq!(layout.first_line, Some(1));
+    }
+
+    #[test]
+    fn the_text_after_the_first_line_is_prepared_in_its_own_style() {
+        let base = sans(14.0);
+        let mut line = sans(14.0);
+        line.transform.case = crate::TextCase::Uppercase;
+        let items = [text(
+            "alpha beta gamma delta epsilon zeta eta theta iota kappa",
+            0,
+        )];
+        let layout = Font::load_embedded().shape_inline_tree(
+            &first_line_elements(base, line),
+            &items,
+            Some(160.0),
+        );
+        let plain_upper = {
+            let mut upper = base;
+            upper.transform.case = crate::TextCase::Uppercase;
+            Font::load_embedded().shape_inline_tree(
+                &[InlineElement::new(0, upper)],
+                &items,
+                Some(160.0),
+            )
+        };
+        let rest = [text("delta epsilon zeta eta theta iota kappa", 0)];
+        let plain = Font::load_embedded().shape_inline_tree(
+            &[InlineElement::new(0, base)],
+            &rest,
+            Some(160.0),
+        );
+        let glyph_ids = |layout: &InlineLayout, line: u32| -> Vec<u32> {
+            layout
+                .runs
+                .iter()
+                .filter(|r| r.line == line)
+                .flat_map(|r| r.glyphs.iter().map(|g| g.id))
+                .collect()
+        };
+        assert_eq!(glyph_ids(&layout, 0), glyph_ids(&plain_upper, 0));
+        // What the first line leaves is laid out as text of its own, in its own style.
+        assert_eq!(glyph_ids(&layout, 1), glyph_ids(&plain, 0));
+        assert_eq!(glyph_ids(&layout, 2), glyph_ids(&plain, 1));
+    }
+
+    #[test]
+    fn a_first_line_beside_a_float_has_the_room_the_float_leaves_it() {
+        let mut env = Beside {
+            left: true,
+            width: 50.0,
+            height: 30.0,
+            placed: Vec::new(),
+        };
+        let base = sans(14.0).with_line_height(LineHeight::Length(20.0));
+        let line = sans(20.0).with_line_height(LineHeight::Length(20.0));
+        let elements = first_line_elements(base, line);
+        let items = [text(WORDS, 0)];
+        let mut source = LineSource::Env {
+            env: &mut env,
+            hints: &[],
+        };
+        let (layout, trace) =
+            Font::load_embedded().shape_inline_tree_in_slots(&elements, &items, 200.0, &mut source);
+        let extents = line_extents(&layout);
+        assert!(extents.len() >= 3, "{extents:?}");
+        close(extents[0].0, 50.0);
+        close(extents[1].0, 50.0);
+        close(extents[2].0, 0.0);
+        assert_eq!(trace.slots.len(), extents.len());
+        assert_eq!(trace.heights.len(), extents.len());
+        close(trace.slots[0].x, 50.0);
+        close(trace.slots[2].x, 0.0);
+    }
+
+    #[test]
+    fn a_float_after_the_first_line_is_placed_once_on_the_line_it_is_reached_on() {
+        let mut env = Beside {
+            left: false,
+            width: 40.0,
+            height: 200.0,
+            placed: Vec::new(),
+        };
+        let base = sans(14.0).with_line_height(LineHeight::Length(20.0));
+        let line = sans(18.0).with_line_height(LineHeight::Length(20.0));
+        let elements = first_line_elements(base, line);
+        let items = [
+            text("The quick brown fox jumps over the lazy dog ", 0),
+            InlineItem::Float { id: 7 },
+            text("and keeps running far away from here", 0),
+        ];
+        let mut source = LineSource::Env {
+            env: &mut env,
+            hints: &[],
+        };
+        let (layout, _) =
+            Font::load_embedded().shape_inline_tree_in_slots(&elements, &items, 200.0, &mut source);
+        assert!(layout.runs.iter().any(|run| run.line >= 1));
+        assert_eq!(env.placed.len(), 1, "{:?}", env.placed);
+        assert_eq!(env.placed[0].0, 7);
+        // It is reached below the first line, which is 20px tall.
+        assert!(env.placed[0].1 >= 19.9, "{:?}", env.placed);
     }
 }

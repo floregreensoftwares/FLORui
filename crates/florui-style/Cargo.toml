@@ -22,6 +22,8 @@ stylo_atoms = "0.8"
 stylo_config = "0.8"
 stylo_dom = "0.8"
 stylo_traits = "0.8"
+unicode-general-category = "1"
+unicode-segmentation = "1"
 url = "2"
 
 [dev-dependencies]

@@ -1366,6 +1366,10 @@ pub struct ComputedStyle {
     pub content: crate::content::Content,
     /// Inherited `quotes`: the marks of `open-quote` and `close-quote`.
     pub quotes: crate::content::Quotes,
+    /// What the node looks like where it is on the first line of a block with a
+    /// `::first-line` rule: the first line's own style for such a block, and for what it
+    /// holds that flows in the line, the style it has when it inherits from that.
+    pub first_line: Option<std::sync::Arc<ComputedStyle>>,
 }
 
 impl ComputedStyle {
@@ -1597,6 +1601,7 @@ impl ComputedStyle {
             scroll_behavior_smooth: _,
             content: _,
             quotes: _,
+            first_line: _,
         } = other;
         self.background_color = *background_color;
         self.background_color_clip = *background_color_clip;

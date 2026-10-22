@@ -1,0 +1,11 @@
+.wrap { position: relative; width: 340px; height: 700px; background-color: #ffffff; color: #101010; font-size: 14px; line-height: 18px; }
+.wrap > div { margin: 0 0 6px 10px; width: 320px; background-color: #e8e8e8; }
+.a::first-line { color: #c02020; font-weight: bold; }
+.b::first-line { font-size: 22px; color: #2040c0; }
+.c::first-line { text-transform: uppercase; letter-spacing: 1px; }
+.d::first-line { color: #208040; font-weight: bold; }
+.e::first-line { background-color: #ffd0d0; margin-left: 30px; padding: 0 10px; border: 2px solid red; }
+.f::first-line { font-size: 20px; color: #c02020; }
+.f::first-letter { color: #2040c0; }
+.g::first-line { line-height: 36px; }
+.h::first-line { color: #c02020; font-size: 20px; }
