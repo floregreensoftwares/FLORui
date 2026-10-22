@@ -119,6 +119,13 @@ impl Bypass {
                     Rule::Network(address, bits)
                 } else if let Some(domain) = token.strip_prefix('.') {
                     Rule::Domain(domain.to_owned())
+                } else if let Some(inside) = token
+                    .strip_prefix('[')
+                    .and_then(|rest| rest.split_once(']'))
+                    .map(|(inside, _port)| inside)
+                {
+                    // `[::1]` and `[::1]:8080`: the address, whatever port follows.
+                    Rule::Glob(inside.to_owned())
                 } else {
                     // Any `:port` at the end is not part of the name.
                     let name = match token.rsplit_once(':') {
@@ -411,22 +418,35 @@ fn run(program: &str, args: &[&str]) -> Option<String> {
         .stdout(Stdio::piped())
         .spawn()
         .ok()?;
+    // Read while it runs: a program that prints more than a pipe holds waits for a reader
+    // before it can exit.
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut output = String::new();
+        std::io::Read::read_to_string(&mut stdout, &mut output)
+            .ok()
+            .map(|_| output)
+    });
     let deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        match child.try_wait().ok()? {
-            Some(status) if status.success() => break,
-            Some(_) => return None,
-            None if Instant::now() >= deadline => {
+    let succeeded = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Ok(None) if Instant::now() >= deadline => {
+                // Closing the pipe ends the reader too.
                 let _ = child.kill();
                 let _ = child.wait();
-                return None;
+                break false;
             }
-            None => std::thread::sleep(Duration::from_millis(10)),
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            Err(_) => break false,
         }
+    };
+    if !succeeded {
+        // The reader is left to end when the pipe closes: a child of the program that was
+        // killed can hold it open, and waiting for that would be waiting for it.
+        return None;
     }
-    let mut output = String::new();
-    std::io::Read::read_to_string(&mut child.stdout.take()?, &mut output).ok()?;
-    Some(output)
+    reader.join().ok().flatten()
 }
 
 #[cfg(test)]
@@ -441,7 +461,7 @@ mod tests {
     fn a_bypass_list_matches_names_domains_patterns_and_networks() {
         let list = bypass(&[
             "localhost;*.corp.example;.intra.example;<local>",
-            "10.0.0.0/8, 192.168.*, 2001:db8::/32 printer.example:8080",
+            "10.0.0.0/8, 192.168.*, 2001:db8::/32 printer.example:8080 [::1]:8080",
         ]);
         for host in [
             "localhost",
@@ -455,6 +475,7 @@ mod tests {
             "2001:db8::7",
             "[2001:db8::7]",
             "printer.example",
+            "::1",
         ] {
             assert!(list.matches(host), "{host} goes direct");
         }
@@ -650,5 +671,23 @@ mod tests {
         assert_eq!(parse_kde("[Proxy Settings]\nProxyType=0\n"), System::Direct);
         assert_eq!(parse_kde("[Other]\nProxyType=1\n"), System::Direct);
         assert_eq!(parse_kde(""), System::Direct);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn output_larger_than_a_pipe_holds_is_read_in_full() {
+        // 300 000 bytes, well over the 64 KiB a pipe takes before the writer has to wait.
+        let output = run("sh", &["-c", "yes | head -c 300000"]).expect("the output");
+        assert_eq!(output.len(), 300_000);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_program_that_is_missing_slow_or_failing_gives_nothing() {
+        assert_eq!(run("florui-no-such-program", &[]), None);
+        assert_eq!(run("sh", &["-c", "exit 3"]), None);
+        let started = std::time::Instant::now();
+        assert_eq!(run("sh", &["-c", "sleep 30"]), None);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
     }
 }

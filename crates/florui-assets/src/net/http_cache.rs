@@ -173,7 +173,8 @@ impl Entry {
 
     /// Stale, but may be used at once while a fresh copy is fetched.
     pub fn may_serve_while_revalidating(&self, now: u64) -> bool {
-        !self.is_fresh(now) && self.age(now) < self.fresh_for + self.stale_while_revalidate
+        !self.is_fresh(now)
+            && self.age(now) < self.fresh_for.saturating_add(self.stale_while_revalidate)
     }
 
     /// Stale, but may be used if fetching a fresh copy fails.
@@ -745,5 +746,17 @@ mod tests {
             cache.lookup(url, NOW).is_none(),
             "the old copy is not served as if current"
         );
+    }
+
+    #[test]
+    fn windows_that_are_absurdly_long_do_not_overflow() {
+        let mut entry = entry("https://example.com/a.png", 1);
+        entry.fresh_for = u64::MAX - 1;
+        entry.stale_while_revalidate = u64::MAX;
+        entry.stale_if_error = u64::MAX;
+        assert!(entry.is_fresh(NOW + 1));
+        assert!(entry.may_serve_on_error(NOW + 1));
+        entry.fresh_for = 10;
+        assert!(entry.may_serve_while_revalidating(NOW + 11));
     }
 }

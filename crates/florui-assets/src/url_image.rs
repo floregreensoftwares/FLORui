@@ -137,12 +137,28 @@ pub(crate) fn sniff(bytes: &[u8]) -> Option<Format> {
     if crate::raster::Format::sniff(bytes).is_some() {
         return Some(Format::Raster);
     }
+    let text = bytes
+        .iter()
+        .skip_while(|b| b.is_ascii_whitespace() || **b == 0xEF || **b == 0xBB || **b == 0xBF);
+    let head: Vec<u8> = text.take(5).copied().collect();
+    (head.first() == Some(&b'<')).then_some(Format::Svg)
+}
+
+/// [`sniff`] for what a server sent, which can be anything: an SVG must have `<svg>` for its
+/// first element, after what may come before it. A page of HTML served as an image is not
+/// one. (A file of the application's own is trusted more, and `sniff` takes it as an SVG as
+/// soon as it looks like XML.)
+#[cfg(any(feature = "net", test))]
+pub(crate) fn sniff_strict(bytes: &[u8]) -> Option<Format> {
+    if crate::raster::Format::sniff(bytes).is_some() {
+        return Some(Format::Raster);
+    }
     looks_like_svg(bytes).then_some(Format::Svg)
 }
 
-/// Whether the first element of the document is `<svg>`, after what may come before it: a
-/// byte order mark, white space, an XML declaration, comments and a doctype. A page of HTML
-/// (an error page served as an image) is not one.
+/// Whether the first element of the document is `<svg>` (or `<svg:svg>`), after a byte
+/// order mark, white space, an XML declaration, comments and a doctype.
+#[cfg(any(feature = "net", test))]
 fn looks_like_svg(bytes: &[u8]) -> bool {
     let mut rest = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
     loop {
@@ -159,7 +175,7 @@ fn looks_like_svg(bytes: &[u8]) -> bool {
             };
             return name
                 .first()
-                .is_some_and(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/'));
+                .is_some_and(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/' | b':'));
         };
         match skipped {
             Some(len) => rest = &rest[len..],
@@ -168,6 +184,7 @@ fn looks_like_svg(bytes: &[u8]) -> bool {
     }
 }
 
+#[cfg(any(feature = "net", test))]
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
@@ -175,6 +192,7 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// The end of a `<!DOCTYPE ...>`, which may hold an internal subset in `[...]`.
+#[cfg(any(feature = "net", test))]
 fn doctype_end(rest: &[u8]) -> Option<usize> {
     let mut depth = 0usize;
     for (at, byte) in rest.iter().enumerate() {
@@ -581,14 +599,15 @@ mod tests {
     }
 
     #[test]
-    fn only_a_document_whose_first_element_is_svg_is_taken_for_one() {
+    fn only_a_document_whose_first_element_is_svg_is_taken_for_one_of_a_server() {
         for svg in [
+            "<svg:svg xmlns:svg='http://www.w3.org/2000/svg'/>",
             "<svg xmlns='http://www.w3.org/2000/svg'/>",
             "\u{feff}  <svg>",
             "<?xml version='1.0'?>\n<!-- made by hand -->\n<!DOCTYPE svg PUBLIC '-//W3C//DTD SVG 1.1//EN' 'x' [ <!ENTITY a 'b'> ]>\n<svg width='1'>",
             "<svg/>",
         ] {
-            assert_eq!(sniff(svg.as_bytes()), Some(Format::Svg), "{svg}");
+            assert_eq!(sniff_strict(svg.as_bytes()), Some(Format::Svg), "{svg}");
         }
         for not_svg in [
             "<html><body><svg></svg></body></html>",
@@ -599,7 +618,18 @@ mod tests {
             "hello",
             "",
         ] {
-            assert_eq!(sniff(not_svg.as_bytes()), None, "{not_svg}");
+            assert_eq!(sniff_strict(not_svg.as_bytes()), None, "{not_svg}");
+        }
+    }
+
+    #[test]
+    fn a_file_of_the_applications_own_is_still_taken_for_svg_when_it_looks_like_xml() {
+        for svg in [
+            "<svg:svg xmlns:svg='x'/>",
+            "<svgx>",
+            "  <?xml version='1.0'?><svg/>",
+        ] {
+            assert_eq!(sniff(svg.as_bytes()), Some(Format::Svg), "{svg}");
         }
     }
 }

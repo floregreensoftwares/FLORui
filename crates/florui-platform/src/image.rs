@@ -121,6 +121,9 @@ type Ticket = florui_assets::net::FetchTicket;
 #[cfg(not(feature = "net"))]
 type Ticket = ();
 
+/// The bytes of a downloaded document, shared with the download itself and not copied.
+type SharedBytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
+
 /// One `<img>`'s own current load state.
 enum ImageState {
     Pending,
@@ -164,7 +167,7 @@ struct ImageEntry {
     ticket: Option<Ticket>,
     /// A network SVG only: the downloaded document, kept so that rasterizing it at another
     /// size does not download it again (a path is read again, cheaply, from disk).
-    svg_bytes: Option<Arc<Vec<u8>>>,
+    svg_bytes: Option<SharedBytes>,
 }
 
 /// Real load state for every currently-live `<img>`, keyed by structural
@@ -372,7 +375,7 @@ impl ImageRegistry {
             let result = florui_reactive::blocking::spawn_blocking(move || match downloaded {
                 Some(bytes) => cache.get_or_decode(
                     florui_assets::AssetId::Url(path.to_string_lossy().into_owned()),
-                    &bytes,
+                    (*bytes).as_ref(),
                     florui_assets::DecodeParams::Rasterized(fit),
                 ),
                 None => cache.get_or_load(
@@ -463,7 +466,7 @@ enum Downloaded {
     /// it is drawn at.
     Svg {
         intrinsic: florui_assets::Size2D,
-        bytes: Arc<Vec<u8>>,
+        bytes: SharedBytes,
     },
 }
 
@@ -536,7 +539,7 @@ fn start_remote(
                     let image = florui_assets::parse_svg(text)?;
                     Ok(Downloaded::Svg {
                         intrinsic: image.intrinsic_size,
-                        bytes: Arc::new(fetched.bytes.clone()),
+                        bytes: fetched,
                     })
                 })
                 .await
