@@ -1626,4 +1626,67 @@ mod tests {
             assert_same(&mut cache, &mut font, &arena, Size::MAX_CONTENT, "after");
         }
     }
+
+    #[test]
+    fn a_vertical_tree_lays_out_in_a_kept_tree_as_in_one_built_anew() {
+        let vertical = ".v { writing-mode: vertical-rl; height: 90px; } .l { writing-mode: vertical-lr; } \n             .h { writing-mode: horizontal-tb; } .p { margin: 0 0 3px 0; } \n             .s { padding: 2px 3px; border-right: 1px solid red; }";
+        let horizontal = ".p { margin: 0 0 3px 0; } .s { padding: 2px 3px; }";
+        let page = |inner: &str| {
+            let text = |content: &str| Element::text(content);
+            Element::node(
+                "div",
+                vec![("class".into(), "v".into())],
+                vec![
+                    Element::node(
+                        "p",
+                        vec![("class".into(), "p".into())],
+                        vec![
+                            text("one "),
+                            Element::node(
+                                "span",
+                                vec![("class".into(), "s".into())],
+                                vec![text(inner)],
+                            ),
+                            text(" three four five six"),
+                        ],
+                    ),
+                    Element::node(
+                        "p",
+                        vec![("class".into(), "l".into())],
+                        vec![text("second")],
+                    ),
+                    Element::node(
+                        "p",
+                        vec![("class".into(), "h".into())],
+                        vec![text("across")],
+                    ),
+                ],
+            )
+        };
+        let mut font = florui_text::Font::load_embedded();
+        let mut cache = LayoutCache::new();
+        let available = Size::MAX_CONTENT;
+        // The same tree under the styles that turn it, then the ones that do not, then back:
+        // the frames of the nodes change under a kept tree.
+        for (step, (css, inner)) in [
+            (vertical, "two"),
+            (vertical, "two"),
+            (vertical, "twenty"),
+            (horizontal, "two"),
+            (vertical, "two"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let arena = Arena::build(&page(inner));
+            assert_same_with(
+                css,
+                &mut cache,
+                &mut font,
+                &arena,
+                available,
+                &format!("step {step}"),
+            );
+        }
+    }
 }

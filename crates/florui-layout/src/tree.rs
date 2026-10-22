@@ -56,6 +56,8 @@ pub(crate) struct Node {
     pub(crate) marker: Option<MarkerRise>,
     /// The writing mode of the node: the frame its content is laid out in.
     pub(crate) flow: Flow,
+    /// The writing mode of the parent, the frame the layout of the node is in.
+    pub(crate) parent_flow: Flow,
     /// `style` as the algorithms of the content of the node read it, when its flow is
     /// vertical; and as its parent's read it, when the flow of the parent is.
     content: OnceCell<Box<Style>>,
@@ -92,6 +94,7 @@ impl Node {
             border: None,
             marker: None,
             flow: Flow::Horizontal,
+            parent_flow: Flow::Horizontal,
             content: OnceCell::new(),
             item: OnceCell::new(),
         }
@@ -268,6 +271,7 @@ impl FlorTree {
         for &child in children {
             let child = self.get_mut(child)?;
             child.parent = Some(id);
+            child.parent_flow = Flow::Horizontal;
             child.item = OnceCell::new();
         }
         self.live_mut(id).children = children.to_vec();
@@ -284,6 +288,7 @@ impl FlorTree {
         for child in children {
             if let Ok(child) = self.get_mut(child) {
                 child.parent = None;
+                child.parent_flow = Flow::Horizontal;
             }
         }
         let (index, _) = split_id(id);
@@ -298,6 +303,7 @@ impl FlorTree {
         for child in self.get(parent)?.children.clone() {
             if let Ok(child) = self.get_mut(child) {
                 child.parent = None;
+                child.parent_flow = Flow::Horizontal;
             }
         }
         for &child in children {
@@ -305,8 +311,10 @@ impl FlorTree {
                 self.get_mut(previous)?.children.retain(|&c| c != child);
                 self.mark_dirty(previous)?;
             }
+            let flow = self.get(parent)?.flow;
             let node = self.get_mut(child)?;
             node.parent = Some(parent);
+            node.parent_flow = flow;
             node.item = OnceCell::new();
         }
         self.get_mut(parent)?.children = children.to_vec();
@@ -346,6 +354,7 @@ impl FlorTree {
         node.item = OnceCell::new();
         for child in node.children.clone() {
             if let Ok(child) = self.get_mut(child) {
+                child.parent_flow = flow;
                 child.item = OnceCell::new();
             }
         }
@@ -354,9 +363,7 @@ impl FlorTree {
 
     /// The flow of the parent of `id`, the frame the layout of `id` is in.
     pub(crate) fn parent_flow(&self, id: NodeId) -> Flow {
-        self.live(id)
-            .parent
-            .map_or(Flow::Horizontal, |parent| self.live(parent).flow)
+        self.live(id).parent_flow
     }
 
     pub(crate) fn set_marker(&mut self, id: NodeId, marker: Option<MarkerRise>) -> TreeResult<()> {
@@ -408,19 +415,19 @@ impl FlorTree {
         if !frame.is_vertical() {
             return Ok(node.layout);
         }
-        let width = node
+        let container = node
             .parent
-            .map_or(0.0, |parent| self.physical_width(parent));
-        Ok(flow::layout_to_physical(&node.layout, frame, width))
+            .map_or((0.0, 0.0), |parent| self.physical_size(parent));
+        Ok(flow::layout_to_physical(&node.layout, frame, container))
     }
 
-    /// How wide the border box of `id` is on the screen.
-    pub(crate) fn physical_width(&self, id: NodeId) -> f32 {
+    /// How wide and how tall the border box of `id` is on the screen.
+    pub(crate) fn physical_size(&self, id: NodeId) -> (f32, f32) {
         let size = self.live(id).layout.size;
         if self.parent_flow(id).is_vertical() {
-            size.height
+            (size.height, size.width)
         } else {
-            size.width
+            (size.width, size.height)
         }
     }
 
@@ -486,7 +493,8 @@ pub(crate) struct Run<'a> {
 impl Run<'_> {
     /// The style of `id` as its parent's algorithm reads it.
     fn item_style(&self, id: NodeId) -> &Style {
-        self.tree.live(id).item_view(self.tree.parent_flow(id))
+        let node = self.tree.live(id);
+        node.item_view(node.parent_flow)
     }
 
     pub(crate) fn child_layout(

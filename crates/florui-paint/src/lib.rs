@@ -5075,7 +5075,7 @@ fn paint_node(
                     let (runs, cuts) = inline_runs_for(font, style, &shaped, line / scale_factor);
                     flowed(
                         buffer,
-                        vertical,
+                        mode,
                         (x + at.x, y + at.y, at.width, at.height),
                         reach_of(
                             mode,
@@ -5133,7 +5133,7 @@ fn paint_node(
                     inline_runs_for(font, style, &shaped, line_length / scale_factor);
                 flowed(
                     buffer,
-                    vertical,
+                    mode,
                     (content_x, content_y, content_width, content_height),
                     reach_of(mode, ink, (line_length, stack_length)),
                     scale_factor,
@@ -5180,7 +5180,7 @@ fn paint_node(
                 .then_some(content_width / scale_factor);
             flowed(
                 buffer,
-                vertical,
+                mode,
                 (content_x, content_y, content_width, content_height),
                 reach_of(mode, ink, (line_length, stack_length)),
                 scale_factor,
@@ -5230,16 +5230,17 @@ fn reach_of(
 #[allow(clippy::too_many_arguments)]
 fn flowed(
     buffer: &mut Surface,
-    vertical: bool,
+    mode: florui_style::WritingMode,
     content: (f32, f32, f32, f32),
     ink: (f32, f32, f32),
     scale_factor: f32,
     clip: Option<&Mask>,
     draw: impl FnOnce(&mut Surface, (f32, f32), Option<&Mask>),
 ) {
-    if vertical {
+    if mode.is_vertical() {
         turned::paint_turned(
             buffer,
+            mode,
             content,
             ink,
             scale_factor,

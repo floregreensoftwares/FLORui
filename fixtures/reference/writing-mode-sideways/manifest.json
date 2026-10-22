@@ -1,0 +1,108 @@
+{
+    "id":  "writing-mode-sideways",
+    "description":  "writing-mode sideways-rl and sideways-lr: the glyphs lie on their side whatever the script, and in sideways-lr the lines run up the page.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  300,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 300px; background-color: #ffffff; color: #101010; font-size: 14px; line-height: 18px; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 8px; padding: 8px; box-sizing: border-box; } .wrap \u003e div { background-color: #e8e8e8; } .a { writing-mode: sideways-rl; height: 100px; } .b { writing-mode: sideways-lr; height: 100px; } .c { writing-mode: sideways-lr; height: 100px; width: 50px; } .d { writing-mode: sideways-lr; height: 100px; } .s { background-color: #ffd0d0; padding: 3px 2px; border-right: 2px solid #c02020; } .e { writing-mode: sideways-lr; height: 100px; display: flex; } .e span { background-color: #c0d0f0; margin-bottom: 4px; } .f { writing-mode: sideways-rl; height: 100px; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "abc def ghi",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "b",
+                                        "css":  "",
+                                        "text":  "abc def ghi",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "c",
+                                        "css":  "",
+                                        "text":  "text that wraps into columns here",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "d",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "ab",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "s",
+                                                             "css":  "",
+                                                             "text":  "cd",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         "ef"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "e",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "one",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "two",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "f",
+                                        "css":  "",
+                                        "text":  "日本語abc",
+                                        "children":  [
+
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  4,
+                           "geometry_tolerance_px":  0.5,
+                           "channel_tolerance":  0,
+                           "reason":  "Measured against Chromium 155 on Windows: 3.48% of the pixels differ and every box, the span and the flex items have the geometry Chromium gives them, the lines running up the page in sideways-lr. What is left is the antialiasing of the text. With writing-mode ignored the same fixture measures 28.5%, so it fails."
+                       }
+}

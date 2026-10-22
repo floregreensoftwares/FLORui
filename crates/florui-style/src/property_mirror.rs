@@ -25,6 +25,7 @@ use cssparser::{Parser, ParserInput, Token};
 /// The properties carried as `--florui-<name>` as written.
 pub(crate) const MIRRORED: &[&str] = &[
     "text-orientation",
+    "writing-mode",
     "list-style-type",
     "counter-reset",
     "counter-increment",
@@ -358,6 +359,7 @@ fn expand(name: &str, value: &str, important: &str) -> Option<String> {
         "list-style-type" => is_valid_list_style_type(value)
             .then(|| format!("{}: {value}{important}", mirror_name(name))),
         "text-decoration" => expand_text_decoration(value, important),
+        "writing-mode" => expand_writing_mode(value, important),
         "clip-path" => Some(expand_clip_path(value, important)),
         "grid-template-columns" | "grid-template-rows" => {
             // A `subgrid` that does not parse is left for the engine to drop.
@@ -391,6 +393,26 @@ fn expand(name: &str, value: &str, important: &str) -> Option<String> {
         .then(|| format!("{}: {value}{important}", mirror_name(name))),
         _ => Some(format!("{}: {value}{important}", mirror_name(name))),
     }
+}
+
+/// `writing-mode`, which the engine knows with three of its values: the others are given to it
+/// as the nearest (`sideways-rl` and `sideways-lr` as `vertical-rl` and `vertical-lr`) and kept
+/// whole in the custom property, which every declaration of the property sets so that a later
+/// one resets it.
+fn expand_writing_mode(value: &str, important: &str) -> Option<String> {
+    let lower = value.trim().to_ascii_lowercase();
+    let engine = match lower.as_str() {
+        "sideways-rl" => "vertical-rl",
+        "sideways-lr" => "vertical-lr",
+        "horizontal-tb" | "vertical-rl" | "vertical-lr" | "lr" | "lr-tb" | "rl" | "rl-tb"
+        | "tb" | "tb-rl" => lower.as_str(),
+        word if is_global(word) => lower.as_str(),
+        _ => return None,
+    };
+    Some(format!(
+        "writing-mode: {engine}{important}; {}: {lower}{important}",
+        mirror_name("writing-mode")
+    ))
 }
 
 /// Whether `word` is a non-negative number.

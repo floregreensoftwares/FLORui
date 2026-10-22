@@ -8,7 +8,8 @@
 //! boxes are read out ([`rect_to_physical`], [`sides_to_physical`]).
 //!
 //! In that frame the left edge is the top edge of the screen; the top edge is the right
-//! edge in `vertical-rl` and the left edge in `vertical-lr`.
+//! edge in `vertical-rl` and the left edge in `vertical-lr`. In `sideways-lr` the lines run
+//! up, so the left edge is the bottom edge of the screen, and the top edge is its left edge.
 
 use taffy::{
     Baselines, CollapsibleMarginSet, Layout, LayoutInput, LayoutOutput, Line, Point, Rect,
@@ -24,6 +25,8 @@ pub(crate) enum Flow {
     VerticalRl,
     /// Lines run down, and stack from the left edge towards the right.
     VerticalLr,
+    /// Lines run up, and stack from the left edge towards the right.
+    SidewaysLr,
 }
 
 impl Flow {
@@ -32,6 +35,7 @@ impl Flow {
             florui_style::WritingMode::HorizontalTb => Flow::Horizontal,
             florui_style::WritingMode::VerticalRl => Flow::VerticalRl,
             florui_style::WritingMode::VerticalLr => Flow::VerticalLr,
+            florui_style::WritingMode::SidewaysLr => Flow::SidewaysLr,
         }
     }
 
@@ -49,16 +53,26 @@ fn swap<T>(size: Size<T>) -> Size<T> {
 
 /// The sides of a physical box as the frame of `flow` sees them.
 fn sides<T: Copy>(rect: Rect<T>, flow: Flow) -> Rect<T> {
-    let (top, bottom) = if flow == Flow::VerticalRl {
-        (rect.right, rect.left)
-    } else {
-        (rect.left, rect.right)
-    };
-    Rect {
-        left: rect.top,
-        right: rect.bottom,
-        top,
-        bottom,
+    match flow {
+        Flow::Horizontal => rect,
+        Flow::VerticalRl => Rect {
+            left: rect.top,
+            right: rect.bottom,
+            top: rect.right,
+            bottom: rect.left,
+        },
+        Flow::VerticalLr => Rect {
+            left: rect.top,
+            right: rect.bottom,
+            top: rect.left,
+            bottom: rect.right,
+        },
+        Flow::SidewaysLr => Rect {
+            left: rect.bottom,
+            right: rect.top,
+            top: rect.left,
+            bottom: rect.right,
+        },
     }
 }
 
@@ -125,18 +139,18 @@ pub(crate) fn transpose_output(output: LayoutOutput) -> LayoutOutput {
     }
 }
 
-/// The rectangle at `(x, y)` of `width` by `height` in the frame of `flow`, in a box
-/// whose width on the screen is `container_width`, on the screen: `(x, y, width,
-/// height)`.
+/// The rectangle at `(x, y)` of `width` by `height` in the frame of `flow`, in a box whose
+/// size on the screen is `container` (width, height), on the screen: `(x, y, width, height)`.
 pub(crate) fn rect_to_physical(
     flow: Flow,
-    container_width: f32,
+    container: (f32, f32),
     (x, y, width, height): (f32, f32, f32, f32),
 ) -> (f32, f32, f32, f32) {
     match flow {
         Flow::Horizontal => (x, y, width, height),
         Flow::VerticalLr => (y, x, height, width),
-        Flow::VerticalRl => (container_width - y - height, x, height, width),
+        Flow::VerticalRl => (container.0 - y - height, x, height, width),
+        Flow::SidewaysLr => (y, container.1 - x - width, height, width),
     }
 }
 
@@ -156,18 +170,24 @@ pub(crate) fn sides_to_physical(rect: Rect<f32>, flow: Flow) -> Rect<f32> {
             left: rect.bottom,
             right: rect.top,
         },
+        Flow::SidewaysLr => Rect {
+            top: rect.right,
+            bottom: rect.left,
+            left: rect.top,
+            right: rect.bottom,
+        },
     }
 }
 
-/// `layout`, made in the frame of `flow` inside a box that is `container_width` wide on
+/// `layout`, made in the frame of `flow` inside a box that is `container` (width, height) on
 /// the screen, as it is on the screen.
-pub(crate) fn layout_to_physical(layout: &Layout, flow: Flow, container_width: f32) -> Layout {
+pub(crate) fn layout_to_physical(layout: &Layout, flow: Flow, container: (f32, f32)) -> Layout {
     if flow == Flow::Horizontal {
         return *layout;
     }
     let (x, y, width, height) = rect_to_physical(
         flow,
-        container_width,
+        container,
         (
             layout.location.x,
             layout.location.y,
@@ -239,12 +259,17 @@ mod tests {
         // In a box 100 wide on the screen, a 30x10 rectangle at (5, 20) of the frame.
         let rect = (5.0, 20.0, 30.0, 10.0);
         assert_eq!(
-            rect_to_physical(Flow::VerticalLr, 100.0, rect),
+            rect_to_physical(Flow::VerticalLr, (100.0, 80.0), rect),
             (20.0, 5.0, 10.0, 30.0)
         );
         assert_eq!(
-            rect_to_physical(Flow::VerticalRl, 100.0, rect),
+            rect_to_physical(Flow::VerticalRl, (100.0, 80.0), rect),
             (70.0, 5.0, 10.0, 30.0)
+        );
+        // The lines run up: what is at the start of a line is at the bottom of the box.
+        assert_eq!(
+            rect_to_physical(Flow::SidewaysLr, (100.0, 80.0), rect),
+            (20.0, 45.0, 10.0, 30.0)
         );
     }
 }

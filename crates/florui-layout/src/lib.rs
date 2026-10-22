@@ -2212,8 +2212,14 @@ fn fragment_rect(
     fragment: &florui_text::InlineFragment,
 ) -> (f32, f32, f32, f32) {
     let (above, below) = styles.get(&node).map_or((0.0, 0.0), |s| {
-        // The top of a line of a vertical writing mode is the right of the page.
-        if s.writing_mode.is_vertical() {
+        // The top of a line of a vertical writing mode is the right of the page, and in
+        // `sideways-lr` the left.
+        if s.writing_mode == florui_style::WritingMode::SidewaysLr {
+            (
+                s.padding.left + s.border.left.width,
+                s.padding.right + s.border.right.width,
+            )
+        } else if s.writing_mode.is_vertical() {
             (
                 s.padding.right + s.border.right.width,
                 s.padding.left + s.border.left.width,
@@ -2627,7 +2633,7 @@ fn collect_layouts(
         // the horizontal axis of that frame, and the edges are the ones of the frame.
         let layout = tree.layout(tid).map_err(LayoutError)?;
         let flow = tree.node(tid).flow;
-        let container_width = tree.physical_width(tid);
+        let container_size = tree.physical_size(tid);
         let container_style = styles.get(container);
         let (padding_left, padding_right, border_left, border_right, padding_top, border_top) =
             if flow.is_vertical() {
@@ -2726,14 +2732,14 @@ fn collect_layouts(
         // A box of the lines, in the frame of the flow of the container, as it is on the
         // screen inside the box it is placed in: whose width on the screen is its height
         // here.
-        let physical = |parent_width: f32, rect: (f32, f32, f32, f32)| {
-            vertical::rect_to_physical(flow, parent_width, rect)
+        let physical = |parent: (f32, f32), rect: (f32, f32, f32, f32)| {
+            vertical::rect_to_physical(flow, parent, rect)
         };
-        let width_of = |element: usize, rects: &[Option<(f32, f32, f32, f32)>]| {
+        let size_of = |element: usize, rects: &[Option<(f32, f32, f32, f32)>]| {
             if element == 0 {
-                container_width
+                container_size
             } else {
-                rects[element].map_or(0.0, |rect| rect.3 - rect.1)
+                rects[element].map_or((0.0, 0.0), |rect| (rect.3 - rect.1, rect.2 - rect.0))
             }
         };
         for element in 1..count {
@@ -2749,7 +2755,7 @@ fn collect_layouts(
                 (x0 - parent.0, y0 - parent.1)
             };
             let own = physical(
-                width_of(context.elements[element].parent, &rects),
+                size_of(context.elements[element].parent, &rects),
                 (rx, ry, x1 - x0, y1 - y0),
             );
             result.insert(
@@ -2766,7 +2772,7 @@ fn collect_layouts(
             if pieces[element].len() > 1 {
                 for (number, piece) in pieces[element].iter().enumerate() {
                     let at = physical(
-                        y1 - y0,
+                        (y1 - y0, x1 - x0),
                         (
                             piece.0 - x0,
                             piece.1 - y0,
@@ -2845,7 +2851,7 @@ fn collect_layouts(
                     (positioned.x - parent.0, positioned.y - parent.1)
                 };
                 let (x, y, width, height) =
-                    physical(width_of(element, &rects), (x, y, width, height));
+                    physical(size_of(element, &rects), (x, y, width, height));
                 result.insert(
                     child,
                     BoxLayout {
@@ -2884,7 +2890,7 @@ fn collect_layouts(
                 (at.0 - origin.0 - parent.0, at.1 - origin.1 - parent.1)
             };
             let (x, y, width, height) = physical(
-                width_of(*element, &rects),
+                size_of(*element, &rects),
                 (x, y, float.size.width, float.size.height),
             );
             let margin = vertical::sides_to_physical(float.margin, flow);
@@ -11259,6 +11265,36 @@ mod tests {
                 florui_style::Rgba::opaque(0xff, 0, 0),
                 "the nearer 500px `.inner` container matches, even though the \
                  farther 200px `.outer` one alone would not"
+            );
+        }
+
+        /// In a vertical writing mode the inline axis is the height: a container that is
+        /// `inline-size` answers `inline-size` queries by its height, and not `width` ones.
+        #[test]
+        fn the_inline_axis_of_a_vertical_container_is_its_height() {
+            let tree: Element = view! {
+                <div class="box">
+                    <div class="card" />
+                </div>
+            };
+            let css = "
+                .box { container-type: inline-size; writing-mode: vertical-rl; 
+                       width: 60px; height: 300px; }
+                @container (min-inline-size: 200px) { .card { background-color: #ff0000; } }
+                @container (min-width: 50px) { .card { color: #00ff00; } }
+            ";
+            let (arena, styles, _) = compute_with_style_for(&tree, css, Size::MAX_CONTENT);
+            let card = arena.children(arena.roots()[0])[0];
+            assert_eq!(
+                styles[&card].background_color,
+                florui_style::Rgba::opaque(0xff, 0, 0),
+                "its inline size is its 300px height"
+            );
+            assert_ne!(
+                styles[&card].color,
+                florui_style::Rgba::opaque(0, 0xff, 0),
+                "a width query needs the width axis, which an inline-size container of a 
+                 vertical flow does not give"
             );
         }
 

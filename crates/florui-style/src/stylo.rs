@@ -2490,9 +2490,9 @@ fn process_animations_for_style<'n>(
 /// `needs_animations_update` — whether `@keyframes` animations need
 /// starting, canceling, or restarting for this style change. Drops its
 /// real counterpart's `TraversalFlags::ForCSSRuleChanges`/pseudo-element/
-/// `writing-mode` branches: this bridge never sets that flag, never
-/// resolves a pseudo-element, and this crate has no `writing-mode`
-/// support to begin with, so each always takes its simplest real case.
+/// `writing-mode` branches: this bridge never sets that flag and never
+/// resolves a pseudo-element, so each always takes its simplest real case, and an
+/// animation of a logical property is not restarted by a change of the writing mode.
 fn needs_animations_update<'n>(
     context: &StyleContext<'_, StyloNode<'n>>,
     target: StyloNode<'n>,
@@ -5199,16 +5199,31 @@ fn to_direction(values: &ComputedValues) -> crate::Direction {
     }
 }
 
+/// `writing-mode`, with the `sideways-*` values the engine does not know read from the
+/// property that carries them (the engine is given `vertical-*` in their place).
 fn to_writing_mode(values: &ComputedValues) -> crate::WritingMode {
     use style::computed_values::writing_mode::T;
-    match values.get_inherited_box().clone_writing_mode() {
+    let mode = match values.get_inherited_box().clone_writing_mode() {
         T::HorizontalTb => crate::WritingMode::HorizontalTb,
         T::VerticalRl => crate::WritingMode::VerticalRl,
         T::VerticalLr => crate::WritingMode::VerticalLr,
+    };
+    match mirrored(values, "writing-mode").as_deref() {
+        Some("sideways-lr") if mode == crate::WritingMode::VerticalLr => {
+            crate::WritingMode::SidewaysLr
+        }
+        _ => mode,
     }
 }
 
 fn to_text_orientation(values: &ComputedValues) -> crate::TextOrientation {
+    // A `sideways-*` writing mode sets every glyph on its side, whatever `text-orientation` says.
+    if matches!(
+        mirrored(values, "writing-mode").as_deref(),
+        Some("sideways-rl" | "sideways-lr")
+    ) {
+        return crate::TextOrientation::Sideways;
+    }
     match mirrored(values, "text-orientation").as_deref() {
         Some("upright") => crate::TextOrientation::Upright,
         Some("sideways" | "sideways-right") => crate::TextOrientation::Sideways,

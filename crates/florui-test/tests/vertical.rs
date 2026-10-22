@@ -83,3 +83,14 @@ fn upright_letters_stand_one_under_the_other() {
     // And narrow, as a column of letters is.
     assert!(upright.2 - upright.0 < 12, "{upright:?}");
 }
+
+#[test]
+fn the_lines_of_a_sideways_lr_box_start_at_the_bottom() {
+    let (left, top, right, bottom) = ink_of(
+        &format!("{PAGE} .box {{ writing-mode: sideways-lr; width: 18px; }}"),
+        || view! { <div class="box">{"abc"}</div> },
+    );
+    assert!(bottom > 90, "starts at the bottom: {bottom}");
+    assert!(top > 60, "and runs up a short way: {top}");
+    assert!(right < 20 && left < 6, "inside the column: {left}..{right}");
+}
