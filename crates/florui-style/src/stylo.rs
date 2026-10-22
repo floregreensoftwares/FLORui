@@ -3145,23 +3145,35 @@ fn parse_deg(css: &str) -> Option<f32> {
     }
 }
 
-/// Reads `--florui-appearance`.
+/// Reads `appearance`, which the engine's servo build lacks and which is carried as
+/// `--florui-appearance` (see [`crate::property_mirror`]). Neither spelling inherits, as the
+/// property does not: only this element's own rules count. `none` removes the built-in
+/// decoration; any other value leaves it.
 fn to_appearance(values: &ComputedValues) -> FlorAppearance {
+    if !declares_mirrored(values, "appearance") {
+        return FlorAppearance::Auto;
+    }
     match florui_property(values, |names| &names.appearance) {
-        Some(css) if css.trim() == "none" => FlorAppearance::None,
+        Some(css) if css.trim().eq_ignore_ascii_case("none") => FlorAppearance::None,
         _ => FlorAppearance::Auto,
     }
 }
 
-/// Reads `--florui-resize`.
+/// Reads `resize`, carried as `--florui-resize` and, like `appearance`, from this element's
+/// own rules only. `block` and `inline` are the vertical and horizontal directions in the
+/// horizontal writing mode every box here has.
 fn to_resize(values: &ComputedValues) -> FlorResize {
+    if !declares_mirrored(values, "resize") {
+        return FlorResize::Both;
+    }
     match florui_property(values, |names| &names.resize)
         .as_deref()
-        .map(str::trim)
+        .map(|css| css.trim().to_ascii_lowercase())
+        .as_deref()
     {
         Some("none") => FlorResize::None,
-        Some("vertical") => FlorResize::Vertical,
-        Some("horizontal") => FlorResize::Horizontal,
+        Some("vertical" | "block") => FlorResize::Vertical,
+        Some("horizontal" | "inline") => FlorResize::Horizontal,
         _ => FlorResize::Both,
     }
 }
