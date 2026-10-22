@@ -9,6 +9,7 @@ use wgpu::{CompositeAlphaMode, TextureFormat};
 use winit::platform::windows::WindowAttributesExtWindows;
 use winit::window::{Window, WindowAttributes};
 
+use crate::GpuMemory;
 use crate::gpu::{GpuPresenter, PresentationCapability};
 
 /// See `crate::gpu::transparent_capable_attributes`'s own doc for why
@@ -21,7 +22,10 @@ pub(crate) fn transparent_window_attributes(attrs: WindowAttributes) -> WindowAt
 /// `Dx12SwapchainKind::DxgiFromVisual` + `CompositeAlphaMode::PreMultiplied`
 /// -- see `crate::gpu`'s own doc for why only this exact combination is
 /// live-verified. `None` falls through to the default opaque path.
-pub(crate) fn try_dx12_direct_composition(window: Arc<Window>) -> Option<GpuPresenter> {
+pub(crate) fn try_dx12_direct_composition(
+    window: Arc<Window>,
+    memory: GpuMemory,
+) -> Option<GpuPresenter> {
     let mut backend_options = wgpu::BackendOptions::from_env_or_default();
     if wgpu::Dx12SwapchainKind::from_env().is_none() {
         backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
@@ -39,6 +43,7 @@ pub(crate) fn try_dx12_direct_composition(window: Arc<Window>) -> Option<GpuPres
     .ok()?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("florui-platform GPU presenter (DX12 + DirectComposition)"),
+        memory_hints: memory.hints(),
         ..Default::default()
     }))
     .ok()?;
