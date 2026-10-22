@@ -106,8 +106,39 @@ pub enum BlockAlign {
     Right,
 }
 
-/// `text-align` for left-to-right text: `left` and `right` are `Start` and
-/// `End`.
+/// `direction`: which way the text of a block and the boxes of a row run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Direction {
+    #[default]
+    Ltr,
+    Rtl,
+}
+
+impl Direction {
+    pub fn is_rtl(self) -> bool {
+        self == Direction::Rtl
+    }
+}
+
+/// `unicode-bidi`: how an element takes part in the bidirectional ordering of the
+/// text around it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UnicodeBidi {
+    #[default]
+    Normal,
+    /// A new level of embedding in the element's `direction`.
+    Embed,
+    /// The element is kept apart from the text around it, in its `direction`.
+    Isolate,
+    /// The text goes in the order of `direction`, whatever the characters are.
+    BidiOverride,
+    IsolateOverride,
+    /// The direction is that of the first strong character, kept apart.
+    Plaintext,
+}
+
+/// `text-align`, with `left` and `right` already turned into `Start` and `End`
+/// by the `direction` of the element they are on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TextAlign {
     #[default]
@@ -1370,6 +1401,10 @@ pub struct ComputedStyle {
     /// `::first-line` rule: the first line's own style for such a block, and for what it
     /// holds that flows in the line, the style it has when it inherits from that.
     pub first_line: Option<std::sync::Arc<ComputedStyle>>,
+    /// Inherited `direction`.
+    pub direction: Direction,
+    /// `unicode-bidi`.
+    pub unicode_bidi: UnicodeBidi,
 }
 
 impl ComputedStyle {
@@ -1602,6 +1637,8 @@ impl ComputedStyle {
             content: _,
             quotes: _,
             first_line: _,
+            direction: _,
+            unicode_bidi: _,
         } = other;
         self.background_color = *background_color;
         self.background_color_clip = *background_color_clip;
@@ -3449,6 +3486,71 @@ mod tests {
         assert_eq!(computed[button].text_align, TextAlign::Center);
         assert_eq!(computed[left].text_align, TextAlign::Start);
         assert_eq!(computed[plain].text_align, TextAlign::Start);
+    }
+
+    #[test]
+    fn direction_and_unicode_bidi_are_read_and_direction_inherits() {
+        let tree: Element = view! {
+            <div class="rtl">
+                <span>{"a"}</span>
+                <p class="ltr" />
+                <p class="plain" />
+            </div>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".rtl { direction: rtl; unicode-bidi: bidi-override } \
+             .ltr { direction: ltr; unicode-bidi: isolate }",
+            &InteractionState::new(),
+        );
+        let root = arena.roots()[0];
+        let [span, ltr, plain] = arena.children(root)[..] else {
+            panic!("three children");
+        };
+        assert_eq!(computed[&root].direction, crate::Direction::Rtl);
+        assert_eq!(
+            computed[&root].unicode_bidi,
+            crate::UnicodeBidi::BidiOverride
+        );
+        assert_eq!(
+            computed[&span].direction,
+            crate::Direction::Rtl,
+            "inherited"
+        );
+        assert_eq!(
+            computed[&span].unicode_bidi,
+            crate::UnicodeBidi::Normal,
+            "not inherited"
+        );
+        assert_eq!(computed[&ltr].direction, crate::Direction::Ltr);
+        assert_eq!(computed[&ltr].unicode_bidi, crate::UnicodeBidi::Isolate);
+        assert_eq!(computed[&plain].direction, crate::Direction::Rtl);
+    }
+
+    #[test]
+    fn left_and_right_are_the_physical_sides_whatever_the_direction() {
+        let tree: Element = view! {
+            <div class="rtl">
+                <p class="left" />
+                <p class="right" />
+                <p class="start" />
+                <p class="end" />
+            </div>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".rtl { direction: rtl } .left { text-align: left } .right { text-align: right } \
+             .start { text-align: start } .end { text-align: end }",
+            &InteractionState::new(),
+        );
+        let [left, right, start, end] = arena.children(arena.roots()[0])[..] else {
+            panic!("four children");
+        };
+        // The end of a line is on the left in right-to-left text.
+        assert_eq!(computed[&left].text_align, TextAlign::End);
+        assert_eq!(computed[&right].text_align, TextAlign::Start);
+        assert_eq!(computed[&start].text_align, TextAlign::Start);
+        assert_eq!(computed[&end].text_align, TextAlign::End);
     }
 
     #[test]

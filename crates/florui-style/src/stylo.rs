@@ -2627,6 +2627,7 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
     let font_size_px = font.font_size.computed_size.0.px();
     let font_size = style::values::computed::Length::new(font_size_px);
 
+    let rtl = to_direction(values).is_rtl();
     ComputedStyle {
         background_color: background
             .background_color
@@ -2722,7 +2723,7 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
         font_features: to_font_features(values),
         font_variations: to_font_variations(values),
         text_transform: to_text_transform(text.text_transform),
-        text_align: to_text_align(text.text_align),
+        text_align: to_text_align(text.text_align, rtl),
         block_align: to_block_align(text.text_align),
         text_shadow: to_text_shadows(&text.text_shadow.0, &text.color),
         glass: to_glass(values),
@@ -2896,6 +2897,12 @@ fn to_computed_style(values: &ComputedValues, viewport_px: (f32, f32)) -> Comput
         content: to_content(values),
         quotes: to_quotes(values),
         first_line: None,
+        direction: if rtl {
+            crate::Direction::Rtl
+        } else {
+            crate::Direction::Ltr
+        },
+        unicode_bidi: to_unicode_bidi(values),
     }
 }
 
@@ -5167,13 +5174,38 @@ fn to_block_align(value: style::values::computed::text::TextAlign) -> crate::Blo
     }
 }
 
-fn to_text_align(value: style::values::computed::text::TextAlign) -> crate::TextAlign {
+/// `text-align` for an element whose direction is `rtl` or not: `left` and `right`
+/// are the physical sides, `start` and `end` the ones the direction gives.
+fn to_text_align(value: style::values::computed::text::TextAlign, rtl: bool) -> crate::TextAlign {
     use style::values::specified::text::TextAlignKeyword as Keyword;
     match value {
         Keyword::Center | Keyword::MozCenter => crate::TextAlign::Center,
-        Keyword::Right | Keyword::MozRight | Keyword::End => crate::TextAlign::End,
+        Keyword::Right | Keyword::MozRight if rtl => crate::TextAlign::Start,
+        Keyword::Right | Keyword::MozRight => crate::TextAlign::End,
+        Keyword::Left | Keyword::MozLeft if rtl => crate::TextAlign::End,
+        Keyword::End => crate::TextAlign::End,
         Keyword::Justify => crate::TextAlign::Justify,
         _ => crate::TextAlign::Start,
+    }
+}
+
+fn to_direction(values: &ComputedValues) -> crate::Direction {
+    use style::computed_values::direction::T;
+    match values.get_inherited_box().clone_direction() {
+        T::Ltr => crate::Direction::Ltr,
+        T::Rtl => crate::Direction::Rtl,
+    }
+}
+
+fn to_unicode_bidi(values: &ComputedValues) -> crate::UnicodeBidi {
+    use style::computed_values::unicode_bidi::T;
+    match values.get_text().clone_unicode_bidi() {
+        T::Normal => crate::UnicodeBidi::Normal,
+        T::Embed => crate::UnicodeBidi::Embed,
+        T::Isolate => crate::UnicodeBidi::Isolate,
+        T::BidiOverride => crate::UnicodeBidi::BidiOverride,
+        T::IsolateOverride => crate::UnicodeBidi::IsolateOverride,
+        T::Plaintext => crate::UnicodeBidi::Plaintext,
     }
 }
 

@@ -109,6 +109,7 @@ struct Element {
     parent: usize,
     style: StyleBits,
     first_line: Option<StyleBits>,
+    rtl: bool,
 }
 
 impl Element {
@@ -117,6 +118,7 @@ impl Element {
             parent: element.parent,
             style: element.style.bits(),
             first_line: element.first_line.map(|style| style.bits()),
+            rtl: element.rtl,
         }
     }
 }
@@ -142,6 +144,7 @@ impl Entry {
                 stored.parent == asked.parent
                     && stored.style == asked.style.bits()
                     && stored.first_line == asked.first_line.map(|style| style.bits())
+                    && stored.rtl == asked.rtl
             })
             && self
                 .items
@@ -180,6 +183,7 @@ fn hash_of(elements: &[InlineElement], items: &[InlineItem<'_>], width: Option<u
             .first_line
             .map(|style| style.bits())
             .hash(&mut hasher);
+        element.rtl.hash(&mut hasher);
     }
     for item in items {
         match *item {
