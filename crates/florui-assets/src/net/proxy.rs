@@ -374,7 +374,10 @@ pub(crate) fn parse_gnome(output: &str) -> Option<System> {
     // `['localhost', '127.0.0.0/8', '::1']`
     let bypass = get("org.gnome.system.proxy", "ignore-hosts")
         .map(|list| {
-            list.trim_start_matches('[')
+            // An empty list is printed with its type: `@as []`.
+            list.trim_start_matches("@as")
+                .trim_start()
+                .trim_start_matches('[')
                 .trim_end_matches(']')
                 .split(',')
                 .map(|host| text(host.trim()))
@@ -413,6 +416,10 @@ pub(crate) fn parse_kde(contents: &str) -> System {
     let Some(url) = server("httpsProxy").or_else(|| server("httpProxy")) else {
         return System::Direct;
     };
+    // `ReversedException=true` turns the list around: the proxy is for those hosts only.
+    if settings.get("ReversedException").map(String::as_str) == Some("true") {
+        return System::Script("a list of the only hosts that use the proxy".to_owned());
+    }
     let bypass = settings
         .get("NoProxyFor")
         .map(|list| vec![list.clone()])
@@ -689,6 +696,11 @@ mod tests {
         assert!(matches!(parse_gnome(&auto), Some(System::Script(_))));
         let empty = "org.gnome.system.proxy mode 'manual'\norg.gnome.system.proxy.http host ''\norg.gnome.system.proxy.http port 0\n";
         assert_eq!(parse_gnome(empty), Some(System::Direct));
+        // An empty list of hosts is printed with its type.
+        let none = GNOME_MANUAL.replace("['localhost', '127.0.0.0/8', '::1', '*.corp']", "@as []");
+        assert!(
+            matches!(parse_gnome(&none), Some(System::Manual { bypass, .. }) if bypass.is_empty())
+        );
         // Not GNOME's output at all.
         assert_eq!(parse_gnome("nothing here"), None);
     }
@@ -716,6 +728,8 @@ mod tests {
             System::Script(_)
         ));
         assert_eq!(parse_kde("[Proxy Settings]\nProxyType=0\n"), System::Direct);
+        let reversed = "[Proxy Settings]\nProxyType=1\nhttpProxy=http://p:1\nReversedException=true\nNoProxyFor=only.corp\n";
+        assert!(matches!(parse_kde(reversed), System::Script(_)));
         assert_eq!(parse_kde("[Other]\nProxyType=1\n"), System::Direct);
         assert_eq!(parse_kde(""), System::Direct);
     }

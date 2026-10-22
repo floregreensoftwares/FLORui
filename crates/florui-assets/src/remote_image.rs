@@ -139,9 +139,14 @@ fn with_store<T>(work: impl FnOnce(&mut Store) -> T) -> T {
 /// Whether `url` is one this module loads.
 pub fn is_remote(url: &str) -> bool {
     // The fetcher ignores white space around an address, and so does this.
-    let url = url.trim_start_matches(|c: char| c.is_ascii_whitespace());
-    let start = url.get(..8).unwrap_or(url).to_ascii_lowercase();
-    start.starts_with("http://") || start.starts_with("https://")
+    let url = url
+        .trim_start_matches(|c: char| c.is_ascii_whitespace())
+        .as_bytes();
+    let has = |scheme: &[u8]| {
+        url.get(..scheme.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(scheme))
+    };
+    has(b"http://") || has(b"https://")
 }
 
 /// Calls `listener` (from a thread of the fetcher) whenever a picture that was asked for
@@ -305,9 +310,12 @@ fn start(_url: &str, _generation: u64) -> Started {
 #[cfg(feature = "net")]
 fn start(url: &str, generation: u64) -> Started {
     let owned = url.to_owned();
-    match crate::net::shared_fetcher()
-        .submit(url, move |outcome| finish(&owned, generation, outcome))
-    {
+    // The callback runs on a thread of the fetcher, which is for downloads: decoding is
+    // handed to threads of its own, so a burst of large pictures does not hold up the
+    // downloads queued behind them.
+    match crate::net::shared_fetcher().submit(url, move |outcome| {
+        decoder::run(Box::new(move || finish(&owned, generation, outcome)));
+    }) {
         Ok(ticket) => Started::Queued(ticket),
         Err(error) => Started::Refused(error.to_string()),
     }
@@ -324,6 +332,44 @@ fn cache() -> &'static AssetCache {
     CACHE.get_or_init(AssetCache::new)
 }
 
+/// A few threads that decode what the fetcher has downloaded, as many as there are decode
+/// slots (see `AssetCache`), so none of them waits for a slot that others hold.
+#[cfg(feature = "net")]
+mod decoder {
+    use std::sync::mpsc::{Receiver, Sender, channel};
+    use std::sync::{Arc, Mutex, OnceLock};
+
+    type Job = Box<dyn FnOnce() + Send>;
+
+    pub(super) fn run(job: Job) {
+        static QUEUE: OnceLock<Sender<Job>> = OnceLock::new();
+        let queue = QUEUE.get_or_init(|| {
+            let (sender, receiver) = channel::<Job>();
+            let receiver: Arc<Mutex<Receiver<Job>>> = Arc::new(Mutex::new(receiver));
+            let cores = std::thread::available_parallelism().map_or(2, usize::from);
+            for _ in 0..(cores / 2).clamp(1, 4) {
+                let receiver = Arc::clone(&receiver);
+                let _ = std::thread::Builder::new()
+                    .name("florui-decode".to_owned())
+                    .spawn(move || {
+                        loop {
+                            let job = receiver
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner())
+                                .recv();
+                            let Ok(job) = job else { return };
+                            // A job that panics must not end the thread; it records its own
+                            // failure (see `finish`).
+                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                        }
+                    });
+            }
+            sender
+        });
+        let _ = queue.send(job);
+    }
+}
+
 /// What a download became.
 #[cfg(feature = "net")]
 enum Built {
@@ -332,7 +378,8 @@ enum Built {
     Unchanged {
         stale: bool,
     },
-    Loaded(Loaded, u64, u64),
+    /// `stale`: it was loaded from a stale copy, with a fresh one being fetched behind it.
+    Loaded(Loaded, u64, u64, bool),
     Failed(String),
 }
 
@@ -353,19 +400,26 @@ fn finish(
     generation: u64,
     outcome: Result<Arc<crate::net::Fetched>, crate::FetchError>,
 ) {
-    // The digest of the picture being shown, when this is a request for a newer copy of it.
-    let shown = with_store(|store| match store.slots.get(url) {
+    // Whether anyone still waits for this, and the digest of the picture being shown when
+    // it is a request for a newer copy of it. A picture that was dropped meanwhile (its
+    // window closed, or it was evicted) is not decoded for nothing.
+    let (waiting, shown) = with_store(|store| match store.slots.get(url) {
         Some(Slot::Ready {
             refresh: Some((g, _)),
             digest,
             ..
-        }) if *g == generation => Some(*digest),
-        _ => None,
+        }) if *g == generation => (true, Some(*digest)),
+        Some(Slot::Pending { generation: g, .. }) if *g == generation => (true, None),
+        _ => (false, None),
     });
+    if !waiting {
+        return;
+    }
     // A decoder that panics on a hostile file must leave the picture failed, not pending for
     // ever.
     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match outcome {
         Ok(fetched) => {
+            let origin = fetched.origin;
             let sum = digest(&fetched.bytes);
             if shown == Some(sum) {
                 // The same bytes again, from the server or from a copy on disk: nothing to
@@ -382,7 +436,15 @@ fn finish(
             match crate::url_image::build(&fetched.bytes, None, false, |bytes| {
                 cache().get_or_decode(AssetId::Url(url.to_owned()), bytes, DecodeParams::Native)
             }) {
-                Ok(loaded) => Built::Loaded(loaded, size, sum),
+                Ok(loaded) => Built::Loaded(
+                    loaded,
+                    size,
+                    sum,
+                    matches!(
+                        origin,
+                        crate::net::Origin::Stale | crate::net::Origin::StaleOnError
+                    ),
+                ),
                 Err(reason) => Built::Failed(reason),
             }
         }
@@ -414,7 +476,7 @@ fn finish(
         store.clock += 1;
         let used = store.clock;
         match (was, built) {
-            (Was::Pending, Built::Loaded(loaded, size, sum)) => {
+            (Was::Pending, Built::Loaded(loaded, size, sum, stale)) => {
                 let bytes = retained(&loaded, size);
                 store.held += bytes;
                 store.slots.insert(
@@ -426,7 +488,11 @@ fn finish(
                         used,
                         digest: sum,
                         checked_at: Instant::now(),
-                        recheck_after: RECHECK_AFTER,
+                        recheck_after: if stale {
+                            RECHECK_AFTER_STALE
+                        } else {
+                            RECHECK_AFTER
+                        },
                         refresh: None,
                     },
                 );
@@ -443,7 +509,7 @@ fn finish(
                 );
                 true
             }
-            (Was::Refreshed, Built::Loaded(loaded, size, sum)) => {
+            (Was::Refreshed, Built::Loaded(loaded, size, sum, stale)) => {
                 let bytes = retained(&loaded, size);
                 if let Some(Slot::Ready { bytes: old, .. }) = store.slots.remove(url) {
                     store.held -= old;
@@ -458,7 +524,11 @@ fn finish(
                         used,
                         digest: sum,
                         checked_at: Instant::now(),
-                        recheck_after: RECHECK_AFTER,
+                        recheck_after: if stale {
+                            RECHECK_AFTER_STALE
+                        } else {
+                            RECHECK_AFTER
+                        },
                         refresh: None,
                     },
                 );
@@ -799,6 +869,68 @@ mod tests {
             });
             finish(url, 10, Ok(sent_again(crate::net::Origin::Cache)));
             assert_eq!(wait(url), Some(RECHECK_AFTER));
+        }
+
+        #[test]
+        fn a_picture_first_loaded_from_a_stale_copy_is_checked_again_soon() {
+            direct();
+            let url = "http://example.invalid/first-stale.png";
+            let bytes = png_of(2, 2);
+            with_store(|store| {
+                store.slots.insert(
+                    url.to_owned(),
+                    Slot::Pending {
+                        generation: 3,
+                        ticket: None,
+                    },
+                );
+            });
+            finish(
+                url,
+                3,
+                Ok(Arc::new(crate::net::Fetched {
+                    bytes,
+                    content_type: Some("image/png".to_owned()),
+                    origin: crate::net::Origin::Stale,
+                })),
+            );
+            let wait = with_store(|store| match store.slots.get(url) {
+                Some(Slot::Ready { recheck_after, .. }) => Some(*recheck_after),
+                _ => None,
+            });
+            assert_eq!(wait, Some(RECHECK_AFTER_STALE));
+        }
+
+        #[test]
+        fn a_picture_nobody_waits_for_any_more_is_not_decoded() {
+            direct();
+            let url = "http://example.invalid/dropped.png";
+            // No slot for it: it was evicted or its window closed while it downloaded.
+            finish(
+                url,
+                1,
+                Ok(Arc::new(crate::net::Fetched {
+                    bytes: b"not even an image".to_vec(),
+                    content_type: Some("image/png".to_owned()),
+                    origin: crate::net::Origin::Network,
+                })),
+            );
+            assert!(with_store(|store| !store.slots.contains_key(url)));
+        }
+
+        #[test]
+        fn the_decoder_threads_survive_a_job_that_panics() {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            decoder::run(Box::new(|| panic!("a decoder gave up")));
+            for n in 0..4 {
+                let sender = sender.clone();
+                decoder::run(Box::new(move || sender.send(n).unwrap()));
+            }
+            let mut got: Vec<_> = (0..4)
+                .map(|_| receiver.recv_timeout(Duration::from_secs(10)).unwrap())
+                .collect();
+            got.sort();
+            assert_eq!(got, [0, 1, 2, 3]);
         }
 
         #[test]

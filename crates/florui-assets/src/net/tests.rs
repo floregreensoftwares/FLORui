@@ -1014,6 +1014,85 @@ mod unconditional {
     }
 }
 
+mod separate_lines {
+    use super::*;
+
+    #[test]
+    fn a_header_sent_as_several_lines_is_one_list() {
+        let dir = tempfile::tempdir().unwrap();
+        for (first, second, name) in [
+            ("max-age=600", "no-store", "Cache-Control"),
+            ("max-age=600", "private, no-store", "Cache-Control"),
+        ] {
+            let server = Server::start(move |_| {
+                Reply::ok("image/png", png())
+                    .header(name, first)
+                    .header(name, second)
+            });
+            let url = server.url("/cover.png");
+            let fetcher = Fetcher::new(NetConfig {
+                cache_dir: Some(dir.path().to_owned()),
+                ..config()
+            });
+            assert_eq!(fetcher.fetch(&url).unwrap().origin, Origin::Network);
+            assert_eq!(
+                fetcher.fetch(&url).unwrap().origin,
+                Origin::Network,
+                "{first} and {second} are both in force"
+            );
+        }
+        let server = Server::start(|_| {
+            Reply::ok("image/png", png())
+                .header("Cache-Control", "max-age=600")
+                .header("Vary", "Accept-Encoding")
+                .header("Vary", "*")
+        });
+        let url = server.url("/varies.png");
+        let fetcher = Fetcher::new(NetConfig {
+            cache_dir: Some(dir.path().to_owned()),
+            ..config()
+        });
+        fetcher.fetch(&url).unwrap();
+        assert_eq!(fetcher.fetch(&url).unwrap().origin, Origin::Network);
+    }
+}
+
+mod dropping {
+    use super::*;
+
+    /// Calls back into the fetcher when it is dropped, as a task woken by the drop of a
+    /// callback might.
+    struct UsesTheFetcherWhenDropped(Fetcher, mpsc::Sender<()>);
+
+    impl Drop for UsesTheFetcherWhenDropped {
+        fn drop(&mut self) {
+            let ticket = self.0.submit("http://127.0.0.1:1/never.png", |_| {});
+            drop(ticket);
+            let _ = self.1.send(());
+        }
+    }
+
+    #[test]
+    fn letting_go_of_a_request_drops_its_callback_outside_the_locks() {
+        let server =
+            Server::start(|_| Reply::ok("image/png", png()).delayed(Duration::from_millis(300)));
+        let fetcher = fetcher();
+        let (done, finished) = mpsc::channel();
+        let guard = UsesTheFetcherWhenDropped(fetcher.clone(), done);
+        let ticket = fetcher
+            .submit(&server.url("/a.png"), move |_| drop(guard))
+            .unwrap();
+        // Dropping the ticket drops the callback, and with it the guard, which uses the
+        // fetcher: with the queue locked that would wait for itself.
+        let letting_go = std::thread::spawn(move || drop(ticket));
+        assert!(
+            finished.recv_timeout(Duration::from_secs(5)).is_ok(),
+            "the callback was dropped while the queue was locked"
+        );
+        letting_go.join().unwrap();
+    }
+}
+
 mod scheduling {
     use super::*;
 
