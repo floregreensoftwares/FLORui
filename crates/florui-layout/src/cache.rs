@@ -397,7 +397,11 @@ impl LayoutCache {
                         };
                         self.place(
                             node,
-                            (table::role_of(arena, styles, node), None),
+                            (
+                                table::role_of(arena, styles, node),
+                                None,
+                                crate::flow_of(styles, node),
+                            ),
                             style,
                             context,
                             &[],
@@ -415,7 +419,11 @@ impl LayoutCache {
                         let context = build_inline_content_items(font, arena, styles, node, None);
                         self.place(
                             node,
-                            (table::role_of(arena, styles, node), None),
+                            (
+                                table::role_of(arena, styles, node),
+                                None,
+                                crate::flow_of(styles, node),
+                            ),
                             to_taffy_style(styles.get(&node)),
                             Some(LeafContext::Inline(context.clone())),
                             &[],
@@ -501,6 +509,7 @@ impl LayoutCache {
                                     context.clone(),
                                     &float_ids,
                                 )?;
+                                self.tree.set_flow(leaf, crate::flow_of(styles, node))?;
                                 let key = anonymous_id(node, run_number);
                                 run_number += 1;
                                 self.anonymous.insert(key, leaf);
@@ -518,6 +527,7 @@ impl LayoutCache {
                         (
                             table::role_of(arena, styles, node),
                             crate::marker_rise(font, arena, styles, node),
+                            crate::flow_of(styles, node),
                         ),
                         to_taffy_style(styles.get(&node)),
                         None,
@@ -534,6 +544,7 @@ impl LayoutCache {
                         (
                             table::role_of(arena, styles, node),
                             crate::marker_rise(font, arena, styles, node),
+                            crate::flow_of(styles, node),
                         ),
                         to_taffy_style(styles.get(&node)),
                         Some(LeafContext::Inline(context.clone())),
@@ -575,6 +586,7 @@ impl LayoutCache {
                         (
                             table::role_of(arena, styles, node),
                             crate::marker_rise(font, arena, styles, node),
+                            crate::flow_of(styles, node),
                         ),
                         to_taffy_style(styles.get(&node)),
                         None,
@@ -592,7 +604,11 @@ impl LayoutCache {
     fn place(
         &mut self,
         node: NodeId,
-        (role, marker): (table::Role, Option<crate::tree::MarkerRise>),
+        (role, marker, flow): (
+            table::Role,
+            Option<crate::tree::MarkerRise>,
+            crate::vertical::Flow,
+        ),
         style: taffy::Style,
         context: Option<LeafContext>,
         children: &[taffy::NodeId],
@@ -628,6 +644,7 @@ impl LayoutCache {
             };
             self.tree.set_role(id, role)?;
             self.tree.set_marker(id, marker)?;
+            self.tree.set_flow(id, flow)?;
             self.slots[node] = Some(Slot {
                 id,
                 children: children.to_vec(),
@@ -640,6 +657,7 @@ impl LayoutCache {
         let id = slot.id;
         self.tree.set_role(id, role)?;
         self.tree.set_marker(id, marker)?;
+        self.tree.set_flow(id, flow)?;
         if *self.tree.style(id)? != style {
             self.tree.set_style(id, style)?;
         }

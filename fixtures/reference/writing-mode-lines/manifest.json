@@ -1,0 +1,100 @@
+{
+    "id":  "writing-mode-lines",
+    "description":  "Lines of vertical boxes: vertical-lr in boxes wider than their lines, columns that wrap, inline boxes with padding and borders, an inline run mixed with a span, and a horizontal box inside a vertical one.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  300,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 300px; background-color: #ffffff; color: #101010; font-size: 14px; line-height: 18px; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 8px; padding: 8px; box-sizing: border-box; } .wrap \u003e div { background-color: #e8e8e8; } .h { writing-mode: vertical-lr; width: 60px; height: 70px; } .i { writing-mode: vertical-lr; width: 60px; height: 100px; } .j { writing-mode: vertical-rl; height: 100px; } .s { background-color: #ffd0d0; padding: 3px 2px; border-right: 2px solid #c02020; } .l { writing-mode: vertical-rl; height: 100px; } .hz { writing-mode: horizontal-tb; margin: 0; background-color: #d0e0d0; } .m { writing-mode: vertical-lr; height: 100px; } .m span { background-color: #c0d0f0; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "h",
+                                        "css":  "",
+                                        "text":  "text that wraps into columns",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "i",
+                                        "css":  "",
+                                        "text":  "abc",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "j",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "ab",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "s",
+                                                             "css":  "",
+                                                             "text":  "cd",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         "ef"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "l",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "p",
+                                                             "class":  "hz",
+                                                             "css":  "",
+                                                             "text":  "abc def",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "m",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "xx ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "yy yy yy yy yy",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " zz"
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  3,
+                           "geometry_tolerance_px":  0.5,
+                           "channel_tolerance":  0,
+                           "reason":  "Measured against Chromium 155 on Windows: 2.52% of the pixels differ and every box, column and span has the geometry Chromium gives it. What is left is the antialiasing of the text. With writing-mode ignored the same fixture measures 20.4%, so it fails."
+                       }
+}

@@ -375,8 +375,8 @@ fn break_lines_in_slots(
 /// A font's vertical metrics at one size, which line boxes are built from.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct StyleMetrics {
-    ascent: f32,
-    descent: f32,
+    pub(crate) ascent: f32,
+    pub(crate) descent: f32,
     leading: f32,
     x_height: f32,
 }
@@ -779,6 +779,7 @@ impl Font {
         let after = second.layout;
         layout.runs.extend(after.runs);
         layout.boxes.extend(after.boxes);
+        layout.lines.extend(after.lines);
         layout
             .fragments
             .extend(after.fragments.into_iter().map(|mut fragment| {
@@ -888,6 +889,7 @@ impl Font {
                     last_baseline: 0.0,
                     runs: Vec::new(),
                     boxes: Vec::new(),
+                    lines: Vec::new(),
                     fragments: Vec::new(),
                     first_line: None,
                 },
@@ -906,6 +908,19 @@ impl Font {
             self.spacer_em(FontFamily::Monospace),
         ];
         let root_style = elements[part.root].style;
+        // The room each upright character of a vertical line takes, by item.
+        let cells: Vec<Vec<(Range<usize>, f32)>> = items
+            .iter()
+            .zip(runs)
+            .map(|(item, run)| match *item {
+                InlineItem::Text { element, .. }
+                    if elements[element].style.orientation.may_stand() =>
+                {
+                    self.upright_cells(elements[element].style, run.text.as_ref())
+                }
+                _ => Vec::new(),
+            })
+            .collect();
 
         let mut builder = self
             .layout_cx
@@ -915,7 +930,7 @@ impl Font {
         builder.push_default(StyleProperty::FontSize(16.0));
 
         let mut offset = before.len();
-        for (item, run) in items.iter().zip(runs) {
+        for (index, (item, run)) in items.iter().zip(runs).enumerate() {
             let run = run.text.as_ref();
             match *item {
                 InlineItem::Text { element, .. } => {
@@ -941,6 +956,24 @@ impl Font {
                         StyleProperty::Brush(brush_of(element, SpanKind::Text)),
                         offset..end,
                     );
+                    let features = if cells[index].is_empty() {
+                        String::new()
+                    } else {
+                        style.upright_features()
+                    };
+                    for (range, spacing) in &cells[index] {
+                        let range = offset + range.start..offset + range.end;
+                        builder.push(
+                            StyleProperty::FontFeatures(parley::FontFeatures::Source(
+                                features.clone().into(),
+                            )),
+                            range.clone(),
+                        );
+                        builder.push(StyleProperty::LetterSpacing(*spacing), range.clone());
+                        let mut brush = brush_of(element, SpanKind::Text);
+                        brush[3] = 1;
+                        builder.push(StyleProperty::Brush(brush), range);
+                    }
                     offset = end;
                 }
                 InlineItem::Spacer {
@@ -1052,6 +1085,7 @@ impl Font {
 
         let mut runs = Vec::new();
         let mut boxes = Vec::new();
+        let mut lines = Vec::new();
         let mut fragments = Vec::new();
         let mut cursor = part.cursor;
         let mut first_baseline = None;
@@ -1097,6 +1131,10 @@ impl Font {
             let metrics = line.metrics();
             widest = widest.max(metrics.advance - metrics.trailing_whitespace);
             trace.heights.push(placed.height);
+            lines.push(crate::LineBox {
+                top: cursor,
+                height: placed.height,
+            });
             cursor += placed.height;
         }
         let first = layout.lines().next().map(|line| {
@@ -1120,6 +1158,7 @@ impl Font {
                 last_baseline,
                 runs,
                 boxes,
+                lines,
                 fragments,
                 first_line: None,
             },
@@ -1326,12 +1365,14 @@ fn place_line(
                         id: glyph.id,
                         x: glyph.x,
                         y: glyph.y,
+                        advance: glyph.advance,
                     })
                     .collect();
                 let metrics = run.metrics();
                 let synthesis = synthesis_of(run, no_synthesis);
                 line_runs.push(LineRun {
                     shaped: ShapedRun {
+                        upright: glyph_run.style().brush[3] == 1,
                         font: run.font().clone(),
                         font_size: run.font_size(),
                         normalized_coords: run.normalized_coords().to_vec(),

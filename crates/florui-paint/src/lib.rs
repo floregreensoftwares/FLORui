@@ -73,6 +73,7 @@ mod scene3d;
 mod shadow_cache;
 mod svg_ref;
 mod text_shadow;
+mod turned;
 
 pub use incremental::{PaintInputs, Repaint, Repainter};
 
@@ -4045,6 +4046,7 @@ fn paint_list_marker(
                     scale_factor,
                     clip,
                     shadows: &[],
+                    mirror: None,
                     ellipsis: None,
                     decoration: None,
                 },
@@ -4734,7 +4736,15 @@ fn paint_node(
         // `scale_factor` at rasterization time, the other half of the same
         // split: shape at the size layout actually measured, paint at the
         // size the canvas actually needs.
-        let wrap_width = wrap_width(content_width, scale_factor);
+        // The lines of a vertical box run down it, so they are as long as it is tall.
+        let mode = style.map_or(florui_style::WritingMode::HorizontalTb, |s| s.writing_mode);
+        let vertical = mode.is_vertical();
+        let (line_length, stack_length) = if vertical {
+            (content_height, content_width)
+        } else {
+            (content_width, content_height)
+        };
+        let wrap_width = wrap_width(line_length, scale_factor);
 
         // Only the inline elements of a context can show themselves again.
         if !shown
@@ -4792,6 +4802,7 @@ fn paint_node(
                     (wrap_width, content_width / scale_factor),
                     scale_factor,
                     clip,
+                    None,
                 );
             }
         } else if matches!(arena.tag(node), "input" | "textarea") {
@@ -5048,31 +5059,51 @@ fn paint_node(
                 let Some(&at) = layouts.get(&block) else {
                     continue;
                 };
-                if let Some(shaped) = florui_layout::shape_anonymous_block(
+                let line = if vertical { at.height } else { at.width };
+                if let Some(mut shaped) = florui_layout::shape_anonymous_block(
                     font,
                     arena,
                     styles,
                     (layouts, scale_factor),
                     block,
-                    self_wrap(at.width, scale_factor),
+                    self_wrap(line, scale_factor),
                 ) {
-                    let origin = (x + at.x, y + at.y);
-                    let (runs, cuts) =
-                        inline_runs_for(font, style, &shaped, at.width / scale_factor);
-                    paint_inline_context(
+                    if mode == florui_style::WritingMode::VerticalLr {
+                        std::sync::Arc::make_mut(&mut shaped.layout)
+                            .mirror_lines(at.width / scale_factor);
+                    }
+                    let (runs, cuts) = inline_runs_for(font, style, &shaped, line / scale_factor);
+                    flowed(
                         buffer,
-                        (arena, styles),
-                        &shaped,
-                        &runs,
-                        &cuts,
-                        origin,
-                        color,
+                        vertical,
+                        (x + at.x, y + at.y, at.width, at.height),
+                        reach_of(
+                            mode,
+                            (
+                                shaped.layout.width * scale_factor,
+                                shaped.layout.height * scale_factor,
+                            ),
+                            (line, at.width),
+                        ),
                         scale_factor,
                         clip,
+                        |surface, origin, clip| {
+                            paint_inline_context(
+                                surface,
+                                (arena, styles),
+                                &shaped,
+                                &runs,
+                                &cuts,
+                                origin,
+                                color,
+                                scale_factor,
+                                clip,
+                            );
+                        },
                     );
                 }
             }
-        } else if let Some(shaped) = inline_shape(
+        } else if let Some(mut shaped) = inline_shape(
             font,
             arena,
             styles,
@@ -5080,6 +5111,10 @@ fn paint_node(
             node,
             wrap_width,
         ) {
+            if mode == florui_style::WritingMode::VerticalLr {
+                std::sync::Arc::make_mut(&mut shaped.layout)
+                    .mirror_lines(content_width / scale_factor);
+            }
             // A real mixed text/inline-element node: rebuilt and
             // reshaped fresh here, since this crate doesn't share layout's
             // own internal Taffy tree — deterministic at the same final
@@ -5089,33 +5124,45 @@ fn paint_node(
             // underline on it.
             {
                 let is_button = arena.tag(node) == "button";
-                let (dx, dy) = text_offset(
-                    is_button,
-                    style,
-                    (content_width, content_height),
-                    (
-                        shaped.layout.width * scale_factor,
-                        shaped.layout.height * scale_factor,
-                    ),
+                let ink = (
+                    shaped.layout.width * scale_factor,
+                    shaped.layout.height * scale_factor,
                 );
-                let origin = (content_x + dx, content_y + dy);
+                let (dx, dy) = text_offset(is_button, style, (line_length, stack_length), ink);
                 let (runs, cuts) =
-                    inline_runs_for(font, style, &shaped, content_width / scale_factor);
-                paint_inline_context(
+                    inline_runs_for(font, style, &shaped, line_length / scale_factor);
+                flowed(
                     buffer,
-                    (arena, styles),
-                    &shaped,
-                    &runs,
-                    &cuts,
-                    origin,
-                    color,
+                    vertical,
+                    (content_x, content_y, content_width, content_height),
+                    reach_of(mode, ink, (line_length, stack_length)),
                     scale_factor,
                     clip,
+                    |surface, (base_x, base_y), clip| {
+                        paint_inline_context(
+                            surface,
+                            (arena, styles),
+                            &shaped,
+                            &runs,
+                            &cuts,
+                            (base_x + dx, base_y + dy),
+                            color,
+                            scale_factor,
+                            clip,
+                        );
+                    },
                 );
             }
         } else {
             let text = arena.text_content(node);
             let is_button = arena.tag(node) == "button";
+            let ink = if vertical && !text.is_empty() {
+                let metrics =
+                    font.measure_wrapped(florui_layout::node_text_style(style), text, wrap_width);
+                (metrics.width * scale_factor, metrics.height * scale_factor)
+            } else {
+                (0.0, 0.0)
+            };
             let (dx, dy) = match style {
                 Some(style) if !text.is_empty() && places_its_text(is_button, Some(style)) => {
                     let text_style = florui_layout::text_style_of(style);
@@ -5123,25 +5170,86 @@ fn paint_node(
                     text_offset(
                         is_button,
                         Some(style),
-                        (content_width, content_height),
+                        (line_length, stack_length),
                         (metrics.width * scale_factor, metrics.height * scale_factor),
                     )
                 }
                 _ => (0.0, 0.0),
             };
-            paint_node_text(
+            let mirror = (mode == florui_style::WritingMode::VerticalLr)
+                .then_some(content_width / scale_factor);
+            flowed(
                 buffer,
-                font,
-                arena,
-                node,
-                style,
-                color,
-                (content_x + dx, content_y + dy),
-                (wrap_width, content_width / scale_factor),
+                vertical,
+                (content_x, content_y, content_width, content_height),
+                reach_of(mode, ink, (line_length, stack_length)),
                 scale_factor,
                 clip,
+                |surface, (base_x, base_y), clip| {
+                    paint_node_text(
+                        surface,
+                        font,
+                        arena,
+                        node,
+                        style,
+                        color,
+                        (base_x + dx, base_y + dy),
+                        (wrap_width, line_length / scale_factor),
+                        scale_factor,
+                        clip,
+                        mirror,
+                    );
+                },
             );
         }
+    }
+}
+
+/// How far the lines of a vertical box reach, for [`flowed`]: along the lines, across them,
+/// and across them the other way from the corner of the box. `lines` is the size of the lines
+/// as shaped, and `room` the length of a line and the width the lines have.
+fn reach_of(
+    mode: florui_style::WritingMode,
+    lines: (f32, f32),
+    room: (f32, f32),
+) -> (f32, f32, f32) {
+    let along = lines.0.max(room.0);
+    if mode == florui_style::WritingMode::VerticalLr {
+        // The lines are put from the other edge, so it is the ones that overflow that go
+        // past the corner.
+        (along, room.1, (lines.1 - room.1).max(0.0))
+    } else {
+        (along, lines.1.max(room.1), 0.0)
+    }
+}
+
+/// What a box paints of its lines: with `draw` on `buffer` when they run along the page, and
+/// when they run down it (a vertical writing mode), in the frame of the lines, put on
+/// `buffer` turned. `draw` is given the surface, where the content box corner is on it, and
+/// the clip to use.
+#[allow(clippy::too_many_arguments)]
+fn flowed(
+    buffer: &mut Surface,
+    vertical: bool,
+    content: (f32, f32, f32, f32),
+    ink: (f32, f32, f32),
+    scale_factor: f32,
+    clip: Option<&Mask>,
+    draw: impl FnOnce(&mut Surface, (f32, f32), Option<&Mask>),
+) {
+    if vertical {
+        turned::paint_turned(
+            buffer,
+            content,
+            ink,
+            scale_factor,
+            clip,
+            |surface, origin| {
+                draw(surface, origin, None);
+            },
+        );
+    } else {
+        draw(buffer, (content.0, content.1), clip);
     }
 }
 
@@ -5228,6 +5336,7 @@ fn paint_node_text(
     (wrap_width, content_width): (f32, f32),
     scale_factor: f32,
     clip: Option<&Mask>,
+    mirror: Option<f32>,
 ) {
     let text = arena.text_content(node);
     if text.is_empty() {
@@ -5246,6 +5355,7 @@ fn paint_node_text(
             scale_factor,
             clip,
             shadows: style.map_or(&[][..], |s| &s.text_shadow[..]),
+            mirror,
             ellipsis: style
                 .and_then(text_overflow_mark)
                 .map(|mark| (mark, content_width)),
@@ -6686,6 +6796,9 @@ struct TextPaint<'a> {
     scale_factor: f32,
     clip: Option<&'a Mask>,
     shadows: &'a [florui_style::TextShadow],
+    /// For the lines of a `vertical-lr` box, how wide the box is: they stack from the other
+    /// edge.
+    mirror: Option<f32>,
     /// The mark a clipped line ends in, and the width of the box it is cut at.
     ellipsis: Option<(String, f32)>,
     /// The decoration the element declares, if any.
@@ -6703,10 +6816,14 @@ fn paint_text(buffer: &mut Surface, font: &mut Font, params: TextPaint<'_>) {
         scale_factor,
         clip,
         shadows,
+        mirror,
         ellipsis,
         decoration,
     } = params;
     let mut shaped = font.shape_wrapped(style, text, wrap_width);
+    if let Some(extent) = mirror {
+        shaped.mirror_lines(extent);
+    }
     if let Some((mark, limit)) = &ellipsis {
         font.ellipsize_runs(&mut shaped.runs, style, mark, *limit, 0);
     }
@@ -7584,15 +7701,42 @@ fn append_glyphs(
         // The font is parsed and the outlines extracted only for a glyph the
         // cache has not seen at this size yet.
         let mut outlines = None;
+        // The widths of the glyphs of a run that stands upright, which are centred in their
+        // cells.
+        let metrics = run.upright.then(|| {
+            FontRef::from_index(run.font.data.data(), run.font.index)
+                .ok()
+                .map(|font| {
+                    let coords: Vec<NormalizedCoord> = run
+                        .normalized_coords
+                        .iter()
+                        .map(|&bits| NormalizedCoord::from_bits(bits))
+                        .collect();
+                    (font, coords)
+                })
+        });
         for glyph in &run.glyphs {
             let segments = glyph_outline(&instance, run, glyph.id, size, &mut outlines);
-            glyph_cache::replay(
-                builder,
-                x + glyph.x * scale_factor,
-                y + glyph.y * scale_factor,
-                &segments,
-                run.skew,
-            );
+            let (origin_x, origin_y) = (x + glyph.x * scale_factor, y + glyph.y * scale_factor);
+            if let Some(Some((font, coords))) = &metrics {
+                // Standing upright: the glyph is centred in its cell, along the line and on the
+                // middle of the line across it, and turned back from the turn of the line.
+                let natural = font
+                    .glyph_metrics(GlyphSize::new(size), LocationRef::new(coords))
+                    .advance_width(GlyphId::new(glyph.id))
+                    .unwrap_or(glyph.advance * scale_factor);
+                let cell = glyph.advance * scale_factor;
+                let middle = (run.metrics.ascent - run.metrics.descent) / 2.0 * scale_factor;
+                glyph_cache::replay_turned(
+                    builder,
+                    (origin_x, origin_y),
+                    &segments,
+                    (cell / 2.0, middle),
+                    (cell - natural) / 2.0,
+                );
+                continue;
+            }
+            glyph_cache::replay(builder, origin_x, origin_y, &segments, run.skew);
         }
     }
 }

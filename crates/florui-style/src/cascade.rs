@@ -137,6 +137,36 @@ pub enum UnicodeBidi {
     Plaintext,
 }
 
+/// `writing-mode`: which way the lines of a block run and which way they stack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WritingMode {
+    /// Lines run left to right (or right to left), top to bottom.
+    #[default]
+    HorizontalTb,
+    /// Lines run top to bottom and stack from the right edge towards the left.
+    VerticalRl,
+    /// Lines run top to bottom and stack from the left edge towards the right.
+    VerticalLr,
+}
+
+impl WritingMode {
+    pub fn is_vertical(self) -> bool {
+        self != WritingMode::HorizontalTb
+    }
+}
+
+/// `text-orientation`: how the characters stand in a line of a vertical block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextOrientation {
+    /// Characters of scripts written vertically stand upright, the others lie on their side.
+    #[default]
+    Mixed,
+    /// Every character stands upright, one under the other.
+    Upright,
+    /// Every character lies on its side, as in a horizontal line turned a quarter.
+    Sideways,
+}
+
 /// `text-align`, with `left` and `right` already turned into `Start` and `End`
 /// by the `direction` of the element they are on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1405,9 +1435,42 @@ pub struct ComputedStyle {
     pub direction: Direction,
     /// `unicode-bidi`.
     pub unicode_bidi: UnicodeBidi,
+    /// Inherited `writing-mode`.
+    pub writing_mode: WritingMode,
+    /// Inherited `text-orientation`.
+    pub text_orientation: TextOrientation,
 }
 
 impl ComputedStyle {
+    /// The style of an inline box in the lines of a vertical writing mode, as the lines are
+    /// laid out and drawn: turned a quarter clockwise, so that what is on the top of the
+    /// box (the side the letters point to, which is the right on the page) is its top, and
+    /// what is on the left of the page is its bottom. Margins, padding, borders and the
+    /// corners are turned; nothing else is.
+    pub fn turned(&self) -> ComputedStyle {
+        fn edges<T>(side: Edges<T>) -> Edges<T> {
+            Edges {
+                top: side.right,
+                right: side.bottom,
+                bottom: side.left,
+                left: side.top,
+            }
+        }
+        let corner = |radius: (LengthPercentage, LengthPercentage)| (radius.1, radius.0);
+        let radius = self.border_radius;
+        let mut turned = self.clone();
+        turned.margin = edges(self.margin);
+        turned.padding = edges(self.padding);
+        turned.border = edges(self.border);
+        turned.border_radius = Corners {
+            top_left: corner(radius.top_right),
+            top_right: corner(radius.bottom_right),
+            bottom_right: corner(radius.bottom_left),
+            bottom_left: corner(radius.top_left),
+        };
+        turned
+    }
+
     /// Where a flex or grid item stacks among its siblings: by `z-index`, then
     /// by `order`, with document order left to break any tie. An absolutely
     /// positioned child is no item and stacks as `order: 0`.
@@ -1639,6 +1702,8 @@ impl ComputedStyle {
             first_line: _,
             direction: _,
             unicode_bidi: _,
+            writing_mode: _,
+            text_orientation: _,
         } = other;
         self.background_color = *background_color;
         self.background_color_clip = *background_color_clip;
@@ -3525,6 +3590,39 @@ mod tests {
         assert_eq!(computed[&ltr].direction, crate::Direction::Ltr);
         assert_eq!(computed[&ltr].unicode_bidi, crate::UnicodeBidi::Isolate);
         assert_eq!(computed[&plain].direction, crate::Direction::Rtl);
+    }
+
+    #[test]
+    fn writing_mode_and_text_orientation_are_read_and_inherit() {
+        let tree: Element = view! {
+            <div class="rl">
+                <span>{"a"}</span>
+                <p class="lr" />
+                <p class="up" />
+            </div>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".rl { writing-mode: vertical-rl } .lr { writing-mode: vertical-lr } \
+             .up { text-orientation: upright }",
+            &InteractionState::new(),
+        );
+        let root = arena.roots()[0];
+        let [span, lr, up] = arena.children(root)[..] else {
+            panic!("three children");
+        };
+        assert_eq!(computed[&root].writing_mode, crate::WritingMode::VerticalRl);
+        assert_eq!(
+            computed[&root].text_orientation,
+            crate::TextOrientation::Mixed
+        );
+        assert_eq!(computed[&span].writing_mode, crate::WritingMode::VerticalRl);
+        assert_eq!(computed[&lr].writing_mode, crate::WritingMode::VerticalLr);
+        assert_eq!(computed[&up].writing_mode, crate::WritingMode::VerticalRl);
+        assert_eq!(
+            computed[&up].text_orientation,
+            crate::TextOrientation::Upright
+        );
     }
 
     #[test]
