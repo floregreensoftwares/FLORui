@@ -744,19 +744,22 @@ impl Inner {
             // The validators belong to the address that was stored, not to wherever it
             // redirects: sent on, they would leak to another host and a `304` from there
             // would renew the wrong body.
+            let mut sent_validators = false;
             if let (0, Some(entry)) = (hop, validators) {
                 if let Some(etag) = &entry.etag {
                     request = request.header("If-None-Match", etag);
+                    sent_validators = true;
                 }
                 if let Some(modified) = &entry.last_modified {
                     request = request.header("If-Modified-Since", modified);
+                    sent_validators = true;
                 }
             }
             let request = request.config().timeout_global(Some(remaining)).build();
             self.requests.fetch_add(1, Ordering::Relaxed);
             let response = request.call().map_err(map_error)?;
             if !matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
-                return Ok((response, hop == 0 && validators.is_some()));
+                return Ok((response, hop == 0 && sent_validators));
             }
             let location = response
                 .headers()
@@ -808,8 +811,8 @@ impl Inner {
 /// The URL as it is requested: `http` or `https`, with a host, no credentials and no
 /// fragment.
 fn parse_url(text: &str) -> Result<Url, FetchError> {
-    let mut url =
-        Url::parse(text.trim()).map_err(|error| FetchError::InvalidUrl(error.to_string()))?;
+    let mut url = Url::parse(text.trim_matches(|c: char| c.is_ascii_whitespace()))
+        .map_err(|error| FetchError::InvalidUrl(error.to_string()))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(FetchError::UnsupportedScheme(url.scheme().to_owned()));
     }

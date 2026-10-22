@@ -119,13 +119,18 @@ impl Bypass {
                     Rule::Network(address, bits)
                 } else if let Some(domain) = token.strip_prefix('.') {
                     Rule::Domain(domain.to_owned())
-                } else if let Some(inside) = token
+                } else if let Some((inside, after)) = token
                     .strip_prefix('[')
                     .and_then(|rest| rest.split_once(']'))
-                    .map(|(inside, _port)| inside)
                 {
-                    // `[::1]` and `[::1]:8080`: the address, whatever port follows.
-                    Rule::Glob(inside.to_owned())
+                    // `[::1]`, `[::1]:8080` and `[2001:db8::]/32`.
+                    match cidr(&format!("{inside}{after}")) {
+                        Some((address, bits)) if after.starts_with('/') => {
+                            Rule::Network(address, bits)
+                        }
+                        // A port after the address is not part of it.
+                        _ => Rule::Glob(inside.to_owned()),
+                    }
                 } else {
                     // Any `:port` at the end is not part of the name.
                     let name = match token.rsplit_once(':') {
@@ -421,32 +426,36 @@ fn run(program: &str, args: &[&str]) -> Option<String> {
     // Read while it runs: a program that prints more than a pipe holds waits for a reader
     // before it can exit.
     let mut stdout = child.stdout.take()?;
-    let reader = std::thread::spawn(move || {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut output = String::new();
-        std::io::Read::read_to_string(&mut stdout, &mut output)
-            .ok()
-            .map(|_| output)
+        let read = std::io::Read::read_to_string(&mut stdout, &mut output);
+        let _ = sender.send(read.ok().map(|_| output));
     });
     let deadline = Instant::now() + Duration::from_secs(2);
     let succeeded = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status.success(),
-            Ok(None) if Instant::now() >= deadline => {
-                // Closing the pipe ends the reader too.
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            // Too slow, or not to be asked: either way it must not outlive this.
+            Ok(None) | Err(_) => {
                 let _ = child.kill();
                 let _ = child.wait();
                 break false;
             }
-            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
-            Err(_) => break false,
         }
     };
     if !succeeded {
-        // The reader is left to end when the pipe closes: a child of the program that was
-        // killed can hold it open, and waiting for that would be waiting for it.
+        // The reader ends when the pipe closes; a child of the program that was killed can
+        // hold it open, and waiting for that would be waiting for it.
         return None;
     }
-    reader.join().ok().flatten()
+    // The program is done, but something it started can still hold the pipe open and keep
+    // the reader from seeing the end, so the wait for the output has a limit too.
+    receiver
+        .recv_timeout(Duration::from_millis(500))
+        .ok()
+        .flatten()
 }
 
 #[cfg(test)]
@@ -462,6 +471,7 @@ mod tests {
         let list = bypass(&[
             "localhost;*.corp.example;.intra.example;<local>",
             "10.0.0.0/8, 192.168.*, 2001:db8::/32 printer.example:8080 [::1]:8080",
+            "[fd00::]/8",
         ]);
         for host in [
             "localhost",
@@ -476,6 +486,7 @@ mod tests {
             "[2001:db8::7]",
             "printer.example",
             "::1",
+            "fd12:3456::1",
         ] {
             assert!(list.matches(host), "{host} goes direct");
         }

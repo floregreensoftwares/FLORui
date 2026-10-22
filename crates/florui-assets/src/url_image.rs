@@ -71,7 +71,7 @@ fn stamp(url: &str) -> Stamp {
 /// them: it changes when the file does.
 pub fn identity(url: &str) -> String {
     if crate::remote_image::is_remote(url) {
-        return crate::remote_image::identity(url);
+        return crate::remote_image::identity(remote_address(url));
     }
     match stamp(url) {
         Stamp::Data => format!("data:{}", url.len()),
@@ -81,6 +81,12 @@ pub fn identity(url: &str) -> String {
 }
 
 pub use crate::remote_image::{is_remote, on_change as on_remote_change};
+
+/// The address as it is requested and keyed: without the white space around it, which is
+/// ASCII only, so that the same picture written twice is one picture.
+pub fn remote_address(url: &str) -> &str {
+    url.trim_matches(|c: char| c.is_ascii_whitespace())
+}
 
 /// What was found when an image was last read, and the file's stamp then.
 type Kept = (Stamp, Option<Arc<Loaded>>);
@@ -98,7 +104,7 @@ static SOURCES: Mutex<Option<HashMap<String, Kept>>> = Mutex::new(None);
 /// failure), and [`on_remote_change`] tells the host when to ask again.
 pub fn load(url: &str) -> Option<Arc<Loaded>> {
     if crate::remote_image::is_remote(url) {
-        return crate::remote_image::load(url);
+        return crate::remote_image::load(remote_address(url));
     }
     let now = stamp(url);
     {
@@ -173,9 +179,14 @@ fn looks_like_svg(bytes: &[u8]) -> bool {
             let Some(name) = rest.strip_prefix(b"<svg") else {
                 return false;
             };
+            // `<svg:svg>`, with the prefix bound to the namespace, is the same element.
+            let name = match name.strip_prefix(b":svg") {
+                Some(after) => after,
+                None => name,
+            };
             return name
                 .first()
-                .is_some_and(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/' | b':'));
+                .is_some_and(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/'));
         };
         match skipped {
             Some(len) => rest = &rest[len..],
@@ -613,6 +624,8 @@ mod tests {
             "<html><body><svg></svg></body></html>",
             "<!doctype html><title>404</title>",
             "<svgfoo>",
+            "<svg:foo xmlns:svg='http://www.w3.org/2000/svg'/>",
+            "<svg:svgx>",
             "<?xml version='1.0'?><html/>",
             "<!-- unfinished",
             "hello",

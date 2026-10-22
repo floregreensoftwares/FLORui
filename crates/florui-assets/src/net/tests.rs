@@ -964,6 +964,42 @@ mod redirected_revalidation {
     }
 }
 
+mod unconditional {
+    use super::*;
+
+    #[test]
+    fn a_304_to_a_request_that_sent_no_validators_does_not_renew_the_stored_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = Server::start(|request| {
+            if request.path == "/cover.png" && !request.headers.contains_key("x-second") {
+                Reply::ok("image/png", png()).header("Cache-Control", "max-age=60")
+            } else {
+                Reply::status(304)
+            }
+        });
+        let url = server.url("/cover.png");
+        let fetcher = Fetcher::new(NetConfig {
+            cache_dir: Some(dir.path().to_owned()),
+            ..config()
+        });
+        fetcher.fetch(&url).unwrap();
+        // Stale, and with nothing to ask the server to confirm it with.
+        let disk = fetcher.inner.disk.as_ref().unwrap();
+        let (mut entry, body) = disk.lookup(&url, unix_now()).unwrap();
+        assert!(entry.etag.is_none() && entry.last_modified.is_none());
+        entry.stored_at -= 3600;
+        disk.store(&entry, &body);
+        // The server now answers 304 to everything, which is not an answer to anything.
+        let server_that_always_304s = Server::start(|_| Reply::status(304));
+        let moved = server_that_always_304s.url("/cover.png");
+        let (mut again, body) = disk.lookup(&url, unix_now()).unwrap();
+        again.url = moved.clone();
+        disk.store(&again, &body);
+        let error = fetcher.fetch(&moved).unwrap_err();
+        assert!(matches!(error, FetchError::Transport(reason) if reason.contains("304")));
+    }
+}
+
 mod scheduling {
     use super::*;
 
