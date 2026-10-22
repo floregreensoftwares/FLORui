@@ -3,6 +3,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 
 use crate::error::AssetError;
@@ -170,7 +171,9 @@ impl AssetCache {
         params: DecodeParams,
     ) -> Result<Arc<RasterImage>, AssetError> {
         let id = source.identity()?;
-        self.get_or_decode_with(id, params, || source.read_bytes())
+        self.get_or_decode_with(id, params, source.path().map(Path::to_owned), || {
+            source.read_bytes()
+        })
     }
 
     /// The decode of `(id, params)` if a handle to it is alive, without loading or
@@ -198,13 +201,16 @@ impl AssetCache {
         bytes: &[u8],
         params: DecodeParams,
     ) -> Result<Arc<RasterImage>, AssetError> {
-        self.get_or_decode_with(id, params, || Ok(Cow::Borrowed(bytes)))
+        // The same ceiling as for a file or an embedded asset, whatever limit the download had.
+        crate::limits::check_source_len(bytes.len() as u64, None)?;
+        self.get_or_decode_with(id, params, None, || Ok(Cow::Borrowed(bytes)))
     }
 
     fn get_or_decode_with<'b>(
         &self,
         id: AssetId,
         params: DecodeParams,
+        path: Option<PathBuf>,
         read: impl FnOnce() -> Result<Cow<'b, [u8]>, AssetError>,
     ) -> Result<Arc<RasterImage>, AssetError> {
         let key = CacheKey { id, params };
@@ -256,7 +262,7 @@ impl AssetCache {
                 let read = read.take().expect("only the thread that leads decodes");
                 // A download is someone else's document; a file or embedded asset is the
                 // application's own.
-                decode(read, params, !matches!(key.id, AssetId::Url(_)))
+                decode(read, params, !matches!(key.id, AssetId::Url(_)), path)
             };
             let decoded = result.and_then(|image| {
                 let (needed, held) = (image.retained_bytes(), self.held_bytes());
@@ -315,10 +321,11 @@ fn decode<'b>(
     read: impl FnOnce() -> Result<Cow<'b, [u8]>, AssetError>,
     params: DecodeParams,
     trusted: bool,
+    path: Option<PathBuf>,
 ) -> Result<RasterImage, AssetError> {
     let parse = |text: &str| parse_svg_for(trusted, text);
     let text = |bytes: Cow<'_, [u8]>| {
-        String::from_utf8(bytes.into_owned()).map_err(|_| AssetError::InvalidUtf8 { path: None })
+        String::from_utf8(bytes.into_owned()).map_err(|_| AssetError::InvalidUtf8 { path })
     };
     match params {
         DecodeParams::Native => {
@@ -765,5 +772,71 @@ mod tests {
             )
             .unwrap();
         assert!(!drawn(&downloaded), "a download does not");
+    }
+
+    #[test]
+    fn an_svg_that_is_not_utf8_names_its_file_in_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.svg");
+        std::fs::write(&path, [0xff, 0xfe, 0xfd]).unwrap();
+        let error = AssetCache::new()
+            .get_or_load(
+                &AssetSource::Path(&path),
+                DecodeParams::Rasterized(crate::svg::RasterFit::Stretch {
+                    width: 4,
+                    height: 4,
+                }),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(&error, AssetError::InvalidUtf8 { path: Some(found) } if *found == path),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn bytes_over_the_source_limit_are_refused_whatever_they_came_from() {
+        let cache = AssetCache::new();
+        let too_big = vec![0u8; (crate::limits::MAX_SOURCE_BYTES + 1) as usize];
+        let error = cache
+            .get_or_decode(
+                AssetId::Url("https://example.com/huge".to_owned()),
+                &too_big,
+                DecodeParams::Native,
+            )
+            .unwrap_err();
+        assert!(matches!(error, AssetError::SourceTooLarge { .. }));
+    }
+
+    #[test]
+    fn two_versions_of_an_address_rasterize_separately_under_their_digests() {
+        use crate::svg::RasterFit;
+        let cache = AssetCache::new();
+        let fit = DecodeParams::Rasterized(RasterFit::Stretch {
+            width: 8,
+            height: 8,
+        });
+        let old = BLUE_CIRCLE_SVG;
+        let new = BLUE_CIRCLE_SVG.replace("#3366ff", "#ff0000");
+        let url = "https://example.com/logo.svg";
+        let first = cache
+            .get_or_decode(
+                crate::url_image::download_id(url, old.as_bytes()),
+                old.as_bytes(),
+                fit,
+            )
+            .unwrap();
+        let second = cache
+            .get_or_decode(
+                crate::url_image::download_id(url, new.as_bytes()),
+                new.as_bytes(),
+                fit,
+            )
+            .unwrap();
+        assert!(
+            !Arc::ptr_eq(&first, &second),
+            "the old one is not handed back for the new"
+        );
+        assert_ne!(first.rgba, second.rgba);
     }
 }

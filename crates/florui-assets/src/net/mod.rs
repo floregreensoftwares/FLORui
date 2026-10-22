@@ -73,6 +73,9 @@ use crate::limits::MAX_SOURCE_BYTES;
 use crate::url_image::{self, Format};
 use http_cache::{DiskCache, Entry, Headers, Policy, unix_now};
 
+/// How long after a background revalidation failed the next one is held back.
+const REFRESH_BACKOFF: Duration = Duration::from_secs(60);
+
 const ACCEPT: &str = "image/webp,image/png,image/jpeg,image/gif,image/svg+xml,*/*;q=0.5";
 
 /// Where the proxy settings come from.
@@ -245,6 +248,9 @@ struct Inner {
     requests: AtomicU64,
     cache_hits: AtomicU64,
     revalidated: AtomicU64,
+    /// When the background revalidation of an address last failed, so that an origin that is
+    /// down is not asked again at every use of its stale copy.
+    refresh_failed: Mutex<HashMap<String, Instant>>,
 }
 
 /// Loads images from the network under the limits of a [`NetConfig`]. Cheap to clone;
@@ -290,6 +296,7 @@ impl Fetcher {
                 requests: AtomicU64::new(0),
                 cache_hits: AtomicU64::new(0),
                 revalidated: AtomicU64::new(0),
+                refresh_failed: Mutex::default(),
                 config,
             }),
         }
@@ -425,21 +432,6 @@ impl Inner {
                     bypass: proxy::Bypass::default(),
                     error: None,
                 },
-                proxy::Plan::EnvironmentChecked { bypass } => {
-                    // `Environment` is only planned when a proxy is set in it.
-                    match ureq::Proxy::try_from_env() {
-                        Some(proxy) => {
-                            let bypass = proxy::Bypass::parse(&bypass);
-                            Network {
-                                agent: agent(config, Some(Some(proxy))),
-                                direct: Some(agent(config, Some(None))),
-                                bypass,
-                                error: None,
-                            }
-                        }
-                        None => unusable("the proxy of the environment went away".to_owned()),
-                    }
-                }
                 proxy::Plan::Direct => Network {
                     agent: agent(config, Some(None)),
                     direct: None,
@@ -549,6 +541,20 @@ impl Inner {
                 queue.jobs.remove(&job.key());
                 std::mem::take(&mut *waiters)
             };
+            if job.refresh {
+                let mut failed = self
+                    .refresh_failed
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                if outcome.is_ok() {
+                    failed.remove(&job.url);
+                } else {
+                    if failed.len() >= 1024 {
+                        failed.clear();
+                    }
+                    failed.insert(job.url.clone(), Instant::now());
+                }
+            }
             for (_, callback) in waiters {
                 // The callback is the caller's; one that panics does not stop the others.
                 let outcome = outcome.clone();
@@ -565,6 +571,15 @@ impl Inner {
     /// Queues the background revalidation of the copy `served` was stale. This worker
     /// finds it on its next turn.
     fn enqueue_refresh(&self, served: &Job) {
+        if self
+            .refresh_failed
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(&served.url)
+            .is_some_and(|failed| failed.elapsed() < REFRESH_BACKOFF)
+        {
+            return;
+        }
         let mut queue = self.lock();
         let key = (served.url.clone(), true);
         if queue.jobs.contains_key(&key) {
@@ -602,14 +617,19 @@ impl Inner {
         });
         if let Some(origin) = usable_at_once
             && let Some(entry) = stored.as_ref()
-            && let Some(body) = self.disk.as_ref().and_then(|disk| disk.read_body(entry))
         {
-            self.cache_hits.fetch_add(1, Ordering::Relaxed);
-            return Ok(Fetched {
-                bytes: body,
-                content_type: stored.and_then(|entry| entry.content_type),
-                origin,
-            });
+            if let Some(body) = self.disk.as_ref().and_then(|disk| disk.read_body(entry)) {
+                self.cache_hits.fetch_add(1, Ordering::Relaxed);
+                return Ok(Fetched {
+                    bytes: body,
+                    content_type: stored.and_then(|entry| entry.content_type),
+                    origin,
+                });
+            }
+            // Gone since it was found (replaced, or dropped for room): there is nothing to
+            // confirm, and a conditional request would come back 304 for a body that is not
+            // there.
+            stored = None;
         }
         let outcome = self.request(job, &mut stored);
         if let (Err(error), false) = (&outcome, job.refresh)

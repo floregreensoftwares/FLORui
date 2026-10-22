@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 
 use crate::url_image::Loaded;
 #[cfg(feature = "net")]
-use crate::{AssetCache, AssetId, DecodeParams};
+use crate::{AssetCache, DecodeParams};
 
 /// How long a picture that failed to load is left alone before the next ask tries again.
 const RETRY_AFTER: Duration = Duration::from_secs(30);
@@ -43,10 +43,14 @@ const RETRY_AFTER: Duration = Duration::from_secs(30);
 /// How long a picture that is ready is shown before it is asked for again.
 const RECHECK_AFTER: Duration = Duration::from_secs(10 * 60);
 
+/// A picture asked for within this long is in use, and is not let go to make room.
+const IN_USE: Duration = Duration::from_secs(10);
+
 /// How many failures are kept before the ones that are due for a retry are let go, and how many
 /// addresses have their failure remembered as said.
 const MOST_FAILURES: usize = 512;
 const MOST_REPORTED: usize = 4096;
+const TRIM_EVERY: u32 = 64;
 
 /// How long until the next recheck when the last one was answered with a stale copy and the
 /// fresh one was being fetched behind it.
@@ -72,6 +76,8 @@ enum Slot {
         loaded: Arc<Loaded>,
         bytes: u64,
         used: u64,
+        /// When it was last asked for, to tell the pictures in use from the ones left over.
+        used_at: Instant,
         /// A digest of the encoded bytes it was made from, to tell a picture the server
         /// changed from one it only sent again.
         digest: u64,
@@ -108,6 +114,8 @@ struct Store {
     /// The addresses whose failure has been said on standard error, so that a picture that
     /// stays broken is said once and not again at every retry.
     reported: std::collections::HashSet<String>,
+    /// Failures since the failed slots were last counted.
+    failed_since_trim: u32,
 }
 
 impl Store {
@@ -133,6 +141,12 @@ impl Store {
                 at: Instant::now(),
             },
         );
+        // Counted every so many failures and not at every one: it looks at every slot.
+        self.failed_since_trim += 1;
+        if self.failed_since_trim < TRIM_EVERY {
+            return;
+        }
+        self.failed_since_trim = 0;
         let failures = self
             .slots
             .values()
@@ -158,7 +172,14 @@ impl Store {
                 .slots
                 .iter()
                 .filter_map(|(url, slot)| match slot {
-                    Slot::Ready { used, .. } if url != keep => Some((*used, url.clone())),
+                    // A picture asked for lately is on a screen, and going would only make
+                    // it come back, another to go in its place and the window to paint
+                    // forever: more than the budget are held while that many are in use.
+                    Slot::Ready { used, used_at, .. }
+                        if url != keep && used_at.elapsed() >= IN_USE =>
+                    {
+                        Some((*used, url.clone()))
+                    }
                     _ => None,
                 })
                 .min();
@@ -268,12 +289,14 @@ pub(crate) fn load(url: &str) -> Option<Arc<Loaded>> {
             Some(Slot::Ready {
                 loaded,
                 used,
+                used_at,
                 checked_at,
                 recheck_after,
                 refresh,
                 ..
             }) => {
                 *used = clock;
+                *used_at = Instant::now();
                 if rechecking && refresh.is_none() && checked_at.elapsed() >= *recheck_after {
                     *refresh = Some((next, None));
                     request = Some(Request {
@@ -476,13 +499,16 @@ enum Built {
 /// bytes, so a picture the server replaced is a different entry from the old one (which may
 /// still be alive, held by what is painting it) and neither can be handed back for the
 /// other, whatever runs at the same time.
-#[cfg(feature = "net")]
-fn cache_id(url: &str, digest: u64) -> AssetId {
-    AssetId::Url(format!("{url}\u{0}{digest:016x}"))
+pub(crate) fn cache_id(url: &str, digest: u64) -> crate::AssetId {
+    crate::AssetId::Url(format!("{url}\u{0}{digest:016x}"))
+}
+
+/// The identity to decode the bytes of one download of `url` under: see [`cache_id`].
+pub(crate) fn download_id(url: &str, bytes: &[u8]) -> crate::AssetId {
+    cache_id(url, digest(bytes))
 }
 
 /// A digest of `bytes` that only has to tell two downloads apart.
-#[cfg(feature = "net")]
 fn digest(bytes: &[u8]) -> u64 {
     use std::hash::Hasher as _;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -586,6 +612,7 @@ fn finish(
                         loaded: Arc::new(loaded),
                         bytes,
                         used,
+                        used_at: Instant::now(),
                         digest: sum,
                         checked_at: Instant::now(),
                         recheck_after: if stale {
@@ -618,6 +645,7 @@ fn finish(
                         loaded: Arc::new(loaded),
                         bytes,
                         used,
+                        used_at: Instant::now(),
                         digest: sum,
                         checked_at: Instant::now(),
                         recheck_after: if stale {
@@ -705,6 +733,8 @@ mod tests {
             }),
             bytes,
             used,
+            // Left alone long enough to be let go.
+            used_at: Instant::now() - IN_USE - Duration::from_secs(1),
             digest: 0,
             checked_at: Instant::now(),
             recheck_after: RECHECK_AFTER,
@@ -722,6 +752,20 @@ mod tests {
         assert!(!store.slots.contains_key("a"));
         assert!(store.slots.contains_key("b") && store.slots.contains_key("c"));
         assert_eq!(store.held, MAX_HELD_BYTES);
+        // A picture in use is not let go for room, even over the budget.
+        if let Some(Slot::Ready { used_at, .. }) = store.slots.get_mut("b") {
+            *used_at = Instant::now();
+        }
+        store.held = MAX_HELD_BYTES * 2;
+        store.evict("c");
+        assert!(
+            store.slots.contains_key("b"),
+            "asked for lately, so on a screen"
+        );
+        if let Some(Slot::Ready { used_at, .. }) = store.slots.get_mut("b") {
+            *used_at = Instant::now() - IN_USE - Duration::from_secs(1);
+        }
+        store.held = MAX_HELD_BYTES;
         // Over budget with only the kept picture left: it stays.
         store.held = MAX_HELD_BYTES * 2;
         store.evict("c");
@@ -765,7 +809,7 @@ mod tests {
         store.report("http://example.invalid/a.png", "down again");
         assert_eq!(store.reported.len(), said);
         // Thousands of dead addresses: the ones that can be retried anyway are let go.
-        for n in 0..(MOST_FAILURES + 50) {
+        for n in 0..(MOST_FAILURES + 2 * TRIM_EVERY as usize) {
             store.fail(&format!("http://example.invalid/{n}.png"));
             // Old enough to be due for a retry.
             if let Some(Slot::Failed { at, .. }) = store
@@ -1011,6 +1055,7 @@ mod tests {
                         loaded: Arc::new(loaded),
                         bytes: 1,
                         used: 1,
+                        used_at: Instant::now(),
                         digest: sum,
                         checked_at: Instant::now(),
                         recheck_after: Duration::ZERO,

@@ -97,6 +97,14 @@ pub fn identity(url: &str) -> String {
 
 pub use crate::remote_image::{Subscription, is_remote, on_change as on_remote_change};
 
+/// The identity to decode the bytes of one download of `url` under in an [`crate::AssetCache`]:
+/// the address and a digest of the bytes, so that a document the server replaced and the one
+/// before it are different entries and neither is handed back for the other while the old one
+/// is still alive.
+pub fn download_id(url: &str, bytes: &[u8]) -> crate::AssetId {
+    crate::remote_image::download_id(remote_address(url), bytes)
+}
+
 /// The address as it is requested and keyed: without the white space around it (ASCII only)
 /// and without the `#fragment`, which is not sent, so that the same picture written twice
 /// is one picture.

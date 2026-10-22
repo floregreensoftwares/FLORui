@@ -53,12 +53,6 @@ pub(crate) enum Plan {
         url: String,
         bypass: Vec<String>,
     },
-    /// The environment's proxy, with the bypass list of its `NO_PROXY` handled here instead of
-    /// by the client, so that the hosts that bypass it can be reached through a client that
-    /// checks addresses (see `NetConfig::block_private_addresses`).
-    EnvironmentChecked {
-        bypass: Vec<String>,
-    },
     /// Requests must fail, with this reason.
     Unusable(String),
 }
@@ -68,14 +62,31 @@ pub(crate) enum Plan {
 pub(crate) struct Environment {
     /// `HTTPS_PROXY` and its kind: a proxy is set.
     pub set: bool,
+    /// The address it names, from the same variables in the same order as the client reads.
+    pub proxy: Option<String>,
     /// `NO_PROXY`, as written.
     pub no_proxy: Vec<String>,
 }
 
 impl Environment {
     pub fn read() -> Self {
+        let proxy = [
+            "ALL_PROXY",
+            "all_proxy",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "HTTP_PROXY",
+            "http_proxy",
+        ]
+        .iter()
+        .find_map(|name| {
+            std::env::var(name)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        });
         Self {
             set: ureq::Proxy::try_from_env().is_some(),
+            proxy,
             no_proxy: std::env::var("NO_PROXY")
                 .or_else(|_| std::env::var("no_proxy"))
                 .into_iter()
@@ -84,8 +95,7 @@ impl Environment {
     }
 }
 
-/// `guard`: whether addresses are checked, which the client does not do for the hosts that its
-/// own reading of `NO_PROXY` sends directly. `system` reads the operating system's settings,
+/// `guard`: whether addresses are checked (see `from_environment` below). `system` reads the operating system's settings,
 /// and is called only when it is needed.
 pub(crate) fn plan(
     mode: &ProxyMode,
@@ -94,14 +104,16 @@ pub(crate) fn plan(
     guard: bool,
     system: impl FnOnce() -> System,
 ) -> Plan {
-    let from_environment = || {
-        if guard && environment.set {
-            Plan::EnvironmentChecked {
-                bypass: environment.no_proxy.clone(),
-            }
-        } else {
-            Plan::Environment
-        }
+    let from_environment = || match (&environment.proxy, guard && environment.set) {
+        // The client reads `NO_PROXY` itself and connects without a check to the hosts it
+        // names, and in its own idea of how an entry matches. With addresses checked the
+        // environment's proxy is used as a proxy that is given, and the hosts that bypass it
+        // are decided here, where the checked client is the one that connects to them.
+        (Some(url), true) => Plan::Proxy {
+            url: url.clone(),
+            bypass: environment.no_proxy.clone(),
+        },
+        _ => Plan::Environment,
     };
     match mode {
         ProxyMode::FromEnvironment => from_environment(),
@@ -665,6 +677,7 @@ mod tests {
         let never = || -> System { unreachable!("the system settings were read") };
         let set = Environment {
             set: true,
+            proxy: Some("http://corp:3128".to_owned()),
             no_proxy: vec![".internal,10.0.0.0/8".to_owned()],
         };
         let unset = Environment::default();
@@ -695,18 +708,15 @@ mod tests {
         );
         // When addresses are checked, the environment's bypass list is handled here, so that
         // the hosts it sends directly go through the checked client too.
+        let checked = Plan::Proxy {
+            url: "http://corp:3128".to_owned(),
+            bypass: vec![".internal,10.0.0.0/8".to_owned()],
+        };
         assert_eq!(
             plan(&ProxyMode::FromEnvironment, &[], &set, true, never),
-            Plan::EnvironmentChecked {
-                bypass: vec![".internal,10.0.0.0/8".to_owned()]
-            }
+            checked
         );
-        assert_eq!(
-            plan(&ProxyMode::System, &[], &set, true, never),
-            Plan::EnvironmentChecked {
-                bypass: vec![".internal,10.0.0.0/8".to_owned()]
-            }
-        );
+        assert_eq!(plan(&ProxyMode::System, &[], &set, true, never), checked);
         // No proxy in the environment: nothing to bypass, the client is checked as it is.
         assert_eq!(
             plan(&ProxyMode::FromEnvironment, &[], &unset, true, never),

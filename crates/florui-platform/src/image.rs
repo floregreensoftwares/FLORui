@@ -373,10 +373,12 @@ impl ImageRegistry {
         let src_for_task = src.to_string();
         executor.spawn(Box::pin(async move {
             let result = florui_reactive::blocking::spawn_blocking(move || match downloaded {
+                // Under an identity that has the digest of this document in it: another
+                // window may hold a rasterization of an older one of the same address.
                 Some(bytes) => cache.get_or_decode(
-                    florui_assets::AssetId::Url(
-                        florui_assets::url_image::remote_address(&path.to_string_lossy())
-                            .to_owned(),
+                    florui_assets::url_image::download_id(
+                        &path.to_string_lossy(),
+                        (*bytes).as_ref(),
                     ),
                     (*bytes).as_ref(),
                     florui_assets::DecodeParams::Rasterized(fit),
