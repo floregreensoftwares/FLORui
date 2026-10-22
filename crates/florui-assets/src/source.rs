@@ -90,7 +90,7 @@ impl<'a> AssetSource<'a> {
         })
     }
 
-    fn path(&self) -> Option<&Path> {
+    pub(crate) fn path(&self) -> Option<&Path> {
         match self {
             AssetSource::Path(path) => Some(path),
             AssetSource::Embedded { .. } => None,

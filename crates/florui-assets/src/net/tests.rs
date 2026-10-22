@@ -975,6 +975,25 @@ mod staleness {
     }
 
     #[test]
+    fn a_revalidation_that_failed_is_not_started_again_at_every_use_of_the_stale_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = first_ok_then("max-age=0, stale-while-revalidate=600", |_| {
+            Reply::status(500)
+        });
+        let url = server.url("/cover.png");
+        let fetcher = Fetcher::new(cached_config(&dir));
+        fetcher.fetch(&url).unwrap();
+        assert_eq!(fetcher.fetch(&url).unwrap().origin, Origin::Stale);
+        assert!(wait_until(|| server.hits() == 2 && idle(&fetcher)));
+        // The origin is down: asking for the stale copy again and again does not hammer it.
+        for _ in 0..5 {
+            assert_eq!(fetcher.fetch(&url).unwrap().origin, Origin::Stale);
+        }
+        assert!(wait_until(|| idle(&fetcher)));
+        assert_eq!(server.hits(), 2, "no new revalidation within the backoff");
+    }
+
+    #[test]
     fn a_failed_revalidation_leaves_the_stale_copy_for_the_next_ask() {
         let dir = tempfile::tempdir().unwrap();
         let server = first_ok_then("max-age=0, stale-while-revalidate=600", |_| {
