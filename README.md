@@ -503,7 +503,9 @@ florui report (3.0 s)
   Linux, the anonymous resident pages).
 - **held** is what each cache of the framework believes it holds, summed over every thread that has one,
   with the most it held at once: background layers, shadow masks, glyph outlines, shaped text, measured
-  text, the frame the painter keeps and what it remembers of each box. The numbers are the caches' own,
+  text, the frame the painter keeps and what it remembers of each box, and, with the `net` feature, the
+  pictures downloaded for an `<img>` or `url(...)` and the downloads waiting to be decoded (`remote-images`,
+  `decode-queue`). The numbers are the caches' own,
   without the allocator's overhead, so they say which owner is large and not the exact size of the
   process. Whatever the process holds beyond them is the application's own data, its decoded pictures
   (`window N`, counting each picture's pixels, a premultiplied copy and its smaller sizes) or memory

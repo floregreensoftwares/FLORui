@@ -29,6 +29,11 @@ pub enum Gauge {
     InlineMemo,
     /// Measured plain text, in entries, one memo per font instance.
     TextMetrics,
+    /// Pictures downloaded for an `<img>` or a `url(...)` and held decoded, ready to
+    /// paint.
+    RemoteImages,
+    /// Downloads, in encoded bytes, that wait to be decoded or are being decoded.
+    DecodeQueue,
     /// Frame buffers the painter keeps between frames and the presenter uploads.
     FrameBuffers,
     /// What the incremental painter remembers of each box to tell what changed,
@@ -43,7 +48,7 @@ pub enum Unit {
     Entries,
 }
 
-const COUNT: usize = 8;
+const COUNT: usize = 10;
 
 impl Gauge {
     pub const ALL: [Gauge; COUNT] = [
@@ -53,6 +58,8 @@ impl Gauge {
         Gauge::GlyphSegments,
         Gauge::InlineMemo,
         Gauge::TextMetrics,
+        Gauge::RemoteImages,
+        Gauge::DecodeQueue,
         Gauge::FrameBuffers,
         Gauge::PaintMemo,
     ];
@@ -65,6 +72,8 @@ impl Gauge {
             Gauge::GlyphSegments => "glyph-segments",
             Gauge::InlineMemo => "inline-memo",
             Gauge::TextMetrics => "text-metrics",
+            Gauge::RemoteImages => "remote-images",
+            Gauge::DecodeQueue => "decode-queue",
             Gauge::FrameBuffers => "frame-buffers",
             Gauge::PaintMemo => "paint-memo",
         }
