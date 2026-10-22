@@ -201,6 +201,8 @@ pub struct WindowOptions {
     /// How the window is painted while its edge is dragged to a new size: see
     /// [`LiveResize`] for the choices and what each costs.
     pub live_resize: LiveResize,
+    /// How much memory this window's graphics device holds back: see [`GpuMemory`].
+    pub gpu_memory: crate::GpuMemory,
 }
 
 /// Not `#[derive(Default)]`: every field but `respect_reduced_motion`
@@ -225,6 +227,7 @@ impl Default for WindowOptions {
             persistence: None,
             frozen_animation_time: None,
             live_resize: LiveResize::default(),
+            gpu_memory: crate::GpuMemory::default(),
         }
     }
 }
@@ -1161,11 +1164,12 @@ enum Presenter {
 fn new_presenter(
     window: &Arc<Window>,
     software_only: bool,
+    memory: crate::GpuMemory,
 ) -> Result<Presenter, softbuffer::SoftBufferError> {
     let gpu = if software_only {
-        GpuPresenter::try_new_software(window.clone())
+        GpuPresenter::try_new_software_with(window.clone(), memory)
     } else {
-        GpuPresenter::try_new(window.clone())
+        GpuPresenter::try_new_with(window.clone(), memory)
     };
     if let Some(gpu) = gpu {
         return Ok(Presenter::Gpu(Box::new(gpu)));
@@ -1221,6 +1225,8 @@ struct WindowState {
     resizing_until: Option<std::time::Instant>,
     /// What a frame costs at full size, to choose how small to paint while resizing.
     live_resizer: crate::frame_quality::LiveResizer,
+    /// How the graphics device takes memory, kept to build the next one after a loss.
+    gpu_memory: crate::GpuMemory,
     /// The last sharp frame, painted over by the next so only what changed is
     /// painted again.
     repainter: florui_paint::Repainter,
@@ -1784,7 +1790,7 @@ impl WindowState {
         );
         // The old presenter must release the window before a new one takes it.
         self.presenter = Presenter::Detached;
-        match new_presenter(&self.window, self.gpu_losses > 1) {
+        match new_presenter(&self.window, self.gpu_losses > 1, self.gpu_memory) {
             Ok(presenter) => self.presenter = presenter,
             Err(error) => {
                 eprintln!("florui-platform: could not recover the render surface: {error}");
@@ -2314,7 +2320,8 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             // GPU-preferred, `softbuffer` fallback — see `crate::gpu`'s own
             // doc for the two-tier (three-way, counting this CPU path)
             // capability contract this implements.
-            let presenter = match new_presenter(&window, false) {
+            let gpu_memory = crate::GpuMemory::resolve(spec.options.gpu_memory);
+            let presenter = match new_presenter(&window, false, gpu_memory) {
                 Ok(presenter) => presenter,
                 Err(error) => return self.fail(event_loop, RunError::SurfaceCreation(error)),
             };
@@ -2430,6 +2437,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 live_resizer: crate::frame_quality::LiveResizer::new(
                     LiveResize::from_environment().unwrap_or(spec.options.live_resize),
                 ),
+                gpu_memory,
                 repainter: florui_paint::Repainter::new(),
                 cpu_frame: Vec::new(),
                 held_frames: florui_profile::gauge::Holder::new(

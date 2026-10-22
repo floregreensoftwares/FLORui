@@ -106,6 +106,12 @@ mod frame_quality;
 pub use frame_quality::LiveResize;
 
 #[cfg(feature = "desktop")]
+mod gpu_memory;
+
+#[cfg(feature = "desktop")]
+pub use gpu_memory::GpuMemory;
+
+#[cfg(feature = "desktop")]
 mod headless;
 
 #[cfg(feature = "desktop")]

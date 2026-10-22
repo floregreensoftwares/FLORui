@@ -522,6 +522,33 @@ florui report (3.0 s)
 The report names kinds of work, never values from the application. In a release build without the
 `profiling` feature none of this is measured and the variable is ignored, with one line saying so.
 
+### How much memory a window's graphics device holds
+
+Every window has a graphics device of its own, and on DirectX 12 and Vulkan its allocator takes memory
+from the system in blocks. The default asks for large blocks, 128 MiB of video memory and 64 MiB beside
+it, which spares a window that creates many graphics resources from going back to the system. A window
+of today's Florui paints on the processor and uploads one picture per frame, so it never uses them,
+and an application with two windows holds them twice. Measured on the glass example at 1800x1000 and
+under a storm of resizes, frames cost the same with either choice and the private bytes of the process
+were 360 MiB with the default and about 206 MiB with `Compact`. `WindowOptions::gpu_memory` chooses:
+
+| choice | first blocks | suits |
+|---|---|---|
+| `GpuMemory::Performance` (default) | 128 MiB + 64 MiB, growing to 256 + 128 | applications that create many graphics resources, or that want the allocator to rarely go back to the system |
+| `GpuMemory::Compact` | 8 MiB + 4 MiB, growing to 64 + 32 | applications that draw little: a much smaller footprint, with the same frames in the glass example |
+| `GpuMemory::Manual { min_block_mib, max_block_mib }` | the range asked for (the allocator keeps it between 4 and 256) | anything between |
+
+```rust
+let options = WindowOptions {
+    gpu_memory: GpuMemory::Compact,
+    ..WindowOptions::default()
+};
+```
+
+`FLORUI_GPU_MEMORY` (`performance`, `compact`, or a range of MiB such as `16-64`) overrides what every
+window chose, to compare the choices without changing code. The effect shows as the process's private
+bytes in the report above.
+
 ## Format on save
 
 `florui fmt --stdin-filepath <path>` reads a Rust source file from stdin, prints only the formatted source to stdout and sends every diagnostic to stderr (exit code 2 on failure, so an editor keeps the buffer as it was). The path selects the `rustfmt.toml` and the edition of the package that owns the file.

@@ -89,6 +89,8 @@ use wgpu::{
 };
 use winit::window::Window;
 
+use crate::GpuMemory;
+
 /// See this module's own doc for what each state means and the fallback
 /// contract between them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,13 +181,19 @@ impl GpuPresenter {
     /// all, the signal `crate::desktop::DesktopHost` uses to fall back
     /// to `softbuffer`.
     pub fn try_new(window: Arc<Window>) -> Option<Self> {
+        Self::try_new_with(window, GpuMemory::default())
+    }
+
+    /// [`Self::try_new`], with the device taking memory as `memory` says.
+    pub fn try_new_with(window: Arc<Window>, memory: GpuMemory) -> Option<Self> {
         #[cfg(target_os = "windows")]
         if let Some(presenter) =
-            crate::os::windows::gpu::try_dx12_direct_composition(window.clone())
+            crate::os::windows::gpu::try_dx12_direct_composition(window.clone(), memory)
         {
             return Some(presenter);
         }
-        Self::try_default_opaque(window.clone(), false).or_else(|| Self::try_new_software(window))
+        Self::try_default_opaque(window.clone(), false, memory)
+            .or_else(|| Self::try_new_software_with(window, memory))
     }
 
     /// Only `wgpu`'s software adapter, opaque. Used after a hardware device
@@ -193,14 +201,19 @@ impl GpuPresenter {
     /// on `wgpu` because a window made for transparent composition shows
     /// nothing drawn with `softbuffer`.
     pub fn try_new_software(window: Arc<Window>) -> Option<Self> {
-        Self::try_default_opaque(window, true)
+        Self::try_new_software_with(window, GpuMemory::default())
+    }
+
+    /// [`Self::try_new_software`], with the device taking memory as `memory` says.
+    pub fn try_new_software_with(window: Arc<Window>, memory: GpuMemory) -> Option<Self> {
+        Self::try_default_opaque(window, true, memory)
     }
 
     /// Whatever backend `wgpu` picks by default, opaque only — the
     /// second-tier fallback: still GPU-rendered, just without real
     /// per-pixel alpha compositing. `software` restricts it to the software
     /// adapter.
-    fn try_default_opaque(window: Arc<Window>, software: bool) -> Option<Self> {
+    fn try_default_opaque(window: Arc<Window>, software: bool, memory: GpuMemory) -> Option<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let surface = instance.create_surface(window.clone()).ok()?;
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -211,6 +224,7 @@ impl GpuPresenter {
         .ok()?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("florui-platform GPU presenter (opaque)"),
+            memory_hints: memory.hints(),
             ..Default::default()
         }))
         .ok()?;
