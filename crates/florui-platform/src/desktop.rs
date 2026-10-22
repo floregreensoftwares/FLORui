@@ -606,10 +606,7 @@ fn watch_css_file(
 
     let mut watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
         let Ok(event) = result else { return };
-        let touches_target = event
-            .paths
-            .iter()
-            .any(|p| p.canonicalize().map(|c| c == target).unwrap_or(false));
+        let touches_target = event.paths.iter().any(|p| is_watched_file(p, &target));
         if touches_target {
             // The event loop may already be gone; nothing to do if so.
             let _ = proxy.send_event(UserEvent::CssChanged(window_id, florui_profile::now()));
@@ -617,6 +614,27 @@ fn watch_css_file(
     })?;
     watcher.watch(parent, RecursiveMode::NonRecursive)?;
     Ok(watcher)
+}
+
+/// Whether `path`, from a file system event, is the watched file `target` (canonical). A file
+/// that was deleted or renamed away cannot be canonicalized, so it is told by its directory and
+/// name: the reload then runs and says the file could not be read.
+fn is_watched_file(path: &Path, target: &Path) -> bool {
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical == target;
+    }
+    let (Some(name), Some(directory)) = (path.file_name(), path.parent()) else {
+        return false;
+    };
+    let directory = if directory.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        directory
+    };
+    target.file_name() == Some(name)
+        && directory
+            .canonicalize()
+            .is_ok_and(|directory| Some(directory.as_path()) == target.parent())
 }
 
 pub(crate) fn layout_viewport(scale: ViewportScale) -> Size<AvailableSpace> {
@@ -2802,6 +2820,26 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_deleted_stylesheet_is_still_told_by_its_directory_and_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("app.css");
+        std::fs::write(&file, "a {}").unwrap();
+        let target = file.canonicalize().unwrap();
+        assert!(is_watched_file(&file, &target), "present");
+        std::fs::remove_file(&file).unwrap();
+        assert!(is_watched_file(&file, &target), "deleted");
+        assert!(
+            !is_watched_file(&dir.path().join("other.css"), &target),
+            "another name in the same directory"
+        );
+        let elsewhere = tempfile::tempdir().unwrap();
+        assert!(
+            !is_watched_file(&elsewhere.path().join("app.css"), &target),
+            "the same name in another directory"
+        );
+    }
 
     #[test]
     fn a_cpu_pixel_carries_its_alpha_only_where_the_buffer_has_that_channel() {
