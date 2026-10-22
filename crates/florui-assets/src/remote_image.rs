@@ -132,7 +132,8 @@ impl Store {
         if self.reported.len() >= MOST_REPORTED {
             self.reported.clear();
         }
-        if self.reported.insert(url.to_owned()) {
+        // Said again when the reason is another one, not for the same one at every retry.
+        if self.reported.insert(format!("{url}\u{0}{reason}")) {
             self.said.push((url.to_owned(), reason.to_owned()));
         }
     }
@@ -149,6 +150,7 @@ impl Store {
                 at: Instant::now(),
             },
         );
+        arm_retry();
         // Counted every so many failures and not at every one: it looks at every slot.
         self.failed_since_trim += 1;
         if self.failed_since_trim < TRIM_EVERY {
@@ -200,6 +202,9 @@ impl Store {
 }
 
 static STORE: Mutex<Option<Store>> = Mutex::new(None);
+/// Whether a timer is already waiting to ask the host to look at the failures again.
+#[cfg(feature = "net")]
+static RETRY_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 type Listener = Arc<dyn Fn() + Send + Sync>;
 /// Everyone who wants to hear of arrivals, by the number their subscription has.
 static LISTENERS: Mutex<Vec<(u64, Listener)>> = Mutex::new(Vec::new());
@@ -256,6 +261,49 @@ pub fn on_change(listener: impl Fn() + Send + Sync + 'static) -> Subscription {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .push((id, Arc::new(listener)));
     Subscription(id)
+}
+
+/// A picture that failed is tried again by the next ask, and a screen that does not change
+/// asks no more: one timer, for all of the failures, calls the listeners once they are due, so
+/// the host paints and asks again.
+#[cfg(feature = "net")]
+fn arm_retry() {
+    use std::sync::atomic::Ordering;
+    if RETRY_ARMED
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        let spawned = std::thread::Builder::new()
+            .name("florui-retry".to_owned())
+            .spawn(|| {
+                std::thread::sleep(RETRY_AFTER);
+                RETRY_ARMED.store(false, Ordering::SeqCst);
+                wake_for_failures();
+            });
+        if spawned.is_err() {
+            RETRY_ARMED.store(false, Ordering::SeqCst);
+        }
+    }
+}
+
+/// Nothing downloads without the `net` feature, so nothing fails to be tried again.
+#[cfg(not(feature = "net"))]
+fn arm_retry() {}
+
+/// Calls the listeners if some picture is waiting to be tried again.
+#[cfg(feature = "net")]
+fn wake_for_failures() {
+    if with_store(|store| failures_are_due(store)) {
+        notify();
+    }
+}
+
+#[cfg(feature = "net")]
+fn failures_are_due(store: &Store) -> bool {
+    store
+        .slots
+        .values()
+        .any(|slot| matches!(slot, Slot::Failed { at, .. } if at.elapsed() >= RETRY_AFTER))
 }
 
 fn notify() {
@@ -473,7 +521,11 @@ fn start(url: &str, generation: u64) -> Started {
     // handed to threads of its own, so a burst of large pictures does not hold up the
     // downloads queued behind them.
     match crate::net::shared_fetcher().submit(url, move |outcome| {
-        decoder::run(Box::new(move || finish(&owned, generation, outcome)));
+        let weight = outcome.as_ref().map_or(0, |fetched| fetched.bytes.len());
+        decoder::run(
+            Box::new(move || finish(&owned, generation, outcome)),
+            weight,
+        );
     }) {
         Ok(ticket) => Started::Queued(ticket),
         Err(error) => Started::Refused(error.to_string()),
@@ -500,18 +552,41 @@ fn cache() -> &'static AssetCache {
 /// slots (see `AssetCache`), so none of them waits for a slot that others hold.
 #[cfg(feature = "net")]
 pub(crate) mod decoder {
-    use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-    use std::sync::{Arc, Mutex, OnceLock};
+    use std::sync::mpsc::{Receiver, Sender, channel};
+    use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
     pub(crate) type Job = Box<dyn FnOnce() + Send>;
 
-    pub(crate) fn run(job: Job) {
-        // A few jobs wait, no more: each owns the body of a download, and when decoding falls
-        // behind, the downloads wait for it (the thread that sends is a fetcher's) instead of
-        // piling up what they fetched.
-        static QUEUE: OnceLock<SyncSender<Job>> = OnceLock::new();
+    /// What waits to be decoded may weigh this much in encoded bytes, jobs that are being
+    /// decoded included; a job alone may be bigger (it waits for the others to finish).
+    const MOST_QUEUED_BYTES: usize = 128 * 1024 * 1024;
+
+    /// The encoded bytes that queued and running jobs own, and who waits for room.
+    static QUEUED: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
+
+    /// Runs `job`, which owns `weight` bytes of a download, on a thread of the decoders. When
+    /// decoding has fallen behind by `MOST_QUEUED_BYTES`, this waits (the thread that calls is a
+    /// fetcher's) instead of letting what was downloaded pile up.
+    pub(crate) fn run(job: Job, weight: usize) {
+        {
+            let (queued, freed) = &QUEUED;
+            let mut queued = queued.lock().unwrap_or_else(|poison| poison.into_inner());
+            while *queued > 0 && *queued + weight > MOST_QUEUED_BYTES {
+                queued = freed
+                    .wait(queued)
+                    .unwrap_or_else(|poison| poison.into_inner());
+            }
+            *queued += weight;
+        }
+        let job: Job = Box::new(move || {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+            let (queued, freed) = &QUEUED;
+            *queued.lock().unwrap_or_else(|poison| poison.into_inner()) -= weight;
+            freed.notify_all();
+        });
+        static QUEUE: OnceLock<Sender<Job>> = OnceLock::new();
         let queue = QUEUE.get_or_init(|| {
-            let (sender, receiver) = sync_channel::<Job>(16);
+            let (sender, receiver) = channel::<Job>();
             let receiver: Arc<Mutex<Receiver<Job>>> = Arc::new(Mutex::new(receiver));
             let cores = std::thread::available_parallelism().map_or(2, usize::from);
             for _ in 0..(cores / 2).clamp(1, 4) {
@@ -524,10 +599,10 @@ pub(crate) mod decoder {
                                 .lock()
                                 .unwrap_or_else(|poison| poison.into_inner())
                                 .recv();
+                            // A job that panics does not end the thread (see above); it
+                            // records its own failure.
                             let Ok(job) = job else { return };
-                            // A job that panics must not end the thread; it records its own
-                            // failure (see `finish`).
-                            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                            job();
                         }
                     });
             }
@@ -697,7 +772,9 @@ fn finish(
         match &built {
             Built::Failed(reason) => store.report(url, reason),
             Built::Loaded(..) => {
-                store.reported.remove(url);
+                store
+                    .reported
+                    .retain(|said| said.split('\u{0}').next() != Some(url));
             }
             Built::Unchanged { .. } => {}
         }
@@ -881,6 +958,21 @@ mod tests {
         assert!(store.slots.contains_key("c") && !store.slots.contains_key("b"));
     }
 
+    #[cfg(feature = "net")]
+    #[test]
+    fn a_failure_is_due_for_a_retry_only_after_the_wait() {
+        let mut store = Store::default();
+        assert!(!failures_are_due(&store), "nothing failed");
+        store.fail("http://example.invalid/retry-wake.png");
+        assert!(!failures_are_due(&store), "failed just now");
+        if let Some(Slot::Failed { at, .. }) =
+            store.slots.get_mut("http://example.invalid/retry-wake.png")
+        {
+            *at = Instant::now() - RETRY_AFTER - Duration::from_secs(1);
+        }
+        assert!(failures_are_due(&store), "waited long enough");
+    }
+
     #[test]
     fn every_listener_hears_and_a_dropped_subscription_stops_hearing() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -913,10 +1005,17 @@ mod tests {
         let mut store = Store::default();
         // Said once however many times it fails.
         store.report("http://example.invalid/a.png", "down");
-        assert!(store.reported.contains("http://example.invalid/a.png"));
+        assert!(
+            store
+                .reported
+                .contains("http://example.invalid/a.png\u{0}down")
+        );
         let said = store.reported.len();
-        store.report("http://example.invalid/a.png", "down again");
+        store.report("http://example.invalid/a.png", "down");
         assert_eq!(store.reported.len(), said);
+        // A different reason is another thing to say.
+        store.report("http://example.invalid/a.png", "now it is 404");
+        assert_eq!(store.reported.len(), said + 1);
         // Thousands of dead addresses: the ones that can be retried anyway are let go.
         for n in 0..(MOST_FAILURES + 2 * TRIM_EVERY as usize) {
             store.fail(&format!("http://example.invalid/{n}.png"));
@@ -1251,10 +1350,10 @@ mod tests {
         #[test]
         fn the_decoder_threads_survive_a_job_that_panics() {
             let (sender, receiver) = std::sync::mpsc::channel();
-            decoder::run(Box::new(|| panic!("a decoder gave up")));
+            decoder::run(Box::new(|| panic!("a decoder gave up")), 0);
             for n in 0..4 {
                 let sender = sender.clone();
-                decoder::run(Box::new(move || sender.send(n).unwrap()));
+                decoder::run(Box::new(move || sender.send(n).unwrap()), 1);
             }
             let mut got: Vec<_> = (0..4)
                 .map(|_| receiver.recv_timeout(Duration::from_secs(10)).unwrap())

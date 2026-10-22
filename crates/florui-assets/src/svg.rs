@@ -86,7 +86,32 @@ pub fn parse_svg(svg_text: &str) -> Result<VectorImage, AssetError> {
 pub fn parse_svg_untrusted(svg_text: &str) -> Result<VectorImage, AssetError> {
     let mut options = resvg::usvg::Options::default();
     options.image_href_resolver.resolve_string = Box::new(|_href, _options| None);
+    // An image carried in the document is decoded later by the renderer, at the size its own
+    // header declares, which a few kilobytes of compressed pixels can make enormous: it draws
+    // only if it is within the limits that every other raster image is held to.
+    let default = resvg::usvg::ImageHrefResolver::default_data_resolver();
+    options.image_href_resolver.resolve_data = Box::new(move |mime, data, options| {
+        if !embedded_image_is_within_limits(&data) {
+            return None;
+        }
+        default(mime, data, options)
+    });
     parse(svg_text, options)
+}
+
+/// Whether the raster image in `data` (judged by its header, without decoding it) is within
+/// [`crate::limits`]. Anything the header reader does not recognize, such as a nested SVG,
+/// passes: its own images are held to the same rule when it is parsed.
+fn embedded_image_is_within_limits(data: &[u8]) -> bool {
+    let dimensions = image::ImageReader::new(std::io::Cursor::new(data))
+        .with_guessed_format()
+        .ok()
+        .and_then(|reader| reader.into_dimensions().ok());
+    let Some((width, height)) = dimensions else {
+        return true;
+    };
+    crate::limits::check_raster_size(width, height).is_ok()
+        && u64::from(width) * u64::from(height) * 4 <= crate::limits::MAX_DECODE_BYTES
 }
 
 /// [`parse_svg`] for the application's own documents, [`parse_svg_untrusted`] for anyone
@@ -518,5 +543,45 @@ mod tests {
             draws(&parse_svg_untrusted(&inline).unwrap()),
             "what it carries itself draws"
         );
+    }
+
+    #[test]
+    fn an_untrusted_svg_draws_a_small_embedded_image_and_not_an_enormous_one() {
+        let png = |width: u32, height: u32| {
+            let image = image::RgbaImage::from_pixel(width, height, image::Rgba([255, 0, 0, 255]));
+            let mut bytes = Vec::new();
+            image::DynamicImage::ImageRgba8(image)
+                .write_to(
+                    &mut std::io::Cursor::new(&mut bytes),
+                    image::ImageFormat::Png,
+                )
+                .unwrap();
+            bytes
+        };
+        let embedding = |bytes: &[u8]| {
+            format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="4" height="4"><image xlink:href="data:image/png;base64,{}" width="4" height="4"/></svg>"##,
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
+            )
+        };
+        let draws = |vector: &VectorImage| {
+            let fit = RasterFit::Stretch {
+                width: 4,
+                height: 4,
+            };
+            rasterize_svg(vector, fit)
+                .unwrap()
+                .rgba
+                .chunks(4)
+                .any(|p| p[3] != 0)
+        };
+        let small = parse_svg_untrusted(&embedding(&png(4, 4))).unwrap();
+        assert!(draws(&small), "an image of reasonable size draws");
+        // A header that declares more than any image here may have: a few bytes on the wire.
+        let mut huge = png(2, 2);
+        let too_wide = (crate::limits::MAX_RASTER_DIMENSION + 1).to_be_bytes();
+        huge[16..20].copy_from_slice(&too_wide);
+        let enormous = parse_svg_untrusted(&embedding(&huge)).unwrap();
+        assert!(!draws(&enormous), "an image over the limits is left out");
     }
 }
