@@ -931,14 +931,27 @@ impl MetricsMemo {
 
     fn insert(&mut self, style: MemoStyle, text: &str, width: Option<u32>, metrics: TextMetrics) {
         if self.current.entries >= self.generation_capacity {
+            self.release(self.previous.entries);
             self.previous = std::mem::take(&mut self.current);
         }
         self.current.insert(style, text, width, metrics);
+        florui_profile::gauge::add(florui_profile::gauge::Gauge::TextMetrics, 1);
     }
 
     fn clear(&mut self) {
+        self.release(self.current.entries + self.previous.entries);
         self.current = Generation::default();
         self.previous = Generation::default();
+    }
+
+    fn release(&self, entries: usize) {
+        florui_profile::gauge::sub(florui_profile::gauge::Gauge::TextMetrics, entries);
+    }
+}
+
+impl Drop for MetricsMemo {
+    fn drop(&mut self) {
+        self.release(self.current.entries + self.previous.entries);
     }
 }
 

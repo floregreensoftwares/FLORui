@@ -482,6 +482,44 @@ one machine). A window made translucent shows the desktop through it, but the de
 blurred; operating-system materials are not part of this. No claim is made of matching any other
 system's glass.
 
+## Finding what uses memory and processor time
+
+An app that looks idle and still uses the processor, or holds more memory than its pictures explain, can
+say why. Run a debug build, or a release build with the `profiling` feature of `florui-platform`, with
+`FLORUI_REPORT=<seconds>` set (any other value means five), and it prints a report on standard error
+every few seconds:
+
+```text
+florui report (3.0 s)
+  process    working set 40.5 MiB, private 14.6 MiB, 8 threads
+  held       layer-cache 0.0 MiB (peak 0.0 MiB), glyph-segments 2288 (peak 2288), inline-memo 0.2 MiB (peak 0.2 MiB), frame-buffers 5.5 MiB (peak 5.5 MiB), paint-memo 0.5 MiB (peak 0.5 MiB)
+  window 1   302 nodes, 0.0 MiB of decoded pictures
+  loop       172 wakes (animation 172); 172 frames, 57.3/s, 1.73 ms each, drawing 10.4% of the time
+  animating  window 1: @keyframes pulse (repeats for ever) on 1 element
+  updates    Clock (signal write) 5 (1.0/s)
+```
+
+- **process** is what the operating system says: the working set and, on Windows, the private bytes (on
+  Linux, the anonymous resident pages).
+- **held** is what each cache of the framework believes it holds, summed over every thread that has one,
+  with the most it held at once: background layers, shadow masks, glyph outlines, shaped text, measured
+  text, the frame the painter keeps and what it remembers of each box. The numbers are the caches' own,
+  without the allocator's overhead, so they say which owner is large and not the exact size of the
+  process. Whatever the process holds beyond them is the application's own data, its decoded pictures
+  (`window N`, counting each picture's pixels, a premultiplied copy and its smaller sizes) or memory
+  outside the heap, such as the graphics driver's.
+- **loop** is why the event loop ran (input, window events, signals, animations, scrolling, timers, the
+  stylesheet, the system) and how many frames it drew. An app at rest says `idle: no wakes, no frames`;
+  frames at about 60 a second with `animation` as the reason mean something keeps asking for them.
+- **animating** names what keeps a window asking for frames: the `@keyframes` (and whether it repeats for
+  ever) or the transitioning properties, with how many elements run each. An infinite animation redraws
+  the window at every frame for as long as it runs, even one small element.
+- **updates** counts the signal writes and events by the component that was running, so a signal written
+  on a timer shows up with the component that writes it.
+
+The report names kinds of work, never values from the application. In a release build without the
+`profiling` feature none of this is measured and the variable is ignored, with one line saying so.
+
 ## Format on save
 
 `florui fmt --stdin-filepath <path>` reads a Rust source file from stdin, prints only the formatted source to stdout and sends every diagnostic to stderr (exit code 2 on failure, so an editor keeps the buffer as it was). The path selects the `rustfmt.toml` and the edition of the package that owns the file.

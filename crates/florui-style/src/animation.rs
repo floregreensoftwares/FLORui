@@ -26,7 +26,7 @@
 
 use std::collections::HashMap;
 
-use style::animation::{DocumentAnimationSet, ElementAnimationSet};
+use style::animation::{AnimationState, DocumentAnimationSet, ElementAnimationSet};
 use style::properties::ComputedValues;
 use style::servo_arc::Arc as StyloArc;
 
@@ -102,6 +102,21 @@ pub struct AnimationTimeline {
     /// limitation, not a choice this crate made), so there is only ever
     /// one signal to carry, not two.
     prefers_dark_color_scheme: bool,
+}
+
+/// One kind of running animation, with how many elements run it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunningAnimation {
+    pub kind: RunningKind,
+    pub elements: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunningKind {
+    /// An `animation-name`, repeating for ever when `infinite`.
+    Keyframes { name: String, infinite: bool },
+    /// A transition of `property`.
+    Transition { property: String },
 }
 
 impl AnimationTimeline {
@@ -183,6 +198,50 @@ impl AnimationTimeline {
             .read()
             .values()
             .any(ElementAnimationSet::needs_animation_ticks)
+    }
+
+    /// What is running or waiting for a tick, counted by what it is and not by
+    /// element: how many elements run each `@keyframes` (and whether it repeats
+    /// for ever) and change each transitioning property. What keeps a window
+    /// asking for frames, named, for a report. Empty when motion is suppressed,
+    /// as [`Self::is_animating`] is.
+    pub fn running(&self) -> Vec<RunningAnimation> {
+        if self.should_suppress_animations() {
+            return Vec::new();
+        }
+        let ticking = |state: &AnimationState| {
+            matches!(state, AnimationState::Running | AnimationState::Pending)
+        };
+        let mut counts: std::collections::BTreeMap<(bool, String, bool), usize> =
+            std::collections::BTreeMap::new();
+        for set in self.sets.sets.read().values() {
+            for animation in set.animations.iter().filter(|a| ticking(&a.state)) {
+                let infinite = matches!(
+                    animation.iteration_state,
+                    style::animation::KeyframesIterationState::Infinite(_)
+                );
+                *counts
+                    .entry((true, animation.name.to_string(), infinite))
+                    .or_default() += 1;
+            }
+            for transition in set.transitions.iter().filter(|t| ticking(&t.state)) {
+                let property = transition.property_animation.property_id().name();
+                *counts
+                    .entry((false, property.into_owned(), false))
+                    .or_default() += 1;
+            }
+        }
+        counts
+            .into_iter()
+            .map(|((keyframes, name, infinite), elements)| RunningAnimation {
+                kind: if keyframes {
+                    RunningKind::Keyframes { name, infinite }
+                } else {
+                    RunningKind::Transition { property: name }
+                },
+                elements,
+            })
+            .collect()
     }
 
     /// Whether no animation or transition is running or waiting for a tick, so
