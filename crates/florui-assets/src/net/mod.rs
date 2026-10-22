@@ -166,6 +166,12 @@ pub struct Fetched {
     pub origin: Origin,
 }
 
+impl AsRef<[u8]> for Fetched {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
 /// What a [`Fetcher`] has done so far; for diagnostics and tests.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Stats {
@@ -590,7 +596,7 @@ impl Inner {
             return Err(FetchError::Transport(reason.clone()));
         }
         let validators = stored.map(|(entry, _)| entry);
-        let mut response = self.get(job, validators)?;
+        let (mut response, conditional) = self.get(job, validators)?;
         let status = response.status().as_u16();
         let received_at = unix_now();
         let header = |name: &str| {
@@ -627,6 +633,10 @@ impl Inner {
             )
         };
         if status == 304 {
+            // Only an answer to a conditional request says the stored copy is current; one
+            // from a later hop of a redirect, which carried no validators, is about another
+            // address.
+            let stored = stored.filter(|_| conditional);
             let Some((entry, body)) = stored else {
                 return Err(FetchError::Transport(
                     "the server answered 304 to a request that was not conditional".to_owned(),
@@ -700,12 +710,12 @@ impl Inner {
     }
 
     /// Sends the request and follows redirects by hand; the response it returns is not a
-    /// redirect.
+    /// redirect, and whether it answers a conditional request.
     fn get(
         &self,
         job: &Job,
         validators: Option<&Entry>,
-    ) -> Result<ureq::http::Response<ureq::Body>, FetchError> {
+    ) -> Result<(ureq::http::Response<ureq::Body>, bool), FetchError> {
         let mut url = parse_url(&job.url)?;
         let started = Instant::now();
         for hop in 0..=self.config.max_redirects {
@@ -746,7 +756,7 @@ impl Inner {
             self.requests.fetch_add(1, Ordering::Relaxed);
             let response = request.call().map_err(map_error)?;
             if !matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
-                return Ok(response);
+                return Ok((response, hop == 0 && validators.is_some()));
             }
             let location = response
                 .headers()
@@ -902,7 +912,7 @@ fn check_content(content_type: Option<&str>, bytes: &[u8]) -> Result<(), FetchEr
         .and_then(|value| value.split(';').next())
         .map(|media| media.trim().to_ascii_lowercase())
         .filter(|media| !media.is_empty());
-    let found = url_image::sniff(bytes);
+    let found = url_image::sniff_strict(bytes);
     let found_name = match found {
         Some(Format::Raster) => crate::raster::Format::sniff(bytes).map(|format| match format {
             crate::raster::Format::Png => "PNG",

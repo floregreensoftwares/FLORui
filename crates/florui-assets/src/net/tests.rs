@@ -933,6 +933,37 @@ mod robustness {
     }
 }
 
+mod redirected_revalidation {
+    use super::*;
+
+    #[test]
+    fn a_304_from_a_later_hop_does_not_renew_the_stored_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let stale = std::sync::atomic::AtomicBool::new(false);
+        let server = Server::start(move |request| match request.path.as_str() {
+            // First an image with a validator; later the same address redirects, to a
+            // server that wrongly answers 304 to a request that was not conditional.
+            "/old.png" if stale.swap(true, Ordering::SeqCst) => {
+                Reply::status(302).header("Location", "/elsewhere.png")
+            }
+            "/old.png" => Reply::ok("image/png", png())
+                .header("ETag", "\"old\"")
+                .header("Cache-Control", "max-age=0"),
+            _ => Reply::status(304),
+        });
+        let fetcher = Fetcher::new(NetConfig {
+            cache_dir: Some(dir.path().to_owned()),
+            ..config()
+        });
+        let url = server.url("/old.png");
+        fetcher.fetch(&url).unwrap();
+        assert!(matches!(
+            fetcher.fetch(&url).unwrap_err(),
+            FetchError::Transport(reason) if reason.contains("304")
+        ));
+    }
+}
+
 mod scheduling {
     use super::*;
 

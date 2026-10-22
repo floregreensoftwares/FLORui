@@ -341,7 +341,9 @@ florui_platform::network::configure(florui_platform::network::NetConfig {
   type-checked for the Windows target.
 
 A `url(...)` never waits for the download on the painting thread: the layer draws nothing (a list marker is the broken one)
-until the picture has arrived, and the window then lays out and paints again.
+until the picture has arrived, and the window then lays out and paints again. A picture that stays in use is asked for again
+every ten minutes, in the background and through the HTTP cache, and replaced if the server changed it; an `<img>` keeps the
+picture it loaded for as long as it is mounted, as a browser does.
 
 ## Filters, clipping, masks and blending
 
