@@ -76,15 +76,12 @@ fn source_pixels(
     // that share it share the one drawing.
     // The key is read before the picture is, and the picture only on a miss: pixels that are
     // newer than their key are harmless (the next key is theirs), and the other way round
-    // cannot happen. Loading first, to key by the picture, would take the lock of the
-    // loader on every paint.
+    // cannot happen. Loading first, to key by the picture, would take the loader's lock a
+    // second time on every paint.
     let (identity, size) = match image {
-        BackgroundImage::Url(url) => {
-            // Its drawing is kept and may be found without asking for it: a remote picture
-            // must still be marked as in use.
-            image_source::touch(url);
-            (image_source::identity(url), (0, 0))
-        }
+        // (For a remote picture, asking for the identity also marks it as in use, which its
+        // kept drawing, found without a load, would not.)
+        BackgroundImage::Url(url) => (image_source::identity(url), (0, 0)),
         _ => (String::new(), (area.0.to_bits(), area.1.to_bits())),
     };
     let key = format!(

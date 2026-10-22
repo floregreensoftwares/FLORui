@@ -23,7 +23,6 @@
 
 mod auto_id;
 mod components;
-#[cfg(feature = "net")]
 mod delivery;
 mod focus;
 mod focus_observer;

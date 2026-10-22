@@ -58,6 +58,7 @@
 //! a precise diagnostic, once, and let a cache avoid repeating that work.
 
 mod cache;
+pub mod download;
 mod error;
 pub mod limits;
 #[cfg(feature = "net")]
