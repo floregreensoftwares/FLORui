@@ -155,6 +155,12 @@ fn from_asset_error(err: florui_assets::AssetError, path: Option<&Path>) -> Icon
         florui_assets::AssetError::RasterTargetEmpty { .. } => {
             IconError::SizeZero { path: owned_path() }
         }
+        // An icon is a file or bytes of the application's own; nothing here loads from the
+        // network, kept as the read failure it would be.
+        err @ florui_assets::AssetError::Fetch { .. } => IconError::Io {
+            path: owned_path().unwrap_or_default(),
+            source: std::io::Error::other(err.to_string()),
+        },
     }
 }
 

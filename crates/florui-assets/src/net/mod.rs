@@ -443,21 +443,25 @@ impl Inner {
 
     /// Takes `waiter` off `job`; the last one to go cancels it.
     fn withdraw(&self, job: &Arc<Job>, waiter: u64) {
+        // What is taken off is dropped last, after the locks are let go: dropping a callback
+        // can wake a task, and what runs then must be able to use the queue.
+        let removed;
         let mut queue = self.lock();
         let left = {
             let mut waiters = job
                 .waiters
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner());
-            let before = waiters.len();
-            waiters.retain(|(id, _)| *id != waiter);
-            if waiters.len() == before {
+            let Some(at) = waiters.iter().position(|(id, _)| *id == waiter) else {
                 // Already answered.
                 return;
-            }
+            };
+            removed = waiters.remove(at);
             waiters.len()
         };
         if left > 0 {
+            drop(queue);
+            drop(removed);
             return;
         }
         job.cancel.store(true, Ordering::SeqCst);
@@ -465,6 +469,8 @@ impl Inner {
             queue.waiting.retain(|queued| !Arc::ptr_eq(queued, job));
             queue.jobs.remove(&job.key());
         }
+        drop(queue);
+        drop(removed);
     }
 
     /// A worker thread: runs queued requests that the limits allow until there are none,
@@ -618,13 +624,20 @@ impl Inner {
             header("last-modified"),
             header("content-type"),
         );
-        let cache_control = header("cache-control");
-        let (expires, date, age, vary) = (
-            header("expires"),
-            header("date"),
-            header("age"),
-            header("vary"),
-        );
+        // A header that may be sent as several lines is one comma-separated list (RFC 9110,
+        // 5.3): `Cache-Control: max-age=600` and `Cache-Control: no-store` are both in force.
+        let list = |name: &str| {
+            let values: Vec<&str> = response
+                .headers()
+                .get_all(name)
+                .iter()
+                .filter_map(|value| value.to_str().ok())
+                .collect();
+            (!values.is_empty()).then(|| values.join(","))
+        };
+        let cache_control = list("cache-control");
+        let vary = list("vary");
+        let (expires, date, age) = (header("expires"), header("date"), header("age"));
         let policy_of = |etag: Option<&str>, last_modified: Option<&str>| {
             Policy::of(
                 &Headers {

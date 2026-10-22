@@ -162,9 +162,14 @@ pub(crate) struct Entry {
 
 impl Entry {
     fn age(&self, now: u64) -> u64 {
-        // A clock set back is not a reason to keep it fresh forever, but it is not a
-        // reason to throw it away either.
-        now.saturating_sub(self.stored_at)
+        if self.stored_at > now {
+            // The clock was set back since it was stored, so its age is not known. Counting
+            // it as new would keep it fresh for as long as the clock is behind: it counts
+            // as having just gone stale, which asks the server again (and may still be
+            // served within its stale windows if that fails) without throwing it away.
+            return self.fresh_for;
+        }
+        now - self.stored_at
     }
 
     pub fn is_fresh(&self, now: u64) -> bool {
@@ -607,8 +612,11 @@ mod tests {
         let entry = entry("https://example.com/a.png", 1);
         assert!(entry.is_fresh(NOW + 59));
         assert!(!entry.is_fresh(NOW + 60));
-        // A clock set back is not a reason to keep it fresh forever.
-        assert!(entry.is_fresh(NOW - 1000));
+        // A clock set back is not a reason to keep it fresh for as long as it stays back: it
+        // counts as just gone stale, within its windows.
+        assert!(!entry.is_fresh(NOW - 1000));
+        assert!(entry.may_serve_while_revalidating(NOW - 1000));
+        assert!(entry.may_serve_on_error(NOW - 1000));
     }
 
     #[test]
