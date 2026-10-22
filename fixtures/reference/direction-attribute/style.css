@@ -1,0 +1,1 @@
+.wrap { position: relative; width: 340px; height: 300px; background-color: #ffffff; color: #101010; font-size: 14px; line-height: 18px; padding: 4px; box-sizing: border-box; } .wrap > * { background-color: #e8e8e8; width: 260px; margin-top: 0; margin-bottom: 6px; }
