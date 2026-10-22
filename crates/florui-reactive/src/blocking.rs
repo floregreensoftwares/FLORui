@@ -86,14 +86,26 @@ mod tests {
     use crate::executor::{Executor, LocalExecutor};
     use std::sync::mpsc;
 
-    /// Waits for `executor` to report real background progress, the same
-    /// way a host reacts to [`LocalExecutor::on_woken`], then drains it —
-    /// standing in for a host's event loop without needing one.
-    fn await_background_progress(executor: &LocalExecutor, woken: &mpsc::Receiver<()>) {
+    /// Gets the result of the task the executor runs, the way a host does: waits for the
+    /// executor to report real background progress (see [`LocalExecutor::on_woken`]) and drains
+    /// it, standing in for a host's event loop without needing one. A background thread that
+    /// finishes before the task's first poll leaves nothing to wake (the poll finds the result
+    /// in hand), so `results` is looked at before waiting.
+    fn drain_until_done<T>(
+        executor: &LocalExecutor,
+        woken: &mpsc::Receiver<()>,
+        results: &mpsc::Receiver<T>,
+    ) -> T {
+        if let Ok(value) = results.try_recv() {
+            return value;
+        }
         woken
             .recv_timeout(Duration::from_secs(5))
             .expect("the background thread must eventually wake the executor");
         executor.run_until_stalled();
+        results
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the task must have completed once the executor was drained again")
     }
 
     #[test]
@@ -111,11 +123,28 @@ mod tests {
         }));
         executor.run_until_stalled();
 
-        await_background_progress(&executor, &woken_rx);
-        let value = result_rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("the task must have completed once the executor was drained again");
-        assert_eq!(value, 2);
+        assert_eq!(drain_until_done(&executor, &woken_rx, &result_rx), 2);
+    }
+
+    #[test]
+    fn a_thread_that_finishes_before_the_first_poll_needs_no_wake() {
+        let executor = LocalExecutor::new();
+        let (woken_tx, woken_rx) = mpsc::channel();
+        executor.on_woken(move || {
+            let _ = woken_tx.send(());
+        });
+
+        let (result_tx, result_rx) = mpsc::channel();
+        executor.spawn(Box::pin(async move {
+            let task = spawn_blocking(|| 1 + 1);
+            // The thread is long done when the task is first polled, as it can be on a busy
+            // machine; the poll finds the result and nothing is left to wake.
+            std::thread::sleep(Duration::from_millis(100));
+            result_tx.send(task.await).unwrap();
+        }));
+        executor.run_until_stalled();
+
+        assert_eq!(drain_until_done(&executor, &woken_rx, &result_rx), 2);
     }
 
     #[test]
@@ -133,9 +162,6 @@ mod tests {
         }));
         executor.run_until_stalled();
 
-        await_background_progress(&executor, &woken_rx);
-        done_rx.recv_timeout(Duration::from_secs(5)).expect(
-            "the sleep's completion must have been drained by the second run_until_stalled",
-        );
+        drain_until_done(&executor, &woken_rx, &done_rx);
     }
 }
