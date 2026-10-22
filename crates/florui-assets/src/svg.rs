@@ -89,6 +89,16 @@ pub fn parse_svg_untrusted(svg_text: &str) -> Result<VectorImage, AssetError> {
     parse(svg_text, options)
 }
 
+/// [`parse_svg`] for the application's own documents, [`parse_svg_untrusted`] for anyone
+/// else's: one place for the choice.
+pub fn parse_svg_for(trusted: bool, svg_text: &str) -> Result<VectorImage, AssetError> {
+    if trusted {
+        parse_svg(svg_text)
+    } else {
+        parse_svg_untrusted(svg_text)
+    }
+}
+
 fn parse(svg_text: &str, options: resvg::usvg::Options<'_>) -> Result<VectorImage, AssetError> {
     let tree = resvg::usvg::Tree::from_str(svg_text, &options).map_err(AssetError::Svg)?;
     let size = tree.size();

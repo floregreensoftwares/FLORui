@@ -302,6 +302,32 @@ fn what_the_type_and_the_bytes_say_must_agree() {
 }
 
 #[test]
+fn a_response_declared_as_something_else_is_refused_before_its_body_is_read() {
+    // Endless, with no length: reading it would run into the size limit or the timeout.
+    let server = Server::start(|_| {
+        let mut reply = Reply::ok("text/html", vec![b'x'; 16 * 1024]);
+        reply.endless = true;
+        reply
+    });
+    let started = Instant::now();
+    assert!(matches!(
+        fetcher().fetch(&server.url("/page.png")).unwrap_err(),
+        FetchError::NotAnImage { content_type } if content_type == "text/html"
+    ));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+    // An image type with no decoder here is refused as early.
+    let server = Server::start(|_| Reply::ok("image/avif", vec![0; 10]));
+    assert!(matches!(
+        fetcher().fetch(&server.url("/a.avif")).unwrap_err(),
+        FetchError::NotAnImage { .. }
+    ));
+}
+
+#[test]
 fn an_html_page_served_as_an_image_never_reaches_the_caller() {
     let server = Server::start(|_| Reply::ok("text/html", b"<html>nope</html>".to_vec()));
     assert!(matches!(
@@ -653,6 +679,70 @@ mod caching {
         assert!(renewed.is_fresh(unix_now()));
         // Fresh again: no request.
         assert_eq!(fetcher.fetch(&url).unwrap().origin, Origin::Cache);
+    }
+
+    #[test]
+    fn a_304_keeps_each_part_of_the_lifetime_it_does_not_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = Server::start(|request| {
+            if request.headers.contains_key("if-none-match") {
+                // Sets nothing about the lifetime or the windows.
+                Reply::status(304)
+                    .header("ETag", "\"v1\"")
+                    .header("Cache-Control", "public")
+            } else {
+                Reply::ok("image/png", png())
+                    .header("ETag", "\"v1\"")
+                    .header(
+                        "Cache-Control",
+                        "max-age=3600, stale-while-revalidate=86400, stale-if-error=600",
+                    )
+            }
+        });
+        let url = server.url("/cover.png");
+        let fetcher = Fetcher::new(cached_config(&dir));
+        fetcher.fetch(&url).unwrap();
+        let disk = fetcher.inner.disk.as_ref().unwrap();
+        let (mut entry, body) = disk.lookup(&url, unix_now()).unwrap();
+        // Past the lifetime and the window in which it is used while it is asked again.
+        entry.stored_at -= 100_000;
+        disk.store(&entry, &body);
+        assert_eq!(fetcher.fetch(&url).unwrap().origin, Origin::Revalidated);
+        let (renewed, _) = disk.lookup(&url, unix_now()).unwrap();
+        assert_eq!(
+            (
+                renewed.fresh_for,
+                renewed.stale_while_revalidate,
+                renewed.stale_if_error
+            ),
+            (3600, 86400, 600)
+        );
+    }
+
+    #[test]
+    fn a_304_that_sets_a_new_max_age_replaces_only_that() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = Server::start(|request| {
+            if request.headers.contains_key("if-none-match") {
+                Reply::status(304)
+                    .header("ETag", "\"v1\"")
+                    .header("Cache-Control", "max-age=60")
+            } else {
+                Reply::ok("image/png", png())
+                    .header("ETag", "\"v1\"")
+                    .header("Cache-Control", "max-age=3600, stale-if-error=600")
+            }
+        });
+        let url = server.url("/cover.png");
+        let fetcher = Fetcher::new(cached_config(&dir));
+        fetcher.fetch(&url).unwrap();
+        let disk = fetcher.inner.disk.as_ref().unwrap();
+        let (mut entry, body) = disk.lookup(&url, unix_now()).unwrap();
+        entry.stored_at -= 7200;
+        disk.store(&entry, &body);
+        fetcher.fetch(&url).unwrap();
+        let (renewed, _) = disk.lookup(&url, unix_now()).unwrap();
+        assert_eq!((renewed.fresh_for, renewed.stale_if_error), (60, 600));
     }
 
     #[test]

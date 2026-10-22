@@ -75,8 +75,8 @@ pub use error::{AssetError, FetchError};
 pub use raster::{Format, Level, RasterImage, decode_png, decode_raster};
 pub use source::{AssetId, AssetSource};
 pub use svg::{
-    ObjectBounds, RasterFit, Size2D, SvgFonts, VectorImage, parse_svg, parse_svg_untrusted,
-    parse_svg_with_fonts, rasterize_svg, substitute_current_color,
+    ObjectBounds, RasterFit, Size2D, SvgFonts, VectorImage, parse_svg, parse_svg_for,
+    parse_svg_untrusted, parse_svg_with_fonts, rasterize_svg, substitute_current_color,
 };
 #[cfg(feature = "watch")]
 pub use watch::{WatchError, watch_path};

@@ -679,14 +679,20 @@ impl Inner {
                 entry.last_modified = Some(modified);
             }
             entry.stored_at = received_at;
-            // A 304 only updates what it carries: one that says nothing about caching (many
-            // servers send just the validator and the date) leaves the lifetime the stored
-            // response had.
+            // A 304 only updates what it carries (RFC 9111, 4.3.4): `Cache-Control: public`
+            // alone leaves the lifetime and the stale windows the stored response had, and
+            // so does a 304 that says nothing about caching.
             let keep = if cache_control.is_some() || expires.is_some() {
                 let policy = policy_of(entry.etag.as_deref(), entry.last_modified.as_deref());
-                entry.fresh_for = policy.fresh_for;
-                entry.stale_while_revalidate = policy.stale_while_revalidate;
-                entry.stale_if_error = policy.stale_if_error;
+                if policy.given.lifetime {
+                    entry.fresh_for = policy.fresh_for;
+                }
+                if policy.given.stale_while_revalidate || policy.given.revalidate {
+                    entry.stale_while_revalidate = policy.stale_while_revalidate;
+                }
+                if policy.given.stale_if_error || policy.given.revalidate {
+                    entry.stale_if_error = policy.stale_if_error;
+                }
                 policy.store
             } else {
                 true
@@ -707,6 +713,9 @@ impl Inner {
         if status != 200 {
             return Err(FetchError::Status(status));
         }
+        // What the headers already say is not an image is refused before the body is read: a
+        // page or a video of any size would hold a connection and a worker for nothing.
+        check_declared(content_type.as_deref())?;
         let bytes = self.read_body(response.body_mut(), job)?;
         check_content(content_type.as_deref(), &bytes)?;
         if let Some(disk) = &self.disk {
@@ -957,6 +966,33 @@ fn map_io_error(error: std::io::Error) -> FetchError {
         return FetchError::Timeout;
     }
     FetchError::Transport(error.to_string())
+}
+
+/// The part of [`check_content`] that needs no bytes: a declared type that is not an image
+/// type, or one with no decoder here, fails; no type, a generic one or a supported one passes.
+fn check_declared(content_type: Option<&str>) -> Result<(), FetchError> {
+    let Some(declared) = content_type
+        .and_then(|value| value.split(';').next())
+        .map(|media| media.trim().to_ascii_lowercase())
+        .filter(|media| !media.is_empty())
+    else {
+        return Ok(());
+    };
+    if matches!(
+        declared.as_str(),
+        "application/octet-stream" | "binary/octet-stream" | "application/x-unknown"
+    ) {
+        return Ok(());
+    }
+    let supported = declared.starts_with("image/")
+        && (declared.contains("svg") || crate::raster::Format::of_media_type(&declared).is_some());
+    if supported {
+        Ok(())
+    } else {
+        Err(FetchError::NotAnImage {
+            content_type: declared,
+        })
+    }
 }
 
 /// Judges a response by its media type and its bytes together; see the module doc.

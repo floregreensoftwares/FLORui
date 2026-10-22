@@ -17,7 +17,10 @@
 //! stays in use is asked for again after [`RECHECK_AFTER`], in the background and through the
 //! HTTP cache, so an application that stays open does not show a picture the server has
 //! replaced for ever: the old one is shown until a new one has arrived, and the window
-//! then paints again.
+//! then paints again. That needs the cache directory of [`crate::net::NetConfig`]: without
+//! one there is nothing to ask the server "has it changed?" with, and every recheck would
+//! download the whole picture again to find it had not, so a picture is not asked for again
+//! while it stays in use.
 //!
 //! Without the `net` feature an address like this fails at once, with the reason.
 
@@ -186,6 +189,7 @@ pub(crate) fn identity_at(url: &str, version: u64) -> String {
 /// failed lately) and answers `None`. A picture that has been shown for a while is answered
 /// at once and asked for again in the background.
 pub(crate) fn load(url: &str) -> Option<Arc<Loaded>> {
+    let rechecking = recheck_enabled();
     /// What to do once the lock is let go: nothing may be started while it is held, because
     /// the fetcher can answer before it returns, and the answer takes the lock.
     struct Request {
@@ -207,7 +211,7 @@ pub(crate) fn load(url: &str) -> Option<Arc<Loaded>> {
                 ..
             }) => {
                 *used = clock;
-                if refresh.is_none() && checked_at.elapsed() >= *recheck_after {
+                if rechecking && refresh.is_none() && checked_at.elapsed() >= *recheck_after {
                     *refresh = Some((next, None));
                     request = Some(Request {
                         generation: next,
@@ -247,6 +251,22 @@ pub(crate) fn load(url: &str) -> Option<Arc<Loaded>> {
         with_store(|store| attach(store, url, generation, refresh, started));
     }
     answer
+}
+
+/// Whether a picture that stays in use is asked for again: see the module documentation.
+#[cfg(feature = "net")]
+fn recheck_enabled() -> bool {
+    rechecks(crate::net::shared_fetcher().config())
+}
+
+#[cfg(not(feature = "net"))]
+fn recheck_enabled() -> bool {
+    false
+}
+
+#[cfg(feature = "net")]
+fn rechecks(config: &crate::net::NetConfig) -> bool {
+    config.cache_dir.is_some()
 }
 
 /// What starting a request came to.
@@ -666,8 +686,12 @@ mod tests {
 
         /// The shared fetcher goes direct in these tests, whatever the environment says.
         fn direct() {
+            // A cache directory is what makes a recheck possible; nothing the tests serve is
+            // allowed to be stored in it (no validators, no lifetime), so every fetch still
+            // goes to the server.
             crate::net::configure(NetConfig {
                 proxy: ProxyMode::Direct,
+                cache_dir: Some(std::env::temp_dir().join("florui-assets-remote-image-tests")),
                 ..NetConfig::default()
             });
         }
@@ -952,6 +976,15 @@ mod tests {
                 .collect();
             got.sort();
             assert_eq!(got, [0, 1, 2, 3]);
+        }
+
+        #[test]
+        fn a_picture_is_asked_for_again_only_when_there_is_a_cache_to_ask_with() {
+            assert!(!rechecks(&NetConfig::default()));
+            assert!(rechecks(&NetConfig {
+                cache_dir: Some(std::path::PathBuf::from("cache")),
+                ..NetConfig::default()
+            }));
         }
 
         #[test]
