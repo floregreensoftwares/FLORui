@@ -77,7 +77,7 @@ fn stamp(url: &str) -> Stamp {
 /// picture than the one in hand.
 pub fn identity_of(url: &str, loaded: &Loaded) -> String {
     if crate::remote_image::is_remote(url) {
-        return crate::remote_image::identity_at(remote_address(url), loaded.version);
+        return crate::remote_image::identity_at(&remote_address(url), loaded.version);
     }
     identity(url)
 }
@@ -86,7 +86,7 @@ pub fn identity_of(url: &str, loaded: &Loaded) -> String {
 /// them: it changes when the file does.
 pub fn identity(url: &str) -> String {
     if crate::remote_image::is_remote(url) {
-        return crate::remote_image::identity(remote_address(url));
+        return crate::remote_image::identity(&remote_address(url));
     }
     match stamp(url) {
         Stamp::Data => format!("data:{}", url.len()),
@@ -102,26 +102,34 @@ pub use crate::remote_image::{Subscription, is_remote, on_change as on_remote_ch
 /// before it are different entries and neither is handed back for the other while the old one
 /// is still alive.
 pub fn download_id(url: &str, bytes: &[u8]) -> crate::AssetId {
-    crate::remote_image::download_id(remote_address(url), bytes)
+    crate::remote_image::download_id(&remote_address(url), bytes)
 }
 
 /// [`download_id`], remembering that these bytes are the latest download of `url`, so that
 /// [`latest_download`] can find a picture that is still alive without downloading it again.
 pub fn register_download(url: &str, bytes: &[u8]) -> crate::AssetId {
-    crate::remote_image::register_download(remote_address(url), bytes)
+    crate::remote_image::register_download(&remote_address(url), bytes)
 }
 
 /// The identity of the latest download of `url` that was registered, if any.
 pub fn latest_download(url: &str) -> Option<crate::AssetId> {
-    crate::remote_image::latest_download(remote_address(url))
+    crate::remote_image::latest_download(&remote_address(url))
 }
 
 /// The address as it is requested and keyed: without the white space around it (ASCII only)
-/// and without the `#fragment`, which is not sent, so that the same picture written twice
-/// is one picture.
-pub fn remote_address(url: &str) -> &str {
-    let url = url.trim_matches(|c: char| c.is_ascii_whitespace());
-    url.split_once('#').map_or(url, |(address, _)| address)
+/// and without the `#fragment`, which is not sent, and (with the `net` feature) as the fetcher
+/// writes it, so that the same picture written two ways (`HTTPS://Example.com:443/a.png` and
+/// `https://example.com/a.png`) is one picture.
+pub fn remote_address(url: &str) -> String {
+    let trimmed = url.trim_matches(|c: char| c.is_ascii_whitespace());
+    let trimmed = trimmed
+        .split_once('#')
+        .map_or(trimmed, |(address, _)| address);
+    #[cfg(feature = "net")]
+    if let Some(normal) = crate::net::normalize_address(trimmed) {
+        return normal;
+    }
+    trimmed.to_owned()
 }
 
 /// What was found when an image was last read, and the file's stamp then.
@@ -140,7 +148,7 @@ static SOURCES: Mutex<Option<HashMap<String, Kept>>> = Mutex::new(None);
 /// failure), and [`on_remote_change`] tells the host when to ask again.
 pub fn load(url: &str) -> Option<Arc<Loaded>> {
     if crate::remote_image::is_remote(url) {
-        return crate::remote_image::load(remote_address(url));
+        return crate::remote_image::load(&remote_address(url));
     }
     let now = stamp(url);
     {

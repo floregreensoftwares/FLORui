@@ -255,20 +255,10 @@ fn what_the_type_and_the_bytes_say_must_agree() {
     assert_eq!(ok(Some("application/octet-stream"), &jpeg), Ok(()));
     assert_eq!(ok(Some("binary/octet-stream"), svg), Ok(()));
 
-    assert_eq!(
-        ok(Some("image/png"), &jpeg),
-        Err(FetchError::ContentTypeMismatch {
-            declared: "image/png".to_owned(),
-            found: "JPEG"
-        })
-    );
-    assert_eq!(
-        ok(Some("image/svg+xml"), &png),
-        Err(FetchError::ContentTypeMismatch {
-            declared: "image/svg+xml".to_owned(),
-            found: "PNG"
-        })
-    );
+    // Between image formats the bytes decide, as in a browser.
+    assert_eq!(ok(Some("image/png"), &jpeg), Ok(()));
+    assert_eq!(ok(Some("image/jpeg"), &png), Ok(()));
+    assert_eq!(ok(Some("image/svg+xml"), &png), Ok(()));
     // An error page that was served as a success.
     assert_eq!(
         ok(Some("text/html; charset=utf-8"), html),
@@ -297,6 +287,10 @@ fn what_the_type_and_the_bytes_say_must_agree() {
     }
     assert!(matches!(
         ok(Some("image/svg+xml"), html),
+        Err(FetchError::ContentTypeMismatch { .. })
+    ));
+    assert!(matches!(
+        ok(Some("image/png"), html),
         Err(FetchError::ContentTypeMismatch { .. })
     ));
     // Nothing says what it is.

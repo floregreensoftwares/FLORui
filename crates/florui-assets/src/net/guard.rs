@@ -88,6 +88,8 @@ fn is_private_v4(a: Ipv4Addr) -> bool {
         || (first == 198 && (second & 0b1111_1110) == 18)
         // 240.0.0.0/4, reserved.
         || first >= 240
+        // 192.88.99.0/24, the relay anycast prefix of 6to4.
+        || a.octets()[..3] == [192, 88, 99]
 }
 
 fn is_private_v6(a: Ipv6Addr) -> bool {
@@ -115,6 +117,10 @@ fn is_private_v6(a: Ipv6Addr) -> bool {
         || (first == 0x2002 && is_private_v4(embedded(segments[1], segments[2])))
         // 100::/64, discard-only.
         || segments[..4] == [0x100, 0, 0, 0]
+        // ::ffff:0:0:0/96, IPv4-translated (SIIT): the IPv4 address is in the last 32 bits.
+        || (segments[..5] == [0, 0, 0, 0, 0xffff]
+            && segments[5] == 0
+            && is_private_v4(embedded(segments[6], segments[7])))
         // 64:ff9b::/96 (NAT64) carries an IPv4 address in its last 32 bits; 64:ff9b:1::/48 is
         // for local use.
         || (segments[..6] == [0x64, 0xff9b, 0, 0, 0, 0]
@@ -167,6 +173,9 @@ mod tests {
             "fec0::1",
             "100::1",
             "64:ff9b:1::1",
+            "::ffff:0:7f00:1",
+            "::ffff:0:a9fe:a9fe",
+            "192.88.99.1",
         ] {
             assert!(private(address), "{address}");
         }
@@ -190,6 +199,7 @@ mod tests {
             "64:ff9b::808:808",
             "2002:0808:0808::1",
             "2001:4860:4860::8888",
+            "::ffff:0:808:808",
         ] {
             assert!(!private(address), "{address}");
         }

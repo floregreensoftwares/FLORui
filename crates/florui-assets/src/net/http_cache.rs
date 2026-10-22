@@ -450,6 +450,11 @@ impl DiskCache {
 
     /// Drops the files left by stores that did not finish, then the least recently used
     /// entries until the directory is at 90% of its budget.
+    ///
+    /// Works from the directory listing alone (names, sizes, times), without opening the
+    /// metadata files: the name of a body is its response's hash and id, so the bodies of an
+    /// entry are the ones that start with the hash of its metadata's name. The id is read
+    /// from the metadata only to tell which of several bodies of one hash is the live one.
     fn evict(&self) {
         let Ok(listing) = fs::read_dir(&self.dir) else {
             return;
@@ -459,59 +464,81 @@ impl DiskCache {
             now.duration_since(modified)
                 .is_ok_and(|age| age >= LEFTOVER_AFTER)
         };
-        // Entries by age with their size and files, and the bodies that some metadata names.
-        let mut entries: Vec<(SystemTime, u64, PathBuf, PathBuf)> = Vec::new();
-        let mut named: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-        let mut bodies: Vec<(PathBuf, SystemTime)> = Vec::new();
-        let mut total = 0u64;
+        struct Group {
+            meta: Option<(PathBuf, u64, SystemTime)>,
+            bodies: Vec<(PathBuf, u64, SystemTime)>,
+        }
+        let mut groups: std::collections::HashMap<String, Group> = std::collections::HashMap::new();
         for item in listing.flatten() {
             let path = item.path();
             let Ok(meta) = item.metadata() else { continue };
             let modified = meta.modified().unwrap_or(UNIX_EPOCH);
+            let name = item.file_name().to_string_lossy().into_owned();
+            // `<hash>.meta`, `<hash>.<id>.body`, `<hash>.tmp<pid>-<n>`.
+            let hash = name.split('.').next().unwrap_or("").to_owned();
+            let group = groups.entry(hash).or_insert(Group {
+                meta: None,
+                bodies: Vec::new(),
+            });
             match path.extension().and_then(|e| e.to_str()) {
-                Some("meta") => {
-                    let Some(entry) = fs::read_to_string(&path)
-                        .ok()
-                        .and_then(|text| Entry::decode(&text))
-                    else {
-                        // Not metadata of this version: nothing names its body.
-                        if old(modified) {
-                            let _ = fs::remove_file(&path);
-                        }
-                        continue;
-                    };
-                    let body = self.body_path(&entry);
-                    let body_len = fs::metadata(&body).map_or(0, |m| m.len());
-                    let size = meta.len() + body_len;
-                    total += size;
-                    named.insert(body.clone());
-                    entries.push((modified, size, path, body));
-                }
-                Some("body") => bodies.push((path, modified)),
+                Some("meta") => group.meta = Some((path, meta.len(), modified)),
+                Some("body") => group.bodies.push((path, meta.len(), modified)),
                 Some(extension) if extension.starts_with("tmp") && old(modified) => {
                     let _ = fs::remove_file(&path);
                 }
                 _ => {}
             }
         }
-        // A body that no metadata names was left by a store that did not finish (or by an
-        // older version of the cache): it goes once it is too old to be one in flight.
-        for (path, modified) in bodies {
-            if !named.contains(&path) && old(modified) {
-                let _ = fs::remove_file(path);
+        // Entries by age with their size and files.
+        let mut entries: Vec<(SystemTime, u64, Vec<PathBuf>)> = Vec::new();
+        let mut total = 0u64;
+        for group in groups.into_values() {
+            let Some((meta_path, meta_len, meta_modified)) = group.meta else {
+                // Bodies that no metadata goes with: left by a store that did not finish, or
+                // by an older version of the cache. They go once too old to be one in flight.
+                for (path, _, modified) in group.bodies {
+                    if old(modified) {
+                        let _ = fs::remove_file(path);
+                    }
+                }
+                continue;
+            };
+            let mut bodies = group.bodies;
+            // With one body it is the live one; with several, the metadata says which, and
+            // the others are left over from stores that were replaced or did not finish.
+            if bodies.len() > 1
+                && let Some(entry) = fs::read_to_string(&meta_path)
+                    .ok()
+                    .and_then(|text| Entry::decode(&text))
+            {
+                let live = self.body_path(&entry);
+                bodies.retain(|(path, _, modified)| {
+                    let keep = *path == live || !old(*modified);
+                    if !keep {
+                        let _ = fs::remove_file(path);
+                    }
+                    keep
+                });
             }
+            let size = meta_len + bodies.iter().map(|(_, len, _)| len).sum::<u64>();
+            total += size;
+            let mut files = vec![meta_path];
+            files.extend(bodies.into_iter().map(|(path, ..)| path));
+            entries.push((meta_modified, size, files));
         }
         if total <= self.max_bytes {
             return;
         }
         entries.sort_by_key(|(modified, ..)| *modified);
         let goal = self.max_bytes / 10 * 9;
-        for (_, size, path, body) in entries {
+        for (_, size, files) in entries {
             if total <= goal {
                 break;
             }
-            let _ = fs::remove_file(&body);
-            let _ = fs::remove_file(&path);
+            // The metadata first: it is what makes the entry exist.
+            for file in files {
+                let _ = fs::remove_file(file);
+            }
             total -= size;
         }
     }
@@ -996,5 +1023,29 @@ mod tests {
             (Some("\"b\""), b"bbbb".to_vec())
         );
         assert!(!cache.body_path(&kept).exists());
+    }
+
+    #[test]
+    fn an_old_stray_body_beside_the_live_one_goes_and_the_live_one_stays() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = DiskCache::new(dir.path().to_owned(), 1 << 20);
+        let url = "https://example.com/a.png";
+        cache.store(&entry(url, 4), b"live");
+        let (live, _) = cache.lookup(url, NOW).unwrap();
+        let stray = Entry {
+            body_id: live.body_id.wrapping_add(7),
+            ..live.clone()
+        };
+        fs::write(cache.body_path(&stray), b"stray").unwrap();
+        let long_ago = SystemTime::now() - Duration::from_secs(3600);
+        fs::File::options()
+            .write(true)
+            .open(cache.body_path(&stray))
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+        cache.evict();
+        assert!(!cache.body_path(&stray).exists());
+        assert_eq!(cache.lookup(url, NOW).unwrap().1, b"live");
     }
 }

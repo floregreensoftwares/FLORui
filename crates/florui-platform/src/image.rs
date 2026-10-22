@@ -495,7 +495,8 @@ fn start_remote(
     use florui_assets::{AssetError, DecodeParams};
 
     // The address as it is requested, so that the same picture written twice is one.
-    let src = florui_assets::url_image::remote_address(src);
+    let normal = florui_assets::url_image::remote_address(src);
+    let src = normal.as_str();
     let Some(entry) = entries.get_mut(key) else {
         return;
     };
