@@ -8,6 +8,9 @@
 //! out and painting (a window, a test, a comparison) free of a registry to feed, at the price
 //! of a short pause for a large file: an image that big belongs in an `<img>`, which loads in
 //! the background.
+//!
+//! An `http://` or `https://` address never waits on the thread that asks: see
+//! [`on_remote_change`].
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -20,7 +23,7 @@ use crate::{RasterImage, VectorImage};
 
 /// A decoded image: its pixels, or the vector document they are drawn from.
 pub enum Source {
-    Raster(RasterImage),
+    Raster(Arc<RasterImage>),
     Vector(Box<VectorImage>),
 }
 
@@ -67,12 +70,17 @@ fn stamp(url: &str) -> Stamp {
 /// Text that stands for `url`'s current bytes, for keys of things made from
 /// them: it changes when the file does.
 pub fn identity(url: &str) -> String {
+    if crate::remote_image::is_remote(url) {
+        return crate::remote_image::identity(url);
+    }
     match stamp(url) {
         Stamp::Data => format!("data:{}", url.len()),
         Stamp::Missing => format!("missing:{url}"),
         Stamp::File(modified, length) => format!("{url}@{modified:?}/{length}"),
     }
 }
+
+pub use crate::remote_image::on_change as on_remote_change;
 
 /// What was found when an image was last read, and the file's stamp then.
 type Kept = (Stamp, Option<Arc<Loaded>>);
@@ -84,7 +92,14 @@ static SOURCES: Mutex<Option<HashMap<String, Kept>>> = Mutex::new(None);
 /// The image `url` names, loaded now if it has not been (or its file has
 /// changed since), or `None` when it cannot be read or decoded; that is said
 /// once, on standard error, and not again until the file changes.
+///
+/// An `http://` or `https://` address is not loaded now: this starts the download in the
+/// background and answers `None` until the picture is decoded (and for a while after a
+/// failure), and [`on_remote_change`] tells the host when to ask again.
 pub fn load(url: &str) -> Option<Arc<Loaded>> {
+    if crate::remote_image::is_remote(url) {
+        return crate::remote_image::load(url);
+    }
     let now = stamp(url);
     {
         let sources = SOURCES
@@ -148,9 +163,21 @@ fn read(url: &str) -> Result<Loaded, String> {
         };
         (bytes, hinted)
     };
+    build(bytes, hinted, |bytes| {
+        crate::decode_raster(bytes).map(Arc::new)
+    })
+}
+
+/// The image `bytes` are, told apart by `hinted` or else by their first bytes. A raster
+/// image is decoded by `raster`.
+pub(crate) fn build(
+    bytes: Vec<u8>,
+    hinted: Option<Format>,
+    raster: impl FnOnce(&[u8]) -> Result<Arc<RasterImage>, crate::AssetError>,
+) -> Result<Loaded, String> {
     match hinted.or_else(|| sniff(&bytes)) {
         Some(Format::Raster) => {
-            let image = crate::decode_raster(&bytes).map_err(|e| e.to_string())?;
+            let image = raster(&bytes).map_err(|e| e.to_string())?;
             let (width, height) = (image.width as f32, image.height as f32);
             Ok(Loaded {
                 source: Source::Raster(image),
