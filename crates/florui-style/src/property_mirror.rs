@@ -92,6 +92,8 @@ pub(crate) const MIRRORED: &[&str] = &[
     "fill-rule",
     "fill-opacity",
     "fill",
+    "appearance",
+    "resize",
 ];
 
 /// The properties an SVG is drawn by that the engine's servo build lacks, kept

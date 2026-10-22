@@ -1660,9 +1660,10 @@ impl Visibility {
     }
 }
 
-/// The values of `resize`, spelled through `--florui-resize`. Only a
-/// `<textarea>` acts on it; anything unset or unrecognized is `Both`, which
-/// is what a textarea has by default.
+/// The values of `resize`, written as the real property (the style engine's servo build lacks
+/// it, so the text is carried as `--florui-resize`, which still works as written). Only a
+/// `<textarea>` acts on it; anything unset or unrecognized is `Both`, which is what a textarea
+/// has by default. It does not inherit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Resize {
     #[default]
@@ -1672,19 +1673,13 @@ pub enum Resize {
     None,
 }
 
-/// A narrow stand-in for real CSS's `appearance` property: whether a
-/// built-in control decoration with no real DOM node of its own (a
-/// `<select>`'s own chevron, a checked checkbox's own check mark) should
-/// paint at all. The real `appearance` property would be the standard
-/// fit, but the `style` crate this project's cascade runs on compiles it
-/// out entirely under Servo mode (`engines="gecko"` in its own source) —
-/// pulling in Gecko/Firefox FFI bindings just for this one toggle isn't
-/// viable. Read instead from a plain custom property, `--florui-appearance`
-/// (the same naming spirit as a vendor prefix like `-webkit-appearance`,
-/// since this genuinely stands in for the real thing): real CSS syntax,
-/// cascaded/inherited by Stylo's own existing (and already exercised)
-/// custom-property machinery, no engine changes, just a value this crate
-/// defines the meaning of.
+/// Whether a built-in control decoration with no real DOM node of its own (a `<select>`'s own
+/// chevron, a checked checkbox's own check mark) paints at all, set by the real `appearance`
+/// property. The style crate this project's cascade runs on compiles `appearance` out under
+/// Servo mode, so the declaration is carried as the custom property `--florui-appearance` (see
+/// `property_mirror`), which also works as written. It does not inherit; only `none` changes
+/// anything, and every other value, `auto` and the compatibility keywords included, leaves the
+/// decoration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Appearance {
     /// The built-in decoration paints normally. Real CSS's initial value,
@@ -6934,19 +6929,87 @@ mod tests {
     }
 
     #[test]
-    fn florui_appearance_inherits_to_a_descendant_like_any_other_custom_property() {
+    fn appearance_does_not_inherit_to_a_descendant_in_either_spelling() {
+        for declaration in ["appearance: none", "--florui-appearance: none"] {
+            let tree: Element = view! {
+                <div class="outer">
+                    <select />
+                </div>
+            };
+            let (arena, computed) = styles(
+                &tree,
+                &format!(".outer {{ {declaration}; }}"),
+                &InteractionState::new(),
+            );
+            let select = arena.find(|a, id| a.tag(id) == "select").unwrap();
+            assert_eq!(
+                computed[&select].appearance,
+                Appearance::Auto,
+                "{declaration}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_real_appearance_and_resize_properties_are_read() {
         let tree: Element = view! {
-            <div class="outer">
-                <select />
+            <div>
+                <select class="plain" />
+                <select class="native" />
+                <textarea class="vertical" />
+                <textarea class="block" />
+                <textarea class="inline" />
+                <textarea class="shouted" />
+                <textarea class="odd" />
             </div>
         };
         let (arena, computed) = styles(
             &tree,
-            ".outer { --florui-appearance: none; }",
+            ".plain { appearance: none; } .native { appearance: auto; } \
+             .vertical { resize: vertical; } .block { resize: block; } \
+             .inline { resize: inline; } .shouted { RESIZE: NONE; } \
+             .odd { resize: sideways; }",
             &InteractionState::new(),
         );
+        let find = |class: &str| {
+            arena
+                .find(|a, id| a.classes(id).iter().any(|c| c == class))
+                .unwrap()
+        };
+        assert_eq!(computed[&find("plain")].appearance, Appearance::None);
+        assert_eq!(computed[&find("native")].appearance, Appearance::Auto);
+        assert_eq!(computed[&find("vertical")].resize, Resize::Vertical);
+        assert_eq!(computed[&find("block")].resize, Resize::Vertical);
+        assert_eq!(computed[&find("inline")].resize, Resize::Horizontal);
+        assert_eq!(computed[&find("shouted")].resize, Resize::None);
+        assert_eq!(computed[&find("odd")].resize, Resize::Both);
+    }
+
+    #[test]
+    fn appearance_and_resize_are_read_from_a_style_attribute_too() {
+        let tree: Element = view! {
+            <div>
+                <textarea style="resize: none" />
+                <select style="appearance: none" />
+            </div>
+        };
+        let (arena, computed) = styles(&tree, "", &InteractionState::new());
+        let textarea = arena.find(|a, id| a.tag(id) == "textarea").unwrap();
         let select = arena.find(|a, id| a.tag(id) == "select").unwrap();
+        assert_eq!(computed[&textarea].resize, Resize::None);
         assert_eq!(computed[&select].appearance, Appearance::None);
+    }
+
+    #[test]
+    fn resize_does_not_inherit_either() {
+        let tree: Element = view! {
+            <div class="outer">
+                <textarea />
+            </div>
+        };
+        let (arena, computed) = styles(&tree, ".outer { resize: none; }", &InteractionState::new());
+        let textarea = arena.find(|a, id| a.tag(id) == "textarea").unwrap();
+        assert_eq!(computed[&textarea].resize, Resize::Both);
     }
 
     #[test]
