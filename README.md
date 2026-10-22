@@ -329,6 +329,9 @@ florui_platform::network::configure(florui_platform::network::NetConfig {
   because every request sends the same headers. A decoded picture is shared by every `<img>` and window that uses it and
   dropped with the last one, within the same memory budget as any other image; a picture a `url(...)` holds for the next
   frame is kept within 256 MiB, least recently used first.
+- **Private networks:** content other people wrote chooses which addresses an application requests. `block_private_addresses` refuses
+  this machine and the networks around it (loopback, `10/8`, `172.16/12`, `192.168/16`, link-local, which is where cloud metadata
+  lives) on what a name resolves to, redirects included; it is off by default and does not apply to a connection a proxy makes.
 - **Concurrency:** 8 requests at once and 6 per host; the rest wait in order, and asking for a URL already in flight joins
   it. An `<img>` that unmounts or changes `src` cancels its request: one still queued is never sent, one running stops at its next read.
 - **Failure:** the `<img>` is in the same state as one whose file cannot be read: no pixels, the reason on standard error,

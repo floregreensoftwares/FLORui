@@ -172,9 +172,14 @@ fn notify() {
 pub(crate) fn identity(url: &str) -> String {
     let generation = with_store(|store| store.slots.get(url).map(Slot::generation));
     match generation {
-        Some(generation) => format!("{url}@remote{generation}"),
+        Some(generation) => identity_at(url, generation),
         None => format!("{url}@remote-none"),
     }
+}
+
+/// The identity of `url` at `version`, which a picture carries (see `Loaded::version`).
+pub(crate) fn identity_at(url: &str, version: u64) -> String {
+    format!("{url}@remote{version}")
 }
 
 /// The picture, if it is here. Otherwise starts getting it (unless that is under way or
@@ -366,7 +371,11 @@ mod decoder {
             }
             sender
         });
-        let _ = queue.send(job);
+        // With no thread to take it (none could be started, so the receiver is gone), the
+        // job runs here, on the thread that downloaded it: slower, but it finishes.
+        if let Err(std::sync::mpsc::SendError(job)) = queue.send(job) {
+            job();
+        }
     }
 }
 
@@ -479,6 +488,8 @@ fn finish(
             (Was::Pending, Built::Loaded(loaded, size, sum, stale)) => {
                 let bytes = retained(&loaded, size);
                 store.held += bytes;
+                let mut loaded = loaded;
+                loaded.version = new_generation;
                 store.slots.insert(
                     url.to_owned(),
                     Slot::Ready {
@@ -515,6 +526,8 @@ fn finish(
                     store.held -= old;
                 }
                 store.held += bytes;
+                let mut loaded = loaded;
+                loaded.version = new_generation;
                 store.slots.insert(
                     url.to_owned(),
                     Slot::Ready {
@@ -596,6 +609,7 @@ mod tests {
         let ready = |used, bytes| Slot::Ready {
             generation: 1,
             loaded: Arc::new(Loaded {
+                version: 0,
                 source: crate::url_image::Source::Vector(Box::new(
                     crate::parse_svg(
                         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>",
@@ -810,6 +824,13 @@ mod tests {
             .expect("the new picture replaces the old one");
             assert_eq!(replaced.intrinsic, (5.0, 5.0));
             assert_ne!(crate::url_image::identity(&url), before);
+            // What is made from a picture is keyed by that picture, not by whatever the
+            // address is at when the key is read: the old one keeps its own key.
+            assert_eq!(crate::url_image::identity_of(&url, &first), before);
+            assert_eq!(
+                crate::url_image::identity_of(&url, &replaced),
+                crate::url_image::identity(&url)
+            );
             // Once, not on every ask.
             for _ in 0..5 {
                 crate::url_image::load(&url);

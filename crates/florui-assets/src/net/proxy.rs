@@ -427,23 +427,70 @@ pub(crate) fn parse_kde(contents: &str) -> System {
     System::Manual { url, bypass }
 }
 
+/// Which desktop's settings to read first, from `XDG_CURRENT_DESKTOP` (a colon-separated list
+/// such as `ubuntu:GNOME` or `KDE`). Both desktops keep a setting that the other one's
+/// leaves at its default, so the one the user runs decides, and when it is not known the
+/// GNOME setting counts if it names a proxy.
+#[cfg(any(target_os = "linux", test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Desktop {
+    Gnome,
+    Kde,
+    Unknown,
+}
+
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn desktop_of(current: Option<&str>) -> Desktop {
+    let names = current.unwrap_or("").to_ascii_uppercase();
+    let has = |name: &str| names.split(':').any(|part| part == name);
+    if has("KDE") {
+        Desktop::Kde
+    } else if [
+        "GNOME",
+        "UNITY",
+        "X-CINNAMON",
+        "CINNAMON",
+        "MATE",
+        "BUDGIE",
+        "PANTHEON",
+        "COSMIC",
+    ]
+    .iter()
+    .any(|name| has(name))
+    {
+        Desktop::Gnome
+    } else {
+        Desktop::Unknown
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub(crate) fn detect() -> System {
-    if let Some(output) = run("gsettings", &["list-recursively", "org.gnome.system.proxy"])
-        && let Some(system) = parse_gnome(&output)
-        && system != System::Direct
-    {
-        return system;
+    let gnome = || {
+        run("gsettings", &["list-recursively", "org.gnome.system.proxy"])
+            .and_then(|output| parse_gnome(&output))
+    };
+    let kde = || {
+        let config_home = std::env::var_os("XDG_CONFIG_HOME")
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_absolute())
+            .or_else(|| {
+                std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
+            });
+        config_home
+            .and_then(|home| std::fs::read_to_string(home.join("kioslaverc")).ok())
+            .map(|contents| parse_kde(&contents))
+    };
+    match desktop_of(std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref()) {
+        // The desktop that is running is what answers, `none` included: the other one's
+        // file may be left over from an earlier session.
+        Desktop::Gnome => gnome().unwrap_or(System::Direct),
+        Desktop::Kde => kde().unwrap_or(System::Direct),
+        Desktop::Unknown => match gnome() {
+            Some(system) if system != System::Direct => system,
+            _ => kde().unwrap_or(System::Direct),
+        },
     }
-    let config_home = std::env::var_os("XDG_CONFIG_HOME")
-        .map(std::path::PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
-        });
-    config_home
-        .and_then(|home| std::fs::read_to_string(home.join("kioslaverc")).ok())
-        .map_or(System::Direct, |contents| parse_kde(&contents))
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
@@ -783,5 +830,20 @@ mod tests {
     fn a_bracketed_ipv6_network_with_a_prefix_length_is_a_network() {
         let list = bypass(&["[2001:db8::]/32"]);
         assert!(list.matches("2001:db8:1::5") && !list.matches("2001:db9::1"));
+    }
+
+    #[test]
+    fn the_desktop_that_is_running_is_the_one_whose_settings_count() {
+        for (current, expected) in [
+            (Some("KDE"), Desktop::Kde),
+            (Some("ubuntu:GNOME"), Desktop::Gnome),
+            (Some("GNOME-Flashback:GNOME"), Desktop::Gnome),
+            (Some("X-Cinnamon"), Desktop::Gnome),
+            (Some("sway"), Desktop::Unknown),
+            (Some(""), Desktop::Unknown),
+            (None, Desktop::Unknown),
+        ] {
+            assert_eq!(desktop_of(current), expected, "{current:?}");
+        }
     }
 }

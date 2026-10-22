@@ -53,6 +53,7 @@
 //! image is wanted whole, and a request that stalls or fails is a failure, not a resume),
 //! and proxy scripts.
 
+mod guard;
 mod http_cache;
 mod proxy;
 #[cfg(test)]
@@ -119,6 +120,12 @@ pub struct NetConfig {
     /// `*` patterns, `.domain`, `<local>` and `10.0.0.0/8` networks, separated by commas,
     /// semicolons or spaces. The environment's `NO_PROXY` is read by the client itself.
     pub no_proxy: Vec<String>,
+    /// Refuse to connect to this machine or to a private network: loopback, `10/8`,
+    /// `172.16/12`, `192.168/16`, link-local (cloud metadata services), shared and unique
+    /// local addresses. Set it for an application that shows content other people wrote, which
+    /// lets them choose what is requested. Checked on what a name resolves to, redirects
+    /// included; not applied to a connection that a proxy makes for the request. `false`.
+    pub block_private_addresses: bool,
     pub user_agent: String,
 }
 
@@ -136,6 +143,7 @@ impl Default for NetConfig {
             cache_max_bytes: 256 * 1024 * 1024,
             proxy: ProxyMode::FromEnvironment,
             no_proxy: Vec::new(),
+            block_private_addresses: false,
             user_agent: format!("florui-assets/{}", env!("CARGO_PKG_VERSION")),
         }
     }
@@ -562,33 +570,32 @@ impl Inner {
         let mut stored = self
             .disk
             .as_ref()
-            .and_then(|disk| disk.lookup(&job.url, now));
-        let usable_at_once = stored
-            .as_ref()
-            .filter(|_| !job.refresh)
-            .and_then(|(entry, _)| {
-                if entry.is_fresh(now) {
-                    Some(Origin::Cache)
-                } else if entry.may_serve_while_revalidating(now) {
-                    Some(Origin::Stale)
-                } else {
-                    None
-                }
-            });
+            .and_then(|disk| disk.lookup_entry(&job.url, now));
+        let usable_at_once = stored.as_ref().filter(|_| !job.refresh).and_then(|entry| {
+            if entry.is_fresh(now) {
+                Some(Origin::Cache)
+            } else if entry.may_serve_while_revalidating(now) {
+                Some(Origin::Stale)
+            } else {
+                None
+            }
+        });
         if let Some(origin) = usable_at_once
-            && let Some((entry, body)) = stored.take()
+            && let Some(entry) = stored.as_ref()
+            && let Some(body) = self.disk.as_ref().and_then(|disk| disk.read_body(entry))
         {
             self.cache_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(Fetched {
                 bytes: body,
-                content_type: entry.content_type,
+                content_type: stored.and_then(|entry| entry.content_type),
                 origin,
             });
         }
         let outcome = self.request(job, &mut stored);
         if let (Err(error), false) = (&outcome, job.refresh)
             && counts_as_failure(error)
-            && let Some((entry, body)) = stored.take_if(|(entry, _)| entry.may_serve_on_error(now))
+            && let Some(entry) = stored.take_if(|entry| entry.may_serve_on_error(now))
+            && let Some(body) = self.disk.as_ref().and_then(|disk| disk.read_body(&entry))
         {
             return Ok(Fetched {
                 bytes: body,
@@ -601,15 +608,11 @@ impl Inner {
 
     /// Asks the server (with the validators of `stored`, if any) and keeps the answer. A
     /// `304` takes the stored copy to answer with.
-    fn request(
-        &self,
-        job: &Job,
-        stored: &mut Option<(Entry, Vec<u8>)>,
-    ) -> Result<Fetched, FetchError> {
+    fn request(&self, job: &Job, stored: &mut Option<Entry>) -> Result<Fetched, FetchError> {
         if let Some(reason) = &self.network().error {
             return Err(FetchError::Transport(reason.clone()));
         }
-        let (mut response, conditional) = self.get(job, stored.as_ref().map(|(entry, _)| entry))?;
+        let (mut response, conditional) = self.get(job, stored.as_ref())?;
         let status = response.status().as_u16();
         let received_at = unix_now();
         let header = |name: &str| {
@@ -656,11 +659,18 @@ impl Inner {
             // Only an answer to a conditional request says the stored copy is current; one
             // from a later hop of a redirect, which carried no validators, is about another
             // address.
-            let Some((mut entry, body)) = stored.take_if(|_| conditional) else {
+            let Some(mut entry) = stored.take_if(|_| conditional) else {
                 return Err(FetchError::Transport(
                     "the server answered 304 to a request that was not conditional".to_owned(),
                 ));
             };
+            // The copy the 304 vouches for is read now, if it is still there.
+            let Some(body) = self.disk.as_ref().and_then(|disk| disk.read_body(&entry)) else {
+                return Err(FetchError::Transport(
+                    "the stored copy the server confirmed is gone".to_owned(),
+                ));
+            };
+            let before = entry.clone();
             self.revalidated.fetch_add(1, Ordering::Relaxed);
             if let Some(etag) = etag {
                 entry.etag = Some(etag);
@@ -683,7 +693,7 @@ impl Inner {
             };
             if let Some(disk) = &self.disk {
                 if keep {
-                    disk.renew(&entry);
+                    disk.renew(&before, &entry);
                 } else {
                     disk.remove(&entry.url);
                 }
@@ -806,7 +816,8 @@ impl Inner {
         {
             return Err(FetchError::TooLarge { limit });
         }
-        let declared = body.content_length().unwrap_or(0).min(8 * 1024 * 1024);
+        // Not what the server says it will send: it has not sent it yet.
+        let declared = body.content_length().unwrap_or(0).min(256 * 1024);
         let mut bytes = Vec::with_capacity(declared as usize);
         let mut reader = body.as_reader();
         let mut chunk = vec![0u8; 32 * 1024];
@@ -874,11 +885,26 @@ fn agent(config: &NetConfig, proxy: Option<Option<ureq::Proxy>>) -> ureq::Agent 
                 .root_certs(ureq::tls::RootCerts::PlatformVerifier)
                 .build(),
         );
+    // Whether this client connects to the hosts itself, which is where addresses can be
+    // checked: through a proxy it connects to the proxy.
+    let direct = match &proxy {
+        Some(proxy) => proxy.is_none(),
+        None => ureq::Proxy::try_from_env().is_none(),
+    };
     let builder = match proxy {
         Some(proxy) => builder.proxy(proxy),
         None => builder,
     };
-    ureq::Agent::new_with_config(builder.build())
+    let agent_config = builder.build();
+    if config.block_private_addresses && direct {
+        ureq::Agent::with_parts(
+            agent_config,
+            ureq::unversioned::transport::DefaultConnector::default(),
+            guard::PublicOnly::default(),
+        )
+    } else {
+        ureq::Agent::new_with_config(agent_config)
+    }
 }
 
 /// Whether `error` is the kind of failure a stale copy may stand in for: the server or the
@@ -909,6 +935,12 @@ fn map_error(error: ureq::Error) -> FetchError {
 }
 
 fn map_io_error(error: std::io::Error) -> FetchError {
+    if error
+        .get_ref()
+        .is_some_and(|inner| inner.downcast_ref::<guard::Blocked>().is_some())
+    {
+        return FetchError::BlockedAddress;
+    }
     if let Some(inner) = error
         .get_ref()
         .and_then(|inner| inner.downcast_ref::<ureq::Error>())
@@ -1007,6 +1039,9 @@ pub fn configure(config: NetConfig) -> bool {
 /// The process-wide fetcher: one queue and one set of limits for every picture that names
 /// a URL, whichever window or element asked.
 pub fn shared_fetcher() -> &'static Fetcher {
+    if let Some(fetcher) = SHARED.get() {
+        return fetcher;
+    }
     let mut pending = PENDING_CONFIG
         .lock()
         .unwrap_or_else(|poison| poison.into_inner());

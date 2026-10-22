@@ -150,6 +150,9 @@ pub enum FetchError {
         declared: String,
         found: &'static str,
     },
+    /// The address is on this machine or on a private network, and
+    /// `block_private_addresses` is set.
+    BlockedAddress,
     /// The request was cancelled before it finished.
     Cancelled,
     /// Resolving the host, connecting, the TLS handshake or reading failed.
@@ -189,6 +192,10 @@ impl fmt::Display for FetchError {
             FetchError::ContentTypeMismatch { declared, found } => {
                 write!(f, "the response says {declared} but its bytes are {found}")
             }
+            FetchError::BlockedAddress => write!(
+                f,
+                "the address is on this machine or a private network, which is not requested"
+            ),
             FetchError::Cancelled => write!(f, "the request was cancelled"),
             FetchError::Transport(reason) => write!(f, "{reason}"),
         }

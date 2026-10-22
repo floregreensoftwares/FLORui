@@ -426,8 +426,11 @@ fn paint_layer(
     let (keep_x0, keep_x1) = center_range(cut_x, cut_x + cut.width, x0, x1);
     let (keep_y0, keep_y1) = center_range(cut_y, cut_y + cut.height, y0, y1);
     let bits = |values: &[f32]| values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
-    let source = match &layer.image {
-        BackgroundImage::Url(url) => image_source::identity(url),
+    // From the picture in hand, not asked for again: a picture replaced since the load
+    // would give a key for pixels this is not drawn from.
+    let source = match (&layer.image, loaded.as_deref()) {
+        (BackgroundImage::Url(url), Some(loaded)) => image_source::identity_of(url, loaded),
+        (BackgroundImage::Url(url), None) => image_source::identity(url),
         _ => String::new(),
     };
     let key = format!(
