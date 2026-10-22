@@ -33,12 +33,15 @@ image = { version = "0.25.10", default-features = false, features = [
 ] }
 base64 = "0.22"
 notify = { version = "8.2.0", optional = true }
-# Blocking, small and pure Rust apart from the crypto of rustls (ring); the
+# Blocking, small and pure Rust (gzip and brotli decoders included) apart from the crypto of rustls (ring); the
 # certificate check goes through the platform verifier (the system store) and
 # the proxy settings are read from the environment. See the `net` module.
-ureq = { version = "3", optional = true, default-features = false, features = ["rustls", "platform-verifier"] }
+ureq = { version = "3", optional = true, default-features = false, features = ["rustls", "platform-verifier", "gzip", "brotli"] }
 url = { version = "2.5.8", optional = true }
 httpdate = { version = "1", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+# Compressing the responses of the tests of the `net` feature.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+brotli = { version = "8", default-features = false, features = ["std"] }

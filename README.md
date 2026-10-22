@@ -311,13 +311,17 @@ florui_platform::network::configure(florui_platform::network::NetConfig {
 - **Requests:** `GET` only, with no cookies and no credentials (a URL with a user name or password is refused). Connecting
   (10 s), waiting for a response or for more of the body (15 s) and the whole request (60 s) have timeouts, and there is no
   automatic retry. Redirects are followed up to 5 times, only to `http` and `https`, and never from `https` to `http`. The
-  proxy comes from `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`; the proxy settings that live only in the
-  operating system (the Windows configuration, a PAC file) are not read. Certificates are checked against the system store.
+  proxy comes from `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`, or with `ProxyMode::System` from those and
+  otherwise from the manual proxy of the Windows Internet Options, GNOME or KDE, with its bypass list. A proxy that a script
+  decides (PAC, WPAD, `auto` in GNOME) is not evaluated: requests then fail and say so, instead of going around a proxy the
+  user needs. Certificates are checked against the system store.
 - **Size and content:** the declared length and the bytes as they stream in are held to the same 64 MiB as a file. A
   response whose `Content-Type` is not an image, or names one format over the bytes of another, is refused before a decoder
   sees it; a missing or generic type is judged by the bytes. The format does not come from the extension.
 - **Cache:** with `cache_dir` set, responses are kept on disk under `Cache-Control`, `Expires`, `Age`, `ETag` and
-  `Last-Modified` (a stale one is asked again with a conditional request), within 256 MiB. `Vary` other than `*` is not part of the key,
+  `Last-Modified` (a stale one is asked again with a conditional request), within 256 MiB. With `stale-while-revalidate`
+  a stale picture is used at once while a fresh one is fetched behind it, and with `stale-if-error` it stands in when the
+  network or the server (a `5xx`) fails; `no-cache` and `must-revalidate` turn both off. `Vary` other than `*` is not part of the key,
   because every request sends the same headers. A decoded picture is shared by every `<img>` and window that uses it and
   dropped with the last one, within the same memory budget as any other image; a picture a `url(...)` holds for the next
   frame is kept within 256 MiB, least recently used first.
@@ -326,11 +330,14 @@ florui_platform::network::configure(florui_platform::network::NetConfig {
 - **Failure:** the `<img>` is in the same state as one whose file cannot be read: no pixels, the reason on standard error,
   and the size CSS gives its box. An `alt` is used for the accessible name only; no
   fallback text is painted (nor for a file that cannot be read). A `url(...)` that fails is tried again after 30 seconds.
-- **Not covered:** `crossorigin`, credentials and cookies (there is no page origin), compressed responses, range
-  requests, and `stale-while-revalidate` / `stale-if-error` (a stale picture the server cannot confirm is an error).
+- **Not covered:** `crossorigin`, credentials and cookies (there is no page origin), range requests (an image is wanted
+  whole, and a request that stalls or fails is a failure, not a resume), proxy scripts, and macOS (the platform crate does
+  not support it yet).
 - **Tested** against a local HTTP server (statuses, redirects, size limits, content checks, the cache, the queue and
-  cancellation) and, once, against a real HTTPS host through the system
-  certificate store and an HTTP proxy; no other operating system or certificate setup was tried.
+  cancellation, compression, stale responses, an explicit proxy and its bypass list) and, once, against a real HTTPS host
+  through the system certificate store and an HTTP proxy. The readers of the Windows, GNOME and KDE proxy settings are
+  tested on sample output of `reg query`, `gsettings` and `kioslaverc`, not on those systems; the Windows one was only
+  type-checked for the Windows target.
 
 A `url(...)` never waits for the download on the painting thread: the layer draws nothing (a list marker is the broken one)
 until the picture has arrived, and the window then lays out and paints again.

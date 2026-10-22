@@ -7,7 +7,11 @@
 //! that varies on anything but the headers this crate always sends (`Vary: *`) is not
 //! stored. Only complete `200` responses are stored. A stored response is used while it is
 //! fresh; once stale it is asked again with `If-None-Match` and `If-Modified-Since`, and a
-//! `304` renews it without the body travelling again.
+//! `304` renews it without the body travelling again. Two extensions of `Cache-Control`
+//! (RFC 5861) let a stale response be used anyway: for `stale-while-revalidate` seconds it
+//! is used at once while a fresh copy is fetched in the background, and for
+//! `stale-if-error` seconds it is used when asking again fails (a network error or a `5xx`).
+//! `no-cache` and `must-revalidate` turn both off.
 
 use std::fs;
 use std::io::Write as _;
@@ -29,6 +33,10 @@ pub(crate) struct Policy {
     pub store: bool,
     /// How long it can be used without asking the server, from when it was received.
     pub fresh_for: u64,
+    /// For how long after that it may be used while a fresh copy is fetched.
+    pub stale_while_revalidate: u64,
+    /// For how long after that it may be used when fetching a fresh copy fails.
+    pub stale_if_error: u64,
 }
 
 /// The headers [`Policy::of`] reads.
@@ -50,6 +58,8 @@ impl Policy {
         let never = Self {
             store: false,
             fresh_for: 0,
+            stale_while_revalidate: 0,
+            stale_if_error: 0,
         };
         if headers
             .vary
@@ -59,6 +69,8 @@ impl Policy {
         }
         let mut max_age = None;
         let mut no_cache = false;
+        let mut must_revalidate = false;
+        let (mut while_revalidating, mut if_error) = (0, 0);
         for directive in headers.cache_control.unwrap_or("").split(',') {
             let directive = directive.trim().to_ascii_lowercase();
             let (name, value) = match directive.split_once('=') {
@@ -68,6 +80,11 @@ impl Policy {
             match name {
                 "no-store" => return never,
                 "no-cache" => no_cache = true,
+                "must-revalidate" | "proxy-revalidate" => must_revalidate = true,
+                "stale-while-revalidate" => {
+                    while_revalidating = value.and_then(|v| v.parse().ok()).unwrap_or(0)
+                }
+                "stale-if-error" => if_error = value.and_then(|v| v.parse().ok()).unwrap_or(0),
                 // A malformed value makes the response stale at once, the safe reading.
                 "max-age" => max_age = Some(value.and_then(|v| v.parse::<u64>().ok()).unwrap_or(0)),
                 _ => {}
@@ -92,10 +109,17 @@ impl Policy {
             .and_then(|age| age.trim().parse::<u64>().ok())
             .unwrap_or(0);
         fresh_for = fresh_for.saturating_sub(age);
+        let (stale_while_revalidate, stale_if_error) = if no_cache || must_revalidate {
+            (0, 0)
+        } else {
+            (while_revalidating, if_error)
+        };
         // A stale response nothing can renew is no use kept.
         Self {
             store: fresh_for > 0 || has_validator,
             fresh_for,
+            stale_while_revalidate,
+            stale_if_error,
         }
     }
 }
@@ -126,13 +150,31 @@ pub(crate) struct Entry {
     /// When the response was received, or last renewed by a `304`.
     pub stored_at: u64,
     pub fresh_for: u64,
+    pub stale_while_revalidate: u64,
+    pub stale_if_error: u64,
     /// The size of the body, to tell a whole file from one cut short.
     pub length: u64,
 }
 
 impl Entry {
+    fn age(&self, now: u64) -> u64 {
+        // A clock set back is not a reason to keep it fresh forever, but it is not a
+        // reason to throw it away either.
+        now.saturating_sub(self.stored_at)
+    }
+
     pub fn is_fresh(&self, now: u64) -> bool {
-        now.saturating_sub(self.stored_at) < self.fresh_for
+        self.age(now) < self.fresh_for
+    }
+
+    /// Stale, but may be used at once while a fresh copy is fetched.
+    pub fn may_serve_while_revalidating(&self, now: u64) -> bool {
+        !self.is_fresh(now) && self.age(now) < self.fresh_for + self.stale_while_revalidate
+    }
+
+    /// Stale, but may be used if fetching a fresh copy fails.
+    pub fn may_serve_on_error(&self, now: u64) -> bool {
+        self.age(now) < self.fresh_for.saturating_add(self.stale_if_error)
     }
 
     fn encode(&self) -> String {
@@ -155,6 +197,11 @@ impl Entry {
         }
         line("stored-at", &self.stored_at.to_string());
         line("fresh-for", &self.fresh_for.to_string());
+        line(
+            "stale-while-revalidate",
+            &self.stale_while_revalidate.to_string(),
+        );
+        line("stale-if-error", &self.stale_if_error.to_string());
         line("length", &self.length.to_string());
         text
     }
@@ -166,6 +213,7 @@ impl Entry {
         }
         let (mut url, mut etag, mut last_modified, mut content_type) = (None, None, None, None);
         let (mut stored_at, mut fresh_for, mut length) = (None, None, None);
+        let (mut while_revalidating, mut if_error) = (0, 0);
         for line in lines {
             let (key, value) = line.split_once(": ")?;
             match key {
@@ -175,6 +223,8 @@ impl Entry {
                 "content-type" => content_type = Some(value.to_owned()),
                 "stored-at" => stored_at = value.parse().ok(),
                 "fresh-for" => fresh_for = value.parse().ok(),
+                "stale-while-revalidate" => while_revalidating = value.parse().ok()?,
+                "stale-if-error" => if_error = value.parse().ok()?,
                 "length" => length = value.parse().ok(),
                 _ => {}
             }
@@ -186,6 +236,8 @@ impl Entry {
             content_type,
             stored_at: stored_at?,
             fresh_for: fresh_for?,
+            stale_while_revalidate: while_revalidating,
+            stale_if_error: if_error,
             length: length?,
         })
     }
@@ -358,11 +410,8 @@ mod tests {
             ..Headers::default()
         };
         assert_eq!(
-            policy(headers),
-            Policy {
-                store: true,
-                fresh_for: 500
-            }
+            (policy(headers).store, policy(headers).fresh_for),
+            (true, 500)
         );
     }
 
@@ -391,11 +440,8 @@ mod tests {
             ..Headers::default()
         };
         assert_eq!(
-            policy(with_etag),
-            Policy {
-                store: true,
-                fresh_for: 0
-            }
+            (policy(with_etag).store, policy(with_etag).fresh_for),
+            (true, 0)
         );
         let without = Headers {
             cache_control: Some("no-cache"),
@@ -471,6 +517,8 @@ mod tests {
             content_type: Some("image/png".to_owned()),
             stored_at: NOW,
             fresh_for: 60,
+            stale_while_revalidate: 30,
+            stale_if_error: 600,
             length,
         }
     }
@@ -479,6 +527,56 @@ mod tests {
     fn an_entry_survives_being_written_and_read() {
         let entry = entry("https://example.com/a.png?x=1", 3);
         assert_eq!(Entry::decode(&entry.encode()), Some(entry));
+    }
+
+    #[test]
+    fn the_stale_windows_follow_the_freshness() {
+        let entry = entry("https://example.com/a.png", 1);
+        // Fresh for 60 s, usable while revalidating until 90 s, usable on error until 660 s.
+        assert!(!entry.may_serve_while_revalidating(NOW + 59));
+        assert!(entry.may_serve_while_revalidating(NOW + 60));
+        assert!(entry.may_serve_while_revalidating(NOW + 89));
+        assert!(!entry.may_serve_while_revalidating(NOW + 90));
+        assert!(entry.may_serve_on_error(NOW + 659));
+        assert!(!entry.may_serve_on_error(NOW + 660));
+    }
+
+    #[test]
+    fn the_stale_windows_are_read_from_cache_control() {
+        let headers = Headers {
+            cache_control: Some("max-age=60, stale-while-revalidate=30, stale-if-error=600"),
+            ..Headers::default()
+        };
+        let policy = policy(headers);
+        assert_eq!(
+            (policy.stale_while_revalidate, policy.stale_if_error),
+            (30, 600)
+        );
+    }
+
+    #[test]
+    fn no_cache_and_must_revalidate_turn_the_stale_windows_off() {
+        for directive in ["no-cache", "must-revalidate"] {
+            let control =
+                format!("max-age=60, {directive}, stale-while-revalidate=30, stale-if-error=600");
+            let headers = Headers {
+                cache_control: Some(&control),
+                etag: Some("\"a\""),
+                ..Headers::default()
+            };
+            let policy = policy(headers);
+            assert_eq!(
+                (policy.stale_while_revalidate, policy.stale_if_error),
+                (0, 0)
+            );
+        }
+    }
+
+    #[test]
+    fn an_entry_written_before_the_stale_windows_existed_reads_with_none() {
+        let old = "florui-http-cache 1\nurl: https://example.com/a.png\nstored-at: 1\nfresh-for: 2\nlength: 3\n";
+        let entry = Entry::decode(old).unwrap();
+        assert_eq!((entry.stale_while_revalidate, entry.stale_if_error), (0, 0));
     }
 
     #[test]

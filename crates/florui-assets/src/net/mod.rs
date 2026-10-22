@@ -12,7 +12,9 @@
 //! - **Size.** The declared `Content-Length` is checked before the body is read, and the
 //!   body is counted while it streams in, so a server that lies about its length or sends
 //!   no length is cut off at [`NetConfig::max_bytes`] (by default the
-//!   [`crate::limits::MAX_SOURCE_BYTES`] of every other source).
+//!   [`crate::limits::MAX_SOURCE_BYTES`] of every other source). A body sent with gzip or
+//!   brotli is decoded as it arrives and the limit counts the decoded bytes, so a
+//!   decompression bomb is cut off like any other body.
 //! - **Content.** A response whose `Content-Type` is not an image type is refused, and one
 //!   that names a format the bytes are not is refused too, so an error page served as `200`
 //!   never reaches a decoder. A missing or generic (`application/octet-stream`) type is
@@ -20,7 +22,9 @@
 //! - **Cache.** With [`NetConfig::cache_dir`], responses are kept on disk under
 //!   `Cache-Control`, `Expires`, `Age`, `ETag` and `Last-Modified` (see the `http_cache`
 //!   module), within a byte budget. A stale response is asked again with a conditional
-//!   request. The memory a decoded picture takes is budgeted where it is decoded, by
+//!   request; with `stale-while-revalidate` it is used at once while a fresh copy is
+//!   fetched behind it ([`Origin::Stale`]), and with `stale-if-error` it stands in when
+//!   the network or the server (a `5xx`) fails ([`Origin::StaleOnError`]). The memory a decoded picture takes is budgeted where it is decoded, by
 //!   [`crate::AssetCache`]; this module holds no decoded pixels.
 //! - **Concurrency.** At most [`NetConfig::max_concurrent`] requests run at once, and at most
 //!   [`NetConfig::max_per_host`] to one host; the rest wait in a queue, in order. Asking for
@@ -38,10 +42,19 @@
 //! certificates are checked against the system store (the Windows and macOS stores, or the
 //! system roots on Linux), so a company's own root certificate works as it does in the
 //! browser. The one part that is not Rust is the cryptography of `rustls` (`ring`, which
-//! needs a C compiler to build): there is no mature pure Rust provider. Settings that live
-//! only in the operating system (the Windows proxy configuration, a PAC file) are not read.
+//! needs a C compiler to build): there is no mature pure Rust provider. [`ProxyMode::System`]
+//! also reads the proxy of the Windows Internet Options, of GNOME and of KDE when the
+//! environment sets none; a proxy that a script decides (PAC, WPAD) is not evaluated and
+//! makes requests fail with that reason, see the `proxy` module.
+//!
+//! ## What is not covered
+//!
+//! `crossorigin` and credentials (there is no page origin to speak of), range requests (an
+//! image is wanted whole, and a request that stalls or fails is a failure, not a resume),
+//! and proxy scripts.
 
 mod http_cache;
+mod proxy;
 #[cfg(test)]
 pub(crate) mod test_server;
 
@@ -69,8 +82,14 @@ pub enum ProxyMode {
     FromEnvironment,
     /// Connect directly, whatever the environment says.
     Direct,
-    /// This proxy (`http://host:port`, `socks5://host:port`...) for every request.
+    /// This proxy (`http://host:port`, `socks5://host:port`...) for every request, except
+    /// to the hosts of [`NetConfig::no_proxy`].
     Url(String),
+    /// The environment's variables when any is set; otherwise the proxy the operating system
+    /// is set to use (Windows' Internet Options, GNOME, KDE), with its list of hosts that
+    /// are reached directly. A proxy that a script decides is not evaluated: requests fail
+    /// and say so. See the `proxy` module.
+    System,
 }
 
 /// The limits and places of a [`Fetcher`].
@@ -96,6 +115,10 @@ pub struct NetConfig {
     /// What the cache directory may hold, in bytes. 256 MiB.
     pub cache_max_bytes: u64,
     pub proxy: ProxyMode,
+    /// Hosts reached directly with [`ProxyMode::Url`] and [`ProxyMode::System`]: names,
+    /// `*` patterns, `.domain`, `<local>` and `10.0.0.0/8` networks, separated by commas,
+    /// semicolons or spaces. The environment's `NO_PROXY` is read by the client itself.
+    pub no_proxy: Vec<String>,
     pub user_agent: String,
 }
 
@@ -112,6 +135,7 @@ impl Default for NetConfig {
             cache_dir: None,
             cache_max_bytes: 256 * 1024 * 1024,
             proxy: ProxyMode::FromEnvironment,
+            no_proxy: Vec::new(),
             user_agent: format!("florui-assets/{}", env!("CARGO_PKG_VERSION")),
         }
     }
@@ -126,6 +150,12 @@ pub enum Origin {
     Cache,
     /// The disk cache's copy, confirmed by the server with a `304`.
     Revalidated,
+    /// The disk cache's copy, stale but within its `stale-while-revalidate` window: used
+    /// at once, while a fresh copy is fetched in the background for the next request.
+    Stale,
+    /// The disk cache's copy, stale, used because asking the server failed and the copy is
+    /// within its `stale-if-error` window.
+    StaleOnError,
 }
 
 /// A response that is an image.
@@ -154,26 +184,48 @@ type Callback = Box<dyn FnOnce(Outcome) + Send>;
 struct Job {
     url: String,
     host: String,
+    /// A background revalidation of a copy that was served stale: it always asks the
+    /// server, and nobody waits for it.
+    refresh: bool,
     cancel: AtomicBool,
     waiters: Mutex<Vec<(u64, Callback)>>,
     started: AtomicBool,
+}
+
+impl Job {
+    fn key(&self) -> (String, bool) {
+        (self.url.clone(), self.refresh)
+    }
 }
 
 #[derive(Default)]
 struct Queue {
     /// Not started yet, in order.
     waiting: VecDeque<Arc<Job>>,
-    /// Waiting or running, by URL.
-    jobs: HashMap<String, Arc<Job>>,
+    /// Waiting or running, by URL and whether it is a background revalidation, so a request
+    /// for the picture is never made to wait for the revalidation of its stale copy.
+    jobs: HashMap<(String, bool), Arc<Job>>,
     running_by_host: HashMap<String, usize>,
     workers: usize,
     next_waiter: u64,
 }
 
+/// The clients and the proxy decision, made on the first request and not when the fetcher
+/// is made: reading the system's settings starts a program, which a thread of the UI must
+/// not wait for.
+struct Network {
+    agent: ureq::Agent,
+    /// For the hosts of `bypass`, when there is a proxy.
+    direct: Option<ureq::Agent>,
+    bypass: proxy::Bypass,
+    /// Every request fails with this: the proxy cannot be used, and going direct instead
+    /// would send requests where the application meant them not to go.
+    error: Option<String>,
+}
+
 struct Inner {
     config: NetConfig,
-    agent: ureq::Agent,
-    proxy_error: Option<String>,
+    network: OnceLock<Network>,
     disk: Option<DiskCache>,
     queue: Mutex<Queue>,
     requests: AtomicU64,
@@ -212,45 +264,13 @@ impl Drop for FetchTicket {
 
 impl Fetcher {
     pub fn new(config: NetConfig) -> Self {
-        let builder = ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            // Followed by hand, to keep to http(s), refuse a downgrade and count.
-            .max_redirects(0)
-            .user_agent(config.user_agent.clone())
-            .accept(ACCEPT)
-            .timeout_connect(Some(config.connect_timeout))
-            .timeout_recv_response(Some(config.stall_timeout))
-            .timeout_per_read(Some(config.stall_timeout))
-            .timeout_global(Some(config.total_timeout))
-            .tls_config(
-                ureq::tls::TlsConfig::builder()
-                    .root_certs(ureq::tls::RootCerts::PlatformVerifier)
-                    .build(),
-            );
-        // A proxy that does not parse is a configuration mistake, and going direct instead
-        // would send requests where the application meant them not to go: every request
-        // fails with the reason.
-        let mut proxy_error = None;
-        let builder = match &config.proxy {
-            ProxyMode::FromEnvironment => builder,
-            ProxyMode::Direct => builder.proxy(None),
-            ProxyMode::Url(url) => match ureq::Proxy::new(url) {
-                Ok(proxy) => builder.proxy(Some(proxy)),
-                Err(error) => {
-                    proxy_error = Some(format!("the proxy `{url}` is not usable: {error}"));
-                    builder.proxy(None)
-                }
-            },
-        };
-        let agent_config = builder.build();
         let disk = config
             .cache_dir
             .clone()
             .map(|dir| DiskCache::new(dir, config.cache_max_bytes));
         Self {
             inner: Arc::new(Inner {
-                agent: ureq::Agent::new_with_config(agent_config),
-                proxy_error,
+                network: OnceLock::new(),
                 disk,
                 queue: Mutex::default(),
                 requests: AtomicU64::new(0),
@@ -290,7 +310,7 @@ impl Fetcher {
         let mut queue = inner.lock();
         let waiter = queue.next_waiter;
         queue.next_waiter += 1;
-        let job = match queue.jobs.get(&key) {
+        let job = match queue.jobs.get(&(key.clone(), false)) {
             Some(job) => {
                 // Somebody wants it again after the last one let go of it.
                 job.cancel.store(false, Ordering::SeqCst);
@@ -300,11 +320,12 @@ impl Fetcher {
                 let job = Arc::new(Job {
                     url: key.clone(),
                     host,
+                    refresh: false,
                     cancel: AtomicBool::new(false),
                     waiters: Mutex::default(),
                     started: AtomicBool::new(false),
                 });
-                queue.jobs.insert(key, Arc::clone(&job));
+                queue.jobs.insert((key, false), Arc::clone(&job));
                 queue.waiting.push_back(Arc::clone(&job));
                 job
             }
@@ -341,6 +362,51 @@ impl Fetcher {
 }
 
 impl Inner {
+    fn network(&self) -> &Network {
+        self.network.get_or_init(|| {
+            let config = &self.config;
+            let plan = proxy::plan(
+                &config.proxy,
+                &config.no_proxy,
+                ureq::Proxy::try_from_env().is_some(),
+                proxy::detect,
+            );
+            let unusable = |reason: String| Network {
+                agent: agent(config, None),
+                direct: None,
+                bypass: proxy::Bypass::default(),
+                error: Some(reason),
+            };
+            match plan {
+                proxy::Plan::Environment => Network {
+                    agent: agent(config, None),
+                    direct: None,
+                    bypass: proxy::Bypass::default(),
+                    error: None,
+                },
+                proxy::Plan::Direct => Network {
+                    agent: agent(config, Some(None)),
+                    direct: None,
+                    bypass: proxy::Bypass::default(),
+                    error: None,
+                },
+                proxy::Plan::Proxy { url, bypass } => match ureq::Proxy::new(&url) {
+                    Ok(proxy) => {
+                        let bypass = proxy::Bypass::parse(&bypass);
+                        Network {
+                            agent: agent(config, Some(Some(proxy))),
+                            direct: (!bypass.is_empty()).then(|| agent(config, Some(None))),
+                            bypass,
+                            error: None,
+                        }
+                    }
+                    Err(error) => unusable(format!("the proxy `{url}` is not usable: {error}")),
+                },
+                proxy::Plan::Unusable(reason) => unusable(reason),
+            }
+        })
+    }
+
     fn lock(&self) -> MutexGuard<'_, Queue> {
         self.queue
             .lock()
@@ -369,7 +435,7 @@ impl Inner {
         job.cancel.store(true, Ordering::SeqCst);
         if !job.started.load(Ordering::SeqCst) {
             queue.waiting.retain(|queued| !Arc::ptr_eq(queued, job));
-            queue.jobs.remove(&job.url);
+            queue.jobs.remove(&job.key());
         }
     }
 
@@ -414,18 +480,40 @@ impl Inner {
                     queue.waiting.push_back(job);
                     continue;
                 }
-                queue.jobs.remove(&job.url);
+                queue.jobs.remove(&job.key());
                 std::mem::take(&mut *waiters)
             };
             for (_, callback) in waiters {
                 callback(outcome.clone());
             }
+            if matches!(&outcome, Ok(fetched) if fetched.origin == Origin::Stale) {
+                self.enqueue_refresh(&job);
+            }
         }
     }
 
+    /// Queues the background revalidation of the copy `served` was stale. This worker
+    /// finds it on its next turn.
+    fn enqueue_refresh(&self, served: &Job) {
+        let mut queue = self.lock();
+        let key = (served.url.clone(), true);
+        if queue.jobs.contains_key(&key) {
+            return;
+        }
+        let job = Arc::new(Job {
+            url: served.url.clone(),
+            host: served.host.clone(),
+            refresh: true,
+            cancel: AtomicBool::new(false),
+            waiters: Mutex::default(),
+            started: AtomicBool::new(false),
+        });
+        queue.jobs.insert(key, Arc::clone(&job));
+        queue.waiting.push_back(job);
+    }
+
     fn run(&self, job: &Job) -> Result<Fetched, FetchError> {
-        let cancelled = || job.cancel.load(Ordering::SeqCst);
-        if cancelled() {
+        if job.cancel.load(Ordering::SeqCst) {
             return Err(FetchError::Cancelled);
         }
         let now = unix_now();
@@ -433,20 +521,45 @@ impl Inner {
             .disk
             .as_ref()
             .and_then(|disk| disk.lookup(&job.url, now));
-        if let Some((entry, body)) = &stored
-            && entry.is_fresh(now)
+        if !job.refresh
+            && let Some((entry, body)) = &stored
         {
-            self.cache_hits.fetch_add(1, Ordering::Relaxed);
+            let origin = if entry.is_fresh(now) {
+                Some(Origin::Cache)
+            } else if entry.may_serve_while_revalidating(now) {
+                Some(Origin::Stale)
+            } else {
+                None
+            };
+            if let Some(origin) = origin {
+                self.cache_hits.fetch_add(1, Ordering::Relaxed);
+                return Ok(Fetched {
+                    bytes: body.clone(),
+                    content_type: entry.content_type.clone(),
+                    origin,
+                });
+            }
+        }
+        let outcome = self.request(job, stored.as_ref());
+        if let (Err(error), Some((entry, body)), false) = (&outcome, &stored, job.refresh)
+            && counts_as_failure(error)
+            && entry.may_serve_on_error(now)
+        {
             return Ok(Fetched {
                 bytes: body.clone(),
                 content_type: entry.content_type.clone(),
-                origin: Origin::Cache,
+                origin: Origin::StaleOnError,
             });
         }
-        if let Some(reason) = &self.proxy_error {
+        outcome
+    }
+
+    /// Asks the server (with the validators of `stored`, if any) and keeps the answer.
+    fn request(&self, job: &Job, stored: Option<&(Entry, Vec<u8>)>) -> Result<Fetched, FetchError> {
+        if let Some(reason) = &self.network().error {
             return Err(FetchError::Transport(reason.clone()));
         }
-        let validators = stored.as_ref().map(|(entry, _)| entry);
+        let validators = stored.map(|(entry, _)| entry);
         let mut response = self.get(job, validators)?;
         let status = response.status().as_u16();
         let received_at = unix_now();
@@ -484,11 +597,12 @@ impl Inner {
             )
         };
         if status == 304 {
-            let Some((mut entry, body)) = stored else {
+            let Some((entry, body)) = stored else {
                 return Err(FetchError::Transport(
                     "the server answered 304 to a request that was not conditional".to_owned(),
                 ));
             };
+            let (mut entry, body) = (entry.clone(), body.clone());
             self.revalidated.fetch_add(1, Ordering::Relaxed);
             if let Some(etag) = etag {
                 entry.etag = Some(etag);
@@ -499,6 +613,8 @@ impl Inner {
             let policy = policy_of(entry.etag.as_deref(), entry.last_modified.as_deref());
             entry.stored_at = received_at;
             entry.fresh_for = policy.fresh_for;
+            entry.stale_while_revalidate = policy.stale_while_revalidate;
+            entry.stale_if_error = policy.stale_if_error;
             if let Some(disk) = &self.disk {
                 if policy.store {
                     disk.renew(&entry);
@@ -528,6 +644,8 @@ impl Inner {
                         content_type: content_type.clone(),
                         stored_at: received_at,
                         fresh_for: policy.fresh_for,
+                        stale_while_revalidate: policy.stale_while_revalidate,
+                        stale_if_error: policy.stale_if_error,
                         length: bytes.len() as u64,
                     },
                     &bytes,
@@ -555,7 +673,18 @@ impl Inner {
             if job.cancel.load(Ordering::SeqCst) {
                 return Err(FetchError::Cancelled);
             }
-            let mut request = self.agent.get(url.as_str());
+            let network = self.network();
+            let client = match &network.direct {
+                Some(direct)
+                    if url
+                        .host_str()
+                        .is_some_and(|host| network.bypass.matches(host)) =>
+                {
+                    direct
+                }
+                _ => &network.agent,
+            };
+            let mut request = client.get(url.as_str());
             if let Some(entry) = validators {
                 if let Some(etag) = &entry.etag {
                     request = request.header("If-None-Match", etag);
@@ -643,6 +772,40 @@ fn host_key(url: &Url) -> String {
         url.scheme(),
         url.host_str().unwrap_or_default(),
         url.port_or_known_default().unwrap_or(0)
+    )
+}
+
+/// A client with the limits of `config`. `proxy`: `None` leaves the client's default (the
+/// environment's variables), `Some(None)` connects directly, `Some(Some(_))` uses that proxy.
+fn agent(config: &NetConfig, proxy: Option<Option<ureq::Proxy>>) -> ureq::Agent {
+    let builder = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        // Followed by hand, to keep to http(s), refuse a downgrade and count.
+        .max_redirects(0)
+        .user_agent(config.user_agent.clone())
+        .accept(ACCEPT)
+        .timeout_connect(Some(config.connect_timeout))
+        .timeout_recv_response(Some(config.stall_timeout))
+        .timeout_per_read(Some(config.stall_timeout))
+        .timeout_global(Some(config.total_timeout))
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                .build(),
+        );
+    let builder = match proxy {
+        Some(proxy) => builder.proxy(proxy),
+        None => builder,
+    };
+    ureq::Agent::new_with_config(builder.build())
+}
+
+/// Whether `error` is the kind of failure a stale copy may stand in for: the server or the
+/// network failed, as opposed to the server answering that the picture is not there.
+fn counts_as_failure(error: &FetchError) -> bool {
+    matches!(
+        error,
+        FetchError::Timeout | FetchError::Transport(_) | FetchError::Status(500..=599)
     )
 }
 
