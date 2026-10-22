@@ -61,9 +61,11 @@
 //! - An `<img>` that unmounts, or whose `src` changes, cancels its request
 //!   (the entry holds the request's ticket): one still queued is never sent,
 //!   one running stops at its next read.
-//! - Decoding goes through the same [`florui_assets::AssetCache`] and decode
-//!   slots as a file, so the decoded image is shared between windows and
-//!   dropped when the last `<img>` holding it goes.
+//! - Decoding goes through the same [`florui_assets::AssetCache`] (the one
+//!   of the window's runtime) and decode slots as a file, so the decoded image
+//!   is shared by the `<img>` of that window and dropped when the last one
+//!   holding it goes. Another window has a cache of its own and decodes its
+//!   own copy.
 //! - A failure is the same state as an unreadable file: no pixels, the
 //!   reason logged once and available from [`ImageRegistry::error`], and the
 //!   size CSS gives the box (a broken image has no intrinsic size).

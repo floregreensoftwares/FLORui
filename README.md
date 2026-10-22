@@ -326,9 +326,10 @@ florui_platform::network::configure(florui_platform::network::NetConfig {
   a stale picture is used at once while a fresh one is fetched behind it, and with `stale-if-error` it stands in when the
   network or the server (a `5xx`) fails; `no-cache` and `must-revalidate` turn both off. The validators belong to the stored
   address, so a picture whose address redirects is downloaded again when it goes stale. `Vary` other than `*` is not part of the key,
-  because every request sends the same headers. A decoded picture is shared by every `<img>` and window that uses it and
-  dropped with the last one, within the same memory budget as any other image; a picture a `url(...)` holds for the next
-  frame is kept within 256 MiB, least recently used first.
+  because every request sends the same headers. A decoded picture is shared by the `<img>` of a window that use it and
+  dropped with the last one, within the memory budget of that window's image cache (another window decodes its own copy); the
+  pictures of `url(...)` are decoded into a cache of their own for the process, and the ones held for the next frame are kept
+  within 256 MiB, least recently used first, while those asked for in the last ten seconds are never let go for room.
 - **Private networks:** content other people wrote chooses which addresses an application requests. `block_private_addresses` refuses
   this machine and the networks around it (loopback, `10/8`, `172.16/12`, `192.168/16`, link-local, which is where cloud metadata
   lives) on what a name resolves to, redirects included; it is off by default and does not apply to a connection a proxy makes.

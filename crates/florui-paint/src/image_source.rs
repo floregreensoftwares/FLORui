@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use florui_assets::RasterFit;
-pub(crate) use florui_assets::url_image::{Loaded, Source, identity, identity_of, load};
+pub(crate) use florui_assets::url_image::{Loaded, Source, identity, identity_of, load, touch};
 use tiny_skia::Pixmap;
 
 /// The largest tile, in pixels on a side and in pixels altogether, that is

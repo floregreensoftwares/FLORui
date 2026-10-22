@@ -79,7 +79,12 @@ fn source_pixels(
     // cannot happen. Loading first, to key by the picture, would take the lock of the
     // loader on every paint.
     let (identity, size) = match image {
-        BackgroundImage::Url(url) => (image_source::identity(url), (0, 0)),
+        BackgroundImage::Url(url) => {
+            // Its drawing is kept and may be found without asking for it: a remote picture
+            // must still be marked as in use.
+            image_source::touch(url);
+            (image_source::identity(url), (0, 0))
+        }
         _ => (String::new(), (area.0.to_bits(), area.1.to_bits())),
     };
     let key = format!(

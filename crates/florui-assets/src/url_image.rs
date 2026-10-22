@@ -121,15 +121,41 @@ pub fn latest_download(url: &str) -> Option<crate::AssetId> {
 /// writes it, so that the same picture written two ways (`HTTPS://Example.com:443/a.png` and
 /// `https://example.com/a.png`) is one picture.
 pub fn remote_address(url: &str) -> String {
+    use std::cell::RefCell;
+    // Painting asks for the same few addresses on every frame, on every thread: each thread
+    // remembers what it has already worked out.
+    thread_local! {
+        static KNOWN: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
+    }
+    if let Some(known) = KNOWN.with(|known| known.borrow().get(url).cloned()) {
+        return known;
+    }
     let trimmed = url.trim_matches(|c: char| c.is_ascii_whitespace());
     let trimmed = trimmed
         .split_once('#')
         .map_or(trimmed, |(address, _)| address);
     #[cfg(feature = "net")]
-    if let Some(normal) = crate::net::normalize_address(trimmed) {
-        return normal;
+    let normal = crate::net::normalize_address(trimmed).unwrap_or_else(|| trimmed.to_owned());
+    #[cfg(not(feature = "net"))]
+    let normal = trimmed.to_owned();
+    KNOWN.with(|known| {
+        let mut known = known.borrow_mut();
+        if known.len() >= 1024 {
+            known.clear();
+        }
+        known.insert(url.to_owned(), normal.clone());
+    });
+    normal
+}
+
+/// Marks the picture `url` names as in use, which a picture that is not asked for by
+/// [`load`] on every paint (one whose drawing is kept, as a border image's is) must do for
+/// itself: a remote picture that looks left alone is let go to make room, and is not asked
+/// for again to see whether the server changed it. Costs nothing for a file or a `data:` URL.
+pub fn touch(url: &str) {
+    if crate::remote_image::is_remote(url) {
+        let _ = crate::remote_image::load(&remote_address(url));
     }
-    trimmed.to_owned()
 }
 
 /// What was found when an image was last read, and the file's stamp then.
@@ -198,7 +224,6 @@ pub(crate) fn sniff(bytes: &[u8]) -> Option<Format> {
 /// first element, after what may come before it. A page of HTML served as an image is not
 /// one. (A file of the application's own is trusted more, and `sniff` takes it as an SVG as
 /// soon as it looks like XML.)
-#[cfg(any(feature = "net", test))]
 pub(crate) fn sniff_strict(bytes: &[u8]) -> Option<Format> {
     if crate::raster::Format::sniff(bytes).is_some() {
         return Some(Format::Raster);
@@ -208,7 +233,6 @@ pub(crate) fn sniff_strict(bytes: &[u8]) -> Option<Format> {
 
 /// Whether the first element of the document is `<svg>` (or `<svg:svg>`), after a byte
 /// order mark, white space, an XML declaration, comments and a doctype.
-#[cfg(any(feature = "net", test))]
 fn looks_like_svg(bytes: &[u8]) -> bool {
     let mut rest = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
     loop {
@@ -239,7 +263,6 @@ fn looks_like_svg(bytes: &[u8]) -> bool {
     }
 }
 
-#[cfg(any(feature = "net", test))]
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
@@ -247,7 +270,6 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// The end of a `<!DOCTYPE ...>`, which may hold an internal subset in `[...]`.
-#[cfg(any(feature = "net", test))]
 fn doctype_end(rest: &[u8]) -> Option<usize> {
     let mut depth = 0usize;
     for (at, byte) in rest.iter().enumerate() {
@@ -294,7 +316,14 @@ pub(crate) fn build(
     trusted: bool,
     raster: impl FnOnce(&[u8]) -> Result<Arc<RasterImage>, crate::AssetError>,
 ) -> Result<Loaded, String> {
-    match hinted.or_else(|| sniff(bytes)) {
+    // A document of the application's own may be anything that looks like XML; a download is
+    // held to being an SVG, whether it came from the server now or from the cache on disk.
+    let sniffed = if trusted {
+        sniff(bytes)
+    } else {
+        sniff_strict(bytes)
+    };
+    match hinted.or(sniffed) {
         Some(Format::Raster) => {
             let image = raster(bytes).map_err(|e| e.to_string())?;
             let (width, height) = (image.width as f32, image.height as f32);
@@ -692,5 +721,20 @@ mod tests {
         ] {
             assert_eq!(sniff(svg.as_bytes()), Some(Format::Svg), "{svg}");
         }
+    }
+
+    #[test]
+    fn a_download_is_held_to_being_an_svg_and_a_file_of_our_own_is_not() {
+        let html = b"<html><body>Access denied</body></html>";
+        let not_kept = |_: &[u8]| -> Result<Arc<RasterImage>, crate::AssetError> {
+            unreachable!("not a raster image")
+        };
+        // From a server (now, or from a copy on disk): not an SVG, so not parsed as one.
+        let error = build(html, None, false, not_kept).err().unwrap();
+        assert!(error.contains("only PNG"), "{error}");
+        // The application's own document is trusted to be what it says it is; it fails
+        // later, in the parser, with that parser's reason.
+        let error = build(html, None, true, not_kept).err().unwrap();
+        assert!(!error.contains("only PNG"), "{error}");
     }
 }

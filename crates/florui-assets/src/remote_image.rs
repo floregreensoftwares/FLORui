@@ -9,8 +9,10 @@
 //!
 //! Downloads go through [`crate::net::shared_fetcher`], so they share its queue, its
 //! limits and its disk cache with every other picture that names a URL, and decoding goes
-//! through one [`AssetCache`], so the decode slots and the memory budget are the ones of
-//! every other image. What is held for the next frame is limited too: pictures that are
+//! through the decode slots that every cache shares. The decoded pictures of `url(...)` are
+//! kept in one [`AssetCache`] of this module (the process's), which has the memory budget of
+//! any cache; the `<img>` of a window use the cache of that window's runtime, with a budget of
+//! its own. What is held for the next frame is limited too: pictures that are
 //! ready stay while they fit in [`MAX_HELD_BYTES`], least recently asked for going first,
 //! and one that went comes back from the disk cache when it is asked for again. A failure
 //! is remembered for [`RETRY_AFTER`] and then tried again by the next ask. A picture that
@@ -83,7 +85,7 @@ enum Slot {
         used_at: Instant,
         /// A digest of the encoded bytes it was made from, to tell a picture the server
         /// changed from one it only sent again.
-        digest: u64,
+        digest: u128,
         /// When it was loaded, or last found to be current.
         checked_at: Instant,
         /// How long after `checked_at` it is asked for again.
@@ -511,7 +513,7 @@ enum Built {
         uncached: bool,
     },
     /// `stale`: it was loaded from a stale copy, with a fresh one being fetched behind it.
-    Loaded(Loaded, u64, u64, bool),
+    Loaded(Loaded, u64, u128, bool),
     Failed(String),
 }
 
@@ -519,8 +521,8 @@ enum Built {
 /// bytes, so a picture the server replaced is a different entry from the old one (which may
 /// still be alive, held by what is painting it) and neither can be handed back for the
 /// other, whatever runs at the same time.
-pub(crate) fn cache_id(url: &str, digest: u64) -> crate::AssetId {
-    crate::AssetId::Url(format!("{url}\u{0}{digest:016x}"))
+pub(crate) fn cache_id(url: &str, digest: u128) -> crate::AssetId {
+    crate::AssetId::Url(format!("{url}\u{0}{digest:032x}"))
 }
 
 /// The identity to decode the bytes of one download of `url` under: see [`cache_id`].
@@ -530,7 +532,7 @@ pub(crate) fn download_id(url: &str, bytes: &[u8]) -> crate::AssetId {
 
 /// The digest of the latest download of each address that was decoded, so that a picture
 /// still alive in a cache can be found again without downloading it.
-static LATEST: Mutex<Option<HashMap<String, u64>>> = Mutex::new(None);
+static LATEST: Mutex<Option<HashMap<String, u128>>> = Mutex::new(None);
 
 /// [`download_id`], remembering that these bytes are the latest of `url`.
 pub(crate) fn register_download(url: &str, bytes: &[u8]) -> crate::AssetId {
@@ -554,12 +556,25 @@ pub(crate) fn latest_download(url: &str) -> Option<crate::AssetId> {
     latest.as_ref()?.get(url).map(|sum| cache_id(url, *sum))
 }
 
-/// A digest of `bytes` that only has to tell two downloads apart.
-fn digest(bytes: &[u8]) -> u64 {
-    use std::hash::Hasher as _;
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    hasher.write(bytes);
-    hasher.finish()
+/// A digest of `bytes` that tells two downloads apart: the start of their SHA-256, which a
+/// server cannot make two different pictures share. (Without the `net` feature nothing is
+/// downloaded, and a quick hash will do.)
+fn digest(bytes: &[u8]) -> u128 {
+    #[cfg(feature = "net")]
+    {
+        use sha2::{Digest as _, Sha256};
+        let hash = Sha256::digest(bytes);
+        let mut start = [0u8; 16];
+        start.copy_from_slice(&hash[..16]);
+        u128::from_be_bytes(start)
+    }
+    #[cfg(not(feature = "net"))]
+    {
+        use std::hash::Hasher as _;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        hasher.write(bytes);
+        u128::from(hasher.finish())
+    }
 }
 
 /// A download ended: decode it here, on the fetcher's thread and in a decode slot, and
@@ -700,7 +715,7 @@ fn install_ready(
     url: &str,
     mut loaded: Loaded,
     encoded: u64,
-    digest: u64,
+    digest: u128,
     stale: bool,
     generation: u64,
     used: u64,
@@ -1270,6 +1285,44 @@ mod tests {
                 remote_address("https://example.com:8443/a.png"),
                 remote_address("https://example.com/a.png")
             );
+        }
+
+        #[test]
+        fn touching_a_remote_picture_marks_it_in_use_and_touching_anything_else_does_nothing() {
+            direct();
+            let url = "http://example.invalid/touched.png";
+            let bytes = png_of(2, 2);
+            let sum = digest(&bytes);
+            let loaded = crate::url_image::build(&bytes, None, false, |b| {
+                cache().get_or_decode(cache_id(url, sum), b, DecodeParams::Native)
+            })
+            .unwrap();
+            with_store(|store| {
+                store.slots.insert(
+                    url.to_owned(),
+                    Slot::Ready {
+                        generation: 1,
+                        loaded: Arc::new(loaded),
+                        bytes: 1,
+                        used: 1,
+                        used_at: Instant::now() - IN_USE - Duration::from_secs(5),
+                        digest: sum,
+                        checked_at: Instant::now(),
+                        recheck_after: RECHECK_AFTER,
+                        refresh: None,
+                    },
+                );
+            });
+            crate::url_image::touch(url);
+            let in_use = with_store(|store| match store.slots.get(url) {
+                Some(Slot::Ready { used_at, .. }) => used_at.elapsed() < IN_USE,
+                _ => false,
+            });
+            assert!(in_use, "asked for lately");
+            let before = with_store(|store| store.slots.len());
+            crate::url_image::touch("assets/a.png");
+            crate::url_image::touch("data:image/png;base64,AAAA");
+            assert_eq!(with_store(|store| store.slots.len()), before);
         }
 
         #[test]

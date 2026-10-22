@@ -474,8 +474,9 @@ impl DiskCache {
             let Ok(meta) = item.metadata() else { continue };
             let modified = meta.modified().unwrap_or(UNIX_EPOCH);
             let name = item.file_name().to_string_lossy().into_owned();
-            // `<hash>.meta`, `<hash>.<id>.body`, `<hash>.tmp<pid>-<n>`.
-            let hash = name.split('.').next().unwrap_or("").to_owned();
+            // Only what this cache writes is looked at, let alone removed: the directory is
+            // the application's to choose and may hold other things.
+            let Some(hash) = ours(&name) else { continue };
             let group = groups.entry(hash).or_insert(Group {
                 meta: None,
                 bodies: Vec::new(),
@@ -542,6 +543,25 @@ impl DiskCache {
             total -= size;
         }
     }
+}
+
+/// The hash a file of this cache is named for, if `name` is one: `<hash>.meta`,
+/// `<hash>.<id>.body` or `<hash>.tmp<pid>-<n>`, with a hash and an id of 16 hexadecimal digits.
+fn ours(name: &str) -> Option<String> {
+    let hex16 = |part: &str| part.len() == 16 && part.bytes().all(|b| b.is_ascii_hexdigit());
+    let parts: Vec<&str> = name.split('.').collect();
+    let fits = match parts.as_slice() {
+        [hash, "meta"] => hex16(hash),
+        [hash, id, "body"] => hex16(hash) && hex16(id),
+        [hash, temporary] => {
+            hex16(hash)
+                && temporary.strip_prefix("tmp").is_some_and(|rest| {
+                    !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit() || b == b'-')
+                })
+        }
+        _ => false,
+    };
+    fits.then(|| parts[0].to_owned())
 }
 
 /// A number no other response stored here shares, in this process or another: the time, the
@@ -926,9 +946,9 @@ mod tests {
             }
             path
         };
-        let old_body = leave("0000000000000001.body", Some(long_ago));
+        let old_body = leave("0000000000000001.00000000000000a1.body", Some(long_ago));
         let old_temporary = leave("0000000000000002.tmp123-4", Some(long_ago));
-        let young_body = leave("0000000000000003.body", None);
+        let young_body = leave("0000000000000003.00000000000000a3.body", None);
         let young_temporary = leave("0000000000000004.tmp123-5", None);
         cache.evict();
         assert!(!old_body.exists() && !old_temporary.exists());
@@ -1047,5 +1067,48 @@ mod tests {
         cache.evict();
         assert!(!cache.body_path(&stray).exists());
         assert_eq!(cache.lookup(url, NOW).unwrap().1, b"live");
+    }
+
+    #[test]
+    fn files_that_are_not_this_caches_are_never_touched() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = DiskCache::new(dir.path().to_owned(), 1 << 20);
+        let long_ago = SystemTime::now() - Duration::from_secs(3600);
+        let foreign = [
+            "report.body",
+            "x.tmpl",
+            "notes.tmp123",
+            "0000000000000001.body",
+            "0000000000000001.xyz.body",
+            "0000000000000001.0000000000000002.bodyx",
+            "readme.meta",
+            "photo.png",
+        ];
+        for name in foreign {
+            let path = dir.path().join(name);
+            fs::write(&path, b"mine").unwrap();
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(long_ago)
+                .unwrap();
+        }
+        cache.evict();
+        for name in foreign {
+            assert!(dir.path().join(name).exists(), "{name} was removed");
+        }
+        assert_eq!(
+            ours("0123456789abcdef.meta").as_deref(),
+            Some("0123456789abcdef")
+        );
+        assert_eq!(
+            ours("0123456789abcdef.fedcba9876543210.body").as_deref(),
+            Some("0123456789abcdef")
+        );
+        assert_eq!(
+            ours("0123456789abcdef.tmp42-7").as_deref(),
+            Some("0123456789abcdef")
+        );
     }
 }
