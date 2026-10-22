@@ -294,19 +294,31 @@ impl DiskCache {
         self.dir.join(format!("{}.body", stem(url)))
     }
 
-    /// The stored response for `url` and its body, if both are there and whole. A hit
-    /// counts as a use for the eviction order.
-    pub fn lookup(&self, url: &str, now: u64) -> Option<(Entry, Vec<u8>)> {
+    /// The stored response for `url`, if its metadata is there and its body is there and
+    /// whole (judged by its size, without reading it). A hit counts as a use for the
+    /// eviction order.
+    pub fn lookup_entry(&self, url: &str, now: u64) -> Option<Entry> {
         let meta_path = self.meta_path(url);
         let entry = Entry::decode(&fs::read_to_string(&meta_path).ok()?)?;
-        if entry.url != url {
-            return None;
-        }
-        let body = fs::read(self.body_path(url)).ok()?;
-        if body.len() as u64 != entry.length {
+        if entry.url != url || fs::metadata(self.body_path(url)).ok()?.len() != entry.length {
             return None;
         }
         touch(&meta_path, now);
+        Some(entry)
+    }
+
+    /// The body of `entry`, read when it is needed: a stale entry that the server answers
+    /// with a new body never needs it. `None` if it is gone or not whole by now.
+    pub fn read_body(&self, entry: &Entry) -> Option<Vec<u8>> {
+        let body = fs::read(self.body_path(&entry.url)).ok()?;
+        (body.len() as u64 == entry.length).then_some(body)
+    }
+
+    /// [`Self::lookup_entry`] and [`Self::read_body`] together.
+    #[cfg(test)]
+    pub fn lookup(&self, url: &str, now: u64) -> Option<(Entry, Vec<u8>)> {
+        let entry = self.lookup_entry(url, now)?;
+        let body = self.read_body(&entry)?;
         Some((entry, body))
     }
 
@@ -334,9 +346,21 @@ impl DiskCache {
         }
     }
 
-    /// Writes the metadata of an entry renewed by a `304`; the body stays.
-    pub fn renew(&self, entry: &Entry) {
-        let _ = write_atomically(&self.meta_path(&entry.url), entry.encode().as_bytes());
+    /// Writes the metadata of an entry renewed by a `304`; the body stays. Only if the
+    /// entry on disk is still the one that was renewed (`before`): another request for the
+    /// same address may have stored a new response since, whose body this must not be put
+    /// over.
+    pub fn renew(&self, before: &Entry, entry: &Entry) {
+        let same = fs::read_to_string(self.meta_path(&entry.url))
+            .ok()
+            .and_then(|text| Entry::decode(&text))
+            .is_some_and(|now| {
+                (&now.etag, &now.last_modified, now.length)
+                    == (&before.etag, &before.last_modified, before.length)
+            });
+        if same {
+            let _ = write_atomically(&self.meta_path(&entry.url), entry.encode().as_bytes());
+        }
     }
 
     pub fn remove(&self, url: &str) {
@@ -766,5 +790,31 @@ mod tests {
         assert!(entry.may_serve_on_error(NOW + 1));
         entry.fresh_for = 10;
         assert!(entry.may_serve_while_revalidating(NOW + 11));
+    }
+
+    #[test]
+    fn a_renewal_does_not_go_over_a_response_stored_since() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = DiskCache::new(dir.path().to_owned(), 1 << 20);
+        let url = "https://example.com/a.png";
+        let before = entry(url, 3);
+        cache.store(&before, b"old");
+        // Another request stored a new response while the 304 was on its way.
+        let mut newer = entry(url, 5);
+        newer.etag = Some("\"newer\"".to_owned());
+        cache.store(&newer, b"newer");
+        let mut renewed = before.clone();
+        renewed.stored_at += 10;
+        cache.renew(&before, &renewed);
+        let (found, body) = cache.lookup(url, NOW).unwrap();
+        assert_eq!(
+            (found.etag.as_deref(), body),
+            (Some("\"newer\""), b"newer".to_vec())
+        );
+        // And when nothing came between, it renews.
+        let mut again = newer.clone();
+        again.stored_at += 20;
+        cache.renew(&newer, &again);
+        assert_eq!(cache.lookup(url, NOW).unwrap().0.stored_at, again.stored_at);
     }
 }

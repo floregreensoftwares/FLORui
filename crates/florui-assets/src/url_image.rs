@@ -46,6 +46,11 @@ pub struct Loaded {
     pub intrinsic: (f32, f32),
     /// What the image itself says of its size, which `intrinsic` fills in.
     pub natural: Natural,
+    /// Which version of an address this is: 0 for a file or a `data:` URL (whose identity is
+    /// its stamp), and for a network address one that changes when the picture is replaced.
+    /// Keys of things made from the picture should come from [`identity_of`], which reads it,
+    /// and not from [`identity`] after the load, which can already describe a newer picture.
+    pub version: u64,
 }
 
 /// What identifies the bytes behind a path: when and how big. A `data:` URL
@@ -65,6 +70,16 @@ fn stamp(url: &str) -> Stamp {
         Ok(meta) => Stamp::File(meta.modified().ok(), meta.len()),
         Err(_) => Stamp::Missing,
     }
+}
+
+/// [`identity`] of the picture `loaded` that `url` gave, for keys of things made from that
+/// picture: unlike `identity(url)` asked for after the load, it cannot describe a newer
+/// picture than the one in hand.
+pub fn identity_of(url: &str, loaded: &Loaded) -> String {
+    if crate::remote_image::is_remote(url) {
+        return crate::remote_image::identity_at(remote_address(url), loaded.version);
+    }
+    identity(url)
 }
 
 /// Text that stands for `url`'s current bytes, for keys of things made from
@@ -257,6 +272,7 @@ pub(crate) fn build(
             let image = raster(bytes).map_err(|e| e.to_string())?;
             let (width, height) = (image.width as f32, image.height as f32);
             Ok(Loaded {
+                version: 0,
                 source: Source::Raster(image),
                 intrinsic: (width, height),
                 natural: Natural {
@@ -277,6 +293,7 @@ pub(crate) fn build(
             .map_err(|e| e.to_string())?;
             let intrinsic = (image.intrinsic_size.width, image.intrinsic_size.height);
             Ok(Loaded {
+                version: 0,
                 natural: svg_natural(text, intrinsic),
                 source: Source::Vector(Box::new(image)),
                 intrinsic,

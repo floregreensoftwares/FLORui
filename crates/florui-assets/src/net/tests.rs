@@ -393,6 +393,50 @@ mod proxies {
     }
 }
 
+mod private_addresses {
+    use super::test_server::ConnectProxy;
+    use super::*;
+
+    fn blocking() -> NetConfig {
+        NetConfig {
+            block_private_addresses: true,
+            ..config()
+        }
+    }
+
+    #[test]
+    fn a_picture_on_this_machine_is_not_requested_when_private_addresses_are_blocked() {
+        let server = Server::start(|_| Reply::ok("image/png", png()));
+        let fetcher = Fetcher::new(blocking());
+        // By address and by a name that resolves to it.
+        for url in [
+            server.url("/a.png"),
+            server.url("/a.png").replace("127.0.0.1", "localhost"),
+        ] {
+            assert_eq!(fetcher.fetch(&url).unwrap_err(), FetchError::BlockedAddress);
+        }
+        assert_eq!(server.hits(), 0, "nothing reached it");
+    }
+
+    #[test]
+    fn private_addresses_are_requested_by_default() {
+        let server = Server::start(|_| Reply::ok("image/png", png()));
+        assert!(fetcher().fetch(&server.url("/a.png")).is_ok());
+    }
+
+    #[test]
+    fn a_proxy_is_trusted_with_where_the_request_goes() {
+        let proxy = ConnectProxy::start();
+        let server = Server::start(|_| Reply::ok("image/png", png()));
+        let fetcher = Fetcher::new(NetConfig {
+            proxy: ProxyMode::Url(proxy.base.clone()),
+            block_private_addresses: true,
+            ..config()
+        });
+        assert!(fetcher.fetch(&server.url("/a.png")).is_ok());
+    }
+}
+
 mod compression {
     use std::io::Write as _;
 

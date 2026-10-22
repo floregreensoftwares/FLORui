@@ -340,6 +340,9 @@ fn install_tray_waker(_event_loop: &EventLoop<UserEvent>) {}
 /// the fetcher, wake this loop to lay out and paint again; see
 /// [`florui_assets::url_image::on_remote_change`].
 fn install_image_waker(event_loop: &EventLoop<UserEvent>) {
+    // An event sent to a loop that ended before it handled it would leave this set, and
+    // the flag outlives the loop.
+    IMAGES_LOADED_PENDING.store(false, std::sync::atomic::Ordering::SeqCst);
     let proxy = event_loop.create_proxy();
     florui_assets::url_image::on_remote_change(move || {
         // A burst of pictures arriving together asks for one update, not one each.

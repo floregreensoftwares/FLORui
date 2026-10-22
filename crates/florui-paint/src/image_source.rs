@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use florui_assets::RasterFit;
-pub(crate) use florui_assets::url_image::{Loaded, Source, identity, load};
+pub(crate) use florui_assets::url_image::{Loaded, Source, identity, identity_of, load};
 use tiny_skia::Pixmap;
 
 /// The largest tile, in pixels on a side and in pixels altogether, that is
@@ -79,7 +79,7 @@ pub(crate) fn tile(url: &str, loaded: &Loaded, width: u32, height: u32) -> Optio
     // Drawing an SVG is the costly part, a resized box asks for the same tile
     // again, and so does every thread painting a band of the frame: it is kept
     // for all of them, drawn once by whichever asks first.
-    let key = format!("{}|{width}x{height}", identity(url));
+    let key = format!("{}|{width}x{height}", identity_of(url, loaded));
     let cell = {
         let mut tiles = TILES
             .lock()
