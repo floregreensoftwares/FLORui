@@ -342,9 +342,20 @@ fn install_tray_waker(_event_loop: &EventLoop<UserEvent>) {}
 fn install_image_waker(event_loop: &EventLoop<UserEvent>) {
     let proxy = event_loop.create_proxy();
     florui_assets::url_image::on_remote_change(move || {
-        let _ = proxy.send_event(UserEvent::ImagesLoaded);
+        // A burst of pictures arriving together asks for one update, not one each.
+        if !IMAGES_LOADED_PENDING.swap(true, std::sync::atomic::Ordering::SeqCst)
+            && proxy.send_event(UserEvent::ImagesLoaded).is_err()
+        {
+            // The loop is gone; the next one must not wait for an event that never comes.
+            IMAGES_LOADED_PENDING.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
     });
 }
+
+/// Whether an [`UserEvent::ImagesLoaded`] is on its way, so that the ones that follow it
+/// before it is handled are folded into it.
+static IMAGES_LOADED_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 fn run_windows_with(
     initial: Vec<WindowSpec>,
@@ -2582,6 +2593,8 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 }
             }
             UserEvent::ImagesLoaded => {
+                // Before updating: a picture that arrives meanwhile asks again.
+                IMAGES_LOADED_PENDING.store(false, std::sync::atomic::Ordering::SeqCst);
                 for state in self.windows.values_mut() {
                     state.update_and_request_redraw();
                 }

@@ -63,7 +63,7 @@ use std::io::Read as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use url::Url;
 
@@ -336,12 +336,34 @@ impl Fetcher {
             .push((waiter, Box::new(on_done)));
         if queue.workers < inner.config.max_concurrent.max(1) {
             queue.workers += 1;
-            let inner = Arc::clone(inner);
+            let worker = Arc::clone(inner);
             let spawned = std::thread::Builder::new()
                 .name("florui-fetch".to_owned())
-                .spawn(move || inner.work());
-            if spawned.is_err() {
+                .spawn(move || worker.work());
+            if let Err(error) = spawned {
                 queue.workers -= 1;
+                if queue.workers == 0 {
+                    // No thread can ever run what is queued (the process is at its limit
+                    // of threads), so everything waiting fails now rather than never
+                    // finishing. The callbacks run here, before `submit` returns.
+                    let failed = std::mem::take(&mut queue.waiting);
+                    queue.jobs.clear();
+                    drop(queue);
+                    let reason = FetchError::Transport(format!(
+                        "could not start a thread for the request: {error}"
+                    ));
+                    for job in failed {
+                        let waiters = std::mem::take(
+                            &mut *job
+                                .waiters
+                                .lock()
+                                .unwrap_or_else(|poison| poison.into_inner()),
+                        );
+                        for (_, callback) in waiters {
+                            callback(Err(reason.clone()));
+                        }
+                    }
+                }
             }
         }
         Ok(FetchTicket {
@@ -458,7 +480,11 @@ impl Inner {
                 job.started.store(true, Ordering::SeqCst);
                 job
             };
-            let outcome = self.run(&job).map(Arc::new);
+            // A panic in the client or a decoder must not take the worker (and with it one of
+            // the few places for requests) down with it.
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run(&job)))
+                .unwrap_or_else(|_| Err(FetchError::Transport("the request panicked".to_owned())))
+                .map(Arc::new);
             let waiters = {
                 let mut queue = self.lock();
                 if let Some(count) = queue.running_by_host.get_mut(&job.host) {
@@ -484,7 +510,11 @@ impl Inner {
                 std::mem::take(&mut *waiters)
             };
             for (_, callback) in waiters {
-                callback(outcome.clone());
+                // The callback is the caller's; one that panics does not stop the others.
+                let outcome = outcome.clone();
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                    callback(outcome)
+                }));
             }
             if matches!(&outcome, Ok(fetched) if fetched.origin == Origin::Stale) {
                 self.enqueue_refresh(&job);
@@ -610,13 +640,21 @@ impl Inner {
             if let Some(modified) = last_modified {
                 entry.last_modified = Some(modified);
             }
-            let policy = policy_of(entry.etag.as_deref(), entry.last_modified.as_deref());
             entry.stored_at = received_at;
-            entry.fresh_for = policy.fresh_for;
-            entry.stale_while_revalidate = policy.stale_while_revalidate;
-            entry.stale_if_error = policy.stale_if_error;
+            // A 304 only updates what it carries: one that says nothing about caching (many
+            // servers send just the validator and the date) leaves the lifetime the stored
+            // response had.
+            let keep = if cache_control.is_some() || expires.is_some() {
+                let policy = policy_of(entry.etag.as_deref(), entry.last_modified.as_deref());
+                entry.fresh_for = policy.fresh_for;
+                entry.stale_while_revalidate = policy.stale_while_revalidate;
+                entry.stale_if_error = policy.stale_if_error;
+                policy.store
+            } else {
+                true
+            };
             if let Some(disk) = &self.disk {
-                if policy.store {
+                if keep {
                     disk.renew(&entry);
                 } else {
                     disk.remove(&entry.url);
@@ -669,9 +707,17 @@ impl Inner {
         validators: Option<&Entry>,
     ) -> Result<ureq::http::Response<ureq::Body>, FetchError> {
         let mut url = parse_url(&job.url)?;
-        for _ in 0..=self.config.max_redirects {
+        let started = Instant::now();
+        for hop in 0..=self.config.max_redirects {
             if job.cancel.load(Ordering::SeqCst) {
                 return Err(FetchError::Cancelled);
+            }
+            // The client keeps one budget across the redirects it follows itself, and these
+            // are followed here, so the budget is carried by hand: each hop gets what is
+            // left, and so does the body that follows the last one.
+            let remaining = self.config.total_timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return Err(FetchError::Timeout);
             }
             let network = self.network();
             let client = match &network.direct {
@@ -685,7 +731,10 @@ impl Inner {
                 _ => &network.agent,
             };
             let mut request = client.get(url.as_str());
-            if let Some(entry) = validators {
+            // The validators belong to the address that was stored, not to wherever it
+            // redirects: sent on, they would leak to another host and a `304` from there
+            // would renew the wrong body.
+            if let (0, Some(entry)) = (hop, validators) {
                 if let Some(etag) = &entry.etag {
                     request = request.header("If-None-Match", etag);
                 }
@@ -693,6 +742,7 @@ impl Inner {
                     request = request.header("If-Modified-Since", modified);
                 }
             }
+            let request = request.config().timeout_global(Some(remaining)).build();
             self.requests.fetch_add(1, Ordering::Relaxed);
             let response = request.call().map_err(map_error)?;
             if !matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
@@ -910,26 +960,26 @@ static SHARED: OnceLock<Fetcher> = OnceLock::new();
 /// anything to hold a fetcher (a `background-image`, an `<img>`) load through. Takes
 /// effect only before the first use; afterwards nothing changes and this returns `false`.
 pub fn configure(config: NetConfig) -> bool {
+    // The lock is held across the check and the write, and `shared_fetcher` holds it while
+    // it takes the configuration and makes the fetcher, so a configuration is either the
+    // one the fetcher is made from or refused.
+    let mut pending = PENDING_CONFIG
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     if SHARED.get().is_some() {
         return false;
     }
-    *PENDING_CONFIG
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner()) = Some(config);
+    *pending = Some(config);
     true
 }
 
 /// The process-wide fetcher: one queue and one set of limits for every picture that names
 /// a URL, whichever window or element asked.
 pub fn shared_fetcher() -> &'static Fetcher {
-    SHARED.get_or_init(|| {
-        let config = PENDING_CONFIG
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .take()
-            .unwrap_or_default();
-        Fetcher::new(config)
-    })
+    let mut pending = PENDING_CONFIG
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    SHARED.get_or_init(|| Fetcher::new(pending.take().unwrap_or_default()))
 }
 
 #[cfg(test)]

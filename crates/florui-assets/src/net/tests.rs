@@ -279,6 +279,17 @@ fn what_the_type_and_the_bytes_say_must_agree() {
         ok(Some("image/avif"), &png),
         Err(FetchError::NotAnImage { .. })
     ));
+    // An error page served as `200` is no SVG, whatever the type says or leaves out.
+    for declared in [None, Some("application/octet-stream")] {
+        assert!(matches!(
+            ok(declared, html),
+            Err(FetchError::NotAnImage { .. })
+        ));
+    }
+    assert!(matches!(
+        ok(Some("image/svg+xml"), html),
+        Err(FetchError::ContentTypeMismatch { .. })
+    ));
     // Nothing says what it is.
     assert!(matches!(
         ok(None, b"hello"),
@@ -554,6 +565,39 @@ mod caching {
     }
 
     #[test]
+    fn a_304_that_says_nothing_about_caching_keeps_the_lifetime_of_the_stored_response() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = Server::start(|request| {
+            if request.headers.contains_key("if-none-match") {
+                // Only the validator, as many servers and CDNs answer.
+                Reply::status(304).header("ETag", "\"v1\"")
+            } else {
+                Reply::ok("image/png", png())
+                    .header("ETag", "\"v1\"")
+                    .header("Cache-Control", "max-age=3600, stale-if-error=600")
+            }
+        });
+        let url = server.url("/cover.png");
+        let fetcher = Fetcher::new(cached_config(&dir));
+        fetcher.fetch(&url).unwrap();
+        // Two hours later: stale.
+        let disk = fetcher.inner.disk.as_ref().unwrap();
+        let (mut entry, body) = disk.lookup(&url, unix_now()).unwrap();
+        entry.stored_at -= 7200;
+        disk.store(&entry, &body);
+        assert_eq!(fetcher.fetch(&url).unwrap().origin, Origin::Revalidated);
+        let (renewed, _) = disk.lookup(&url, unix_now()).unwrap();
+        assert_eq!(
+            (renewed.fresh_for, renewed.stale_if_error),
+            (3600, 600),
+            "the lifetime is the stored one"
+        );
+        assert!(renewed.is_fresh(unix_now()));
+        // Fresh again: no request.
+        assert_eq!(fetcher.fetch(&url).unwrap().origin, Origin::Cache);
+    }
+
+    #[test]
     fn a_changed_image_replaces_the_stored_one() {
         let dir = tempfile::tempdir().unwrap();
         let version = Arc::new(std::sync::atomic::AtomicUsize::new(1));
@@ -795,6 +839,97 @@ mod staleness {
         assert!(wait_until(|| server.hits() == 2 && idle(&fetcher)));
         let again = fetcher.fetch(&url).unwrap();
         assert_eq!((again.origin, again.bytes.clone()), (Origin::Stale, png()));
+    }
+}
+
+mod robustness {
+    use super::*;
+
+    #[test]
+    fn a_callback_that_panics_does_not_take_the_worker_down() {
+        let server = Server::start(|_| Reply::ok("image/png", png()));
+        let fetcher = Fetcher::new(NetConfig {
+            max_concurrent: 1,
+            ..config()
+        });
+        let _ticket = fetcher
+            .submit(&server.url("/a.png"), |_| {
+                panic!("the caller's callback panicked")
+            })
+            .unwrap();
+        // With one worker, the next request is served only if it survived.
+        assert!(fetcher.fetch(&server.url("/b.png")).is_ok());
+        assert!(wait_until(|| idle(&fetcher)));
+    }
+
+    #[test]
+    fn the_whole_request_has_one_time_budget_across_redirects() {
+        // Every hop answers after 300 ms and sends the client on: five hops are 1.5 s, and
+        // the budget for all of them is 700 ms.
+        let server = Server::start(|request| {
+            let n: u32 = request.path.trim_start_matches('/').parse().unwrap_or(0);
+            Reply::status(302)
+                .header("Location", &format!("/{}", n + 1))
+                .delayed(Duration::from_millis(300))
+        });
+        let fetcher = Fetcher::new(NetConfig {
+            total_timeout: Duration::from_millis(700),
+            max_redirects: 10,
+            ..config()
+        });
+        let started = Instant::now();
+        assert_eq!(
+            fetcher.fetch(&server.url("/0")).unwrap_err(),
+            FetchError::Timeout
+        );
+        assert!(
+            started.elapsed() < Duration::from_millis(1400),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn the_validators_go_to_the_stored_address_and_not_on_to_where_it_redirects() {
+        let dir = tempfile::tempdir().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let sender = std::sync::Mutex::new(sender);
+        let stale = std::sync::atomic::AtomicBool::new(false);
+        let server = Server::start(move |request| {
+            sender
+                .lock()
+                .unwrap()
+                .send((
+                    request.path.clone(),
+                    request.headers.get("if-none-match").cloned(),
+                ))
+                .unwrap();
+            match request.path.as_str() {
+                "/old.png" if stale.swap(true, Ordering::SeqCst) => {
+                    Reply::status(302).header("Location", "/final.png")
+                }
+                "/old.png" => Reply::ok("image/png", png())
+                    .header("ETag", "\"old\"")
+                    .header("Cache-Control", "max-age=0"),
+                _ => Reply::ok("image/png", png()).header("ETag", "\"other\""),
+            }
+        });
+        let fetcher = Fetcher::new(NetConfig {
+            cache_dir: Some(dir.path().to_owned()),
+            ..config()
+        });
+        let url = server.url("/old.png");
+        fetcher.fetch(&url).unwrap();
+        fetcher.fetch(&url).unwrap();
+        let sent: Vec<_> = receiver.try_iter().collect();
+        assert_eq!(
+            sent,
+            [
+                ("/old.png".to_owned(), None),
+                ("/old.png".to_owned(), Some("\"old\"".to_owned())),
+                ("/final.png".to_owned(), None),
+            ]
+        );
     }
 }
 

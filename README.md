@@ -321,7 +321,8 @@ florui_platform::network::configure(florui_platform::network::NetConfig {
 - **Cache:** with `cache_dir` set, responses are kept on disk under `Cache-Control`, `Expires`, `Age`, `ETag` and
   `Last-Modified` (a stale one is asked again with a conditional request), within 256 MiB. With `stale-while-revalidate`
   a stale picture is used at once while a fresh one is fetched behind it, and with `stale-if-error` it stands in when the
-  network or the server (a `5xx`) fails; `no-cache` and `must-revalidate` turn both off. `Vary` other than `*` is not part of the key,
+  network or the server (a `5xx`) fails; `no-cache` and `must-revalidate` turn both off. The validators belong to the stored
+  address, so a picture whose address redirects is downloaded again when it goes stale. `Vary` other than `*` is not part of the key,
   because every request sends the same headers. A decoded picture is shared by every `<img>` and window that uses it and
   dropped with the last one, within the same memory budget as any other image; a picture a `url(...)` holds for the next
   frame is kept within 256 MiB, least recently used first.

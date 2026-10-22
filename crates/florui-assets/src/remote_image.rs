@@ -218,16 +218,19 @@ fn finish(
     generation: u64,
     outcome: Result<Arc<crate::net::Fetched>, crate::FetchError>,
 ) {
-    let built = match outcome {
+    // A decoder that panics on a hostile file must leave the picture failed, not pending for
+    // ever.
+    let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match outcome {
         Ok(fetched) => {
             let size = fetched.bytes.len() as u64;
-            crate::url_image::build(fetched.bytes.clone(), None, |bytes| {
+            crate::url_image::build(&fetched.bytes, None, |bytes| {
                 cache().get_or_decode(AssetId::Url(url.to_owned()), bytes, DecodeParams::Native)
             })
             .map(|loaded| (loaded, size))
         }
         Err(error) => Err(error.to_string()),
-    };
+    }))
+    .unwrap_or_else(|_| Err("the decoder panicked".to_owned()));
     if let Err(reason) = &built {
         report(url, reason);
     }
