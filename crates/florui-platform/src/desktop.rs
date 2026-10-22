@@ -344,7 +344,7 @@ fn install_image_waker(event_loop: &EventLoop<UserEvent>) {
     // the flag outlives the loop.
     IMAGES_LOADED_PENDING.store(false, std::sync::atomic::Ordering::SeqCst);
     let proxy = event_loop.create_proxy();
-    florui_assets::url_image::on_remote_change(move || {
+    let subscription = florui_assets::url_image::on_remote_change(move || {
         // A burst of pictures arriving together asks for one update, not one each.
         if !IMAGES_LOADED_PENDING.swap(true, std::sync::atomic::Ordering::SeqCst)
             && proxy.send_event(UserEvent::ImagesLoaded).is_err()
@@ -353,6 +353,13 @@ fn install_image_waker(event_loop: &EventLoop<UserEvent>) {
             IMAGES_LOADED_PENDING.store(false, std::sync::atomic::Ordering::SeqCst);
         }
     });
+    // This loop's listener replaces the one of the loop before it, and nobody else's: other
+    // listeners of the process are left alone.
+    static CURRENT: std::sync::Mutex<Option<florui_assets::url_image::Subscription>> =
+        std::sync::Mutex::new(None);
+    *CURRENT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(subscription);
 }
 
 /// Whether an [`UserEvent::ImagesLoaded`] is on its way, so that the ones that follow it

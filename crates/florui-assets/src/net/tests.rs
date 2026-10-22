@@ -1314,6 +1314,17 @@ mod scheduling {
     }
 
     #[test]
+    fn joining_a_request_in_flight_starts_no_thread() {
+        let server =
+            Server::start(|_| Reply::ok("image/png", png()).delayed(Duration::from_millis(300)));
+        let fetcher = fetcher();
+        let _tickets: Vec<_> = (0..6)
+            .map(|_| fetcher.submit(&server.url("/a.png"), |_| {}).unwrap())
+            .collect();
+        assert_eq!(fetcher.inner.lock().workers, 1, "one request, one thread");
+    }
+
+    #[test]
     fn asking_for_a_url_that_is_in_flight_joins_it() {
         let server =
             Server::start(|_| Reply::ok("image/png", png()).delayed(Duration::from_millis(200)));

@@ -53,27 +53,65 @@ pub(crate) enum Plan {
         url: String,
         bypass: Vec<String>,
     },
+    /// The environment's proxy, with the bypass list of its `NO_PROXY` handled here instead of
+    /// by the client, so that the hosts that bypass it can be reached through a client that
+    /// checks addresses (see `NetConfig::block_private_addresses`).
+    EnvironmentChecked {
+        bypass: Vec<String>,
+    },
     /// Requests must fail, with this reason.
     Unusable(String),
 }
 
-/// `environment_set`: whether `HTTPS_PROXY` and its kind are in the environment. `system`
-/// reads the operating system's settings, and is called only when it is needed.
+/// What the environment says about proxies.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct Environment {
+    /// `HTTPS_PROXY` and its kind: a proxy is set.
+    pub set: bool,
+    /// `NO_PROXY`, as written.
+    pub no_proxy: Vec<String>,
+}
+
+impl Environment {
+    pub fn read() -> Self {
+        Self {
+            set: ureq::Proxy::try_from_env().is_some(),
+            no_proxy: std::env::var("NO_PROXY")
+                .or_else(|_| std::env::var("no_proxy"))
+                .into_iter()
+                .collect(),
+        }
+    }
+}
+
+/// `guard`: whether addresses are checked, which the client does not do for the hosts that its
+/// own reading of `NO_PROXY` sends directly. `system` reads the operating system's settings,
+/// and is called only when it is needed.
 pub(crate) fn plan(
     mode: &ProxyMode,
     no_proxy: &[String],
-    environment_set: bool,
+    environment: &Environment,
+    guard: bool,
     system: impl FnOnce() -> System,
 ) -> Plan {
+    let from_environment = || {
+        if guard && environment.set {
+            Plan::EnvironmentChecked {
+                bypass: environment.no_proxy.clone(),
+            }
+        } else {
+            Plan::Environment
+        }
+    };
     match mode {
-        ProxyMode::FromEnvironment => Plan::Environment,
+        ProxyMode::FromEnvironment => from_environment(),
         ProxyMode::Direct => Plan::Direct,
         ProxyMode::Url(url) => Plan::Proxy {
             url: url.clone(),
             bypass: no_proxy.to_vec(),
         },
         // What the user set for this process wins over what the desktop says.
-        ProxyMode::System if environment_set => Plan::Environment,
+        ProxyMode::System if environment.set => from_environment(),
         ProxyMode::System => match system() {
             System::Direct => Plan::Direct,
             System::Manual { url, mut bypass } => {
@@ -625,26 +663,54 @@ mod tests {
     #[test]
     fn the_environment_wins_over_the_desktop_and_nothing_reads_the_desktop_for_other_modes() {
         let never = || -> System { unreachable!("the system settings were read") };
+        let set = Environment {
+            set: true,
+            no_proxy: vec![".internal,10.0.0.0/8".to_owned()],
+        };
+        let unset = Environment::default();
         assert_eq!(
-            plan(&ProxyMode::System, &[], true, never),
+            plan(&ProxyMode::System, &[], &set, false, never),
             Plan::Environment
         );
         assert_eq!(
-            plan(&ProxyMode::FromEnvironment, &[], false, never),
+            plan(&ProxyMode::FromEnvironment, &[], &unset, false, never),
             Plan::Environment
         );
-        assert_eq!(plan(&ProxyMode::Direct, &[], true, never), Plan::Direct);
+        assert_eq!(
+            plan(&ProxyMode::Direct, &[], &set, false, never),
+            Plan::Direct
+        );
         assert_eq!(
             plan(
                 &ProxyMode::Url("http://p:1".to_owned()),
                 &["a.example".to_owned()],
-                true,
+                &set,
+                false,
                 never
             ),
             Plan::Proxy {
                 url: "http://p:1".to_owned(),
                 bypass: vec!["a.example".to_owned()]
             }
+        );
+        // When addresses are checked, the environment's bypass list is handled here, so that
+        // the hosts it sends directly go through the checked client too.
+        assert_eq!(
+            plan(&ProxyMode::FromEnvironment, &[], &set, true, never),
+            Plan::EnvironmentChecked {
+                bypass: vec![".internal,10.0.0.0/8".to_owned()]
+            }
+        );
+        assert_eq!(
+            plan(&ProxyMode::System, &[], &set, true, never),
+            Plan::EnvironmentChecked {
+                bypass: vec![".internal,10.0.0.0/8".to_owned()]
+            }
+        );
+        // No proxy in the environment: nothing to bypass, the client is checked as it is.
+        assert_eq!(
+            plan(&ProxyMode::FromEnvironment, &[], &unset, true, never),
+            Plan::Environment
         );
     }
 
@@ -658,6 +724,7 @@ mod tests {
             plan(
                 &ProxyMode::System,
                 &["extra.example".to_owned()],
+                &Environment::default(),
                 false,
                 system
             ),
@@ -667,16 +734,26 @@ mod tests {
             }
         );
         assert_eq!(
-            plan(&ProxyMode::System, &[], false, || System::Direct),
+            plan(
+                &ProxyMode::System,
+                &[],
+                &Environment::default(),
+                false,
+                || System::Direct
+            ),
             Plan::Direct
         );
     }
 
     #[test]
     fn a_proxy_chosen_by_a_script_is_refused_not_bypassed() {
-        let plan = plan(&ProxyMode::System, &[], false, || {
-            System::Script("a proxy auto-configuration script".to_owned())
-        });
+        let plan = plan(
+            &ProxyMode::System,
+            &[],
+            &Environment::default(),
+            false,
+            || System::Script("a proxy auto-configuration script".to_owned()),
+        );
         assert!(
             matches!(&plan, Plan::Unusable(why) if why.contains("PAC") || why.contains("script"))
         );

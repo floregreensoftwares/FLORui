@@ -4,7 +4,7 @@
 //! cannot be waited for there. So asking for one that is not here starts the download in
 //! the background and answers "not available" (the layer draws nothing and a list marker
 //! is the broken one), and when the picture is decoded, or the download failed, the
-//! listener set with [`on_change`] is called so the host lays out and paints again. The
+//! listener added with [`on_change`] is called so the host lays out and paints again. The
 //! next ask finds it.
 //!
 //! Downloads go through [`crate::net::shared_fetcher`], so they share its queue, its
@@ -42,6 +42,11 @@ const RETRY_AFTER: Duration = Duration::from_secs(30);
 
 /// How long a picture that is ready is shown before it is asked for again.
 const RECHECK_AFTER: Duration = Duration::from_secs(10 * 60);
+
+/// How many failures are kept before the ones that are due for a retry are let go, and how many
+/// addresses have their failure remembered as said.
+const MOST_FAILURES: usize = 512;
+const MOST_REPORTED: usize = 4096;
 
 /// How long until the next recheck when the last one was answered with a stale copy and the
 /// fresh one was being fetched behind it.
@@ -100,9 +105,46 @@ struct Store {
     clock: u64,
     next_generation: u64,
     held: u64,
+    /// The addresses whose failure has been said on standard error, so that a picture that
+    /// stays broken is said once and not again at every retry.
+    reported: std::collections::HashSet<String>,
 }
 
 impl Store {
+    /// Says why `url` cannot be used, once until it has loaded again.
+    fn report(&mut self, url: &str, reason: &str) {
+        if self.reported.len() >= MOST_REPORTED {
+            self.reported.clear();
+        }
+        if self.reported.insert(url.to_owned()) {
+            report(url, reason);
+        }
+    }
+
+    /// Puts a failure in the slot of `url`, and lets go of the failures that can be tried
+    /// again anyway when there are many: a feed of thousands of dead addresses must not be
+    /// kept for ever.
+    fn fail(&mut self, url: &str) {
+        let generation = self.generation();
+        self.slots.insert(
+            url.to_owned(),
+            Slot::Failed {
+                generation,
+                at: Instant::now(),
+            },
+        );
+        let failures = self
+            .slots
+            .values()
+            .filter(|slot| matches!(slot, Slot::Failed { .. }))
+            .count();
+        if failures > MOST_FAILURES {
+            self.slots.retain(
+                |_, slot| !matches!(slot, Slot::Failed { at, .. } if at.elapsed() >= RETRY_AFTER),
+            );
+        }
+    }
+
     fn generation(&mut self) -> u64 {
         self.next_generation += 1;
         self.next_generation
@@ -130,7 +172,9 @@ impl Store {
 
 static STORE: Mutex<Option<Store>> = Mutex::new(None);
 type Listener = Arc<dyn Fn() + Send + Sync>;
-static LISTENER: Mutex<Option<Listener>> = Mutex::new(None);
+/// Everyone who wants to hear of arrivals, by the number their subscription has.
+static LISTENERS: Mutex<Vec<(u64, Listener)>> = Mutex::new(Vec::new());
+static NEXT_LISTENER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 fn with_store<T>(work: impl FnOnce(&mut Store) -> T) -> T {
     let mut guard = STORE
@@ -152,21 +196,40 @@ pub fn is_remote(url: &str) -> bool {
     has(b"http://") || has(b"https://")
 }
 
+/// What keeps a listener added with [`on_change`] listening: dropping it removes the listener.
+#[must_use = "the listener is removed when this is dropped"]
+pub struct Subscription(u64);
+
+impl Drop for Subscription {
+    fn drop(&mut self) {
+        LISTENERS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|(id, _)| *id != self.0);
+    }
+}
+
 /// Calls `listener` (from a thread of the fetcher) whenever a picture that was asked for
-/// has loaded or failed to, so the host can lay out and paint again. One listener serves
-/// the whole process; setting another replaces it.
-pub fn on_change(listener: impl Fn() + Send + Sync + 'static) {
-    *LISTENER
+/// has loaded or failed to, so a host can lay out and paint again. Any number of listeners
+/// can listen at once, each until its [`Subscription`] is dropped.
+pub fn on_change(listener: impl Fn() + Send + Sync + 'static) -> Subscription {
+    let id = NEXT_LISTENER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    LISTENERS
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(listener));
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push((id, Arc::new(listener)));
+    Subscription(id)
 }
 
 fn notify() {
-    let listener = LISTENER
+    // Called outside the lock: a listener may add or drop a subscription.
+    let listeners: Vec<Listener> = LISTENERS
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
-    if let Some(listener) = listener {
+        .iter()
+        .map(|(_, listener)| Arc::clone(listener))
+        .collect();
+    for listener in listeners {
         listener();
     }
 }
@@ -280,6 +343,7 @@ enum Started {
 /// ended or been dropped in the meantime (the fetcher can answer before `start` returns),
 /// in which case the ticket is let go.
 fn attach(store: &mut Store, url: &str, generation: u64, refresh: bool, started: Started) {
+    let mut said = None;
     match (store.slots.get_mut(url), started) {
         (
             Some(Slot::Pending {
@@ -298,15 +362,8 @@ fn attach(store: &mut Store, url: &str, generation: u64, refresh: bool, started:
         (Some(slot @ Slot::Pending { .. }), Started::Refused(reason))
             if !refresh && slot.generation() == generation =>
         {
-            report(url, &reason);
-            let generation = store.generation();
-            store.slots.insert(
-                url.to_owned(),
-                Slot::Failed {
-                    generation,
-                    at: Instant::now(),
-                },
-            );
+            store.report(url, &reason);
+            store.fail(url);
         }
         (
             Some(Slot::Ready {
@@ -317,13 +374,16 @@ fn attach(store: &mut Store, url: &str, generation: u64, refresh: bool, started:
             }),
             Started::Refused(reason),
         ) if refresh && refreshing.as_ref().is_some_and(|(g, _)| *g == generation) => {
-            report(url, &reason);
+            said = Some(reason);
             *refreshing = None;
             // Not again at once.
             *checked_at = Instant::now();
             *recheck_after = RECHECK_AFTER;
         }
         _ => {}
+    }
+    if let Some(reason) = said {
+        store.report(url, &reason);
     }
 }
 
@@ -412,6 +472,15 @@ enum Built {
     Failed(String),
 }
 
+/// The identity of the decode of one download of `url`: the address and the digest of its
+/// bytes, so a picture the server replaced is a different entry from the old one (which may
+/// still be alive, held by what is painting it) and neither can be handed back for the
+/// other, whatever runs at the same time.
+#[cfg(feature = "net")]
+fn cache_id(url: &str, digest: u64) -> AssetId {
+    AssetId::Url(format!("{url}\u{0}{digest:016x}"))
+}
+
 /// A digest of `bytes` that only has to tell two downloads apart.
 #[cfg(feature = "net")]
 fn digest(bytes: &[u8]) -> u64 {
@@ -457,13 +526,9 @@ fn finish(
                     stale: fetched.origin == crate::net::Origin::Stale,
                 };
             }
-            // These are bytes just downloaded. A decode of older ones may still be alive,
-            // held by a picture that was shown or is being painted, and would be handed
-            // back for the new bytes.
-            cache().invalidate(&AssetId::Url(url.to_owned()));
             let size = fetched.bytes.len() as u64;
             match crate::url_image::build(&fetched.bytes, None, false, |bytes| {
-                cache().get_or_decode(AssetId::Url(url.to_owned()), bytes, DecodeParams::Native)
+                cache().get_or_decode(cache_id(url, sum), bytes, DecodeParams::Native)
             }) {
                 Ok(loaded) => Built::Loaded(
                     loaded,
@@ -480,9 +545,6 @@ fn finish(
         Err(error) => Built::Failed(error.to_string()),
     }))
     .unwrap_or_else(|_| Built::Failed("the decoder panicked".to_owned()));
-    if let Built::Failed(reason) = &built {
-        report(url, reason);
-    }
     let changed = with_store(|store| {
         enum Was {
             /// Nobody asks any more (it was dropped from the store, and the download with it).
@@ -504,6 +566,13 @@ fn finish(
         let new_generation = store.generation();
         store.clock += 1;
         let used = store.clock;
+        match &built {
+            Built::Failed(reason) => store.report(url, reason),
+            Built::Loaded(..) => {
+                store.reported.remove(url);
+            }
+            Built::Unchanged { .. } => {}
+        }
         match (was, built) {
             (Was::Pending, Built::Loaded(loaded, size, sum, stale)) => {
                 let bytes = retained(&loaded, size);
@@ -531,13 +600,7 @@ fn finish(
                 true
             }
             (Was::Pending, _) => {
-                store.slots.insert(
-                    url.to_owned(),
-                    Slot::Failed {
-                        generation: new_generation,
-                        at: Instant::now(),
-                    },
-                );
+                store.fail(url);
                 true
             }
             (Was::Refreshed, Built::Loaded(loaded, size, sum, stale)) => {
@@ -602,7 +665,8 @@ fn finish(
 fn retained(loaded: &Loaded, encoded: u64) -> u64 {
     match &loaded.source {
         crate::url_image::Source::Raster(image) => image.retained_bytes(),
-        crate::url_image::Source::Vector(_) => encoded,
+        // The parsed tree and what is drawn from it are many times the document.
+        crate::url_image::Source::Vector(_) => encoded.saturating_mul(8),
     }
 }
 
@@ -662,6 +726,73 @@ mod tests {
         store.held = MAX_HELD_BYTES * 2;
         store.evict("c");
         assert!(store.slots.contains_key("c") && !store.slots.contains_key("b"));
+    }
+
+    #[test]
+    fn every_listener_hears_and_a_dropped_subscription_stops_hearing() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (first, second) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        let (a, b) = (Arc::clone(&first), Arc::clone(&second));
+        let one = on_change(move || {
+            a.fetch_add(1, Ordering::SeqCst);
+        });
+        let _two = on_change(move || {
+            b.fetch_add(1, Ordering::SeqCst);
+        });
+        notify();
+        assert!(first.load(Ordering::SeqCst) >= 1 && second.load(Ordering::SeqCst) >= 1);
+        drop(one);
+        let before = (first.load(Ordering::SeqCst), second.load(Ordering::SeqCst));
+        notify();
+        assert_eq!(
+            first.load(Ordering::SeqCst),
+            before.0,
+            "dropped, it hears no more"
+        );
+        assert!(
+            second.load(Ordering::SeqCst) > before.1,
+            "the other still does"
+        );
+    }
+
+    #[test]
+    fn a_failure_is_said_once_and_the_failures_kept_are_limited() {
+        let mut store = Store::default();
+        // Said once however many times it fails.
+        store.report("http://example.invalid/a.png", "down");
+        assert!(store.reported.contains("http://example.invalid/a.png"));
+        let said = store.reported.len();
+        store.report("http://example.invalid/a.png", "down again");
+        assert_eq!(store.reported.len(), said);
+        // Thousands of dead addresses: the ones that can be retried anyway are let go.
+        for n in 0..(MOST_FAILURES + 50) {
+            store.fail(&format!("http://example.invalid/{n}.png"));
+            // Old enough to be due for a retry.
+            if let Some(Slot::Failed { at, .. }) = store
+                .slots
+                .get_mut(&format!("http://example.invalid/{n}.png"))
+            {
+                *at = Instant::now() - RETRY_AFTER - Duration::from_secs(1);
+            }
+        }
+        assert!(
+            store.slots.len() <= MOST_FAILURES + 1,
+            "{} kept",
+            store.slots.len()
+        );
+    }
+
+    #[cfg(feature = "net")]
+    #[test]
+    fn two_downloads_of_one_address_with_different_bytes_do_not_share_a_decode() {
+        assert_ne!(
+            cache_id("http://example.invalid/a.png", 1),
+            cache_id("http://example.invalid/a.png", 2)
+        );
+        assert_eq!(
+            cache_id("http://example.invalid/a.png", 1),
+            cache_id("http://example.invalid/a.png", 1)
+        );
     }
 
     #[cfg(feature = "net")]
@@ -734,7 +865,7 @@ mod tests {
             direct();
             let heard = Arc::new(AtomicUsize::new(0));
             let count = Arc::clone(&heard);
-            crate::url_image::on_remote_change(move || {
+            let _subscription = crate::url_image::on_remote_change(move || {
                 count.fetch_add(1, Ordering::SeqCst);
             });
             let server = Server::start(|request| match request.path.as_str() {
@@ -869,7 +1000,7 @@ mod tests {
             let bytes = png_of(2, 2);
             let sum = digest(&bytes);
             let loaded = crate::url_image::build(&bytes, None, false, |b| {
-                cache().get_or_decode(AssetId::Url(url.to_owned()), b, DecodeParams::Native)
+                cache().get_or_decode(cache_id(url, sum), b, DecodeParams::Native)
             })
             .unwrap();
             with_store(|store| {

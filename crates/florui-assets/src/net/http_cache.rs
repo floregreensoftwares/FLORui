@@ -195,6 +195,8 @@ pub(crate) struct Entry {
     pub stale_if_error: u64,
     /// The size of the body, to tell a whole file from one cut short.
     pub length: u64,
+    /// Which body file is this response's (see [`DiskCache`]); set when it is stored.
+    pub body_id: u64,
 }
 
 impl Entry {
@@ -250,6 +252,7 @@ impl Entry {
         );
         line("stale-if-error", &self.stale_if_error.to_string());
         line("length", &self.length.to_string());
+        line("body", &format!("{:016x}", self.body_id));
         text
     }
 
@@ -260,6 +263,7 @@ impl Entry {
         }
         let (mut url, mut etag, mut last_modified, mut content_type) = (None, None, None, None);
         let (mut stored_at, mut fresh_for, mut length) = (None, None, None);
+        let mut body_id = None;
         let (mut while_revalidating, mut if_error) = (0, 0);
         for line in lines {
             let (key, value) = line.split_once(": ")?;
@@ -273,6 +277,7 @@ impl Entry {
                 "stale-while-revalidate" => while_revalidating = value.parse().ok()?,
                 "stale-if-error" => if_error = value.parse().ok()?,
                 "length" => length = value.parse().ok(),
+                "body" => body_id = u64::from_str_radix(value, 16).ok(),
                 _ => {}
             }
         }
@@ -286,6 +291,7 @@ impl Entry {
             stale_while_revalidate: while_revalidating,
             stale_if_error: if_error,
             length: length?,
+            body_id: body_id?,
         })
     }
 }
@@ -293,9 +299,12 @@ impl Entry {
 /// A directory of stored responses, two files each (`<hash>.meta` and `<hash>.body`),
 /// kept under a byte budget by dropping the least recently used.
 ///
-/// Files are written to a temporary name and renamed, the body before the metadata, so
-/// that another process, or a crash, never leaves a metadata file that names a body that
-/// is not whole: an entry whose body is missing or of another length counts as absent.
+/// Files are written to a temporary name and renamed, the body before the metadata, and each
+/// response's body has a name of its own (`<hash>.<id>.body`, the id kept in the metadata):
+/// a response stored over an older one never replaces the body that the older metadata
+/// names, so another process, or a crash, cannot pair new bytes with old validators. The
+/// metadata is what makes an entry exist; an entry whose body is missing or of another
+/// length counts as absent.
 pub(crate) struct DiskCache {
     dir: PathBuf,
     max_bytes: u64,
@@ -330,8 +339,9 @@ impl DiskCache {
         self.dir.join(format!("{}.meta", stem(url)))
     }
 
-    fn body_path(&self, url: &str) -> PathBuf {
-        self.dir.join(format!("{}.body", stem(url)))
+    fn body_path(&self, entry: &Entry) -> PathBuf {
+        self.dir
+            .join(format!("{}.{:016x}.body", stem(&entry.url), entry.body_id))
     }
 
     /// The stored response for `url`, if its metadata is there and its body is there and
@@ -340,7 +350,7 @@ impl DiskCache {
     pub fn lookup_entry(&self, url: &str, now: u64) -> Option<Entry> {
         let meta_path = self.meta_path(url);
         let entry = Entry::decode(&fs::read_to_string(&meta_path).ok()?)?;
-        if entry.url != url || fs::metadata(self.body_path(url)).ok()?.len() != entry.length {
+        if entry.url != url || fs::metadata(self.body_path(&entry)).ok()?.len() != entry.length {
             return None;
         }
         touch(&meta_path, now);
@@ -350,7 +360,7 @@ impl DiskCache {
     /// The body of `entry`, read when it is needed: a stale entry that the server answers
     /// with a new body never needs it. `None` if it is gone or not whole by now.
     pub fn read_body(&self, entry: &Entry) -> Option<Vec<u8>> {
-        let body = fs::read(self.body_path(&entry.url)).ok()?;
+        let body = fs::read(self.body_path(entry)).ok()?;
         (body.len() as u64 == entry.length).then_some(body)
     }
 
@@ -374,11 +384,20 @@ impl DiskCache {
             return;
         }
         let url = entry.url.as_str();
-        if write_atomically(&self.body_path(url), body).is_err()
+        // The response that this one replaces, whose body goes once the new metadata is in.
+        let replaced = self.read_meta(url);
+        let entry = Entry {
+            body_id: fresh_id(),
+            ..entry.clone()
+        };
+        if write_atomically(&self.body_path(&entry), body).is_err()
             || write_atomically(&self.meta_path(url), entry.encode().as_bytes()).is_err()
         {
-            self.remove(url);
+            let _ = fs::remove_file(self.body_path(&entry));
             return;
+        }
+        if let Some(replaced) = replaced {
+            let _ = fs::remove_file(self.body_path(&replaced));
         }
         // Often enough that the directory cannot run far over its budget: every few stores,
         // and whenever a quarter of the budget has been written since the last look.
@@ -402,8 +421,13 @@ impl DiskCache {
             .ok()
             .and_then(|text| Entry::decode(&text))
             .is_some_and(|now| {
-                (&now.etag, &now.last_modified, now.length)
-                    == (&before.etag, &before.last_modified, before.length)
+                (now.body_id, &now.etag, &now.last_modified, now.length)
+                    == (
+                        before.body_id,
+                        &before.etag,
+                        &before.last_modified,
+                        before.length,
+                    )
             });
         if same {
             let _ = write_atomically(&self.meta_path(&entry.url), entry.encode().as_bytes());
@@ -411,8 +435,17 @@ impl DiskCache {
     }
 
     pub fn remove(&self, url: &str) {
+        let entry = self.read_meta(url);
         let _ = fs::remove_file(self.meta_path(url));
-        let _ = fs::remove_file(self.body_path(url));
+        if let Some(entry) = entry {
+            let _ = fs::remove_file(self.body_path(&entry));
+        }
+    }
+
+    /// The metadata of `url`, whether or not its body is there.
+    fn read_meta(&self, url: &str) -> Option<Entry> {
+        Entry::decode(&fs::read_to_string(self.meta_path(url)).ok()?)
+            .filter(|entry| entry.url == url)
     }
 
     /// Drops the files left by stores that did not finish, then the least recently used
@@ -426,7 +459,10 @@ impl DiskCache {
             now.duration_since(modified)
                 .is_ok_and(|age| age >= LEFTOVER_AFTER)
         };
-        let mut entries: Vec<(SystemTime, u64, PathBuf)> = Vec::new();
+        // Entries by age with their size and files, and the bodies that some metadata names.
+        let mut entries: Vec<(SystemTime, u64, PathBuf, PathBuf)> = Vec::new();
+        let mut named: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        let mut bodies: Vec<(PathBuf, SystemTime)> = Vec::new();
         let mut total = 0u64;
         for item in listing.flatten() {
             let path = item.path();
@@ -434,18 +470,35 @@ impl DiskCache {
             let modified = meta.modified().unwrap_or(UNIX_EPOCH);
             match path.extension().and_then(|e| e.to_str()) {
                 Some("meta") => {
-                    let body_len = fs::metadata(path.with_extension("body")).map_or(0, |m| m.len());
+                    let Some(entry) = fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|text| Entry::decode(&text))
+                    else {
+                        // Not metadata of this version: nothing names its body.
+                        if old(modified) {
+                            let _ = fs::remove_file(&path);
+                        }
+                        continue;
+                    };
+                    let body = self.body_path(&entry);
+                    let body_len = fs::metadata(&body).map_or(0, |m| m.len());
                     let size = meta.len() + body_len;
                     total += size;
-                    entries.push((modified, size, path));
+                    named.insert(body.clone());
+                    entries.push((modified, size, path, body));
                 }
-                Some("body") if !path.with_extension("meta").exists() && old(modified) => {
-                    let _ = fs::remove_file(&path);
-                }
+                Some("body") => bodies.push((path, modified)),
                 Some(extension) if extension.starts_with("tmp") && old(modified) => {
                     let _ = fs::remove_file(&path);
                 }
                 _ => {}
+            }
+        }
+        // A body that no metadata names was left by a store that did not finish (or by an
+        // older version of the cache): it goes once it is too old to be one in flight.
+        for (path, modified) in bodies {
+            if !named.contains(&path) && old(modified) {
+                let _ = fs::remove_file(path);
             }
         }
         if total <= self.max_bytes {
@@ -453,15 +506,28 @@ impl DiskCache {
         }
         entries.sort_by_key(|(modified, ..)| *modified);
         let goal = self.max_bytes / 10 * 9;
-        for (_, size, path) in entries {
+        for (_, size, path, body) in entries {
             if total <= goal {
                 break;
             }
-            let _ = fs::remove_file(path.with_extension("body"));
+            let _ = fs::remove_file(&body);
             let _ = fs::remove_file(&path);
             total -= size;
         }
     }
+}
+
+/// A number no other response stored here shares, in this process or another: the time, the
+/// process and a count, mixed.
+fn fresh_id() -> u64 {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos() as u64);
+    let mixed = nanos
+        ^ (u64::from(std::process::id()) << 32)
+        ^ u64::from(COUNTER.fetch_add(1, Ordering::Relaxed)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    mixed.wrapping_mul(0xff51_afd7_ed55_8ccd)
 }
 
 fn touch(path: &Path, now: u64) {
@@ -619,6 +685,7 @@ mod tests {
             stale_while_revalidate: 30,
             stale_if_error: 600,
             length,
+            body_id: 0,
         }
     }
 
@@ -673,9 +740,12 @@ mod tests {
 
     #[test]
     fn an_entry_written_before_the_stale_windows_existed_reads_with_none() {
-        let old = "florui-http-cache 1\nurl: https://example.com/a.png\nstored-at: 1\nfresh-for: 2\nlength: 3\n";
+        let old = "florui-http-cache 1\nurl: https://example.com/a.png\nstored-at: 1\nfresh-for: 2\nlength: 3\nbody: 00000000000000ab\n";
         let entry = Entry::decode(old).unwrap();
         assert_eq!((entry.stale_while_revalidate, entry.stale_if_error), (0, 0));
+        // One from before bodies had names of their own names no body: it is absent.
+        let older = "florui-http-cache 1\nurl: https://example.com/a.png\nstored-at: 1\nfresh-for: 2\nlength: 3\n";
+        assert_eq!(Entry::decode(older), None);
     }
 
     #[test]
@@ -697,7 +767,16 @@ mod tests {
         let stored = entry("https://example.com/a.png", 4);
         cache.store(&stored, b"abcd");
         let (found, body) = cache.lookup("https://example.com/a.png", NOW).unwrap();
-        assert_eq!((found, body), (stored, b"abcd".to_vec()));
+        assert_eq!(
+            (
+                Entry {
+                    body_id: 0,
+                    ..found
+                },
+                body
+            ),
+            (stored, b"abcd".to_vec())
+        );
         assert!(cache.lookup("https://example.com/b.png", NOW).is_none());
     }
 
@@ -707,9 +786,10 @@ mod tests {
         let cache = DiskCache::new(dir.path().to_owned(), 1 << 20);
         let url = "https://example.com/a.png";
         cache.store(&entry(url, 4), b"abcd");
-        fs::write(cache.body_path(url), b"ab").unwrap();
+        let stored = cache.read_meta(url).unwrap();
+        fs::write(cache.body_path(&stored), b"ab").unwrap();
         assert!(cache.lookup(url, NOW).is_none());
-        fs::remove_file(cache.body_path(url)).unwrap();
+        fs::remove_file(cache.body_path(&stored)).unwrap();
         assert!(cache.lookup(url, NOW).is_none());
     }
 
@@ -722,11 +802,6 @@ mod tests {
         fs::copy(
             cache.meta_path("https://example.com/a.png"),
             cache.meta_path("https://example.com/other.png"),
-        )
-        .unwrap();
-        fs::copy(
-            cache.body_path("https://example.com/a.png"),
-            cache.body_path("https://example.com/other.png"),
         )
         .unwrap();
         assert!(cache.lookup("https://example.com/other.png", NOW).is_none());
@@ -868,8 +943,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = DiskCache::new(dir.path().to_owned(), 1 << 20);
         let url = "https://example.com/a.png";
-        let before = entry(url, 3);
-        cache.store(&before, b"old");
+        cache.store(&entry(url, 3), b"old");
+        let (before, _) = cache.lookup(url, NOW).unwrap();
         // Another request stored a new response while the 304 was on its way.
         let mut newer = entry(url, 5);
         newer.etag = Some("\"newer\"".to_owned());
@@ -883,9 +958,43 @@ mod tests {
             (Some("\"newer\""), b"newer".to_vec())
         );
         // And when nothing came between, it renews.
-        let mut again = newer.clone();
+        let mut again = found.clone();
         again.stored_at += 20;
-        cache.renew(&newer, &again);
+        cache.renew(&found, &again);
         assert_eq!(cache.lookup(url, NOW).unwrap().0.stored_at, again.stored_at);
+    }
+
+    #[test]
+    fn a_response_of_the_same_size_never_takes_the_body_of_the_one_before_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = DiskCache::new(dir.path().to_owned(), 1 << 20);
+        let url = "https://example.com/a.png";
+        let mut first = entry(url, 4);
+        first.etag = Some("\"a\"".to_owned());
+        cache.store(&first, b"aaaa");
+        let (kept, _) = cache.lookup(url, NOW).unwrap();
+        // A second store that dies after writing its body, before the metadata: the body is
+        // there under a name of its own, and the metadata still names the first.
+        let stray = Entry {
+            body_id: kept.body_id.wrapping_add(1),
+            ..kept.clone()
+        };
+        fs::write(cache.body_path(&stray), b"bbbb").unwrap();
+        let (found, body) = cache.lookup(url, NOW).unwrap();
+        assert_eq!(
+            (found.etag.as_deref(), body),
+            (Some("\"a\""), b"aaaa".to_vec()),
+            "the validators still go with their own bytes"
+        );
+        // A store that finishes replaces both, and the old body goes.
+        let mut second = entry(url, 4);
+        second.etag = Some("\"b\"".to_owned());
+        cache.store(&second, b"bbbb");
+        let (found, body) = cache.lookup(url, NOW).unwrap();
+        assert_eq!(
+            (found.etag.as_deref(), body),
+            (Some("\"b\""), b"bbbb".to_vec())
+        );
+        assert!(!cache.body_path(&kept).exists());
     }
 }
