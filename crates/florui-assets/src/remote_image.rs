@@ -60,6 +60,9 @@ enum Slot {
         loaded: Arc<Loaded>,
         bytes: u64,
         used: u64,
+        /// A digest of the encoded bytes it was made from, to tell a picture the server
+        /// changed from one it only sent again.
+        digest: u64,
         /// When it was loaded, or last found to be current.
         checked_at: Instant,
         /// A request for a newer copy under way: its generation and, once queued, its
@@ -130,7 +133,7 @@ fn with_store<T>(work: impl FnOnce(&mut Store) -> T) -> T {
 /// Whether `url` is one this module loads.
 pub fn is_remote(url: &str) -> bool {
     // The fetcher ignores white space around an address, and so does this.
-    let url = url.trim_start();
+    let url = url.trim_start_matches(|c: char| c.is_ascii_whitespace());
     let start = url.get(..8).unwrap_or(url).to_ascii_lowercase();
     start.starts_with("http://") || start.starts_with("https://")
 }
@@ -317,8 +320,17 @@ fn cache() -> &'static AssetCache {
 enum Built {
     /// A request for a newer copy that found the one already shown still current.
     Unchanged,
-    Loaded(Loaded, u64),
+    Loaded(Loaded, u64, u64),
     Failed(String),
+}
+
+/// A digest of `bytes` that only has to tell two downloads apart.
+#[cfg(feature = "net")]
+fn digest(bytes: &[u8]) -> u64 {
+    use std::hash::Hasher as _;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    hasher.write(bytes);
+    hasher.finish()
 }
 
 /// A download ended: decode it here, on the fetcher's thread and in a decode slot, and
@@ -329,30 +341,35 @@ fn finish(
     generation: u64,
     outcome: Result<Arc<crate::net::Fetched>, crate::FetchError>,
 ) {
-    let refreshing = with_store(|store| {
-        matches!(
-            store.slots.get(url),
-            Some(Slot::Ready { refresh: Some((g, _)), .. }) if *g == generation
-        )
+    // The digest of the picture being shown, when this is a request for a newer copy of it.
+    let shown = with_store(|store| match store.slots.get(url) {
+        Some(Slot::Ready {
+            refresh: Some((g, _)),
+            digest,
+            ..
+        }) if *g == generation => Some(*digest),
+        _ => None,
     });
     // A decoder that panics on a hostile file must leave the picture failed, not pending for
     // ever.
     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match outcome {
-        // The copy kept is the one that was sent again: nothing to decode.
-        Ok(fetched) if refreshing && fetched.origin != crate::net::Origin::Network => {
-            Built::Unchanged
-        }
         Ok(fetched) => {
-            let size = fetched.bytes.len() as u64;
-            if refreshing {
+            let sum = digest(&fetched.bytes);
+            if shown == Some(sum) {
+                // The same bytes again, from the server or from a copy on disk: nothing to
+                // decode and nothing to paint again.
+                return Built::Unchanged;
+            }
+            if shown.is_some() {
                 // The decode of the old bytes may still be alive, held by the picture
                 // being shown, and would be handed back for the new ones.
                 cache().invalidate(&AssetId::Url(url.to_owned()));
             }
+            let size = fetched.bytes.len() as u64;
             match crate::url_image::build(&fetched.bytes, None, |bytes| {
                 cache().get_or_decode(AssetId::Url(url.to_owned()), bytes, DecodeParams::Native)
             }) {
-                Ok(loaded) => Built::Loaded(loaded, size),
+                Ok(loaded) => Built::Loaded(loaded, size, sum),
                 Err(reason) => Built::Failed(reason),
             }
         }
@@ -384,7 +401,7 @@ fn finish(
         store.clock += 1;
         let used = store.clock;
         match (was, built) {
-            (Was::Pending, Built::Loaded(loaded, size)) => {
+            (Was::Pending, Built::Loaded(loaded, size, sum)) => {
                 let bytes = retained(&loaded, size);
                 store.held += bytes;
                 store.slots.insert(
@@ -394,6 +411,7 @@ fn finish(
                         loaded: Arc::new(loaded),
                         bytes,
                         used,
+                        digest: sum,
                         checked_at: Instant::now(),
                         refresh: None,
                     },
@@ -411,7 +429,7 @@ fn finish(
                 );
                 true
             }
-            (Was::Refreshed, Built::Loaded(loaded, size)) => {
+            (Was::Refreshed, Built::Loaded(loaded, size, sum)) => {
                 let bytes = retained(&loaded, size);
                 if let Some(Slot::Ready { bytes: old, .. }) = store.slots.remove(url) {
                     store.held -= old;
@@ -424,6 +442,7 @@ fn finish(
                         loaded: Arc::new(loaded),
                         bytes,
                         used,
+                        digest: sum,
                         checked_at: Instant::now(),
                         refresh: None,
                     },
@@ -495,6 +514,7 @@ mod tests {
             }),
             bytes,
             used,
+            digest: 0,
             checked_at: Instant::now(),
             refresh: None,
         };
@@ -701,6 +721,52 @@ mod tests {
                 crate::url_image::load(&url);
             }
             assert_eq!(server.hits(), 2);
+        }
+
+        #[test]
+        fn a_recheck_that_gets_the_same_bytes_again_changes_nothing() {
+            direct();
+            let server = Server::start(|_| Reply::ok("image/png", png_of(3, 2)));
+            let url = server.url("/same.png");
+            assert!(crate::url_image::load(&url).is_none());
+            let shown = wait_for(|| crate::url_image::load(&url)).expect("it loads");
+            let identity = crate::url_image::identity(&url);
+            age(&url);
+            crate::url_image::load(&url);
+            assert!(wait_for(|| (server.hits() == 2).then_some(())).is_some());
+            // The recheck ended: the slot no longer waits for it.
+            assert!(
+                wait_for(|| {
+                    with_store(|store| {
+                        matches!(
+                            store.slots.get(&url),
+                            Some(Slot::Ready { refresh: None, .. })
+                        )
+                    })
+                    .then_some(())
+                })
+                .is_some()
+            );
+            let after = crate::url_image::load(&url).unwrap();
+            assert!(Arc::ptr_eq(&shown, &after), "not decoded again");
+            assert_eq!(
+                crate::url_image::identity(&url),
+                identity,
+                "nothing to paint again"
+            );
+        }
+
+        #[test]
+        fn the_same_picture_written_with_white_space_around_it_is_one_picture() {
+            direct();
+            let server = Server::start(|_| Reply::ok("image/png", png_of(2, 2)));
+            let url = server.url("/spaced.png");
+            let padded = format!(" \n{url}\t ");
+            assert!(crate::url_image::load(&padded).is_none());
+            let loaded = wait_for(|| crate::url_image::load(&padded)).expect("it loads");
+            let plain = crate::url_image::load(&url).expect("the same picture");
+            assert!(Arc::ptr_eq(&loaded, &plain));
+            assert_eq!(server.hits(), 1);
         }
 
         #[test]
