@@ -29,7 +29,7 @@ impl DirtyFlag {
     /// unless a [`crate::batch`] is in progress, in which case the wake is
     /// deferred until that batch finishes (see its module docs) so a host
     /// isn't woken once per write inside one event.
-    pub(crate) fn mark(&self) {
+    pub fn mark(&self) {
         self.inner.flag.set(true);
         crate::batch::defer_or_fire(self);
     }

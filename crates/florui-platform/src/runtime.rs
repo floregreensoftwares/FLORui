@@ -499,11 +499,15 @@ impl UiRuntime {
     /// part that didn't exist before this runtime owned it across
     /// renders: registering now genuinely changes what every later
     /// [`Self::update`] shapes and measures with, not just a
-    /// freshly-loaded instance nothing else could reach. Same contract as
-    /// [`Self::set_rules`]: does not itself re-render — call
-    /// [`Self::update`] afterward to see the new font take effect.
+    /// freshly-loaded instance nothing else could reach. A font that
+    /// registers marks the runtime dirty (and runs the listener of
+    /// [`Self::on_needs_update`]), because the text already laid out may
+    /// measure differently now, and the next [`Self::update`] measures it
+    /// again. A font that does not register changes nothing.
     pub fn register_font(&mut self, font_bytes: &[u8]) -> Result<String, florui_text::TextError> {
-        self.font.register(font_bytes)
+        let family = self.font.register(font_bytes)?;
+        self.dirty.mark();
+        Ok(family)
     }
 
     /// Registers `listener` to run whenever this runtime has something an
@@ -1869,6 +1873,34 @@ mod tests {
             "the same font instance register_font touched must still measure real text \
              correctly afterward"
         );
+    }
+
+    #[test]
+    fn registering_a_font_marks_the_runtime_dirty_and_wakes_its_listener() {
+        let mut runtime =
+            UiRuntime::with_rules(Vec::new(), || view! { <div>"text"</div> }, viewport());
+        let woken = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&woken);
+        runtime.on_needs_update(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        runtime.clear_dirty();
+
+        assert!(runtime.register_font(b"not a font").is_err());
+        assert!(
+            !runtime.is_dirty(),
+            "a font that did not register changes nothing"
+        );
+        assert_eq!(woken.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        runtime
+            .register_font(florui_text::EMBEDDED_MONOSPACE_FONT)
+            .expect("a real font file registers");
+        assert!(
+            runtime.is_dirty(),
+            "text already laid out may measure differently"
+        );
+        assert_eq!(woken.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     /// `DesktopHost` needs a window-specific capability (`WindowControls`)
