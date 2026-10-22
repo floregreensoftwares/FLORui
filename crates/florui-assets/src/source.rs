@@ -34,6 +34,9 @@ pub enum AssetSource<'a> {
 pub enum AssetId {
     Path(PathBuf),
     Embedded(&'static str),
+    /// A network source, by its URL without the fragment. The bytes come from
+    /// [`crate::net`]; see [`crate::AssetCache::get_or_decode`].
+    Url(String),
 }
 
 impl<'a> AssetSource<'a> {

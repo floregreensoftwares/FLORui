@@ -24,6 +24,11 @@ pub enum AssetError {
     InvalidUtf8 {
         path: Option<PathBuf>,
     },
+    /// A network source (`http://` or `https://`) that could not be loaded.
+    Fetch {
+        url: String,
+        error: FetchError,
+    },
     Svg(resvg::usvg::Error),
     /// A raster image (PNG, JPEG, WebP or GIF) that could not be decoded.
     Raster(image::ImageError),
@@ -71,6 +76,7 @@ impl fmt::Display for AssetError {
                 write!(f, "{} is not valid UTF-8 text", path.display())
             }
             AssetError::InvalidUtf8 { path: None } => write!(f, "asset is not valid UTF-8 text"),
+            AssetError::Fetch { url, error } => write!(f, "could not load {url}: {error}"),
             AssetError::Svg(err) => write!(f, "could not parse SVG: {err}"),
             AssetError::Raster(err) => write!(f, "could not decode the image: {err}"),
             AssetError::MemoryBudget {
@@ -103,6 +109,7 @@ impl std::error::Error for AssetError {
             AssetError::Io { source, .. } => Some(source),
             AssetError::Svg(err) => Some(err),
             AssetError::Raster(err) => Some(err),
+            AssetError::Fetch { error, .. } => Some(error),
             AssetError::SourceTooLarge { .. }
             | AssetError::InvalidUtf8 { .. }
             | AssetError::MemoryBudget { .. }
@@ -111,3 +118,81 @@ impl std::error::Error for AssetError {
         }
     }
 }
+
+/// Why a network source did not load. Plain data and cheap to clone, because one
+/// request can answer several waiters; it exists with or without the `net` feature, so
+/// a consumer can name it without a conditional build.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FetchError {
+    /// This build has no network loading (the `net` feature of the crate is off).
+    Unavailable,
+    /// Not a URL this crate can request: it does not parse, has no host, or carries a
+    /// user name or password.
+    InvalidUrl(String),
+    /// A scheme other than `http` and `https`, in the URL or in a redirect.
+    UnsupportedScheme(String),
+    /// The server answered with a status that is not a success.
+    Status(u16),
+    /// More redirects than the configured limit.
+    TooManyRedirects { limit: u32 },
+    /// A redirect from `https` to `http`, refused.
+    InsecureRedirect { to: String },
+    /// A connection, a response or a body took longer than its limit.
+    Timeout,
+    /// The body is, or grew past, the size limit. Checked from the declared length and
+    /// again while the body streams in, so a server that lies about it is cut off.
+    TooLarge { limit: u64 },
+    /// The response is not an image this crate decodes: its media type is not an image
+    /// type, or it is an image type with no decoder here, or the bytes are none of them.
+    NotAnImage { content_type: String },
+    /// The media type says one format and the bytes are another.
+    ContentTypeMismatch {
+        declared: String,
+        found: &'static str,
+    },
+    /// The request was cancelled before it finished.
+    Cancelled,
+    /// Resolving the host, connecting, the TLS handshake or reading failed.
+    Transport(String),
+}
+
+impl fmt::Display for FetchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FetchError::Unavailable => {
+                write!(
+                    f,
+                    "this build cannot load from the network (the `net` feature is off)"
+                )
+            }
+            FetchError::InvalidUrl(reason) => write!(f, "not a usable URL: {reason}"),
+            FetchError::UnsupportedScheme(scheme) => {
+                write!(
+                    f,
+                    "the scheme `{scheme}` is not loaded, only http and https"
+                )
+            }
+            FetchError::Status(code) => write!(f, "the server answered with status {code}"),
+            FetchError::TooManyRedirects { limit } => {
+                write!(f, "more than {limit} redirects")
+            }
+            FetchError::InsecureRedirect { to } => {
+                write!(f, "a redirect from https to {to} was refused")
+            }
+            FetchError::Timeout => write!(f, "the request timed out"),
+            FetchError::TooLarge { limit } => {
+                write!(f, "the response is over the {limit}-byte limit")
+            }
+            FetchError::NotAnImage { content_type } => {
+                write!(f, "the response is not a supported image ({content_type})")
+            }
+            FetchError::ContentTypeMismatch { declared, found } => {
+                write!(f, "the response says {declared} but its bytes are {found}")
+            }
+            FetchError::Cancelled => write!(f, "the request was cancelled"),
+            FetchError::Transport(reason) => write!(f, "{reason}"),
+        }
+    }
+}
+
+impl std::error::Error for FetchError {}

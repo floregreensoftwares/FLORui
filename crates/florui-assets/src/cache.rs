@@ -1,6 +1,7 @@
 //! A shared, deduplicating decode cache. See [`AssetCache`]'s own doc for
 //! the retention policy.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 
@@ -169,7 +170,45 @@ impl AssetCache {
         params: DecodeParams,
     ) -> Result<Arc<RasterImage>, AssetError> {
         let id = source.identity()?;
+        self.get_or_decode_with(id, params, || source.read_bytes())
+    }
+
+    /// The decode of `(id, params)` if a handle to it is alive, without loading or
+    /// decoding anything. For a source whose bytes are costly to come by (a download):
+    /// ask here first, and only fetch on `None`.
+    pub fn cached(&self, id: &AssetId, params: DecodeParams) -> Option<Arc<RasterImage>> {
+        let key = CacheKey {
+            id: id.clone(),
+            params,
+        };
+        let found = self.upgrade(&key);
+        if found.is_some() {
+            florui_profile::count(florui_profile::Counter::AssetCacheHits, 1);
+        }
+        found
+    }
+
+    /// Like [`Self::get_or_load`] for bytes that are already in memory under `id`, such
+    /// as a download's: a cached decode is returned, a decode under way is waited for,
+    /// and otherwise `bytes` are decoded in one of the decode slots and cached. The
+    /// image is shared and dropped like any other.
+    pub fn get_or_decode(
+        &self,
+        id: AssetId,
+        bytes: &[u8],
+        params: DecodeParams,
+    ) -> Result<Arc<RasterImage>, AssetError> {
+        self.get_or_decode_with(id, params, || Ok(Cow::Borrowed(bytes)))
+    }
+
+    fn get_or_decode_with<'b>(
+        &self,
+        id: AssetId,
+        params: DecodeParams,
+        read: impl FnOnce() -> Result<Cow<'b, [u8]>, AssetError>,
+    ) -> Result<Arc<RasterImage>, AssetError> {
         let key = CacheKey { id, params };
+        let mut read = Some(read);
 
         loop {
             if let Some(existing) = self.upgrade(&key) {
@@ -214,7 +253,8 @@ impl AssetCache {
             };
             let result = {
                 let _slot = DecodeSlot::take();
-                decode(source, params)
+                let read = read.take().expect("only the thread that leads decodes");
+                decode(read, params)
             };
             let decoded = result.and_then(|image| {
                 let (needed, held) = (image.retained_bytes(), self.held_bytes());
@@ -269,19 +309,25 @@ impl AssetCache {
     }
 }
 
-fn decode(source: &AssetSource<'_>, params: DecodeParams) -> Result<RasterImage, AssetError> {
+fn decode<'b>(
+    read: impl FnOnce() -> Result<Cow<'b, [u8]>, AssetError>,
+    params: DecodeParams,
+) -> Result<RasterImage, AssetError> {
+    let text = |bytes: Cow<'_, [u8]>| {
+        String::from_utf8(bytes.into_owned()).map_err(|_| AssetError::InvalidUtf8 { path: None })
+    };
     match params {
         DecodeParams::Native => {
-            let bytes = source.read_bytes()?;
+            let bytes = read()?;
             decode_raster(&bytes)
         }
         DecodeParams::Rasterized(fit) => {
-            let text = source.read_text()?;
+            let text = text(read()?)?;
             let vector = parse_svg(&text)?;
             rasterize_svg(&vector, fit)
         }
         DecodeParams::RasterizedThemed(fit, color) => {
-            let text = source.read_text()?;
+            let text = text(read()?)?;
             let themed = substitute_current_color(&text, color);
             let vector = parse_svg(&themed)?;
             rasterize_svg(&vector, fit)
@@ -628,5 +674,58 @@ mod tests {
             .get_or_load(&AssetSource::Path(&path), DecodeParams::Native)
             .unwrap();
         assert_eq!((decoded.width, decoded.height), (3, 3));
+    }
+
+    #[test]
+    fn bytes_decoded_under_a_url_are_shared_while_held_and_dropped_after() {
+        let cache = AssetCache::new();
+        let id = AssetId::Url("https://example.com/cover.jpg".to_string());
+        assert!(cache.cached(&id, DecodeParams::Native).is_none());
+        let bytes = encoded(image::ImageFormat::Jpeg);
+        let first = cache
+            .get_or_decode(id.clone(), &bytes, DecodeParams::Native)
+            .unwrap();
+        assert_eq!((first.width, first.height), (48, 32));
+        let second = cache
+            .get_or_decode(id.clone(), &bytes, DecodeParams::Native)
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(Arc::ptr_eq(
+            &first,
+            &cache.cached(&id, DecodeParams::Native).unwrap()
+        ));
+        drop((first, second));
+        assert!(cache.cached(&id, DecodeParams::Native).is_none());
+    }
+
+    #[test]
+    fn bytes_that_are_not_an_image_fail_under_a_url_and_nothing_is_cached() {
+        let cache = AssetCache::new();
+        let id = AssetId::Url("https://example.com/not-an-image".to_string());
+        let error = cache
+            .get_or_decode(id.clone(), b"nope", DecodeParams::Native)
+            .unwrap_err();
+        assert!(matches!(error, AssetError::Raster(_)));
+        assert!(cache.cached(&id, DecodeParams::Native).is_none());
+    }
+
+    #[test]
+    fn an_svg_from_a_url_rasterizes_per_requested_size() {
+        use crate::svg::RasterFit;
+        let cache = AssetCache::new();
+        let id = AssetId::Url("https://example.com/icon.svg".to_string());
+        let fit = RasterFit::Stretch {
+            width: 20,
+            height: 20,
+        };
+        let image = cache
+            .get_or_decode(
+                id.clone(),
+                BLUE_CIRCLE_SVG.as_bytes(),
+                DecodeParams::Rasterized(fit),
+            )
+            .unwrap();
+        assert_eq!((image.width, image.height), (20, 20));
+        assert!(cache.cached(&id, DecodeParams::Native).is_none());
     }
 }
