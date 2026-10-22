@@ -198,7 +198,10 @@ impl AssetCache {
     /// any other.
     ///
     /// The bytes are someone else's: an SVG among them is parsed without reading the files it
-    /// names, whatever `id` is. `id` should be an [`AssetId::Url`]; any other is kept under a
+    /// names, whatever `id` is. `id` stands for the bytes, not only for where they came from:
+    /// the same id with other bytes gets back the first decode while it is alive, so a
+    /// download of an address that can change should be decoded under
+    /// [`crate::url_image::download_id`], which has a digest of the bytes in it. `id` should be an [`AssetId::Url`]; any other is kept under a
     /// `Url` key made from it (so `cached` and `invalidate` with the id that was passed will
     /// not find it), never under the key of the file or asset that it names, which a later
     /// load of that file would find these bytes under.

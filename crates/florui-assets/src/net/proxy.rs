@@ -57,6 +57,17 @@ pub(crate) enum Plan {
     Unusable(String),
 }
 
+/// The `NO_PROXY` list from the two spellings of the variable: the first of them that says
+/// something, since an empty one must not hide the other.
+fn no_proxy_from(upper: Option<String>, lower: Option<String>) -> Vec<String> {
+    [upper, lower]
+        .into_iter()
+        .flatten()
+        .find(|value| !value.trim().is_empty())
+        .into_iter()
+        .collect()
+}
+
 /// What the environment says about proxies.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct Environment {
@@ -87,10 +98,10 @@ impl Environment {
         Self {
             set: ureq::Proxy::try_from_env().is_some(),
             proxy,
-            no_proxy: std::env::var("NO_PROXY")
-                .or_else(|_| std::env::var("no_proxy"))
-                .into_iter()
-                .collect(),
+            no_proxy: no_proxy_from(
+                std::env::var("NO_PROXY").ok(),
+                std::env::var("no_proxy").ok(),
+            ),
         }
     }
 }
@@ -932,5 +943,19 @@ mod tests {
         ] {
             assert_eq!(desktop_of(current), expected, "{current:?}");
         }
+    }
+
+    #[test]
+    fn an_empty_no_proxy_does_not_hide_the_other_spelling() {
+        let some = |text: &str| Some(text.to_owned());
+        assert_eq!(
+            no_proxy_from(some(""), some("internal.corp")),
+            ["internal.corp"]
+        );
+        assert_eq!(no_proxy_from(some("  "), some("a")), ["a"]);
+        assert_eq!(no_proxy_from(some("a"), some("b")), ["a"]);
+        assert_eq!(no_proxy_from(None, some("b")), ["b"]);
+        assert!(no_proxy_from(None, None).is_empty());
+        assert!(no_proxy_from(some(""), some("")).is_empty());
     }
 }
