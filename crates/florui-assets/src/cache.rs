@@ -48,12 +48,44 @@ struct CacheKey {
 /// leaves only a dead `Weak` pointer in the map (a few words), not the
 /// pixel data itself; call [`AssetCache::compact`] to reclaim even that
 /// immediately rather than waiting for the next lookup on that same key.
-#[derive(Default)]
 pub struct AssetCache {
     entries: Mutex<HashMap<CacheKey, Weak<RasterImage>>>,
+    /// What the images that are alive may retain altogether.
+    memory_limit: u64,
     /// The decodes under way, so that asking for what another thread is already
     /// decoding waits for that one instead of decoding it again.
     decoding: Mutex<HashMap<CacheKey, Arc<Decoding>>>,
+}
+
+impl Default for AssetCache {
+    fn default() -> Self {
+        Self::with_memory_limit(crate::limits::MAX_RETAINED_BYTES)
+    }
+}
+
+/// Clears a decode under way when its thread leaves, however it leaves: the ones
+/// waiting for it are let go, and a panic in a decoder does not leave the key claimed
+/// for good.
+struct FinishDecode<'a> {
+    cache: &'a AssetCache,
+    key: &'a CacheKey,
+    decoding: &'a Decoding,
+}
+
+impl Drop for FinishDecode<'_> {
+    fn drop(&mut self) {
+        self.cache
+            .decoding
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(self.key);
+        *self
+            .decoding
+            .done
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = true;
+        self.decoding.finished.notify_all();
+    }
 }
 
 /// A decode under way: finished once `done` is set.
@@ -102,6 +134,25 @@ impl Drop for DecodeSlot {
 impl AssetCache {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A cache whose live images may retain `limit` bytes altogether (see
+    /// [`crate::limits::MAX_RETAINED_BYTES`], the default).
+    pub fn with_memory_limit(limit: u64) -> Self {
+        Self {
+            entries: Mutex::default(),
+            memory_limit: limit,
+            decoding: Mutex::default(),
+        }
+    }
+
+    /// What the images this cache has handed out and that are still held retain.
+    fn held_bytes(&self) -> u64 {
+        self.lock()
+            .values()
+            .filter_map(Weak::upgrade)
+            .map(|image| image.retained_bytes())
+            .sum()
     }
 
     /// Returns a cached decode for `(source, params)` if any handle to it
@@ -155,23 +206,35 @@ impl AssetCache {
                 continue;
             }
             florui_profile::count(florui_profile::Counter::AssetCacheMisses, 1);
+            // Runs when this leaves, a panic included, after the image is cached.
+            let _finish = FinishDecode {
+                cache: self,
+                key: &key,
+                decoding: &decoding,
+            };
             let result = {
                 let _slot = DecodeSlot::take();
                 decode(source, params)
             };
-            let decoded = result.map(Arc::new);
+            let decoded = result.and_then(|image| {
+                let (needed, held) = (image.retained_bytes(), self.held_bytes());
+                if held + needed > self.memory_limit {
+                    return Err(AssetError::MemoryBudget {
+                        needed,
+                        held,
+                        limit: self.memory_limit,
+                    });
+                }
+                // What painting reads is made here, on the thread that decodes, once
+                // the image is let in.
+                if params == DecodeParams::Native {
+                    image.prepare();
+                }
+                Ok(Arc::new(image))
+            });
             if let Ok(image) = &decoded {
                 self.lock().insert(key.clone(), Arc::downgrade(image));
             }
-            self.decoding
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .remove(&key);
-            *decoding
-                .done
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner()) = true;
-            decoding.finished.notify_all();
             return decoded;
         }
     }
@@ -210,10 +273,7 @@ fn decode(source: &AssetSource<'_>, params: DecodeParams) -> Result<RasterImage,
     match params {
         DecodeParams::Native => {
             let bytes = source.read_bytes()?;
-            let image = decode_raster(&bytes)?;
-            // What painting reads is made here, on the thread that decodes.
-            image.prepare();
-            Ok(image)
+            decode_raster(&bytes)
         }
         DecodeParams::Rasterized(fit) => {
             let text = source.read_text()?;
@@ -295,6 +355,65 @@ mod tests {
         for image in &images {
             assert!(Arc::ptr_eq(&images[0], image), "one decode for all of them");
         }
+    }
+
+    #[test]
+    fn an_image_that_would_pass_the_memory_limit_is_refused_until_others_are_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let (first, second) = (dir.path().join("a.jpg"), dir.path().join("b.jpg"));
+        std::fs::write(&first, encoded(image::ImageFormat::Jpeg)).unwrap();
+        std::fs::write(&second, encoded(image::ImageFormat::Jpeg)).unwrap();
+        // 48 x 32 opaque pixels retain 6144 bytes: room for one and a half.
+        let cache = AssetCache::with_memory_limit(9000);
+        let kept = cache
+            .get_or_load(&AssetSource::Path(&first), DecodeParams::Native)
+            .unwrap();
+        let refused = cache
+            .get_or_load(&AssetSource::Path(&second), DecodeParams::Native)
+            .unwrap_err();
+        assert!(
+            matches!(refused, AssetError::MemoryBudget { .. }),
+            "{refused}"
+        );
+        drop(kept);
+        assert!(
+            cache
+                .get_or_load(&AssetSource::Path(&second), DecodeParams::Native)
+                .is_ok(),
+            "room again once the first is dropped"
+        );
+    }
+
+    #[test]
+    fn a_panic_in_a_decode_does_not_leave_the_key_claimed_or_the_waiters_behind() {
+        let cache = AssetCache::new();
+        let key = CacheKey {
+            id: AssetId::Embedded("guard-test"),
+            params: DecodeParams::Native,
+        };
+        let decoding = Arc::new(Decoding::default());
+        cache
+            .decoding
+            .lock()
+            .unwrap()
+            .insert(key.clone(), Arc::clone(&decoding));
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _finish = FinishDecode {
+                cache: &cache,
+                key: &key,
+                decoding: &decoding,
+            };
+            panic!("a decoder gave up");
+        }));
+        assert!(panicked.is_err());
+        assert!(
+            cache.decoding.lock().unwrap().is_empty(),
+            "the key is free again"
+        );
+        assert!(
+            *decoding.done.lock().unwrap(),
+            "the ones waiting are let go"
+        );
     }
 
     #[test]

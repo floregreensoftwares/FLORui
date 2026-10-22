@@ -25,6 +25,12 @@ pub const MAX_RASTER_DIMENSION: u32 = 8192;
 /// image is 256 MiB of pixels, and the decoder's own buffers come on top.
 pub const MAX_DECODE_BYTES: u64 = 512 * 1024 * 1024;
 
+/// What the decoded images a cache holds may retain altogether, in bytes, prepared
+/// pixels and smaller copies counted (see `RasterImage::retained_bytes`): about a
+/// thousand 640 px covers. An image that would take it past this fails to load, and
+/// loads again once enough of the others have been dropped.
+pub const MAX_RETAINED_BYTES: u64 = 1024 * 1024 * 1024;
+
 pub(crate) fn check_source_len(byte_len: u64, path: Option<&Path>) -> Result<(), AssetError> {
     if byte_len > MAX_SOURCE_BYTES {
         return Err(AssetError::SourceTooLarge {
