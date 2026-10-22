@@ -147,6 +147,12 @@ pub enum PresentOutcome {
 }
 
 impl GpuPresenter {
+    /// The bytes of the texture frames are uploaded into.
+    pub fn texture_bytes(&self) -> usize {
+        let (width, height) = self.upload_size;
+        width as usize * height as usize * 4
+    }
+
     pub fn capability(&self) -> PresentationCapability {
         self.capability
     }

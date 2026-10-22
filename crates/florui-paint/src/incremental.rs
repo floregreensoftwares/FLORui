@@ -125,6 +125,18 @@ impl Repainter {
         self.parts.as_deref()
     }
 
+    /// The bytes the last frame and the records of its boxes take: the frame is
+    /// counted whole, a record by its own size alone (not the styles and text it
+    /// points to), so the second figure is a floor.
+    pub fn held_bytes(&self) -> (usize, usize) {
+        self.memo.as_ref().map_or((0, 0), |memo| {
+            (
+                memo.canvas.data().len(),
+                memo.notes.len() * std::mem::size_of::<Note>(),
+            )
+        })
+    }
+
     /// Forgets the last frame: the next one is painted whole.
     pub fn forget(&mut self) {
         self.memo = None;

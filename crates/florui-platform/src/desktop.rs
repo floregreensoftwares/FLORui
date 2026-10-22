@@ -379,6 +379,7 @@ fn run_windows_with(
     install_image_waker(&event_loop);
 
     let mut host = DesktopHost {
+        report: crate::activity_report::ActivityReporter::from_env(),
         windows: HashMap::new(),
         pending: initial,
         proxy: event_loop.create_proxy(),
@@ -477,6 +478,7 @@ pub fn run_single_instance(
             let _mutex_ownership = mutex_ownership;
 
             let mut host = DesktopHost {
+                report: crate::activity_report::ActivityReporter::from_env(),
                 windows: HashMap::new(),
                 pending: initial,
                 proxy: event_loop.create_proxy(),
@@ -635,6 +637,16 @@ fn is_watched_file(path: &Path, target: &Path) -> bool {
         && directory
             .canonicalize()
             .is_ok_and(|directory| Some(directory.as_path()) == target.parent())
+}
+
+/// Counts why the loop ran for a [`UserEvent`], for the report.
+fn note_user_event(event: &UserEvent) {
+    use florui_profile::wake::{Wake, note};
+    note(match event {
+        UserEvent::Dirty(_) => Wake::Signal,
+        UserEvent::CssChanged(..) => Wake::Stylesheet,
+        _ => Wake::System,
+    });
 }
 
 pub(crate) fn layout_viewport(scale: ViewportScale) -> Size<AvailableSpace> {
@@ -1215,6 +1227,9 @@ struct WindowState {
     /// The last frame as the CPU presenter wants it, converted only where it
     /// changed.
     cpu_frame: Vec<u32>,
+    /// What this window keeps of its frames, for the memory readings.
+    held_frames: florui_profile::gauge::Holder,
+    held_paint_memo: florui_profile::gauge::Holder,
     /// Whether a frame painted whole may be painted in bands on the thread pool.
     /// Off when `FLORUI_NO_PARALLEL_PAINT` is set.
     parallel_paint: bool,
@@ -1806,7 +1821,36 @@ impl WindowState {
             self.runtime.update(viewport);
             self.refresh_animation_schedule();
         }
+        let frame_started = std::time::Instant::now();
         self.redraw();
+        florui_profile::wake::note_frame(frame_started.elapsed());
+        self.publish_frame_memory();
+    }
+
+    /// Tells the memory readings what this window keeps of its frames: the
+    /// painter's last frame and the records it compares with, the converted copy
+    /// for the CPU presenter and the texture the GPU presenter uploads into.
+    fn publish_frame_memory(&mut self) {
+        if !florui_profile::ENABLED {
+            return;
+        }
+        let (canvas, memo) = self.repainter.held_bytes();
+        let presenter = match &self.presenter {
+            Presenter::Gpu(presenter) => presenter.texture_bytes(),
+            _ => 0,
+        };
+        self.held_frames
+            .set(canvas + self.cpu_frame.len() * std::mem::size_of::<u32>() + presenter);
+        self.held_paint_memo.set(memo);
+    }
+
+    /// What this window tells the periodic report about itself.
+    fn report(&self) -> crate::activity_report::WindowReport {
+        crate::activity_report::WindowReport {
+            nodes: self.runtime.node_count(),
+            decoded_images: self.runtime.decoded_image_bytes(),
+            animations: self.runtime.running_animations(),
+        }
     }
 
     /// Re-renders against the current viewport and requests a repaint —
@@ -2056,6 +2100,8 @@ impl WindowState {
 /// contract across many windows is separate, larger work this does not
 /// attempt).
 struct DesktopHost {
+    /// The periodic report of `FLORUI_REPORT`, when asked for.
+    report: Option<crate::activity_report::ActivityReporter>,
     windows: HashMap<WindowId, WindowState>,
     pending: Vec<WindowSpec>,
     proxy: EventLoopProxy<UserEvent>,
@@ -2386,6 +2432,12 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 ),
                 repainter: florui_paint::Repainter::new(),
                 cpu_frame: Vec::new(),
+                held_frames: florui_profile::gauge::Holder::new(
+                    florui_profile::gauge::Gauge::FrameBuffers,
+                ),
+                held_paint_memo: florui_profile::gauge::Holder::new(
+                    florui_profile::gauge::Gauge::PaintMemo,
+                ),
                 parallel_paint: std::env::var_os("FLORUI_NO_PARALLEL_PAINT").is_none(),
                 repaint_over_the_last: std::env::var_os("FLORUI_NO_REPAINT").is_none(),
                 css_path: spec.css_path,
@@ -2465,6 +2517,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
             match state.resizing_until {
                 Some(deadline) if now >= deadline => {
                     // The drag has stopped: the frame at full size.
+                    florui_profile::wake::note(florui_profile::wake::Wake::Timer);
                     state.resizing_until = None;
                     state.window.request_redraw();
                 }
@@ -2474,21 +2527,33 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 None => {}
             }
             match state.next_animation_wake {
-                Some(deadline) if now >= deadline => state.window.request_redraw(),
+                Some(deadline) if now >= deadline => {
+                    florui_profile::wake::note(florui_profile::wake::Wake::Animation);
+                    state.window.request_redraw();
+                }
                 Some(deadline) => {
                     next_wake = Some(next_wake.map_or(deadline, |current| current.min(deadline)));
                 }
                 None => {}
             }
-            for deadline in [
-                state.repeat_spinner_if_due(now),
-                state.repeat_scroll_if_due(now),
-                state.advance_scroll_animations(now),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                next_wake = Some(next_wake.map_or(deadline, |current| current.min(deadline)));
+            for (reason, deadline) in [
+                (
+                    florui_profile::wake::Wake::Timer,
+                    state.repeat_spinner_if_due(now),
+                ),
+                (
+                    florui_profile::wake::Wake::Scroll,
+                    state.repeat_scroll_if_due(now),
+                ),
+                (
+                    florui_profile::wake::Wake::Scroll,
+                    state.advance_scroll_animations(now),
+                ),
+            ] {
+                if let Some(deadline) = deadline {
+                    florui_profile::wake::note(reason);
+                    next_wake = Some(next_wake.map_or(deadline, |current| current.min(deadline)));
+                }
             }
             state.flush_geometry_save_if_due(now);
             if let Some(changed_at) = state.pending_geometry_save {
@@ -2496,6 +2561,14 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
                 next_wake =
                     Some(next_wake.map_or(save_deadline, |current| current.min(save_deadline)));
             }
+        }
+        if let Some(report) = &mut self.report {
+            if report.due(now) {
+                let windows: Vec<_> = self.windows.values().map(WindowState::report).collect();
+                report.emit(now, &windows);
+            }
+            let deadline = report.deadline();
+            next_wake = Some(next_wake.map_or(deadline, |current| current.min(deadline)));
         }
         match next_wake {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
@@ -2509,6 +2582,22 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        use florui_profile::wake::{Wake, note};
+        match &event {
+            // A frame is counted by the frame itself.
+            WindowEvent::RedrawRequested => {}
+            WindowEvent::CursorMoved { .. }
+            | WindowEvent::CursorEntered { .. }
+            | WindowEvent::CursorLeft { .. }
+            | WindowEvent::MouseInput { .. }
+            | WindowEvent::MouseWheel { .. }
+            | WindowEvent::KeyboardInput { .. }
+            | WindowEvent::ModifiersChanged(_)
+            | WindowEvent::Ime(_)
+            | WindowEvent::Touch(_)
+            | WindowEvent::Focused(_) => note(Wake::Input),
+            _ => note(Wake::Window),
+        }
         // A development tool's own window never reaches window state.
         if let Some(observer) = &self.observer
             && observer
@@ -2614,6 +2703,7 @@ impl ApplicationHandler<UserEvent> for DesktopHost {
     }
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        note_user_event(&event);
         match event {
             UserEvent::Dirty(id) => {
                 if let Some(state) = self.windows.get_mut(&id) {
@@ -3072,6 +3162,7 @@ mod tests {
             )
             .expect("an empty stylesheet parses");
             let mut host = DesktopHost {
+                report: None,
                 windows: HashMap::new(),
                 pending: vec![spec],
                 proxy: event_loop.create_proxy(),

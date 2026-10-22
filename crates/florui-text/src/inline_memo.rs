@@ -327,9 +327,12 @@ impl InlineMemo {
             return;
         }
         if self.current.bytes + weight > self.generation_bytes {
+            // The older generation goes, the newer becomes the older.
+            self.release(self.previous.bytes);
             self.previous = std::mem::take(&mut self.current);
         }
         self.current.bytes += weight;
+        florui_profile::gauge::add(florui_profile::gauge::Gauge::InlineMemo, weight);
         self.current.by_hash.entry(hash).or_default().push(Entry {
             elements: elements.iter().map(Element::of).collect(),
             items: items.iter().map(Item::of).collect(),
@@ -339,7 +342,18 @@ impl InlineMemo {
     }
 
     pub(crate) fn clear(&mut self) {
+        self.release(self.current.bytes + self.previous.bytes);
         self.current = Generation::default();
         self.previous = Generation::default();
+    }
+
+    fn release(&self, bytes: usize) {
+        florui_profile::gauge::sub(florui_profile::gauge::Gauge::InlineMemo, bytes);
+    }
+}
+
+impl Drop for InlineMemo {
+    fn drop(&mut self) {
+        self.release(self.current.bytes + self.previous.bytes);
     }
 }

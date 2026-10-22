@@ -94,6 +94,8 @@ windows-sys = { version = "0.60", optional = true, features = [
     # `Storage::FileSystem`/`System::Pipes`.
     "Win32_System_Pipes",
     "Win32_System_Threading",
+    # `activity_report`: the working set and private bytes of the process.
+    "Win32_System_ProcessStatus",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_System_IO",

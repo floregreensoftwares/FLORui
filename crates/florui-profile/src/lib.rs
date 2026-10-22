@@ -13,6 +13,9 @@
 //! [`start`] asked for detail, and are capped per frame. Nothing here records a
 //! value from the application, only phase names, durations and counts.
 
+pub mod gauge;
+pub mod wake;
+
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::OnceLock;

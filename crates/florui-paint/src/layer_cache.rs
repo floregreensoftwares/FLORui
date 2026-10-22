@@ -88,10 +88,13 @@ impl LayerCache {
                 break;
             };
             if let Some(evicted) = self.entries.remove(&oldest) {
-                self.bytes -= evicted.pixels.data().len();
+                let freed = evicted.pixels.data().len();
+                self.bytes -= freed;
+                florui_profile::gauge::sub(florui_profile::gauge::Gauge::LayerCache, freed);
             }
         }
         self.bytes += size;
+        florui_profile::gauge::add(florui_profile::gauge::Gauge::LayerCache, size);
         self.entries.insert(
             key,
             Entry {
@@ -100,6 +103,13 @@ impl LayerCache {
             },
         );
         pixels
+    }
+}
+
+impl Drop for LayerCache {
+    /// A thread that ends takes its layers with it.
+    fn drop(&mut self) {
+        florui_profile::gauge::sub(florui_profile::gauge::Gauge::LayerCache, self.bytes);
     }
 }
 

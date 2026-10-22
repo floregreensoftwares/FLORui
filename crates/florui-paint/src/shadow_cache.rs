@@ -112,10 +112,13 @@ impl ShadowCache {
                 break;
             };
             if let Some(evicted) = self.entries.remove(&oldest) {
-                self.bytes -= evicted.coverage.len();
+                let freed = evicted.coverage.len();
+                self.bytes -= freed;
+                florui_profile::gauge::sub(florui_profile::gauge::Gauge::ShadowCache, freed);
             }
         }
         self.bytes += size;
+        florui_profile::gauge::add(florui_profile::gauge::Gauge::ShadowCache, size);
         self.entries.insert(
             key,
             Entry {
@@ -124,6 +127,13 @@ impl ShadowCache {
             },
         );
         coverage
+    }
+}
+
+impl Drop for ShadowCache {
+    /// A thread that ends takes its masks with it.
+    fn drop(&mut self) {
+        florui_profile::gauge::sub(florui_profile::gauge::Gauge::ShadowCache, self.bytes);
     }
 }
 
@@ -194,6 +204,7 @@ fn shared_coverage(key: ShadowKey, compute: impl FnOnce() -> Vec<u8>) -> Arc<Vec
                 entry.size = size;
             }
             shared.bytes += size;
+            florui_profile::gauge::add(florui_profile::gauge::Gauge::SharedShadows, size);
             while shared.bytes > SHARED_CAPACITY_BYTES {
                 let Some(oldest) = shared
                     .entries
@@ -206,6 +217,10 @@ fn shared_coverage(key: ShadowKey, compute: impl FnOnce() -> Vec<u8>) -> Arc<Vec
                 };
                 if let Some(evicted) = shared.entries.remove(&oldest) {
                     shared.bytes -= evicted.size;
+                    florui_profile::gauge::sub(
+                        florui_profile::gauge::Gauge::SharedShadows,
+                        evicted.size,
+                    );
                 }
             }
         }
@@ -235,6 +250,7 @@ pub(crate) fn clear_on_this_thread() {
     CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         cache.entries.clear();
+        florui_profile::gauge::sub(florui_profile::gauge::Gauge::ShadowCache, cache.bytes);
         cache.bytes = 0;
     });
 }

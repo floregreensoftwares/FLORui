@@ -148,8 +148,9 @@ impl AssetCache {
         }
     }
 
-    /// What the images this cache has handed out and that are still held retain.
-    fn held_bytes(&self) -> u64 {
+    /// What the images this cache has handed out and that are still held retain: the
+    /// pixels, a premultiplied copy when they are not opaque, and the smaller sizes.
+    pub fn held_bytes(&self) -> u64 {
         self.lock()
             .values()
             .filter_map(Weak::upgrade)

@@ -68,7 +68,7 @@ mod stylo;
 mod text_indent_adapter;
 mod tree;
 
-pub use animation::AnimationTimeline;
+pub use animation::{AnimationTimeline, RunningAnimation, RunningKind};
 pub use background::{
     BackgroundBox, BackgroundImage, BackgroundLayer, BackgroundRepeat, BackgroundSize, BlendMode,
     ConicGradient, ConicItem, GradientItem, LinearDirection, LinearGradient, MaskComposite,

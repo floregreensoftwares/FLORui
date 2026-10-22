@@ -82,6 +82,9 @@ pub use virtual_list::{ItemHeight, Overscan, VirtualListHandle, use_virtual_list
 pub use visited_links::VisitedLinks;
 
 #[cfg(feature = "desktop")]
+mod activity_report;
+
+#[cfg(feature = "desktop")]
 mod clipboard;
 
 #[cfg(feature = "desktop")]

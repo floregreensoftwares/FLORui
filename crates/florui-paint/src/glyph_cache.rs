@@ -118,6 +118,10 @@ impl Instance {
         }
         let segments: Rc<[Segment]> = record().into();
         SEGMENTS.with(|total| total.set(total.get() + segments.len() + 1));
+        florui_profile::gauge::add(
+            florui_profile::gauge::Gauge::GlyphSegments,
+            segments.len() + 1,
+        );
         self.glyphs.borrow_mut().insert(glyph, Rc::clone(&segments));
         segments
     }
@@ -133,6 +137,10 @@ thread_local! {
 pub(crate) fn instance(font: u64, index: u32, size: f32, coords: &[i16]) -> Rc<Instance> {
     if SEGMENTS.with(Cell::get) > SEGMENT_BUDGET {
         INSTANCES.with(|instances| instances.borrow_mut().clear());
+        florui_profile::gauge::sub(
+            florui_profile::gauge::Gauge::GlyphSegments,
+            SEGMENTS.with(Cell::get),
+        );
         SEGMENTS.with(|total| total.set(0));
     }
     let key = InstanceKey {

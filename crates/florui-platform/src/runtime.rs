@@ -868,6 +868,22 @@ impl UiRuntime {
         self.animation_timeline.is_animating()
     }
 
+    /// What is animating, by kind, with how many elements run it: the reason
+    /// [`Self::wants_animation_frames`] is true, named.
+    pub fn running_animations(&self) -> Vec<florui_style::RunningAnimation> {
+        self.animation_timeline.running()
+    }
+
+    /// Nodes in the tree last laid out.
+    pub fn node_count(&self) -> usize {
+        self.arena.node_count()
+    }
+
+    /// What the decoded pictures this runtime still holds retain, in bytes.
+    pub fn decoded_image_bytes(&self) -> u64 {
+        self.asset_cache.held_bytes()
+    }
+
     /// Whether a host should keep asking for frames because of an animation:
     /// one is in progress *and* time can advance. A frozen clock (see
     /// [`Self::set_manual_clock`]) never moves, so repainting would only
@@ -2014,6 +2030,30 @@ mod tests {
         let paused = endless_runtime("box still", false);
         assert!(!paused.is_animating());
         assert!(!paused.wants_animation_frames());
+    }
+
+    #[test]
+    fn what_keeps_a_window_animating_is_named() {
+        let running = endless_runtime("box", false).running_animations();
+        assert_eq!(
+            running,
+            [florui_style::RunningAnimation {
+                kind: florui_style::RunningKind::Keyframes {
+                    name: "drift".to_owned(),
+                    infinite: true,
+                },
+                elements: 1,
+            }]
+        );
+        assert!(
+            endless_runtime("box still", false)
+                .running_animations()
+                .is_empty()
+        );
+        assert!(
+            endless_runtime("box", true).running_animations().is_empty(),
+            "suppressed motion is not running"
+        );
     }
 
     #[test]
