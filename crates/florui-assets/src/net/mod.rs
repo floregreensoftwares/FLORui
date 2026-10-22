@@ -324,6 +324,7 @@ impl Fetcher {
         let mut queue = inner.lock();
         let waiter = queue.next_waiter;
         queue.next_waiter += 1;
+        let mut queued_new = false;
         let job = match queue.jobs.get(&(key.clone(), false)) {
             Some(job) => {
                 // Somebody wants it again after the last one let go of it.
@@ -341,6 +342,7 @@ impl Fetcher {
                 });
                 queue.jobs.insert((key, false), Arc::clone(&job));
                 queue.waiting.push_back(Arc::clone(&job));
+                queued_new = true;
                 job
             }
         };
@@ -348,7 +350,9 @@ impl Fetcher {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .push((waiter, Box::new(on_done)));
-        if queue.workers < inner.config.max_concurrent.max(1) {
+        // A thread is for a job that was queued now; one that joined a job already queued or
+        // running has a thread for it, or will have when that job is taken.
+        if queued_new && queue.workers < inner.config.max_concurrent.max(1) {
             queue.workers += 1;
             let worker = Arc::clone(inner);
             let spawned = std::thread::Builder::new()
@@ -404,7 +408,8 @@ impl Inner {
             let plan = proxy::plan(
                 &config.proxy,
                 &config.no_proxy,
-                ureq::Proxy::try_from_env().is_some(),
+                &proxy::Environment::read(),
+                config.block_private_addresses,
                 proxy::detect,
             );
             let unusable = |reason: String| Network {
@@ -420,6 +425,21 @@ impl Inner {
                     bypass: proxy::Bypass::default(),
                     error: None,
                 },
+                proxy::Plan::EnvironmentChecked { bypass } => {
+                    // `Environment` is only planned when a proxy is set in it.
+                    match ureq::Proxy::try_from_env() {
+                        Some(proxy) => {
+                            let bypass = proxy::Bypass::parse(&bypass);
+                            Network {
+                                agent: agent(config, Some(Some(proxy))),
+                                direct: Some(agent(config, Some(None))),
+                                bypass,
+                                error: None,
+                            }
+                        }
+                        None => unusable("the proxy of the environment went away".to_owned()),
+                    }
+                }
                 proxy::Plan::Direct => Network {
                     agent: agent(config, Some(None)),
                     direct: None,
@@ -732,6 +752,8 @@ impl Inner {
                         stale_while_revalidate: policy.stale_while_revalidate,
                         stale_if_error: policy.stale_if_error,
                         length: bytes.len() as u64,
+                        // Named when it is stored.
+                        body_id: 0,
                     },
                     &bytes,
                 );

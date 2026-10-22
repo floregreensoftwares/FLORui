@@ -95,7 +95,7 @@ pub fn identity(url: &str) -> String {
     }
 }
 
-pub use crate::remote_image::{is_remote, on_change as on_remote_change};
+pub use crate::remote_image::{Subscription, is_remote, on_change as on_remote_change};
 
 /// The address as it is requested and keyed: without the white space around it (ASCII only)
 /// and without the `#fragment`, which is not sent, so that the same picture written twice
