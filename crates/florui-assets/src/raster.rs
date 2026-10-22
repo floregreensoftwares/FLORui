@@ -80,6 +80,8 @@ pub struct RasterImage {
     pub height: u32,
     /// What painting reads, made the first time it is asked for.
     paint: OnceLock<PaintLevels>,
+    /// Whether every pixel is opaque, found the first time it is asked for.
+    opaque: OnceLock<bool>,
 }
 
 impl std::fmt::Debug for RasterImage {
@@ -128,7 +130,29 @@ impl RasterImage {
             width,
             height,
             paint: OnceLock::new(),
+            opaque: OnceLock::new(),
         }
+    }
+
+    /// Whether no pixel is translucent, as in a photograph.
+    pub fn is_opaque(&self) -> bool {
+        *self
+            .opaque
+            .get_or_init(|| self.rgba.chunks_exact(4).all(|pixel| pixel[3] == 255))
+    }
+
+    /// How many bytes this image holds once it is prepared for painting: its own
+    /// pixels, a premultiplied copy when some are translucent, and the smaller
+    /// copies when it has them. What a cache counts against its budget.
+    pub fn retained_bytes(&self) -> u64 {
+        let own = self.rgba.len() as u64;
+        let premultiplied = if self.is_opaque() { 0 } else { own };
+        let smaller = if self.width >= MIPS_FROM || self.height >= MIPS_FROM {
+            own / 3
+        } else {
+            0
+        };
+        own + premultiplied + smaller
     }
 
     /// Makes what painting will read now, off the thread that paints. Calling
@@ -139,8 +163,7 @@ impl RasterImage {
 
     fn paint_levels(&self) -> &PaintLevels {
         self.paint.get_or_init(|| {
-            let opaque = self.rgba.chunks_exact(4).all(|pixel| pixel[3] == 255);
-            let base = (!opaque).then(|| premultiplied(&self.rgba));
+            let base = (!self.is_opaque()).then(|| premultiplied(&self.rgba));
             let mut smaller: Vec<(u32, u32, Vec<u8>)> = Vec::new();
             if self.width >= MIPS_FROM || self.height >= MIPS_FROM {
                 let mut next = halved(

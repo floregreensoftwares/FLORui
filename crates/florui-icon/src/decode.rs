@@ -146,6 +146,12 @@ fn from_asset_error(err: florui_assets::AssetError, path: Option<&Path>) -> Icon
             size: width,
             limit,
         },
+        // Only a cache with a memory budget gives this, which an icon load has not got; kept
+        // as the read failure it is like.
+        err @ florui_assets::AssetError::MemoryBudget { .. } => IconError::Io {
+            path: owned_path().unwrap_or_default(),
+            source: std::io::Error::new(std::io::ErrorKind::OutOfMemory, err.to_string()),
+        },
         florui_assets::AssetError::RasterTargetEmpty { .. } => {
             IconError::SizeZero { path: owned_path() }
         }
