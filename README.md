@@ -337,7 +337,7 @@ florui_platform::network::configure(florui_platform::network::NetConfig {
   it. An `<img>` that unmounts or changes `src` cancels its request: one still queued is never sent, one running stops at its next read.
 - **Failure:** the `<img>` is in the same state as one whose file cannot be read: no pixels, the reason on standard error,
   and the size CSS gives its box. An `alt` is used for the accessible name only; no
-  fallback text is painted (nor for a file that cannot be read). A `url(...)` that fails is tried again after 30 seconds.
+  fallback text is painted (nor for a file that cannot be read). A `url(...)` that fails is tried again after 30 seconds, and then less often (up to every 16 minutes) while it keeps failing.
 - **Not covered:** `crossorigin`, credentials and cookies (there is no page origin), range requests (an image is wanted
   whole, and a request that stalls or fails is a failure, not a resume), proxy scripts, and macOS (the platform crate does
   not support it yet).
