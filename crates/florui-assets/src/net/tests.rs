@@ -369,6 +369,20 @@ mod proxies {
     }
 
     #[test]
+    fn a_socks_proxy_is_supported_by_this_build() {
+        // Nothing listens there: the request fails, but not because SOCKS was left out.
+        let fetcher = Fetcher::new(NetConfig {
+            proxy: ProxyMode::Url("socks5://127.0.0.1:1".to_owned()),
+            ..config()
+        });
+        let error = fetcher.fetch("http://example.invalid/a.png").unwrap_err();
+        let FetchError::Transport(reason) = error else {
+            panic!("a transport error, got {error:?}")
+        };
+        assert!(!reason.to_lowercase().contains("feature"), "{reason}");
+    }
+
+    #[test]
     fn a_proxy_that_cannot_be_used_fails_the_request_and_says_why() {
         let fetcher = Fetcher::new(NetConfig {
             proxy: ProxyMode::Url("::not a proxy::".to_owned()),

@@ -374,7 +374,10 @@ impl ImageRegistry {
         executor.spawn(Box::pin(async move {
             let result = florui_reactive::blocking::spawn_blocking(move || match downloaded {
                 Some(bytes) => cache.get_or_decode(
-                    florui_assets::AssetId::Url(path.to_string_lossy().into_owned()),
+                    florui_assets::AssetId::Url(
+                        florui_assets::url_image::remote_address(&path.to_string_lossy())
+                            .to_owned(),
+                    ),
                     (*bytes).as_ref(),
                     florui_assets::DecodeParams::Rasterized(fit),
                 ),
@@ -538,7 +541,8 @@ fn start_remote(
                     }
                     let text = std::str::from_utf8(&fetched.bytes)
                         .map_err(|_| AssetError::InvalidUtf8 { path: None })?;
-                    let image = florui_assets::parse_svg(text)?;
+                    // Someone else's document: it may not name files of ours.
+                    let image = florui_assets::parse_svg_untrusted(text)?;
                     Ok(Downloaded::Svg {
                         intrinsic: image.intrinsic_size,
                         bytes: fetched,

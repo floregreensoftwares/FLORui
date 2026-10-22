@@ -553,50 +553,57 @@ impl Inner {
             return Err(FetchError::Cancelled);
         }
         let now = unix_now();
-        let stored = self
+        let mut stored = self
             .disk
             .as_ref()
             .and_then(|disk| disk.lookup(&job.url, now));
-        if !job.refresh
-            && let Some((entry, body)) = &stored
+        let usable_at_once = stored
+            .as_ref()
+            .filter(|_| !job.refresh)
+            .and_then(|(entry, _)| {
+                if entry.is_fresh(now) {
+                    Some(Origin::Cache)
+                } else if entry.may_serve_while_revalidating(now) {
+                    Some(Origin::Stale)
+                } else {
+                    None
+                }
+            });
+        if let Some(origin) = usable_at_once
+            && let Some((entry, body)) = stored.take()
         {
-            let origin = if entry.is_fresh(now) {
-                Some(Origin::Cache)
-            } else if entry.may_serve_while_revalidating(now) {
-                Some(Origin::Stale)
-            } else {
-                None
-            };
-            if let Some(origin) = origin {
-                self.cache_hits.fetch_add(1, Ordering::Relaxed);
-                return Ok(Fetched {
-                    bytes: body.clone(),
-                    content_type: entry.content_type.clone(),
-                    origin,
-                });
-            }
+            self.cache_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(Fetched {
+                bytes: body,
+                content_type: entry.content_type,
+                origin,
+            });
         }
-        let outcome = self.request(job, stored.as_ref());
-        if let (Err(error), Some((entry, body)), false) = (&outcome, &stored, job.refresh)
+        let outcome = self.request(job, &mut stored);
+        if let (Err(error), false) = (&outcome, job.refresh)
             && counts_as_failure(error)
-            && entry.may_serve_on_error(now)
+            && let Some((entry, body)) = stored.take_if(|(entry, _)| entry.may_serve_on_error(now))
         {
             return Ok(Fetched {
-                bytes: body.clone(),
-                content_type: entry.content_type.clone(),
+                bytes: body,
+                content_type: entry.content_type,
                 origin: Origin::StaleOnError,
             });
         }
         outcome
     }
 
-    /// Asks the server (with the validators of `stored`, if any) and keeps the answer.
-    fn request(&self, job: &Job, stored: Option<&(Entry, Vec<u8>)>) -> Result<Fetched, FetchError> {
+    /// Asks the server (with the validators of `stored`, if any) and keeps the answer. A
+    /// `304` takes the stored copy to answer with.
+    fn request(
+        &self,
+        job: &Job,
+        stored: &mut Option<(Entry, Vec<u8>)>,
+    ) -> Result<Fetched, FetchError> {
         if let Some(reason) = &self.network().error {
             return Err(FetchError::Transport(reason.clone()));
         }
-        let validators = stored.map(|(entry, _)| entry);
-        let (mut response, conditional) = self.get(job, validators)?;
+        let (mut response, conditional) = self.get(job, stored.as_ref().map(|(entry, _)| entry))?;
         let status = response.status().as_u16();
         let received_at = unix_now();
         let header = |name: &str| {
@@ -636,13 +643,11 @@ impl Inner {
             // Only an answer to a conditional request says the stored copy is current; one
             // from a later hop of a redirect, which carried no validators, is about another
             // address.
-            let stored = stored.filter(|_| conditional);
-            let Some((entry, body)) = stored else {
+            let Some((mut entry, body)) = stored.take_if(|_| conditional) else {
                 return Err(FetchError::Transport(
                     "the server answered 304 to a request that was not conditional".to_owned(),
                 ));
             };
-            let (mut entry, body) = (entry.clone(), body.clone());
             self.revalidated.fetch_add(1, Ordering::Relaxed);
             if let Some(etag) = etag {
                 entry.etag = Some(etag);

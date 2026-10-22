@@ -1636,7 +1636,7 @@ mod tests {
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
         .unwrap();
         let server =
-            Server::start(move |_| (200, "image/png", png.clone(), Duration::from_millis(150)));
+            Server::start(move |_| (200, "image/png", png.clone(), Duration::from_millis(1500)));
         let css = format!(
             ".cover {{ width: 40px; height: 40px; background-image: url({}); \
              background-size: 100% 100%; }}",
@@ -1659,7 +1659,7 @@ mod tests {
         // Asking did not wait for the download: the first frame is there without it.
         let started = Instant::now();
         assert!(!red_at(&window.frame()));
-        assert!(started.elapsed() < Duration::from_millis(140));
+        assert!(started.elapsed() < Duration::from_millis(1000));
         // The host paints again when told a picture arrived; here, the test does.
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut arrived = false;

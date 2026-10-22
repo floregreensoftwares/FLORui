@@ -40,6 +40,10 @@ const RETRY_AFTER: Duration = Duration::from_secs(30);
 /// How long a picture that is ready is shown before it is asked for again.
 const RECHECK_AFTER: Duration = Duration::from_secs(10 * 60);
 
+/// How long until the next recheck when the last one was answered with a stale copy and the
+/// fresh one was being fetched behind it.
+const RECHECK_AFTER_STALE: Duration = Duration::from_secs(30);
+
 /// What pictures that are ready may hold altogether, in bytes, for the next frame.
 const MAX_HELD_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -65,6 +69,8 @@ enum Slot {
         digest: u64,
         /// When it was loaded, or last found to be current.
         checked_at: Instant,
+        /// How long after `checked_at` it is asked for again.
+        recheck_after: Duration,
         /// A request for a newer copy under way: its generation and, once queued, its
         /// ticket.
         refresh: Option<(u64, Option<Ticket>)>,
@@ -186,11 +192,12 @@ pub(crate) fn load(url: &str) -> Option<Arc<Loaded>> {
                 loaded,
                 used,
                 checked_at,
+                recheck_after,
                 refresh,
                 ..
             }) => {
                 *used = clock;
-                if refresh.is_none() && checked_at.elapsed() >= RECHECK_AFTER {
+                if refresh.is_none() && checked_at.elapsed() >= *recheck_after {
                     *refresh = Some((next, None));
                     request = Some(Request {
                         generation: next,
@@ -275,6 +282,7 @@ fn attach(store: &mut Store, url: &str, generation: u64, refresh: bool, started:
             Some(Slot::Ready {
                 refresh: refreshing @ Some(_),
                 checked_at,
+                recheck_after,
                 ..
             }),
             Started::Refused(reason),
@@ -283,6 +291,7 @@ fn attach(store: &mut Store, url: &str, generation: u64, refresh: bool, started:
             *refreshing = None;
             // Not again at once.
             *checked_at = Instant::now();
+            *recheck_after = RECHECK_AFTER;
         }
         _ => {}
     }
@@ -318,8 +327,11 @@ fn cache() -> &'static AssetCache {
 /// What a download became.
 #[cfg(feature = "net")]
 enum Built {
-    /// A request for a newer copy that found the one already shown still current.
-    Unchanged,
+    /// A request for a newer copy that found the one already shown still current. `stale`:
+    /// the copy sent was a stale one from the HTTP cache, with a fresh one on its way.
+    Unchanged {
+        stale: bool,
+    },
     Loaded(Loaded, u64, u64),
     Failed(String),
 }
@@ -358,15 +370,16 @@ fn finish(
             if shown == Some(sum) {
                 // The same bytes again, from the server or from a copy on disk: nothing to
                 // decode and nothing to paint again.
-                return Built::Unchanged;
+                return Built::Unchanged {
+                    stale: fetched.origin == crate::net::Origin::Stale,
+                };
             }
-            if shown.is_some() {
-                // The decode of the old bytes may still be alive, held by the picture
-                // being shown, and would be handed back for the new ones.
-                cache().invalidate(&AssetId::Url(url.to_owned()));
-            }
+            // These are bytes just downloaded. A decode of older ones may still be alive,
+            // held by a picture that was shown or is being painted, and would be handed
+            // back for the new bytes.
+            cache().invalidate(&AssetId::Url(url.to_owned()));
             let size = fetched.bytes.len() as u64;
-            match crate::url_image::build(&fetched.bytes, None, |bytes| {
+            match crate::url_image::build(&fetched.bytes, None, false, |bytes| {
                 cache().get_or_decode(AssetId::Url(url.to_owned()), bytes, DecodeParams::Native)
             }) {
                 Ok(loaded) => Built::Loaded(loaded, size, sum),
@@ -413,6 +426,7 @@ fn finish(
                         used,
                         digest: sum,
                         checked_at: Instant::now(),
+                        recheck_after: RECHECK_AFTER,
                         refresh: None,
                     },
                 );
@@ -444,22 +458,31 @@ fn finish(
                         used,
                         digest: sum,
                         checked_at: Instant::now(),
+                        recheck_after: RECHECK_AFTER,
                         refresh: None,
                     },
                 );
                 store.evict(url);
                 true
             }
-            (Was::Refreshed, _) => {
-                // The copy shown stays, and is asked for again after another while.
+            (Was::Refreshed, built) => {
+                // The copy shown stays, and is asked for again after another while: soon
+                // when what came was a stale copy with a fresh one being fetched behind it.
+                let stale = matches!(built, Built::Unchanged { stale: true });
                 if let Some(Slot::Ready {
                     refresh,
                     checked_at,
+                    recheck_after,
                     ..
                 }) = store.slots.get_mut(url)
                 {
                     *refresh = None;
                     *checked_at = Instant::now();
+                    *recheck_after = if stale {
+                        RECHECK_AFTER_STALE
+                    } else {
+                        RECHECK_AFTER
+                    };
                 }
                 false
             }
@@ -516,6 +539,7 @@ mod tests {
             used,
             digest: 0,
             checked_at: Instant::now(),
+            recheck_after: RECHECK_AFTER,
             refresh: None,
         };
         let mut store = Store::default();
@@ -683,8 +707,8 @@ mod tests {
         /// Makes the picture look as if it had been shown for longer than the recheck time.
         fn age(url: &str) {
             with_store(|store| {
-                if let Some(Slot::Ready { checked_at, .. }) = store.slots.get_mut(url) {
-                    *checked_at = Instant::now() - RECHECK_AFTER - Duration::from_secs(1);
+                if let Some(Slot::Ready { recheck_after, .. }) = store.slots.get_mut(url) {
+                    *recheck_after = Duration::ZERO;
                 }
             });
         }
@@ -721,6 +745,60 @@ mod tests {
                 crate::url_image::load(&url);
             }
             assert_eq!(server.hits(), 2);
+        }
+
+        #[test]
+        fn a_recheck_answered_with_a_stale_copy_is_repeated_soon_not_after_the_whole_wait() {
+            direct();
+            let url = "http://example.invalid/stale.png";
+            let bytes = png_of(2, 2);
+            let sum = digest(&bytes);
+            let loaded = crate::url_image::build(&bytes, None, false, |b| {
+                cache().get_or_decode(AssetId::Url(url.to_owned()), b, DecodeParams::Native)
+            })
+            .unwrap();
+            with_store(|store| {
+                store.slots.insert(
+                    url.to_owned(),
+                    Slot::Ready {
+                        generation: 1,
+                        loaded: Arc::new(loaded),
+                        bytes: 1,
+                        used: 1,
+                        digest: sum,
+                        checked_at: Instant::now(),
+                        recheck_after: Duration::ZERO,
+                        refresh: Some((9, None)),
+                    },
+                );
+            });
+            let sent_again = |origin| {
+                Arc::new(crate::net::Fetched {
+                    bytes: bytes.clone(),
+                    content_type: Some("image/png".to_owned()),
+                    origin,
+                })
+            };
+            finish(url, 9, Ok(sent_again(crate::net::Origin::Stale)));
+            let wait = |url: &str| {
+                with_store(|store| match store.slots.get(url) {
+                    Some(Slot::Ready {
+                        recheck_after,
+                        refresh: None,
+                        ..
+                    }) => Some(*recheck_after),
+                    _ => None,
+                })
+            };
+            assert_eq!(wait(url), Some(RECHECK_AFTER_STALE));
+            // The same bytes from a copy that is current wait the whole time.
+            with_store(|store| {
+                if let Some(Slot::Ready { refresh, .. }) = store.slots.get_mut(url) {
+                    *refresh = Some((10, None));
+                }
+            });
+            finish(url, 10, Ok(sent_again(crate::net::Origin::Cache)));
+            assert_eq!(wait(url), Some(RECHECK_AFTER));
         }
 
         #[test]
@@ -793,8 +871,8 @@ mod tests {
                     with_store(|store| {
                         matches!(
                             store.slots.get(&url),
-                            Some(Slot::Ready { refresh: None, checked_at, .. })
-                                if checked_at.elapsed() < RECHECK_AFTER
+                            Some(Slot::Ready { refresh: None, recheck_after, .. })
+                                if *recheck_after == RECHECK_AFTER
                         )
                     })
                     .then_some(())

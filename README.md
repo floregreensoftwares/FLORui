@@ -313,8 +313,11 @@ florui_platform::network::configure(florui_platform::network::NetConfig {
   automatic retry. Redirects are followed up to 5 times, only to `http` and `https`, and never from `https` to `http`. The
   proxy comes from `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`, or with `ProxyMode::System` from those and
   otherwise from the manual proxy of the Windows Internet Options, GNOME or KDE, with its bypass list. A proxy that a script
-  decides (PAC, WPAD, `auto` in GNOME) is not evaluated: requests then fail and say so, instead of going around a proxy the
-  user needs. Certificates are checked against the system store.
+  decides (a PAC file, `auto` in GNOME, a script or automatic detection chosen in KDE) is not evaluated: requests then fail and
+  say so, instead of going around a proxy the user needs. The `Automatically detect settings` box of Windows, on by default
+  and usually finding nothing, is not read. Certificates are checked against the system store.
+- **Content you do not own:** an SVG that arrives over the network is parsed without reading files, so an `<image href>` that names
+  a file of the viewer's is not drawn (an image carried in the document as a `data:` URL is).
 - **Size and content:** the declared length and the bytes as they stream in are held to the same 64 MiB as a file. A
   response whose `Content-Type` is not an image, or names one format over the bytes of another, is refused before a decoder
   sees it; a missing or generic type is judged by the bytes. The format does not come from the extension.
