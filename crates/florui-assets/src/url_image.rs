@@ -137,11 +137,55 @@ pub(crate) fn sniff(bytes: &[u8]) -> Option<Format> {
     if crate::raster::Format::sniff(bytes).is_some() {
         return Some(Format::Raster);
     }
-    let text = bytes
-        .iter()
-        .skip_while(|b| b.is_ascii_whitespace() || **b == 0xEF || **b == 0xBB || **b == 0xBF);
-    let head: Vec<u8> = text.take(5).copied().collect();
-    (head.first() == Some(&b'<')).then_some(Format::Svg)
+    looks_like_svg(bytes).then_some(Format::Svg)
+}
+
+/// Whether the first element of the document is `<svg>`, after what may come before it: a
+/// byte order mark, white space, an XML declaration, comments and a doctype. A page of HTML
+/// (an error page served as an image) is not one.
+fn looks_like_svg(bytes: &[u8]) -> bool {
+    let mut rest = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    loop {
+        rest = rest.trim_ascii_start();
+        let skipped = if rest.starts_with(b"<?") {
+            find(rest, b"?>").map(|end| end + 2)
+        } else if rest.starts_with(b"<!--") {
+            find(rest, b"-->").map(|end| end + 3)
+        } else if rest.len() >= 9 && rest[..9].eq_ignore_ascii_case(b"<!doctype") {
+            doctype_end(rest)
+        } else {
+            let Some(name) = rest.strip_prefix(b"<svg") else {
+                return false;
+            };
+            return name
+                .first()
+                .is_some_and(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/'));
+        };
+        match skipped {
+            Some(len) => rest = &rest[len..],
+            None => return false,
+        }
+    }
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+/// The end of a `<!DOCTYPE ...>`, which may hold an internal subset in `[...]`.
+fn doctype_end(rest: &[u8]) -> Option<usize> {
+    let mut depth = 0usize;
+    for (at, byte) in rest.iter().enumerate() {
+        match byte {
+            b'[' => depth += 1,
+            b']' => depth = depth.saturating_sub(1),
+            b'>' if depth == 0 => return Some(at + 1),
+            _ => {}
+        }
+    }
+    None
 }
 
 fn read(url: &str) -> Result<Loaded, String> {
@@ -163,7 +207,7 @@ fn read(url: &str) -> Result<Loaded, String> {
         };
         (bytes, hinted)
     };
-    build(bytes, hinted, |bytes| {
+    build(&bytes, hinted, |bytes| {
         crate::decode_raster(bytes).map(Arc::new)
     })
 }
@@ -171,13 +215,13 @@ fn read(url: &str) -> Result<Loaded, String> {
 /// The image `bytes` are, told apart by `hinted` or else by their first bytes. A raster
 /// image is decoded by `raster`.
 pub(crate) fn build(
-    bytes: Vec<u8>,
+    bytes: &[u8],
     hinted: Option<Format>,
     raster: impl FnOnce(&[u8]) -> Result<Arc<RasterImage>, crate::AssetError>,
 ) -> Result<Loaded, String> {
-    match hinted.or_else(|| sniff(&bytes)) {
+    match hinted.or_else(|| sniff(bytes)) {
         Some(Format::Raster) => {
-            let image = raster(&bytes).map_err(|e| e.to_string())?;
+            let image = raster(bytes).map_err(|e| e.to_string())?;
             let (width, height) = (image.width as f32, image.height as f32);
             Ok(Loaded {
                 source: Source::Raster(image),
@@ -190,11 +234,12 @@ pub(crate) fn build(
             })
         }
         Some(Format::Svg) => {
-            let text = String::from_utf8(bytes).map_err(|_| "the SVG is not UTF-8".to_string())?;
-            let image = crate::parse_svg(&text).map_err(|e| e.to_string())?;
+            let text =
+                std::str::from_utf8(bytes).map_err(|_| "the SVG is not UTF-8".to_string())?;
+            let image = crate::parse_svg(text).map_err(|e| e.to_string())?;
             let intrinsic = (image.intrinsic_size.width, image.intrinsic_size.height);
             Ok(Loaded {
-                natural: svg_natural(&text, intrinsic),
+                natural: svg_natural(text, intrinsic),
                 source: Source::Vector(Box::new(image)),
                 intrinsic,
             })
@@ -533,5 +578,28 @@ mod tests {
         std::fs::remove_file(&path).expect("removed");
         assert!(load(&url).is_none(), "gone");
         std::fs::remove_dir(&dir).ok();
+    }
+
+    #[test]
+    fn only_a_document_whose_first_element_is_svg_is_taken_for_one() {
+        for svg in [
+            "<svg xmlns='http://www.w3.org/2000/svg'/>",
+            "\u{feff}  <svg>",
+            "<?xml version='1.0'?>\n<!-- made by hand -->\n<!DOCTYPE svg PUBLIC '-//W3C//DTD SVG 1.1//EN' 'x' [ <!ENTITY a 'b'> ]>\n<svg width='1'>",
+            "<svg/>",
+        ] {
+            assert_eq!(sniff(svg.as_bytes()), Some(Format::Svg), "{svg}");
+        }
+        for not_svg in [
+            "<html><body><svg></svg></body></html>",
+            "<!doctype html><title>404</title>",
+            "<svgfoo>",
+            "<?xml version='1.0'?><html/>",
+            "<!-- unfinished",
+            "hello",
+            "",
+        ] {
+            assert_eq!(sniff(not_svg.as_bytes()), None, "{not_svg}");
+        }
     }
 }

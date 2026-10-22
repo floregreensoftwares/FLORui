@@ -26,6 +26,10 @@ const HEURISTIC_CAP_SECS: u64 = 24 * 60 * 60;
 /// How many stores pass between two looks at the size of the directory.
 const SCAN_EVERY: u32 = 16;
 
+/// A body with no metadata, or a temporary file, is probably a store in flight until it is
+/// this old; after that it was left by one that did not finish.
+const LEFTOVER_AFTER: Duration = Duration::from_secs(10 * 60);
+
 /// What the headers of a response allow.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Policy {
@@ -303,7 +307,12 @@ impl DiskCache {
     /// Writes `entry` and `body`, then drops the oldest entries if the directory is over
     /// budget. A failure is only a miss later, so it is not reported.
     pub fn store(&self, entry: &Entry, body: &[u8]) {
-        if body.len() as u64 > self.max_bytes / 4 || fs::create_dir_all(&self.dir).is_err() {
+        if body.len() as u64 > self.max_bytes / 4 {
+            // Too big to keep, and the copy kept before is out of date now.
+            self.remove(&entry.url);
+            return;
+        }
+        if fs::create_dir_all(&self.dir).is_err() {
             return;
         }
         let url = entry.url.as_str();
@@ -329,25 +338,38 @@ impl DiskCache {
         let _ = fs::remove_file(self.body_path(url));
     }
 
-    /// Drops the least recently used entries until the directory is at 90% of its budget,
-    /// and anything in it that is not part of a whole entry.
+    /// Drops the files left by stores that did not finish, then the least recently used
+    /// entries until the directory is at 90% of its budget.
     fn evict(&self) {
         let Ok(listing) = fs::read_dir(&self.dir) else {
             return;
+        };
+        let now = SystemTime::now();
+        let old = |modified: SystemTime| {
+            now.duration_since(modified)
+                .is_ok_and(|age| age >= LEFTOVER_AFTER)
         };
         let mut entries: Vec<(SystemTime, u64, PathBuf)> = Vec::new();
         let mut total = 0u64;
         for item in listing.flatten() {
             let path = item.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("meta") {
-                continue;
-            }
             let Ok(meta) = item.metadata() else { continue };
-            let body = path.with_extension("body");
-            let body_len = fs::metadata(&body).map_or(0, |m| m.len());
-            let size = meta.len() + body_len;
-            total += size;
-            entries.push((meta.modified().unwrap_or(UNIX_EPOCH), size, path));
+            let modified = meta.modified().unwrap_or(UNIX_EPOCH);
+            match path.extension().and_then(|e| e.to_str()) {
+                Some("meta") => {
+                    let body_len = fs::metadata(path.with_extension("body")).map_or(0, |m| m.len());
+                    let size = meta.len() + body_len;
+                    total += size;
+                    entries.push((modified, size, path));
+                }
+                Some("body") if !path.with_extension("meta").exists() && old(modified) => {
+                    let _ = fs::remove_file(&path);
+                }
+                Some(extension) if extension.starts_with("tmp") && old(modified) => {
+                    let _ = fs::remove_file(&path);
+                }
+                _ => {}
+            }
         }
         if total <= self.max_bytes {
             return;
@@ -677,5 +699,51 @@ mod tests {
         let cache = DiskCache::new(dir.path().to_owned(), 1000);
         cache.store(&entry("https://example.com/a.png", 300), &[0u8; 300]);
         assert!(cache.lookup("https://example.com/a.png", NOW).is_none());
+    }
+
+    #[test]
+    fn files_left_by_stores_that_did_not_finish_are_cleaned_once_they_are_old() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = DiskCache::new(dir.path().to_owned(), 1 << 20);
+        cache.store(&entry("https://example.com/kept.png", 1), b"a");
+        let long_ago = SystemTime::now() - Duration::from_secs(3600);
+        let leave = |name: &str, age: Option<SystemTime>| {
+            let path = dir.path().join(name);
+            fs::write(&path, b"leftover").unwrap();
+            if let Some(age) = age {
+                fs::File::options()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_modified(age)
+                    .unwrap();
+            }
+            path
+        };
+        let old_body = leave("0000000000000001.body", Some(long_ago));
+        let old_temporary = leave("0000000000000002.tmp123-4", Some(long_ago));
+        let young_body = leave("0000000000000003.body", None);
+        let young_temporary = leave("0000000000000004.tmp123-5", None);
+        cache.evict();
+        assert!(!old_body.exists() && !old_temporary.exists());
+        assert!(
+            young_body.exists() && young_temporary.exists(),
+            "may be in flight"
+        );
+        assert!(cache.lookup("https://example.com/kept.png", NOW).is_some());
+    }
+
+    #[test]
+    fn a_body_too_big_to_keep_takes_the_older_copy_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = DiskCache::new(dir.path().to_owned(), 1000);
+        let url = "https://example.com/a.png";
+        cache.store(&entry(url, 10), &[0u8; 10]);
+        assert!(cache.lookup(url, NOW).is_some());
+        cache.store(&entry(url, 600), &[0u8; 600]);
+        assert!(
+            cache.lookup(url, NOW).is_none(),
+            "the old copy is not served as if current"
+        );
     }
 }
