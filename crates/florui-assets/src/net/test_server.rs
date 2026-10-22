@@ -178,3 +178,88 @@ fn serve(
     }
     gauge.active.fetch_sub(1, Ordering::SeqCst);
 }
+
+/// A proxy that tunnels: an HTTP client asks it to `CONNECT` to a host and then talks to
+/// that host through the connection, which is how `ureq` uses an HTTP proxy even for
+/// plain `http` addresses. Records the targets it was asked to reach.
+pub(crate) struct ConnectProxy {
+    pub base: String,
+    connects: Arc<Mutex<Vec<String>>>,
+    stop: Arc<AtomicBool>,
+}
+
+impl ConnectProxy {
+    pub fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let connects = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        {
+            let (connects, stop) = (Arc::clone(&connects), Arc::clone(&stop));
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    if stop.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let Ok(stream) = stream else { continue };
+                    let connects = Arc::clone(&connects);
+                    std::thread::spawn(move || tunnel(stream, &connects));
+                }
+            });
+        }
+        Self {
+            base,
+            connects,
+            stop,
+        }
+    }
+
+    pub fn connects(&self) -> Vec<String> {
+        self.connects.lock().unwrap().clone()
+    }
+}
+
+impl Drop for ConnectProxy {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect(self.base.trim_start_matches("http://"));
+    }
+}
+
+fn tunnel(mut client: TcpStream, connects: &Mutex<Vec<String>>) {
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        match client.read(&mut byte) {
+            Ok(1) => head.push(byte[0]),
+            _ => return,
+        }
+    }
+    let text = String::from_utf8_lossy(&head).into_owned();
+    let Some(target) = text
+        .strip_prefix("CONNECT ")
+        .and_then(|rest| rest.split(' ').next())
+    else {
+        let _ = client.write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
+        return;
+    };
+    connects.lock().unwrap().push(target.to_owned());
+    let Ok(upstream) = TcpStream::connect(target) else {
+        let _ = client.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
+        return;
+    };
+    if client
+        .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+        .is_err()
+    {
+        return;
+    }
+    let (mut client_read, mut upstream_write) =
+        (client.try_clone().unwrap(), upstream.try_clone().unwrap());
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut client_read, &mut upstream_write);
+        let _ = upstream_write.shutdown(std::net::Shutdown::Write);
+    });
+    let (mut upstream_read, mut client_write) = (upstream, client);
+    let _ = std::io::copy(&mut upstream_read, &mut client_write);
+}

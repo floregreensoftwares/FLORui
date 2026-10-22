@@ -299,6 +299,177 @@ fn an_html_page_served_as_an_image_never_reaches_the_caller() {
     ));
 }
 
+mod proxies {
+    use super::test_server::ConnectProxy;
+    use super::*;
+
+    #[test]
+    fn a_proxy_that_is_given_carries_the_request_to_any_host() {
+        let proxy = ConnectProxy::start();
+        let origin = Server::start(|_| Reply::ok("image/png", png()));
+        let fetcher = Fetcher::new(NetConfig {
+            proxy: ProxyMode::Url(proxy.base.clone()),
+            ..config()
+        });
+        let fetched = fetcher.fetch(&origin.url("/cover.png")).unwrap();
+        assert_eq!(fetched.bytes, png());
+        // The proxy was asked for the host, and the host got the request through it.
+        assert_eq!(
+            proxy.connects(),
+            [origin.base.trim_start_matches("http://")]
+        );
+        assert_eq!(origin.seen(), ["/cover.png"]);
+    }
+
+    #[test]
+    fn the_hosts_of_the_bypass_list_are_reached_directly() {
+        let proxy = ConnectProxy::start();
+        let origin = Server::start(|_| Reply::ok("image/png", png()));
+        let fetcher = Fetcher::new(NetConfig {
+            proxy: ProxyMode::Url(proxy.base.clone()),
+            no_proxy: vec!["127.0.0.0/8".to_owned()],
+            ..config()
+        });
+        assert_eq!(
+            fetcher.fetch(&origin.url("/cover.png")).unwrap().bytes,
+            png()
+        );
+        assert_eq!(origin.seen(), ["/cover.png"]);
+        assert!(proxy.connects().is_empty());
+    }
+
+    #[test]
+    fn a_redirect_to_a_host_on_the_bypass_list_leaves_the_proxy() {
+        let direct = Server::start(|_| Reply::ok("image/png", png()));
+        // The same server by another name, which is the one on the list.
+        let target = direct.url("/final.png").replace("127.0.0.1", "localhost");
+        let first = Server::start(move |_| Reply::status(302).header("Location", &target));
+        let proxy = ConnectProxy::start();
+        let fetcher = Fetcher::new(NetConfig {
+            proxy: ProxyMode::Url(proxy.base.clone()),
+            no_proxy: vec!["localhost".to_owned()],
+            ..config()
+        });
+        let fetched = fetcher.fetch(&first.url("/a.png")).unwrap();
+        assert_eq!(fetched.bytes, png());
+        // Only the first hop went through the proxy.
+        assert_eq!(proxy.connects(), [first.base.trim_start_matches("http://")]);
+        assert_eq!(direct.seen(), ["/final.png"]);
+    }
+
+    #[test]
+    fn a_proxy_that_cannot_be_used_fails_the_request_and_says_why() {
+        let fetcher = Fetcher::new(NetConfig {
+            proxy: ProxyMode::Url("::not a proxy::".to_owned()),
+            ..config()
+        });
+        let error = fetcher.fetch("http://127.0.0.1:9/a.png").unwrap_err();
+        assert!(matches!(error, FetchError::Transport(reason) if reason.contains("not usable")));
+    }
+}
+
+mod compression {
+    use std::io::Write as _;
+
+    use super::*;
+
+    fn gzip(bytes: &[u8]) -> Vec<u8> {
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn brotli(bytes: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let mut encoder = brotli::CompressorWriter::new(&mut out, 4096, 5, 20);
+            encoder.write_all(bytes).unwrap();
+        }
+        out
+    }
+
+    #[test]
+    fn the_request_offers_the_encodings_it_can_decode() {
+        let (sender, receiver) = mpsc::channel();
+        let sender = std::sync::Mutex::new(sender);
+        let server = Server::start(move |request| {
+            sender
+                .lock()
+                .unwrap()
+                .send(request.headers.get("accept-encoding").cloned())
+                .unwrap();
+            Reply::ok("image/png", png())
+        });
+        fetcher().fetch(&server.url("/a.png")).unwrap();
+        let offered = receiver.recv().unwrap().expect("an Accept-Encoding header");
+        assert!(
+            offered.contains("gzip") && offered.contains("br"),
+            "{offered}"
+        );
+    }
+
+    #[test]
+    fn a_gzip_response_is_decoded_before_the_content_check() {
+        let server = Server::start(|_| {
+            Reply::ok("image/png", gzip(&png())).header("Content-Encoding", "gzip")
+        });
+        let fetched = fetcher().fetch(&server.url("/a.png")).unwrap();
+        assert_eq!(fetched.bytes, png());
+    }
+
+    #[test]
+    fn a_brotli_response_is_decoded_before_the_content_check() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>"#.to_vec();
+        let body = brotli(&svg);
+        let server = Server::start(move |_| {
+            Reply::ok("image/svg+xml", body.clone()).header("Content-Encoding", "br")
+        });
+        let fetched = fetcher().fetch(&server.url("/a.svg")).unwrap();
+        assert_eq!(fetched.bytes, svg);
+    }
+
+    #[test]
+    fn the_size_limit_counts_what_the_body_decodes_to_not_what_it_weighs() {
+        // A few hundred bytes on the wire that grow to 8 MiB: a decompression bomb.
+        let body = gzip(&vec![0u8; 8 * 1024 * 1024]);
+        assert!(body.len() < 64 * 1024);
+        let server = Server::start(move |_| {
+            Reply::ok("image/png", body.clone()).header("Content-Encoding", "gzip")
+        });
+        let fetcher = Fetcher::new(NetConfig {
+            max_bytes: 1024 * 1024,
+            ..config()
+        });
+        assert_eq!(
+            fetcher.fetch(&server.url("/bomb.png")).unwrap_err(),
+            FetchError::TooLarge { limit: 1024 * 1024 }
+        );
+    }
+
+    #[test]
+    fn what_is_stored_on_disk_is_the_decoded_body() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = Server::start(|_| {
+            Reply::ok("image/png", gzip(&png()))
+                .header("Content-Encoding", "gzip")
+                .header("Cache-Control", "max-age=3600")
+        });
+        let url = server.url("/a.png");
+        let fetcher = Fetcher::new(NetConfig {
+            cache_dir: Some(dir.path().to_owned()),
+            ..config()
+        });
+        fetcher.fetch(&url).unwrap();
+        let again = Fetcher::new(NetConfig {
+            cache_dir: Some(dir.path().to_owned()),
+            ..config()
+        })
+        .fetch(&url)
+        .unwrap();
+        assert_eq!((again.origin, again.bytes.clone()), (Origin::Cache, png()));
+    }
+}
+
 mod caching {
     use super::*;
 
@@ -461,6 +632,169 @@ mod caching {
         let fetcher = Fetcher::new(cached_config(&dir));
         assert!(fetcher.fetch(&server.url("/a.png")).is_err());
         assert!(std::fs::read_dir(dir.path()).map_or(true, |mut files| files.next().is_none()));
+    }
+}
+
+mod staleness {
+    use std::sync::atomic::AtomicUsize;
+
+    use super::*;
+
+    fn cached_config(dir: &tempfile::TempDir) -> NetConfig {
+        NetConfig {
+            cache_dir: Some(dir.path().to_owned()),
+            ..config()
+        }
+    }
+
+    /// A server that answers `200` with the picture first and then whatever `then` says.
+    fn first_ok_then(
+        control: &'static str,
+        then: impl Fn(usize) -> Reply + Send + Sync + 'static,
+    ) -> Server {
+        let hits = AtomicUsize::new(0);
+        Server::start(move |_| {
+            let n = hits.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                Reply::ok("image/png", png())
+                    .header("ETag", "\"v1\"")
+                    .header("Cache-Control", control)
+            } else {
+                then(n)
+            }
+        })
+    }
+
+    #[test]
+    fn a_stale_copy_stands_in_when_the_server_fails_within_stale_if_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = first_ok_then("max-age=0, stale-if-error=600", |_| Reply::status(503));
+        let url = server.url("/cover.png");
+        let fetcher = Fetcher::new(cached_config(&dir));
+        assert_eq!(fetcher.fetch(&url).unwrap().origin, Origin::Network);
+        let served = fetcher.fetch(&url).unwrap();
+        assert_eq!(
+            (served.origin, served.bytes.clone()),
+            (Origin::StaleOnError, png())
+        );
+        assert_eq!(server.hits(), 2);
+    }
+
+    #[test]
+    fn a_stale_copy_stands_in_when_the_network_fails_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = {
+            let server = first_ok_then("max-age=0, stale-if-error=600", |_| Reply::status(503));
+            let url = server.url("/cover.png");
+            Fetcher::new(cached_config(&dir)).fetch(&url).unwrap();
+            url
+            // The server goes away here.
+        };
+        let served = Fetcher::new(cached_config(&dir)).fetch(&url).unwrap();
+        assert_eq!(served.origin, Origin::StaleOnError);
+    }
+
+    #[test]
+    fn a_stale_copy_does_not_stand_in_for_a_picture_the_server_says_is_gone() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = first_ok_then("max-age=0, stale-if-error=600", |_| Reply::status(404));
+        let url = server.url("/cover.png");
+        let fetcher = Fetcher::new(cached_config(&dir));
+        fetcher.fetch(&url).unwrap();
+        assert_eq!(fetcher.fetch(&url).unwrap_err(), FetchError::Status(404));
+    }
+
+    #[test]
+    fn a_stale_copy_does_not_stand_in_past_its_window_or_without_one() {
+        let dir = tempfile::tempdir().unwrap();
+        for (control, age) in [
+            ("max-age=0, stale-if-error=60", 3600),
+            ("max-age=0, must-revalidate, stale-if-error=600", 0),
+            ("max-age=0", 0),
+        ] {
+            let server = first_ok_then(control, |_| Reply::status(503));
+            let url = server.url("/cover.png");
+            let fetcher = Fetcher::new(cached_config(&dir));
+            fetcher.fetch(&url).unwrap();
+            // Makes the copy older, as the passing of time would.
+            let disk = fetcher.inner.disk.as_ref().unwrap();
+            let (mut entry, body) = disk.lookup(&url, unix_now()).unwrap();
+            entry.stored_at -= age;
+            disk.store(&entry, &body);
+            assert_eq!(
+                fetcher.fetch(&url).unwrap_err(),
+                FetchError::Status(503),
+                "{control} at {age} s"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stale_copy_is_used_at_once_and_the_fresh_one_is_fetched_behind_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let new_png = {
+            let image = image::RgbaImage::from_pixel(5, 5, image::Rgba([1, 2, 3, 255]));
+            let mut bytes = Vec::new();
+            image::DynamicImage::ImageRgba8(image)
+                .write_to(
+                    &mut std::io::Cursor::new(&mut bytes),
+                    image::ImageFormat::Png,
+                )
+                .unwrap();
+            bytes
+        };
+        let reply_png = new_png.clone();
+        let server = first_ok_then("max-age=0, stale-while-revalidate=600", move |_| {
+            Reply::ok("image/png", reply_png.clone())
+                .header("ETag", "\"v2\"")
+                .header("Cache-Control", "max-age=0, stale-while-revalidate=600")
+                .delayed(Duration::from_millis(400))
+        });
+        let url = server.url("/cover.png");
+        let fetcher = Fetcher::new(cached_config(&dir));
+        assert_eq!(fetcher.fetch(&url).unwrap().origin, Origin::Network);
+
+        let asked = Instant::now();
+        let stale = fetcher.fetch(&url).unwrap();
+        assert_eq!((stale.origin, stale.bytes.clone()), (Origin::Stale, png()));
+        assert!(
+            asked.elapsed() < Duration::from_millis(300),
+            "it did not wait"
+        );
+
+        // While the revalidation is on its way, another ask is not made to wait for it.
+        assert!(wait_until(|| server.hits() == 2));
+        let asked = Instant::now();
+        assert_eq!(fetcher.fetch(&url).unwrap().origin, Origin::Stale);
+        assert!(asked.elapsed() < Duration::from_millis(300));
+
+        // The revalidation lands, and the next ask has the new picture.
+        let disk = fetcher.inner.disk.as_ref().unwrap();
+        assert!(wait_until(|| {
+            disk.lookup(&url, unix_now())
+                .is_some_and(|(_, body)| body == new_png)
+        }));
+        assert_eq!(fetcher.fetch(&url).unwrap().bytes, new_png);
+        // One revalidation per stale answer that started one, not a loop: the three
+        // stale answers started at most two (the second joined the first), and the last
+        // one is still running or done.
+        assert!(wait_until(|| idle(&fetcher)));
+        assert!(server.hits() <= 4, "{} requests", server.hits());
+    }
+
+    #[test]
+    fn a_failed_revalidation_leaves_the_stale_copy_for_the_next_ask() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = first_ok_then("max-age=0, stale-while-revalidate=600", |_| {
+            Reply::status(500)
+        });
+        let url = server.url("/cover.png");
+        let fetcher = Fetcher::new(cached_config(&dir));
+        fetcher.fetch(&url).unwrap();
+        assert_eq!(fetcher.fetch(&url).unwrap().origin, Origin::Stale);
+        assert!(wait_until(|| server.hits() == 2 && idle(&fetcher)));
+        let again = fetcher.fetch(&url).unwrap();
+        assert_eq!((again.origin, again.bytes.clone()), (Origin::Stale, png()));
     }
 }
 
