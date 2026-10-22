@@ -100,18 +100,20 @@ pub fn parse_svg_untrusted(svg_text: &str) -> Result<VectorImage, AssetError> {
 }
 
 /// Whether the raster image in `data` (judged by its header, without decoding it) is within
-/// [`crate::limits`]. Anything the header reader does not recognize, such as a nested SVG,
-/// passes: its own images are held to the same rule when it is parsed.
+/// [`crate::limits`]. Only a nested SVG, whose own images are held to the same rule when it is
+/// parsed, may go without a header the reader understands.
 fn embedded_image_is_within_limits(data: &[u8]) -> bool {
     let dimensions = image::ImageReader::new(std::io::Cursor::new(data))
         .with_guessed_format()
         .ok()
         .and_then(|reader| reader.into_dimensions().ok());
-    let Some((width, height)) = dimensions else {
-        return true;
-    };
-    crate::limits::check_raster_size(width, height).is_ok()
-        && u64::from(width) * u64::from(height) * 4 <= crate::limits::MAX_DECODE_BYTES
+    match dimensions {
+        Some((width, height)) => crate::limits::check_raster_size(width, height).is_ok(),
+        None => {
+            let start = data.iter().position(|byte| !byte.is_ascii_whitespace());
+            data.starts_with(&[0x1f, 0x8b]) || start.is_some_and(|at| data[at] == b'<')
+        }
+    }
 }
 
 /// [`parse_svg`] for the application's own documents, [`parse_svg_untrusted`] for anyone
@@ -583,5 +585,10 @@ mod tests {
         huge[16..20].copy_from_slice(&too_wide);
         let enormous = parse_svg_untrusted(&embedding(&huge)).unwrap();
         assert!(!draws(&enormous), "an image over the limits is left out");
+        let unreadable = parse_svg_untrusted(&embedding(b"\x00\x01 not a header")).unwrap();
+        assert!(
+            !draws(&unreadable),
+            "a header that cannot be read is left out"
+        );
     }
 }

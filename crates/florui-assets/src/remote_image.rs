@@ -204,6 +204,8 @@ impl Store {
 static STORE: Mutex<Option<Store>> = Mutex::new(None);
 /// Whether a timer is already waiting to ask the host to look at the failures again.
 #[cfg(feature = "net")]
+static RETRY_ROUNDS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+#[cfg(feature = "net")]
 static RETRY_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 type Listener = Arc<dyn Fn() + Send + Sync>;
 /// Everyone who wants to hear of arrivals, by the number their subscription has.
@@ -273,10 +275,11 @@ fn arm_retry() {
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_ok()
     {
+        let wait = RETRY_AFTER * (1 << RETRY_ROUNDS.load(Ordering::Relaxed).min(5));
         let spawned = std::thread::Builder::new()
             .name("florui-retry".to_owned())
-            .spawn(|| {
-                std::thread::sleep(RETRY_AFTER);
+            .spawn(move || {
+                std::thread::sleep(wait);
                 RETRY_ARMED.store(false, Ordering::SeqCst);
                 wake_for_failures();
             });
@@ -290,11 +293,25 @@ fn arm_retry() {
 #[cfg(not(feature = "net"))]
 fn arm_retry() {}
 
-/// Calls the listeners if some picture is waiting to be tried again.
+/// Calls the listeners if some picture is waiting to be tried again, and keeps the timer
+/// going while there are failures left, a little less often each time nothing has loaded in
+/// between: an address that stays dead does not repaint the windows every half minute for ever.
 #[cfg(feature = "net")]
 fn wake_for_failures() {
-    if with_store(|store| failures_are_due(store)) {
+    use std::sync::atomic::Ordering;
+    let (due, remaining) = with_store(|store| {
+        let remaining = store
+            .slots
+            .values()
+            .any(|slot| matches!(slot, Slot::Failed { .. }));
+        (failures_are_due(store), remaining)
+    });
+    if due {
+        RETRY_ROUNDS.fetch_add(1, Ordering::Relaxed);
         notify();
+    }
+    if remaining {
+        arm_retry();
     }
 }
 
