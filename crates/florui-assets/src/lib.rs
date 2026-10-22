@@ -21,7 +21,11 @@
 //! redirects, a size cap while streaming, the media type against the bytes, an HTTP
 //! disk cache, bounded and cancellable requests). It lives in the `net` module behind
 //! the `net` feature, which hands back the bytes of an image; those decode through
-//! [`AssetCache::get_or_decode`], under an [`AssetId::Url`], like any other source.
+//! [`AssetCache::get_or_decode`], under an [`AssetId::Url`], like any other source. A
+//! `url(...)` of a stylesheet that names an `http(s)` address never waits for the
+//! download on the thread that paints: `url_image` starts it in the background, answers
+//! "not there yet", and calls the listener of [`url_image::on_remote_change`] when the
+//! picture is decoded or has failed.
 //!
 //! ## Format support
 //!
@@ -59,6 +63,7 @@ pub mod limits;
 #[cfg(feature = "net")]
 pub mod net;
 mod raster;
+mod remote_image;
 mod source;
 mod svg;
 pub mod url_image;

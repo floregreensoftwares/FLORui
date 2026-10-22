@@ -43,7 +43,7 @@
 
 mod http_cache;
 #[cfg(test)]
-mod test_server;
+pub(crate) mod test_server;
 
 use std::collections::{HashMap, VecDeque};
 use std::io::Read as _;

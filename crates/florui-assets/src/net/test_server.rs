@@ -9,13 +9,13 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-pub(super) struct Request {
+pub(crate) struct Request {
     pub path: String,
     /// Lower-case names.
     pub headers: HashMap<String, String>,
 }
 
-pub(super) struct Reply {
+pub(crate) struct Reply {
     pub status: u16,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
@@ -60,12 +60,12 @@ impl Reply {
 /// How many requests are being answered, and the most there were at once. Shared by
 /// several servers to count across hosts.
 #[derive(Default)]
-pub(super) struct Gauge {
+pub(crate) struct Gauge {
     pub active: AtomicUsize,
     pub peak: AtomicUsize,
 }
 
-pub(super) struct Server {
+pub(crate) struct Server {
     pub base: String,
     pub gauge: Arc<Gauge>,
     seen: Arc<Mutex<Vec<String>>>,
