@@ -168,3 +168,59 @@ fn an_inline_block_in_vertical_lines_keeps_its_size_on_the_page_and_sits_on_the_
     rect_near(laid.rect("ib"), (8.0, 8.0, 20.0, 100.0), "the line");
     rect_near(laid.rect("box"), (8.0, 27.98, 20.0, 30.0), "the box");
 }
+
+const SIDEWAYS: &str = ".wrap { position: relative; width: 340px; height: 300px; font-size: 14px; \
+    line-height: 18px; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 8px; \
+    padding: 8px; box-sizing: border-box; } \
+    .a { writing-mode: sideways-rl; height: 100px; } \
+    .b { writing-mode: sideways-lr; height: 100px; } \
+    .c { writing-mode: sideways-lr; height: 100px; width: 50px; } \
+    .d { writing-mode: sideways-lr; height: 100px; } \
+    .s { padding: 3px 2px; border-right: 2px solid #c02020; } \
+    .e { writing-mode: sideways-lr; height: 100px; display: flex; } \
+    .e span { margin-bottom: 4px; }";
+
+fn sideways() -> florui::prelude::Element {
+    div(
+        "wrap",
+        vec![
+            div("a", vec![text("abc def ghi")]),
+            div("b", vec![text("abc def ghi")]),
+            div("c", vec![text("text that wraps into columns here")]),
+            div(
+                "d",
+                vec![text("ab"), span("s", vec![text("cd")]), text("ef")],
+            ),
+            div(
+                "e",
+                vec![span("s1", vec![text("one")]), span("s2", vec![text("two")])],
+            ),
+        ],
+    )
+}
+
+#[test]
+fn the_lines_of_a_sideways_lr_box_stack_from_the_left_and_start_at_the_bottom() {
+    let laid = lay_out(&sideways(), SIDEWAYS);
+    rect_near(laid.rect("a"), (8.0, 8.0, 18.0, 100.0), "sideways-rl");
+    rect_near(laid.rect("b"), (34.0, 8.0, 18.0, 100.0), "sideways-lr");
+    rect_near(
+        laid.rect("c"),
+        (60.0, 8.0, 50.0, 100.0),
+        "sideways-lr, wider than its lines",
+    );
+    // The line starts at the bottom of the box, so the span is where the text before it ends.
+    rect_near(laid.rect("s"), (115.0, 70.36, 25.0, 21.28), "the span");
+    // The flex row runs up the page, from the bottom, and the margin below an item is at the
+    // start of the row.
+    rect_near(
+        laid.rect("s1"),
+        (144.0, 79.13, 18.0, 24.88),
+        "the first item",
+    );
+    rect_near(
+        laid.rect("s2"),
+        (144.0, 50.86, 18.0, 24.27),
+        "the second item",
+    );
+}

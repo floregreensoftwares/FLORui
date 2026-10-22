@@ -147,6 +147,10 @@ pub enum WritingMode {
     VerticalRl,
     /// Lines run top to bottom and stack from the left edge towards the right.
     VerticalLr,
+    /// Lines run bottom to top and stack from the left edge towards the right, with the tops
+    /// of the letters facing left (`sideways-lr`). `sideways-rl` is `VerticalRl` with
+    /// `text-orientation: sideways`.
+    SidewaysLr,
 }
 
 impl WritingMode {
@@ -955,9 +959,8 @@ pub enum TransformFunction {
 pub enum ContainerType {
     #[default]
     Normal,
-    /// Establishes containment on the inline axis only (the axis
-    /// `writing-mode` currently makes horizontal — this crate has no
-    /// `writing-mode` support, so always physical width).
+    /// Establishes containment on the inline axis only: the width of a horizontal
+    /// container, the height of a vertical one.
     InlineSize,
     /// Establishes containment on both axes.
     Size,
@@ -1445,9 +1448,32 @@ impl ComputedStyle {
     /// The style of an inline box in the lines of a vertical writing mode, as the lines are
     /// laid out and drawn: turned a quarter clockwise, so that what is on the top of the
     /// box (the side the letters point to, which is the right on the page) is its top, and
-    /// what is on the left of the page is its bottom. Margins, padding, borders and the
-    /// corners are turned; nothing else is.
+    /// what is on the left of the page is its bottom; in `sideways-lr` turned the other way.
+    /// Margins, padding, borders and the corners are turned; nothing else is.
     pub fn turned(&self) -> ComputedStyle {
+        let radius = self.border_radius;
+        let corner = |radius: (LengthPercentage, LengthPercentage)| (radius.1, radius.0);
+        let mut turned = self.clone();
+        if self.writing_mode == WritingMode::SidewaysLr {
+            fn edges<T>(side: Edges<T>) -> Edges<T> {
+                Edges {
+                    top: side.left,
+                    right: side.top,
+                    bottom: side.right,
+                    left: side.bottom,
+                }
+            }
+            turned.margin = edges(self.margin);
+            turned.padding = edges(self.padding);
+            turned.border = edges(self.border);
+            turned.border_radius = Corners {
+                top_left: corner(radius.bottom_left),
+                top_right: corner(radius.top_left),
+                bottom_right: corner(radius.top_right),
+                bottom_left: corner(radius.bottom_right),
+            };
+            return turned;
+        }
         fn edges<T>(side: Edges<T>) -> Edges<T> {
             Edges {
                 top: side.right,
@@ -1456,9 +1482,6 @@ impl ComputedStyle {
                 left: side.top,
             }
         }
-        let corner = |radius: (LengthPercentage, LengthPercentage)| (radius.1, radius.0);
-        let radius = self.border_radius;
-        let mut turned = self.clone();
         turned.margin = edges(self.margin);
         turned.padding = edges(self.padding);
         turned.border = edges(self.border);
@@ -3622,6 +3645,48 @@ mod tests {
         assert_eq!(
             computed[&up].text_orientation,
             crate::TextOrientation::Upright
+        );
+    }
+
+    #[test]
+    fn the_sideways_writing_modes_are_read_and_a_later_value_resets_them() {
+        let tree: Element = view! {
+            <div class="lr">
+                <span class="plain">{"a"}</span>
+                <p class="rl" />
+                <p class="back" />
+            </div>
+        };
+        let (arena, computed) = styles(
+            &tree,
+            ".lr { writing-mode: sideways-lr } .rl { writing-mode: sideways-rl } 
+             .back { writing-mode: vertical-lr }",
+            &InteractionState::new(),
+        );
+        let root = arena.roots()[0];
+        let [plain, rl, back] = arena.children(root)[..] else {
+            panic!("three children");
+        };
+        assert_eq!(computed[&root].writing_mode, crate::WritingMode::SidewaysLr);
+        assert_eq!(
+            computed[&root].text_orientation,
+            crate::TextOrientation::Sideways
+        );
+        assert_eq!(
+            computed[&plain].writing_mode,
+            crate::WritingMode::SidewaysLr
+        );
+        // `sideways-rl` is `vertical-rl` with the glyphs on their side.
+        assert_eq!(computed[&rl].writing_mode, crate::WritingMode::VerticalRl);
+        assert_eq!(
+            computed[&rl].text_orientation,
+            crate::TextOrientation::Sideways
+        );
+        // A plain vertical value after a sideways one is not sideways.
+        assert_eq!(computed[&back].writing_mode, crate::WritingMode::VerticalLr);
+        assert_eq!(
+            computed[&back].text_orientation,
+            crate::TextOrientation::Mixed
         );
     }
 

@@ -115,6 +115,10 @@ pub(crate) struct ContainerQueryBlock {
     span: (usize, usize),
     needs_width: bool,
     needs_height: bool,
+    /// The axes the condition asks for by their direction in the container's writing mode:
+    /// `inline-size` is the width of a horizontal container and the height of a vertical one.
+    needs_inline: bool,
+    needs_block: bool,
 }
 
 /// See the module doc. Returns an empty list, unallocated, when `css`
@@ -148,13 +152,16 @@ pub(crate) fn extract_container_queries(css: &str) -> Vec<ContainerQueryBlock> {
             });
             let end = parser.position().byte_index();
             if let Ok(Some((name, condition))) = parsed {
-                let (needs_width, needs_height) = required_axes(&condition);
+                let ((needs_width, needs_height), (needs_inline, needs_block)) =
+                    required_axes(&condition);
                 blocks.push(ContainerQueryBlock {
                     name,
                     condition,
                     span: (start, end),
                     needs_width,
                     needs_height,
+                    needs_inline,
+                    needs_block,
                 });
             }
         }
@@ -225,7 +232,7 @@ pub fn resolve_container_query_signatures(
             .iter()
             .map(|block| {
                 find_container(arena, styles, sizes, id, block)
-                    .map(|size| evaluate(&block.condition, size))
+                    .map(|(size, vertical)| evaluate(&block.condition, size, vertical))
                     .unwrap_or(false)
             })
             .collect();
@@ -247,23 +254,38 @@ fn find_container(
     sizes: &HashMap<NodeId, ContentBoxSize>,
     start: NodeId,
     block: &ContainerQueryBlock,
-) -> Option<ContentBoxSize> {
+) -> Option<(ContentBoxSize, bool)> {
     let mut current = arena.parent(start);
     while let Some(id) = current {
         if let Some(style) = styles.get(&id) {
-            let (provides_width, provides_height) = match style.container_type {
+            // The inline axis is the width of a horizontal container and the height of a
+            // vertical one.
+            let vertical = style.writing_mode.is_vertical();
+            let (provides_inline, provides_block) = match style.container_type {
                 ContainerType::Normal => (false, false),
                 ContainerType::InlineSize => (true, false),
                 ContainerType::Size => (true, true),
             };
-            let axes_ok =
-                (!block.needs_width || provides_width) && (!block.needs_height || provides_height);
+            let provides_width = if vertical {
+                provides_block
+            } else {
+                provides_inline
+            };
+            let provides_height = if vertical {
+                provides_inline
+            } else {
+                provides_block
+            };
+            let axes_ok = (!block.needs_width || provides_width)
+                && (!block.needs_height || provides_height)
+                && (!block.needs_inline || provides_inline)
+                && (!block.needs_block || provides_block);
             let name_ok = block
                 .name
                 .as_ref()
                 .is_none_or(|name| style.container_name.iter().any(|n| n == name));
             if axes_ok && name_ok {
-                return sizes.get(&id).copied();
+                return sizes.get(&id).map(|&size| (size, vertical));
             }
         }
         current = arena.parent(id);
@@ -271,28 +293,35 @@ fn find_container(
     None
 }
 
-fn required_axes(condition: &ConditionNode) -> (bool, bool) {
+/// The axes a condition asks for: by their physical names (`width`, `height`, and both for
+/// the ones that need the two), and by their direction in the container (`inline-size`,
+/// `block-size`).
+fn required_axes(condition: &ConditionNode) -> ((bool, bool), (bool, bool)) {
     match condition {
         ConditionNode::Feature { feature, .. } => match feature {
-            Feature::Width | Feature::InlineSize => (true, false),
-            Feature::Height | Feature::BlockSize => (false, true),
-            Feature::AspectRatio | Feature::Orientation => (true, true),
+            Feature::Width => ((true, false), (false, false)),
+            Feature::Height => ((false, true), (false, false)),
+            Feature::InlineSize => ((false, false), (true, false)),
+            Feature::BlockSize => ((false, false), (false, true)),
+            Feature::AspectRatio | Feature::Orientation => ((true, true), (false, false)),
         },
         ConditionNode::Not(inner) => required_axes(inner),
-        ConditionNode::And(operands) | ConditionNode::Or(operands) => {
-            operands.iter().fold((false, false), |(w, h), operand| {
-                let (ow, oh) = required_axes(operand);
-                (w || ow, h || oh)
-            })
-        }
+        ConditionNode::And(operands) | ConditionNode::Or(operands) => operands.iter().fold(
+            ((false, false), (false, false)),
+            |((w, h), (i, b)), operand| {
+                let ((ow, oh), (oi, ob)) = required_axes(operand);
+                ((w || ow, h || oh), (i || oi, b || ob))
+            },
+        ),
     }
 }
 
-fn evaluate(node: &ConditionNode, size: ContentBoxSize) -> bool {
+/// Whether `node` holds for a container of `size`, which is `vertical` if its lines run down.
+fn evaluate(node: &ConditionNode, size: ContentBoxSize, vertical: bool) -> bool {
     match node {
-        ConditionNode::Not(inner) => !evaluate(inner, size),
-        ConditionNode::And(operands) => operands.iter().all(|o| evaluate(o, size)),
-        ConditionNode::Or(operands) => operands.iter().any(|o| evaluate(o, size)),
+        ConditionNode::Not(inner) => !evaluate(inner, size, vertical),
+        ConditionNode::And(operands) => operands.iter().all(|o| evaluate(o, size, vertical)),
+        ConditionNode::Or(operands) => operands.iter().any(|o| evaluate(o, size, vertical)),
         ConditionNode::Feature {
             feature,
             comparison,
@@ -300,12 +329,16 @@ fn evaluate(node: &ConditionNode, size: ContentBoxSize) -> bool {
         } => match (feature, value) {
             (Feature::Width, FeatureValue::Length(px)) => compare(size.width, *comparison, *px),
             (Feature::Height, FeatureValue::Length(px)) => compare(size.height, *comparison, *px),
-            (Feature::InlineSize, FeatureValue::Length(px)) => {
-                compare(size.width, *comparison, *px)
-            }
-            (Feature::BlockSize, FeatureValue::Length(px)) => {
-                compare(size.height, *comparison, *px)
-            }
+            (Feature::InlineSize, FeatureValue::Length(px)) => compare(
+                if vertical { size.height } else { size.width },
+                *comparison,
+                *px,
+            ),
+            (Feature::BlockSize, FeatureValue::Length(px)) => compare(
+                if vertical { size.width } else { size.height },
+                *comparison,
+                *px,
+            ),
             (Feature::AspectRatio, FeatureValue::Ratio(num, den)) => {
                 if size.height <= 0.0 || *den <= 0.0 {
                     return false;
@@ -583,8 +616,8 @@ mod tests {
             width: 399.0,
             height: 0.0,
         };
-        assert!(evaluate(&blocks[0].condition, at));
-        assert!(!evaluate(&blocks[0].condition, below));
+        assert!(evaluate(&blocks[0].condition, at, false));
+        assert!(!evaluate(&blocks[0].condition, below, false));
     }
 
     #[test]
@@ -596,14 +629,16 @@ mod tests {
             ContentBoxSize {
                 width: 400.0,
                 height: 0.0
-            }
+            },
+            false
         ));
         assert!(!evaluate(
             &blocks[0].condition,
             ContentBoxSize {
                 width: 600.0,
                 height: 0.0
-            }
+            },
+            false
         ));
     }
 
@@ -615,14 +650,16 @@ mod tests {
             ContentBoxSize {
                 width: 100.0,
                 height: 200.0
-            }
+            },
+            false
         ));
         assert!(!evaluate(
             &blocks[0].condition,
             ContentBoxSize {
                 width: 200.0,
                 height: 100.0
-            }
+            },
+            false
         ));
     }
 
