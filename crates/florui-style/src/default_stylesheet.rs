@@ -204,7 +204,7 @@ const CSS: &str = "
     }
 
     dd {
-        margin-left: 40px;
+        margin-inline-start: 40px;
     }
 
     hr {
@@ -411,6 +411,13 @@ const CSS: &str = "
         font-weight: bold;
     }
 
+    /* The `dir` attribute sets the direction of an element, and keeps it apart from the text
+       around it; a `bdo` overrides the direction of its characters. */
+    [dir=ltr i] { direction: ltr; unicode-bidi: isolate; }
+    [dir=rtl i] { direction: rtl; unicode-bidi: isolate; }
+    bdi { unicode-bidi: isolate; }
+    bdo, bdo[dir] { unicode-bidi: isolate-override; }
+
     h1, h2, h3, h4, h5, h6 {
         font-weight: bold;
     }
@@ -428,7 +435,7 @@ const CSS: &str = "
         display: block;
         margin-top: 1em;
         margin-bottom: 1em;
-        padding-left: 40px;
+        padding-inline-start: 40px;
     }
     ul, menu { list-style-type: disc; }
     ol { list-style-type: decimal; }
@@ -519,6 +526,79 @@ mod tests {
             &mut crate::AnimationTimeline::default(),
         );
         computed[&arena.roots()[0]].clone()
+    }
+
+    #[test]
+    fn the_dir_attribute_sets_the_direction_and_isolates_the_element() {
+        // `bdo` and `bdi` are not primitives of the view syntax.
+        let tag = |name: &'static str, dir: Option<&str>| {
+            let attributes = dir.map_or_else(Vec::new, |dir| vec![("dir".into(), dir.into())]);
+            Element::node(name, attributes, vec![])
+        };
+        let tree = Element::node(
+            "div",
+            vec![("dir".into(), "rtl".into())],
+            vec![
+                tag("span", Some("LTR")),
+                tag("bdo", Some("rtl")),
+                tag("bdi", None),
+                tag("span", None),
+            ],
+        );
+        let arena = Arena::build(&tree);
+        let div = arena.roots()[0];
+        let [ltr, bdo, bdi, plain] = arena.children(div)[..] else {
+            panic!("four children");
+        };
+        let rules = parse_stylesheet("").unwrap();
+        let computed = compute(
+            &arena,
+            &rules,
+            &InteractionState::new(),
+            Viewport::default(),
+            &mut crate::AnimationTimeline::default(),
+        );
+        assert_eq!(computed[&div].direction, crate::Direction::Rtl);
+        assert_eq!(computed[&div].unicode_bidi, crate::UnicodeBidi::Isolate);
+        assert_eq!(computed[&ltr].direction, crate::Direction::Ltr, "any case");
+        assert_eq!(computed[&bdo].direction, crate::Direction::Rtl);
+        assert_eq!(
+            computed[&bdo].unicode_bidi,
+            crate::UnicodeBidi::IsolateOverride
+        );
+        assert_eq!(computed[&bdi].unicode_bidi, crate::UnicodeBidi::Isolate);
+        assert_eq!(
+            computed[&plain].direction,
+            crate::Direction::Rtl,
+            "inherited"
+        );
+        assert_eq!(computed[&plain].unicode_bidi, crate::UnicodeBidi::Normal);
+    }
+
+    #[test]
+    fn a_list_and_a_definition_are_indented_on_the_side_the_text_starts() {
+        let list = |dir: &str| -> Element {
+            Element::node("ul", vec![("dir".into(), dir.into())], vec![])
+        };
+        let ltr = computed_style_of(list("ltr"));
+        assert_close(ltr.padding.left, 40.0, "ltr list padding-left");
+        assert_close(ltr.padding.right, 0.0, "ltr list padding-right");
+        let rtl = computed_style_of(list("rtl"));
+        assert_close(rtl.padding.right, 40.0, "rtl list padding-right");
+        assert_close(rtl.padding.left, 0.0, "rtl list padding-left");
+        let definition = |dir: &str| -> Element {
+            Element::node("dd", vec![("dir".into(), dir.into())], vec![])
+        };
+        assert_close(
+            computed_style_of(definition("ltr")).margin.left.unwrap(),
+            40.0,
+            "ltr definition margin-left",
+        );
+        assert_close(
+            computed_style_of(definition("rtl")).margin.right.unwrap(),
+            40.0,
+            "rtl definition margin-right",
+        );
     }
 
     #[test]
