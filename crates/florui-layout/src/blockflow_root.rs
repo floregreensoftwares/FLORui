@@ -31,7 +31,7 @@ impl Run<'_> {
     /// Lays out the block formatting context rooted at `id`, which has floats in
     /// it. What Taffy's block layout is for a root with none.
     pub(crate) fn flow_region_root(&mut self, id: NodeId, inputs: LayoutInput) -> LayoutOutput {
-        let style = self.tree.node(id).style.clone();
+        let style = self.tree.node(id).content_view().clone();
         let own = own_of(&style, inputs.parent_size);
         let inherent = inputs.sizing_mode == SizingMode::InherentSize;
         let style_size = if inherent {
@@ -102,6 +102,7 @@ impl Run<'_> {
             },
             collapsible: Line::FALSE,
             root: true,
+            rtl: style.direction == taffy::Direction::Rtl,
         };
         let out = self.block(&mut bfc, id, &geo);
         let size = Size {
@@ -131,7 +132,7 @@ impl Run<'_> {
             if matches!(part, Part::Hidden | Part::Absolute) {
                 continue;
             }
-            let style = self.tree.node(child).style.clone();
+            let style = self.item_style(child).clone();
             let margins = style.margin.resolve_or_zero(None, calc).sum_axes().width;
             let inputs = LayoutInput {
                 run_mode: RunMode::ComputeSize,

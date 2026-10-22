@@ -55,6 +55,8 @@ impl Run<'_> {
         } else if style.float != taffy::Float::None {
             Part::Float
         } else if style.display != Display::Block
+            // A box of another flow than its parent's is the root of a context of its own.
+            || node.flow.is_vertical() != node.parent_flow.is_vertical()
             || self.tree.node(id).role.is_table()
             || style.overflow.x.is_scroll_container()
             || style.overflow.y.is_scroll_container()
@@ -128,6 +130,9 @@ pub(crate) struct Geo {
     pub(crate) collapsible: Line<bool>,
     /// Whether it is the root of the context, which contains its floats.
     pub(crate) root: bool,
+    /// Whether its `direction` is right to left: what its blocks do not fill is on their left,
+    /// and an absolutely positioned child with no inset sits against its right edge.
+    pub(crate) rtl: bool,
 }
 
 /// What laying a block out came to.

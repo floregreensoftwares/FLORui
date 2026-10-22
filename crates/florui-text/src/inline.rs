@@ -1134,6 +1134,7 @@ impl Font {
             lines.push(crate::LineBox {
                 top: cursor,
                 height: placed.height,
+                hanging: metrics.trailing_whitespace,
             });
             cursor += placed.height;
         }

@@ -789,6 +789,8 @@ pub struct ShapedRun {
 pub struct LineBox {
     pub top: f32,
     pub height: f32,
+    /// How wide the white space is that hangs past the end of the line.
+    pub hanging: f32,
 }
 
 impl LineBox {
@@ -1468,6 +1470,7 @@ impl Font {
             lines.push(LineBox {
                 top: metrics.block_min_coord,
                 height: metrics.block_max_coord - metrics.block_min_coord,
+                hanging: metrics.trailing_whitespace,
             });
             for item in line.items() {
                 let PositionedLayoutItem::GlyphRun(glyph_run) = item else {

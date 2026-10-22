@@ -1,0 +1,106 @@
+{
+    "id":  "direction-flow",
+    "description":  "direction: rtl on a scroller (which starts scrolled to its start edge), absolutely positioned boxes with and without an inset, floats with text around them, and text-indent.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  300,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 300px; background-color: #ffffff; color: #101010; font-size: 14px; line-height: 18px; padding: 8px; box-sizing: border-box; } .wrap \u003e div { margin: 0 0 8px 0; background-color: #e8e8e8; } .rtl { direction: rtl; } .s { width: 120px; height: 40px; overflow: auto; } .s div { width: 200px; height: 20px; background-color: #c0d0f0; } .a { position: relative; width: 200px; height: 40px; } .a i { position: absolute; width: 20px; height: 20px; background-color: #f0c0c0; } .a b { position: absolute; top: 10px; width: 20px; height: 20px; background-color: #c0f0c0; right: 5px; } .f { width: 200px; } .f span { float: left; width: 30px; height: 20px; background-color: #f0d0b0; } .f em { float: right; width: 30px; height: 20px; background-color: #b0d0f0; } .t { text-align: start; } .u { text-indent: 20px; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "s rtl",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "wide content in a scroller",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a rtl",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "i",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "b",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "f rtl",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "em",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         "text wraps around the floats in a right to left box of text"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "u rtl",
+                                        "css":  "",
+                                        "text":  "indented text in a right to left paragraph that wraps over lines for sure",
+                                        "children":  [
+
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  6,
+                           "geometry_tolerance_px":  0.5,
+                           "channel_tolerance":  0,
+                           "reason":  "Measured against Chromium 155 on Windows: 5.39% of the pixels differ, all of it the antialiasing of the text: the scroller shows the same part of its content, the absolutely positioned boxes are where Chromium puts them, and the lines run around the floats and start at the same edge."
+                       }
+}

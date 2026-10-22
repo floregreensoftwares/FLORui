@@ -3932,9 +3932,15 @@ fn paint_list_marker(
         }
         _ => None,
     };
-    // An inside marker is at the start of the first line: wherever that is.
+    // An inside marker is at the start of the first line: wherever that is. It has the room of
+    // its box, the gap after it included.
+    let room = if inside {
+        florui_layout::inside_marker_room(font, style, anchor.number)
+    } else {
+        0.0
+    };
     let line_start = if inside {
-        let advance = florui_layout::inside_marker_room(font, style, anchor.number);
+        let advance = room;
         Some(inside_line_start(
             font,
             (arena, styles, layouts),
@@ -3951,6 +3957,9 @@ fn paint_list_marker(
         if !size.broken {
             let (width, height) = (size.width * scale_factor, size.height * scale_factor);
             let left = match line_start {
+                // In a right to left line the gap is on the side of the text, so the picture is
+                // against the far end of its box.
+                Some(start) if rtl => start + room * scale_factor - width,
                 Some(start) => start,
                 None if rtl => content_right + florui_layout::IMAGE_GAP * scale_factor,
                 None => content_left - width - florui_layout::IMAGE_GAP * scale_factor,
@@ -4006,15 +4015,19 @@ fn paint_list_marker(
     match kind {
         Some(florui_layout::MarkerKind::Shape(shape)) => {
             let metrics = florui_layout::shape_metrics(ascent, style.font_size);
+            let size = metrics.size * scale_factor;
             let left = match line_start {
                 // The box of an unreadable image is 2px wider than the bullet, which is in the middle of it.
+                Some(start) if rtl && image_failed => {
+                    start + room * scale_factor - size - scale_factor
+                }
+                Some(start) if rtl => start + room * scale_factor - size,
                 Some(start) if image_failed => start + scale_factor,
                 Some(start) => start,
                 None if rtl => content_right - (metrics.x + metrics.size) * scale_factor,
                 None => content_left + metrics.x * scale_factor,
             };
             let top = baseline + metrics.y * scale_factor;
-            let size = metrics.size * scale_factor;
             paint_marker_shape(buffer, shape, (left, top, size), color, scale_factor, clip);
         }
         Some(florui_layout::MarkerKind::Text(text)) => {
@@ -4121,7 +4134,11 @@ fn inside_line_start(
             .iter()
             .filter(|run| run.line == 0 && run.width > 0.0);
         if rtl {
-            runs.map(|run| run.x + run.width).max_by(f32::total_cmp)
+            // Where the text of the line ends: not the white space that hangs past it, which
+            // the runs hold.
+            let hanging = shaped.layout.lines.first().map_or(0.0, |line| line.hanging);
+            runs.map(|run| run.x + run.width - hanging)
+                .max_by(f32::total_cmp)
         } else {
             runs.map(|run| run.x).min_by(f32::total_cmp)
         }
