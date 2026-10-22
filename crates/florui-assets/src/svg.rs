@@ -228,11 +228,7 @@ pub fn rasterize_svg(image: &VectorImage, fit: RasterFit) -> Result<RasterImage,
 
     let mut rgba = pixmap.data().to_vec();
     unpremultiply(&mut rgba);
-    Ok(RasterImage {
-        rgba,
-        width: target_width,
-        height: target_height,
-    })
+    Ok(RasterImage::new(rgba, target_width, target_height))
 }
 
 /// Straight = premultiplied * 255 / alpha, per channel. `tiny-skia`'s own

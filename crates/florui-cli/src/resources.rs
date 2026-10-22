@@ -307,11 +307,7 @@ fn fit_into_square(source: &RasterImage, size: u32) -> RasterImage {
         ((size - width) / 2) as i64,
         ((size - height) / 2) as i64,
     );
-    RasterImage {
-        rgba: canvas.into_raw(),
-        width: size,
-        height: size,
-    }
+    RasterImage::new(canvas.into_raw(), size, size)
 }
 
 /// The `.ico` file: a directory of PNG-compressed images.

@@ -25,7 +25,8 @@ pub enum AssetError {
         path: Option<PathBuf>,
     },
     Svg(resvg::usvg::Error),
-    Png(image::ImageError),
+    /// A raster image (PNG, JPEG, WebP or GIF) that could not be decoded.
+    Raster(image::ImageError),
     /// A requested raster target exceeds [`crate::limits::MAX_RASTER_DIMENSION`]
     /// on at least one axis.
     RasterTooLarge {
@@ -65,7 +66,7 @@ impl fmt::Display for AssetError {
             }
             AssetError::InvalidUtf8 { path: None } => write!(f, "asset is not valid UTF-8 text"),
             AssetError::Svg(err) => write!(f, "could not parse SVG: {err}"),
-            AssetError::Png(err) => write!(f, "could not decode PNG: {err}"),
+            AssetError::Raster(err) => write!(f, "could not decode the image: {err}"),
             AssetError::RasterTooLarge {
                 width,
                 height,
@@ -87,7 +88,7 @@ impl std::error::Error for AssetError {
         match self {
             AssetError::Io { source, .. } => Some(source),
             AssetError::Svg(err) => Some(err),
-            AssetError::Png(err) => Some(err),
+            AssetError::Raster(err) => Some(err),
             AssetError::SourceTooLarge { .. }
             | AssetError::InvalidUtf8 { .. }
             | AssetError::RasterTooLarge { .. }

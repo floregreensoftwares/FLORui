@@ -11,12 +11,12 @@
 //!
 //! ## Format scope
 //!
-//! PNG and SVG, matching `florui-assets`'s own scope — any other
-//! extension fails immediately with [`ImageLoadError::UnsupportedFormat`]
+//! PNG, JPEG, WebP, GIF and SVG, matching `florui-assets`'s own scope — any
+//! other extension fails immediately with [`ImageLoadError::UnsupportedFormat`]
 //! rather than being silently attempted and failing with a confusing
 //! decode error.
 //!
-//! PNG decodes in one background step, straight to [`ImageState::Ready`]
+//! A raster image (PNG, JPEG, WebP, GIF) decodes in one background step, straight to [`ImageState::Ready`]
 //! (`florui_assets::DecodeParams::Native` has no size parameter — see
 //! that type's own doc). SVG is real vector content: rasterizing it at
 //! an arbitrary fixed size the moment it's parsed would either blur it
@@ -62,7 +62,7 @@ use taffy::geometry::Size;
 /// without that being a `florui-assets` concern.
 #[derive(Debug)]
 pub enum ImageLoadError {
-    /// `src`'s extension isn't `.png`/`.svg` — see this module's own doc
+    /// `src`'s extension isn't one of a raster image's or `.svg` — see this module's own doc
     /// on format scope.
     UnsupportedFormat {
         extension: Option<String>,
@@ -75,7 +75,7 @@ impl std::fmt::Display for ImageLoadError {
         match self {
             ImageLoadError::UnsupportedFormat { extension } => write!(
                 f,
-                "unsupported <img> format ({}) -- only .png and .svg are supported",
+                "unsupported <img> format ({}) -- only .png, .jpg, .jpeg, .webp, .gif and .svg are supported",
                 extension.as_deref().unwrap_or("none")
             ),
             ImageLoadError::Asset(err) => write!(f, "{err}"),
@@ -208,7 +208,7 @@ impl ImageRegistry {
                         entry.state = ImageState::Failed(Arc::new(error));
                     }
                 }
-                Some(Format::Png) => {
+                Some(Format::Raster) => {
                     let cache = Arc::clone(cache);
                     let entries_for_task = Rc::clone(&self.entries);
                     let key_for_task = key.clone();
@@ -380,12 +380,13 @@ impl ImageRegistry {
 }
 
 enum Format {
-    Png,
+    /// A PNG, JPEG, WebP or GIF.
+    Raster,
     Svg,
 }
 
-/// `None` for anything but `.png`/`.svg` (case-insensitive). See this
-/// module's own doc on format scope.
+/// `None` for anything but a raster image's extension or `.svg` (case-insensitive).
+/// See this module's own doc on format scope.
 fn classify_format(path: &Path) -> Option<Format> {
     match path
         .extension()
@@ -393,9 +394,9 @@ fn classify_format(path: &Path) -> Option<Format> {
         .map(str::to_ascii_lowercase)
         .as_deref()
     {
-        Some("png") => Some(Format::Png),
         Some("svg") => Some(Format::Svg),
-        _ => None,
+        Some(extension) => florui_assets::Format::of_extension(extension).map(|_| Format::Raster),
+        None => None,
     }
 }
 
@@ -495,6 +496,34 @@ mod tests {
     }
 
     #[test]
+    fn a_jpeg_source_loads_and_reports_its_real_intrinsic_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cover.jpg");
+        let image = image::RgbImage::from_fn(30, 20, |x, y| image::Rgb([x as u8, y as u8, 90]));
+        image::DynamicImage::ImageRgb8(image)
+            .save_with_format(&path, image::ImageFormat::Jpeg)
+            .unwrap();
+        let tree: Element = view! { <img src={path.display().to_string()} /> };
+        let arena = Arena::build(&tree);
+        let registry = ImageRegistry::new();
+        let cache = Arc::new(florui_assets::AssetCache::new());
+        let executor = LocalExecutor::new();
+        registry.sync(&arena, &cache, &executor);
+        let key = FocusPath::of(&arena, arena.roots()[0]);
+        assert!(wait_until(|| {
+            executor.run_until_stalled();
+            registry.intrinsic_size(&key).is_some()
+        }));
+        assert_eq!(
+            registry.intrinsic_size(&key),
+            Some(Size {
+                width: 30.0,
+                height: 20.0
+            })
+        );
+    }
+
+    #[test]
     fn a_missing_file_reports_a_load_error_not_a_panic() {
         let tree: Element = view! { <img src="does/not/exist.png" /> };
         let arena = Arena::build(&tree);
@@ -517,7 +546,7 @@ mod tests {
 
     #[test]
     fn an_unsupported_extension_fails_immediately_without_a_background_task() {
-        let tree: Element = view! { <img src="photo.jpg" /> };
+        let tree: Element = view! { <img src="photo.bmp" /> };
         let arena = Arena::build(&tree);
         let registry = ImageRegistry::new();
         let cache = Arc::new(florui_assets::AssetCache::new());

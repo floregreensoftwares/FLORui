@@ -127,7 +127,7 @@ fn from_asset_error(err: florui_assets::AssetError, path: Option<&Path>) -> Icon
     match err {
         florui_assets::AssetError::Io { path, source } => IconError::Io { path, source },
         florui_assets::AssetError::Svg(err) => IconError::Svg(err),
-        florui_assets::AssetError::Png(err) => IconError::Png(err),
+        florui_assets::AssetError::Raster(err) => IconError::Png(err),
         florui_assets::AssetError::SourceTooLarge {
             byte_len, limit, ..
         } => IconError::SourceTooLarge {

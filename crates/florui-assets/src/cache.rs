@@ -2,15 +2,15 @@
 //! the retention policy.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 
 use crate::error::AssetError;
-use crate::raster::{RasterImage, decode_png};
+use crate::raster::{RasterImage, decode_raster};
 use crate::source::{AssetId, AssetSource};
 use crate::svg::{RasterFit, parse_svg, rasterize_svg, substitute_current_color};
 
-/// Which decode a cache entry holds the result of. A PNG (or any future
-/// raster format) decodes once at its native size regardless of how it
+/// Which decode a cache entry holds the result of. A raster image (PNG, JPEG,
+/// WebP, GIF) decodes once at its native size regardless of how it
 /// will be displayed, so it needs no size parameter; an SVG is decoded
 /// per requested [`RasterFit`], since a different target size is
 /// genuinely a different pixel result worth caching separately.
@@ -51,6 +51,52 @@ struct CacheKey {
 #[derive(Default)]
 pub struct AssetCache {
     entries: Mutex<HashMap<CacheKey, Weak<RasterImage>>>,
+    /// The decodes under way, so that asking for what another thread is already
+    /// decoding waits for that one instead of decoding it again.
+    decoding: Mutex<HashMap<CacheKey, Arc<Decoding>>>,
+}
+
+/// A decode under way: finished once `done` is set.
+#[derive(Default)]
+struct Decoding {
+    done: Mutex<bool>,
+    finished: Condvar,
+}
+
+/// How many decodes run at once, whatever number of threads ask: a screen of
+/// pictures loading together would otherwise decode on as many threads as there
+/// are pictures, and the interface would wait for all of them.
+fn decode_slots() -> &'static (Mutex<usize>, Condvar) {
+    static SLOTS: OnceLock<(Mutex<usize>, Condvar)> = OnceLock::new();
+    SLOTS.get_or_init(|| {
+        let cores = std::thread::available_parallelism().map_or(2, usize::from);
+        (Mutex::new((cores / 2).clamp(1, 4)), Condvar::new())
+    })
+}
+
+/// A place among the decodes that run, given back when it is dropped.
+struct DecodeSlot;
+
+impl DecodeSlot {
+    fn take() -> Self {
+        let (free, freed) = decode_slots();
+        let mut free = free.lock().unwrap_or_else(|poison| poison.into_inner());
+        while *free == 0 {
+            free = freed
+                .wait(free)
+                .unwrap_or_else(|poison| poison.into_inner());
+        }
+        *free -= 1;
+        Self
+    }
+}
+
+impl Drop for DecodeSlot {
+    fn drop(&mut self) {
+        let (free, freed) = decode_slots();
+        *free.lock().unwrap_or_else(|poison| poison.into_inner()) += 1;
+        freed.notify_one();
+    }
 }
 
 impl AssetCache {
@@ -74,15 +120,60 @@ impl AssetCache {
         let id = source.identity()?;
         let key = CacheKey { id, params };
 
-        if let Some(existing) = self.upgrade(&key) {
-            florui_profile::count(florui_profile::Counter::AssetCacheHits, 1);
-            return Ok(existing);
+        loop {
+            if let Some(existing) = self.upgrade(&key) {
+                florui_profile::count(florui_profile::Counter::AssetCacheHits, 1);
+                return Ok(existing);
+            }
+            // Either this thread decodes it, or it waits for the one that does
+            // and looks again: if that failed, nothing is cached and it tries.
+            let (decoding, leads) = {
+                let mut under_way = self
+                    .decoding
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                match under_way.get(&key) {
+                    Some(decoding) => (Arc::clone(decoding), false),
+                    None => {
+                        let decoding = Arc::new(Decoding::default());
+                        under_way.insert(key.clone(), Arc::clone(&decoding));
+                        (decoding, true)
+                    }
+                }
+            };
+            if !leads {
+                let mut done = decoding
+                    .done
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner());
+                while !*done {
+                    done = decoding
+                        .finished
+                        .wait(done)
+                        .unwrap_or_else(|poison| poison.into_inner());
+                }
+                continue;
+            }
+            florui_profile::count(florui_profile::Counter::AssetCacheMisses, 1);
+            let result = {
+                let _slot = DecodeSlot::take();
+                decode(source, params)
+            };
+            let decoded = result.map(Arc::new);
+            if let Ok(image) = &decoded {
+                self.lock().insert(key.clone(), Arc::downgrade(image));
+            }
+            self.decoding
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .remove(&key);
+            *decoding
+                .done
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner()) = true;
+            decoding.finished.notify_all();
+            return decoded;
         }
-        florui_profile::count(florui_profile::Counter::AssetCacheMisses, 1);
-
-        let decoded = Arc::new(decode(source, params)?);
-        self.lock().insert(key, Arc::downgrade(&decoded));
-        Ok(decoded)
     }
 
     fn upgrade(&self, key: &CacheKey) -> Option<Arc<RasterImage>> {
@@ -119,7 +210,10 @@ fn decode(source: &AssetSource<'_>, params: DecodeParams) -> Result<RasterImage,
     match params {
         DecodeParams::Native => {
             let bytes = source.read_bytes()?;
-            decode_png(&bytes)
+            let image = decode_raster(&bytes)?;
+            // What painting reads is made here, on the thread that decodes.
+            image.prepare();
+            Ok(image)
         }
         DecodeParams::Rasterized(fit) => {
             let text = source.read_text()?;
@@ -148,6 +242,78 @@ mod tests {
         let path = dir.path().join(name);
         std::fs::write(&path, BLUE_CIRCLE_SVG).unwrap();
         path
+    }
+
+    fn encoded(format: image::ImageFormat) -> Vec<u8> {
+        let image =
+            image::RgbImage::from_fn(48, 32, |x, y| image::Rgb([x as u8 * 4, y as u8 * 4, 90]));
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(&mut std::io::Cursor::new(&mut bytes), format)
+            .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn every_raster_format_loads_through_the_cache_by_its_extension_or_its_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = AssetCache::new();
+        for (name, format) in [
+            ("a.png", image::ImageFormat::Png),
+            ("a.jpg", image::ImageFormat::Jpeg),
+            ("a.webp", image::ImageFormat::WebP),
+            ("a.gif", image::ImageFormat::Gif),
+            // The name says nothing: the first bytes do.
+            ("no-extension", image::ImageFormat::Jpeg),
+        ] {
+            let path = dir.path().join(name);
+            std::fs::write(&path, encoded(format)).unwrap();
+            let image = cache
+                .get_or_load(&AssetSource::Path(&path), DecodeParams::Native)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!((image.width, image.height), (48, 32), "{name}");
+        }
+    }
+
+    #[test]
+    fn threads_asking_for_the_same_image_at_once_share_one_decode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cover.jpg");
+        std::fs::write(&path, encoded(image::ImageFormat::Jpeg)).unwrap();
+        let cache = Arc::new(AssetCache::new());
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                let (cache, path) = (Arc::clone(&cache), path.clone());
+                std::thread::spawn(move || {
+                    cache
+                        .get_or_load(&AssetSource::Path(&path), DecodeParams::Native)
+                        .unwrap()
+                })
+            })
+            .collect();
+        let images: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        for image in &images {
+            assert!(Arc::ptr_eq(&images[0], image), "one decode for all of them");
+        }
+    }
+
+    #[test]
+    fn a_decode_that_fails_is_not_kept_and_does_not_hold_the_next_one_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("broken.jpg");
+        std::fs::write(&path, [0xFF, 0xD8, 0xFF, 0x00, 0x01]).unwrap();
+        let cache = AssetCache::new();
+        assert!(
+            cache
+                .get_or_load(&AssetSource::Path(&path), DecodeParams::Native)
+                .is_err()
+        );
+        std::fs::write(&path, encoded(image::ImageFormat::Jpeg)).unwrap();
+        assert!(
+            cache
+                .get_or_load(&AssetSource::Path(&path), DecodeParams::Native)
+                .is_ok()
+        );
     }
 
     #[test]
