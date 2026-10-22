@@ -13,12 +13,18 @@
 //! else its `http` entry. A bypass list is honoured (`*.corp.example`, `.corp.example`,
 //! `<local>`, `10.0.0.0/8`, `192.168.*`...).
 //!
-//! What is not read is a proxy that a script decides (a PAC file, `auto` in GNOME, `Use
-//! automatic configuration script` in Windows and KDE) and automatic detection (WPAD):
-//! running the script needs a JavaScript engine, which this crate does not carry. A system
-//! set up that way is not ignored, because requests would then bypass a proxy the user
-//! needs: every request fails and says why, until the application sets
-//! [`ProxyMode::Url`] or the environment sets `HTTPS_PROXY`.
+//! What is not read is a proxy that a script decides: running a PAC file needs a JavaScript
+//! engine, which this crate does not carry. A system that is set to use a script (`auto` in
+//! GNOME, `Use setup script` in Windows, a script or automatic detection chosen in KDE) is not
+//! ignored, because requests would then bypass a proxy the user needs: every request fails
+//! and says why, until the application sets [`ProxyMode::Url`] or the environment sets
+//! `HTTPS_PROXY`. The exception is the `Automatically detect settings` box of Windows, which
+//! is on by default and usually finds nothing: it is not read, so that setting alone does not
+//! stop requests, and a network that needs WPAD to reach the proxy needs one of those two.
+//!
+//! A bypass entry that is a plain name (`corp.example`) matches that host and the hosts under
+//! it, as `NO_PROXY`, KDE and GNOME read it; the entries of Windows' list match exactly, as
+//! Windows reads them (`*.corp.example` for the hosts under).
 
 use std::net::IpAddr;
 
@@ -94,8 +100,10 @@ enum Rule {
     All,
     /// `<local>`: a name with no dot.
     Local,
-    /// A name or a pattern with `*` in it, any case.
+    /// A pattern with `*` in it, or (written `=name`) a name that must match exactly.
     Glob(String),
+    /// A plain name: that host and the hosts under it.
+    Name(String),
     /// `.example.com`: the domain and what is under it.
     Domain(String),
     Network(IpAddr, u8),
@@ -119,6 +127,8 @@ impl Bypass {
                     Rule::Network(address, bits)
                 } else if let Some(domain) = token.strip_prefix('.') {
                     Rule::Domain(domain.to_owned())
+                } else if let Some(exact) = token.strip_prefix('=') {
+                    Rule::Glob(exact.to_owned())
                 } else if let Some((inside, after)) = token
                     .strip_prefix('[')
                     .and_then(|rest| rest.split_once(']'))
@@ -141,7 +151,11 @@ impl Bypass {
                         }
                         _ => token.as_str(),
                     };
-                    Rule::Glob(name.to_owned())
+                    if name.contains('*') {
+                        Rule::Glob(name.to_owned())
+                    } else {
+                        Rule::Name(name.to_owned())
+                    }
                 });
             }
         }
@@ -163,6 +177,7 @@ impl Bypass {
             Rule::All => true,
             Rule::Local => !host.contains('.') && address.is_none(),
             Rule::Glob(pattern) => glob(pattern, &host),
+            Rule::Name(name) => host == *name || host.ends_with(&format!(".{name}")),
             Rule::Domain(domain) => host == *domain || host.ends_with(&format!(".{domain}")),
             Rule::Network(network, bits) => {
                 address.is_some_and(|address| in_network(address, *network, *bits))
@@ -256,7 +271,7 @@ pub(crate) fn parse_windows(output: &str) -> System {
             return System::Direct;
         };
         let bypass = value("ProxyOverride")
-            .map(|list| vec![list.to_owned()])
+            .map(|list| vec![windows_exact(list)])
             .unwrap_or_default();
         return System::Manual { url, bypass };
     }
@@ -264,6 +279,27 @@ pub(crate) fn parse_windows(output: &str) -> System {
         return System::Script("a proxy auto-configuration script".to_owned());
     }
     System::Direct
+}
+
+/// The Windows list with its plain names marked as exact, which is how Windows matches them.
+#[cfg(any(windows, test))]
+fn windows_exact(list: &str) -> String {
+    list.split([';', ',', ' '])
+        .filter(|token| !token.is_empty())
+        .map(|token| {
+            let plain = !token.contains('*')
+                && !token.starts_with('.')
+                && !token.starts_with('<')
+                && !token.starts_with('[')
+                && cidr(token).is_none();
+            if plain {
+                format!("={token}")
+            } else {
+                token.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 /// `host:port` for every scheme, or `http=h:p;https=h:p;socks=h:p`.
@@ -700,5 +736,38 @@ mod tests {
         let started = std::time::Instant::now();
         assert_eq!(run("sh", &["-c", "sleep 30"]), None);
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_plain_name_matches_the_host_and_the_hosts_under_it_unless_it_is_marked_exact() {
+        let list = bypass(&["corp.example"]);
+        assert!(list.matches("corp.example") && list.matches("img.corp.example"));
+        assert!(!list.matches("notcorp.example") && !list.matches("example"));
+        let exact = bypass(&["=corp.example"]);
+        assert!(exact.matches("corp.example") && !exact.matches("img.corp.example"));
+    }
+
+    #[test]
+    fn the_windows_list_matches_plain_names_exactly() {
+        let output = "    ProxyEnable    REG_DWORD    0x1\n    ProxyServer    REG_SZ    p:1\n    ProxyOverride    REG_SZ    intranet.corp;*.corp;10.0.0.0/8;<local>\n";
+        let System::Manual {
+            bypass: entries, ..
+        } = parse_windows(output)
+        else {
+            panic!("a manual proxy")
+        };
+        let list = Bypass::parse(&entries);
+        assert!(list.matches("intranet.corp") && list.matches("x.corp"));
+        assert!(!list.matches("a.intranet.corp.example"));
+        assert!(list.matches("10.1.1.1") && list.matches("nas"));
+        // Marked exact: the host itself, not what is under it.
+        let plain = Bypass::parse(&[windows_exact("host.example")]);
+        assert!(plain.matches("host.example") && !plain.matches("a.host.example"));
+    }
+
+    #[test]
+    fn a_bracketed_ipv6_network_with_a_prefix_length_is_a_network() {
+        let list = bypass(&["[2001:db8::]/32"]);
+        assert!(list.matches("2001:db8:1::5") && !list.matches("2001:db9::1"));
     }
 }

@@ -76,7 +76,20 @@ pub fn substitute_current_color(svg_text: &str, color: [u8; 3]) -> String {
 /// Parses `svg_text` and reads its intrinsic size. Pure -- takes no path,
 /// touches no disk.
 pub fn parse_svg(svg_text: &str) -> Result<VectorImage, AssetError> {
-    let options = resvg::usvg::Options::default();
+    parse(svg_text, resvg::usvg::Options::default())
+}
+
+/// [`parse_svg`] for a document that someone else wrote (a download): an `<image href>` that
+/// names a file is not read, since it would show the contents of the viewer's own files to
+/// whoever wrote the document, and a file that exists would change what is drawn. An image
+/// carried in the document as a `data:` URL still draws.
+pub fn parse_svg_untrusted(svg_text: &str) -> Result<VectorImage, AssetError> {
+    let mut options = resvg::usvg::Options::default();
+    options.image_href_resolver.resolve_string = Box::new(|_href, _options| None);
+    parse(svg_text, options)
+}
+
+fn parse(svg_text: &str, options: resvg::usvg::Options<'_>) -> Result<VectorImage, AssetError> {
     let tree = resvg::usvg::Tree::from_str(svg_text, &options).map_err(AssetError::Svg)?;
     let size = tree.size();
     Ok(VectorImage {
@@ -448,5 +461,52 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, AssetError::RasterTargetEmpty { .. }));
+    }
+
+    #[test]
+    fn an_untrusted_svg_does_not_draw_a_file_it_names_but_does_draw_a_data_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret = dir.path().join("secret.svg");
+        std::fs::write(
+            &secret,
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="#ff0000"/></svg>"##,
+        )
+        .unwrap();
+        let referencing = |href: &str| {
+            format!(
+                r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="4" height="4"><image xlink:href="{href}" width="4" height="4"/></svg>"##
+            )
+        };
+        let draws = |vector: &VectorImage| {
+            let fit = RasterFit::Stretch {
+                width: 4,
+                height: 4,
+            };
+            rasterize_svg(vector, fit)
+                .unwrap()
+                .rgba
+                .chunks(4)
+                .any(|p| p[3] != 0)
+        };
+        let by_path = referencing(&secret.display().to_string());
+        assert!(
+            draws(&parse_svg(&by_path).unwrap()),
+            "a trusted document reads it"
+        );
+        assert!(
+            !draws(&parse_svg_untrusted(&by_path).unwrap()),
+            "an untrusted one does not"
+        );
+        let inline = referencing(&format!(
+            "data:image/svg+xml;base64,{}",
+            base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                std::fs::read(&secret).unwrap()
+            )
+        ));
+        assert!(
+            draws(&parse_svg_untrusted(&inline).unwrap()),
+            "what it carries itself draws"
+        );
     }
 }

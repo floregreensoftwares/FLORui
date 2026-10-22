@@ -82,10 +82,12 @@ pub fn identity(url: &str) -> String {
 
 pub use crate::remote_image::{is_remote, on_change as on_remote_change};
 
-/// The address as it is requested and keyed: without the white space around it, which is
-/// ASCII only, so that the same picture written twice is one picture.
+/// The address as it is requested and keyed: without the white space around it (ASCII only)
+/// and without the `#fragment`, which is not sent, so that the same picture written twice
+/// is one picture.
 pub fn remote_address(url: &str) -> &str {
-    url.trim_matches(|c: char| c.is_ascii_whitespace())
+    let url = url.trim_matches(|c: char| c.is_ascii_whitespace());
+    url.split_once('#').map_or(url, |(address, _)| address)
 }
 
 /// What was found when an image was last read, and the file's stamp then.
@@ -236,16 +238,18 @@ fn read(url: &str) -> Result<Loaded, String> {
         };
         (bytes, hinted)
     };
-    build(&bytes, hinted, |bytes| {
+    build(&bytes, hinted, true, |bytes| {
         crate::decode_raster(bytes).map(Arc::new)
     })
 }
 
 /// The image `bytes` are, told apart by `hinted` or else by their first bytes. A raster
-/// image is decoded by `raster`.
+/// image is decoded by `raster`. `trusted`: whether the document is the application's own,
+/// and may name files (see [`crate::parse_svg_untrusted`]).
 pub(crate) fn build(
     bytes: &[u8],
     hinted: Option<Format>,
+    trusted: bool,
     raster: impl FnOnce(&[u8]) -> Result<Arc<RasterImage>, crate::AssetError>,
 ) -> Result<Loaded, String> {
     match hinted.or_else(|| sniff(bytes)) {
@@ -265,7 +269,12 @@ pub(crate) fn build(
         Some(Format::Svg) => {
             let text =
                 std::str::from_utf8(bytes).map_err(|_| "the SVG is not UTF-8".to_string())?;
-            let image = crate::parse_svg(text).map_err(|e| e.to_string())?;
+            let image = if trusted {
+                crate::parse_svg(text)
+            } else {
+                crate::parse_svg_untrusted(text)
+            }
+            .map_err(|e| e.to_string())?;
             let intrinsic = (image.intrinsic_size.width, image.intrinsic_size.height);
             Ok(Loaded {
                 natural: svg_natural(text, intrinsic),

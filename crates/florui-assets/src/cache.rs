@@ -8,7 +8,9 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 use crate::error::AssetError;
 use crate::raster::{RasterImage, decode_raster};
 use crate::source::{AssetId, AssetSource};
-use crate::svg::{RasterFit, parse_svg, rasterize_svg, substitute_current_color};
+use crate::svg::{
+    RasterFit, parse_svg, parse_svg_untrusted, rasterize_svg, substitute_current_color,
+};
 
 /// Which decode a cache entry holds the result of. A raster image (PNG, JPEG,
 /// WebP, GIF) decodes once at its native size regardless of how it
@@ -254,7 +256,9 @@ impl AssetCache {
             let result = {
                 let _slot = DecodeSlot::take();
                 let read = read.take().expect("only the thread that leads decodes");
-                decode(read, params)
+                // A download is someone else's document; a file or embedded asset is the
+                // application's own.
+                decode(read, params, !matches!(key.id, AssetId::Url(_)))
             };
             let decoded = result.and_then(|image| {
                 let (needed, held) = (image.retained_bytes(), self.held_bytes());
@@ -312,7 +316,15 @@ impl AssetCache {
 fn decode<'b>(
     read: impl FnOnce() -> Result<Cow<'b, [u8]>, AssetError>,
     params: DecodeParams,
+    trusted: bool,
 ) -> Result<RasterImage, AssetError> {
+    let parse = |text: &str| {
+        if trusted {
+            parse_svg(text)
+        } else {
+            parse_svg_untrusted(text)
+        }
+    };
     let text = |bytes: Cow<'_, [u8]>| {
         String::from_utf8(bytes.into_owned()).map_err(|_| AssetError::InvalidUtf8 { path: None })
     };
@@ -323,13 +335,13 @@ fn decode<'b>(
         }
         DecodeParams::Rasterized(fit) => {
             let text = text(read()?)?;
-            let vector = parse_svg(&text)?;
+            let vector = parse(&text)?;
             rasterize_svg(&vector, fit)
         }
         DecodeParams::RasterizedThemed(fit, color) => {
             let text = text(read()?)?;
             let themed = substitute_current_color(&text, color);
-            let vector = parse_svg(&themed)?;
+            let vector = parse(&themed)?;
             rasterize_svg(&vector, fit)
         }
     }
@@ -727,5 +739,39 @@ mod tests {
             .unwrap();
         assert_eq!((image.width, image.height), (20, 20));
         assert!(cache.cached(&id, DecodeParams::Native).is_none());
+    }
+
+    #[test]
+    fn a_downloaded_svg_may_not_name_a_file_but_the_applications_own_may() {
+        use crate::svg::RasterFit;
+        let dir = tempfile::tempdir().unwrap();
+        let inner = dir.path().join("inner.svg");
+        std::fs::write(&inner, BLUE_CIRCLE_SVG).unwrap();
+        let outer = format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="32" height="32"><image xlink:href="{}" width="32" height="32"/></svg>"##,
+            inner.display()
+        );
+        let fit = RasterFit::Stretch {
+            width: 32,
+            height: 32,
+        };
+        let drawn = |image: &RasterImage| image.rgba.chunks(4).any(|pixel| pixel[3] != 0);
+        let cache = AssetCache::new();
+        let params = DecodeParams::Rasterized(fit);
+        let trusted = cache
+            .get_or_decode(AssetId::Embedded("own"), outer.as_bytes(), params)
+            .unwrap();
+        assert!(
+            drawn(&trusted),
+            "the application's own document reads the file"
+        );
+        let downloaded = cache
+            .get_or_decode(
+                AssetId::Url("https://example.com/a.svg".to_owned()),
+                outer.as_bytes(),
+                params,
+            )
+            .unwrap();
+        assert!(!drawn(&downloaded), "a download does not");
     }
 }

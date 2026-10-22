@@ -20,7 +20,18 @@ pub fn configure(config: NetConfig) -> bool {
 /// `%LOCALAPPDATA%\<app>\http-cache` on Windows, `$XDG_CACHE_HOME/<app>/http-cache`
 /// (else `~/.cache/<app>/http-cache`) on Linux. `None` where the platform has no rule
 /// here yet, or when the variables it needs are not set.
+///
+/// `None` too for an identifier that is not one name: empty, `.` or `..`, or with a path
+/// separator in it. The directory is cleaned of the files this crate writes, so it must not
+/// be able to point outside the cache of the user.
 pub fn cache_dir(app_identifier: &str) -> Option<PathBuf> {
+    let one_name = !app_identifier.is_empty()
+        && app_identifier != "."
+        && app_identifier != ".."
+        && !app_identifier.contains(['/', '\\', '\0', ':']);
+    if !one_name {
+        return None;
+    }
     cache_root().map(|root| root.join(app_identifier).join("http-cache"))
 }
 
@@ -57,6 +68,23 @@ fn xdg_cache_root(
 mod tests {
     use super::*;
     use std::ffi::OsString;
+
+    #[test]
+    fn an_identifier_that_is_not_one_name_has_no_cache_directory() {
+        for bad in [
+            "", ".", "..", "../..", "/tmp/x", "a/b", "a\\b", "C:\\x", "a:b", "a\0b",
+        ] {
+            assert_eq!(cache_dir(bad), None, "{bad:?}");
+        }
+        // Whether the platform has a root at all, a reverse-domain name is a name.
+        if cache_root().is_some() {
+            let dir = cache_dir("com.example.app").unwrap();
+            assert!(
+                dir.ends_with("com.example.app/http-cache")
+                    || dir.ends_with("com.example.app\\http-cache")
+            );
+        }
+    }
 
     #[test]
     fn the_xdg_cache_home_wins_when_it_is_absolute() {
