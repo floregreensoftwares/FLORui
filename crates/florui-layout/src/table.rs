@@ -39,6 +39,8 @@ pub(crate) struct TableRole {
     pub(crate) spacing: (f32, f32),
     /// The borders of the table, which collapse into those of its cells.
     pub(crate) sides: Sides,
+    /// `direction: rtl`: the first column is the rightmost.
+    pub(crate) rtl: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -181,5 +183,6 @@ fn table_role(style: &ComputedStyle) -> TableRole {
         collapse: style.border_collapse == BorderCollapse::Collapse,
         spacing: style.border_spacing,
         sides: sides_of(style),
+        rtl: style.direction.is_rtl(),
     }
 }

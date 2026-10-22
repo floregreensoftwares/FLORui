@@ -40,6 +40,9 @@ pub struct InlineElement {
     /// The style the element's text has where it is on the first line of the container,
     /// when that is not `style`.
     pub first_line: Option<TextStyle>,
+    /// Whether the element's own text runs right to left, which makes the right side of
+    /// its box the one its start is on.
+    pub rtl: bool,
 }
 
 impl InlineElement {
@@ -49,6 +52,7 @@ impl InlineElement {
             parent,
             style,
             first_line: None,
+            rtl: false,
         }
     }
 }
@@ -148,6 +152,19 @@ pub enum LineSource<'a> {
 pub struct LineTrace {
     pub slots: Vec<LineSlot>,
     pub heights: Vec<f32>,
+}
+
+/// What goes before and after the text of the paragraph a container's style gives, given the
+/// prepared text of its items.
+fn paragraph_frame_of(
+    container: &TextStyle,
+    runs: &[crate::Prepared<'_>],
+) -> (&'static str, &'static str) {
+    let has_rtl = container.direction == crate::TextDirection::Ltr
+        && runs
+            .iter()
+            .any(|run| run.text.chars().any(crate::is_rtl_char));
+    crate::bidi::paragraph_frame(container.direction, container.bidi, has_rtl)
 }
 
 /// Which lines of a context a layout is, and where they start.
@@ -579,8 +596,9 @@ impl Font {
     ) -> (InlineLayout, LineTrace) {
         let n = elements.len();
         let mut both = elements.to_vec();
-        both.extend(elements.iter().map(|element| {
-            InlineElement::new(
+        both.extend(elements.iter().map(|element| InlineElement {
+            rtl: element.rtl,
+            ..InlineElement::new(
                 n + element.parent,
                 element.first_line.unwrap_or(element.style),
             )
@@ -651,7 +669,7 @@ impl Font {
         // Where the first line ends in the items: the first item that is wholly after it,
         // or the one it ends in, of which `cut` bytes are on the first line.
         let on_line: Vec<u64> = first.layout.boxes.iter().map(|b| b.id).collect();
-        let mut offset = 0usize;
+        let mut offset = paragraph_frame_of(&both[n].style, &runs).0.len();
         let mut split = None;
         for (index, (item, run)) in items.iter().zip(&runs).enumerate() {
             let after = offset >= text_end;
@@ -821,7 +839,10 @@ impl Font {
         part: Part,
     ) -> Laid {
         let mut trace = LineTrace::default();
-        let mut text = String::new();
+        // The paragraph takes the direction of its container, not of its first strong
+        // character.
+        let (before, after) = paragraph_frame_of(&elements[part.root].style, runs);
+        let mut text = String::from(before);
         let mut spans: Vec<Span> = Vec::new();
         // The small capitals of each run, where they are in `text`.
         let mut small_caps: Vec<(Range<usize>, usize)> = Vec::new();
@@ -854,10 +875,11 @@ impl Font {
                 _ => {}
             }
         }
+        text.push_str(after);
         let has_box = items
             .iter()
             .any(|item| matches!(item, InlineItem::Box { .. }));
-        if text.is_empty() && !has_box {
+        if text.len() == before.len() + after.len() && !has_box {
             return Laid {
                 layout: InlineLayout {
                     width: 0.0,
@@ -892,7 +914,7 @@ impl Font {
         // range below sets its own size and family.
         builder.push_default(StyleProperty::FontSize(16.0));
 
-        let mut offset = 0usize;
+        let mut offset = before.len();
         for (item, run) in items.iter().zip(runs) {
             let run = run.text.as_ref();
             match *item {
@@ -1359,6 +1381,25 @@ fn place_line(
             }
         }
     }
+    // The white space that ends a line hangs outside it, and in a right to left paragraph
+    // that is the left side. A line of one run that the shaper left it at the right end of
+    // is moved over by its width, which puts the text where the paragraph's edge is.
+    let hanging = line.metrics().trailing_whitespace;
+    if hanging > 0.01 && elements[root].style.direction == crate::TextDirection::Rtl {
+        let mut text_runs = line_runs
+            .iter_mut()
+            .filter(|run| run.kind == SpanKind::Text && run.advance > 0.0);
+        if let (Some(only), None) = (text_runs.next(), text_runs.next())
+            && let Some(last) = only.shaped.glyphs.last()
+            && (only.x + only.advance - last.x - hanging).abs() < 0.1
+        {
+            only.x += hanging;
+            only.shaped.x += hanging;
+            for glyph in &mut only.shaped.glyphs {
+                glyph.x += hanging;
+            }
+        }
+    }
     // The strut is on every line, a line of atomic boxes alone included: the
     // boxes sit on its baseline and its depth shows below them.
     present[root] = true;
@@ -1635,6 +1676,7 @@ fn place_line(
             descent: base.content_descent,
             starts: valid && range.start <= first[element] && first[element] < range.end,
             ends: valid && range.start < last[element] && last[element] <= range.end,
+            rtl: elements[element].rtl,
         });
     }
 
@@ -1650,7 +1692,7 @@ fn place_line(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{TextAlign, TextIndent};
+    use crate::{BidiMode, TextAlign, TextDirection, TextIndent};
 
     fn sans(size: f32) -> TextStyle {
         TextStyle::new(FontFamily::SansSerif, size, 400.0)
@@ -2547,5 +2589,102 @@ mod tests {
         assert_eq!(env.placed[0].0, 7);
         // It is reached below the first line, which is 20px tall.
         assert!(env.placed[0].1 >= 19.9, "{:?}", env.placed);
+    }
+
+    fn right_to_left(style: TextStyle) -> TextStyle {
+        style.with_direction(TextDirection::Rtl, BidiMode::Normal)
+    }
+
+    fn visual_ids(layout: &InlineLayout) -> Vec<u32> {
+        layout
+            .runs
+            .iter()
+            .filter(|run| run.width > 0.0)
+            .flat_map(|run| run.glyphs.iter().map(|glyph| glyph.id))
+            .collect()
+    }
+
+    #[test]
+    fn a_right_to_left_paragraph_of_latin_text_starts_at_the_right_edge() {
+        let items = [text("abc def", 0)];
+        let ltr = Font::load_embedded().shape_inline_tree(
+            &[InlineElement::new(0, sans(14.0))],
+            &items,
+            Some(300.0),
+        );
+        let rtl = Font::load_embedded().shape_inline_tree(
+            &[InlineElement::new(0, right_to_left(sans(14.0)))],
+            &items,
+            Some(300.0),
+        );
+        let reach = |layout: &InlineLayout| {
+            let run = layout.runs.iter().find(|run| run.width > 0.0).unwrap();
+            (run.x, run.x + run.width)
+        };
+        close(reach(&ltr).0, 0.0);
+        // The trailing space hangs, so the text ends at the edge.
+        assert!((300.0 - reach(&rtl).1).abs() < 5.0, "{:?}", reach(&rtl));
+        assert!(reach(&rtl).0 > 200.0, "{:?}", reach(&rtl));
+        assert_eq!(
+            visual_ids(&ltr).len(),
+            visual_ids(&rtl).len(),
+            "the mark draws nothing"
+        );
+    }
+
+    #[test]
+    fn the_runs_of_mixed_text_are_ordered_by_the_direction_of_the_paragraph() {
+        let items = [text("ab \u{5e9}\u{5dc}", 0)];
+        let order = |style: TextStyle| {
+            let layout = Font::load_embedded().shape_inline_tree(
+                &[InlineElement::new(0, style)],
+                &items,
+                Some(300.0),
+            );
+            let mut runs: Vec<(f32, usize)> = layout
+                .runs
+                .iter()
+                .filter(|run| run.width > 0.0)
+                .map(|run| (run.x, run.glyphs.len()))
+                .collect();
+            runs.sort_by(|a, b| a.0.total_cmp(&b.0));
+            runs.first().map(|run| run.1)
+        };
+        // Two Hebrew letters and three characters of "ab ": the left end is
+        // Latin in a left to right paragraph and Hebrew in a right to left one.
+        let (ltr_first, rtl_first) = (order(sans(14.0)), order(right_to_left(sans(14.0))));
+        assert_eq!((ltr_first, rtl_first), (Some(3), Some(2)));
+    }
+
+    #[test]
+    fn a_bidi_override_puts_the_text_in_the_order_of_the_direction() {
+        let items = [text("abc def", 0)];
+        let plain = Font::load_embedded().shape_inline_tree(
+            &[InlineElement::new(0, sans(14.0))],
+            &items,
+            Some(300.0),
+        );
+        let overridden = Font::load_embedded().shape_inline_tree(
+            &[InlineElement::new(
+                0,
+                sans(14.0).with_direction(TextDirection::Rtl, BidiMode::Override),
+            )],
+            &items,
+            Some(300.0),
+        );
+        let mut reversed = visual_ids(&plain);
+        reversed.reverse();
+        assert_eq!(visual_ids(&overridden), reversed);
+    }
+
+    #[test]
+    fn an_empty_right_to_left_container_has_no_text_to_lay_out() {
+        let layout = Font::load_embedded().shape_inline_tree(
+            &[InlineElement::new(0, right_to_left(sans(14.0)))],
+            &[text("", 0)],
+            Some(300.0),
+        );
+        assert!(layout.runs.is_empty());
+        assert_eq!(layout.height, 0.0);
     }
 }

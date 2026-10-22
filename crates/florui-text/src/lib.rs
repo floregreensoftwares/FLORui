@@ -52,6 +52,8 @@ mod editor_core;
 mod ellipsis;
 mod features;
 pub use inline::{InlineElement, InlineItem, LineEnv, LineSlot, LineSource, LineTrace};
+mod bidi;
+pub use bidi::{BidiMode, TextDirection, element_frame, first_strong, is_rtl_char};
 mod inline;
 mod inline_memo;
 mod settings;
@@ -282,6 +284,10 @@ pub struct TextStyle {
     /// Which synthesized forms `font-synthesis` turns off: [`NO_SYNTHETIC_STYLE`],
     /// [`NO_SYNTHETIC_CAPS`] and [`NO_SYNTHETIC_WEIGHT`] added together; `0` leaves all on.
     pub no_synthesis: u8,
+    /// `direction`: which way a paragraph in this style runs.
+    pub direction: TextDirection,
+    /// `unicode-bidi`.
+    pub bidi: BidiMode,
 }
 
 /// A font with no italic is not slanted by hand.
@@ -309,6 +315,8 @@ impl TextStyle {
             features: 0,
             variations: 0,
             no_synthesis: 0,
+            direction: TextDirection::Ltr,
+            bidi: BidiMode::Normal,
             family,
             font_size,
             font_weight,
@@ -337,6 +345,13 @@ impl TextStyle {
         self.wrap = wrap;
         self.word_break = word_break;
         self.overflow_wrap = overflow_wrap;
+        self
+    }
+
+    /// `direction` and `unicode-bidi`.
+    pub fn with_direction(mut self, direction: TextDirection, bidi: BidiMode) -> Self {
+        self.direction = direction;
+        self.bidi = bidi;
         self
     }
 
@@ -422,7 +437,9 @@ impl TextStyle {
             self.collapse as u32
                 | (u32::from(self.wrap) << 2)
                 | ((self.word_break as u32) << 3)
-                | ((self.overflow_wrap as u32) << 5),
+                | ((self.overflow_wrap as u32) << 5)
+                | ((self.direction as u32) << 8)
+                | ((self.bidi as u32) << 9),
         ]
     }
 
@@ -819,6 +836,8 @@ pub struct InlineFragment {
     /// margin before the first glyph), and/or its end.
     pub starts: bool,
     pub ends: bool,
+    /// The element's text runs right to left: its start is the right side of the fragment.
+    pub rtl: bool,
 }
 
 #[derive(Debug)]
@@ -1442,7 +1461,19 @@ impl Font {
         let family_name = self.family_name(style.family).to_owned();
         let native_caps = style.caps.is_synthesized() && self.caps_in_font(&style);
         let prepared = style.prepared(text, &mut true, &mut false, native_caps);
-        let text = prepared.text.as_ref();
+        // The paragraph takes the direction of the style, not of its first strong character.
+        let (before, after) = bidi::paragraph_frame(
+            style.direction,
+            style.bidi,
+            prepared.text.chars().any(bidi::is_rtl_char),
+        );
+        let framed: std::borrow::Cow<'_, str> = if before.is_empty() && after.is_empty() {
+            std::borrow::Cow::Borrowed(prepared.text.as_ref())
+        } else {
+            std::borrow::Cow::Owned(format!("{before}{}{after}", prepared.text))
+        };
+        let shift = before.len();
+        let text = framed.as_ref();
         let mut builder = self
             .layout_cx
             .ranged_builder(&mut self.font_cx, text, 1.0, true);
@@ -1464,7 +1495,7 @@ impl Font {
         for range in &prepared.small {
             builder.push(
                 StyleProperty::FontSize(style.font_size * style.caps.scale()),
-                range.clone(),
+                range.start + shift..range.end + shift,
             );
         }
         builder.build(text)

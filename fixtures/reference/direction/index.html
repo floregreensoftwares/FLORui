@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="../assets/reset.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="el" class="wrap">
+    <div class="a">abc def ghi</div>
+    <div class="a rtl">abc def ghi</div>
+    <div class="a rtl" style="text-align: left">abc def ghi</div>
+    <div class="rtl">
+      <div class="box" style="margin-left: 20px"></div>
+      <div class="box"></div>
+    </div>
+    <div class="d rtl">
+      <div class="box"></div>
+      <div class="box" style="background-color: #c08060"></div>
+      <div class="box" style="background-color: #60c080"></div>
+    </div>
+    <div class="e rtl">
+      <div class="box"></div>
+      <div class="box" style="background-color: #c08060"></div>
+      <div class="box" style="background-color: #60c080"></div>
+    </div>
+    <div class="rtl">abc שלום עולם def 123 ghi!</div>
+    <div class="g rtl">before <span>padded span</span> after</div>
+    <div class="a h rtl">abc def ghi</div>
+    <div class="a h">abc def ghi</div>
+    <div class="j rtl">indent from the start edge that wraps around to a second line of text in the box</div>
+    <div class="k rtl">
+      <div>one</div>
+      <div>two</div>
+      <div>three</div>
+    </div>
+    <ul class="u">
+      <li>first item</li>
+      <li>second item</li>
+    </ul>
+  </div>
+</body>
+</html>

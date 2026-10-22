@@ -3918,6 +3918,11 @@ fn paint_list_marker(
         .baseline
         .unwrap_or((style.border.top.width + style.padding.top + ascent) * scale_factor);
     let content_left = x + anchor.content_left;
+    // In a right to left list the marker is on the right of the content box.
+    let rtl = style.direction.is_rtl();
+    let content_right = layouts.get(&node).map_or(content_left, |layout| {
+        x + layout.width - (style.border.right.width + style.padding.right) * scale_factor
+    });
     let mut kind = florui_layout::marker_of(style, anchor.number);
     // An image marker: its box, which stands on the baseline.
     let image_box = match &kind {
@@ -3946,6 +3951,7 @@ fn paint_list_marker(
             let (width, height) = (size.width * scale_factor, size.height * scale_factor);
             let left = match line_start {
                 Some(start) => start,
+                None if rtl => content_right + florui_layout::IMAGE_GAP * scale_factor,
                 None => content_left - width - florui_layout::IMAGE_GAP * scale_factor,
             };
             // The box is put on whole pixels, as a browser does with an image.
@@ -4003,6 +4009,7 @@ fn paint_list_marker(
                 // The box of an unreadable image is 2px wider than the bullet, which is in the middle of it.
                 Some(start) if image_failed => start + scale_factor,
                 Some(start) => start,
+                None if rtl => content_right - (metrics.x + metrics.size) * scale_factor,
                 None => content_left + metrics.x * scale_factor,
             };
             let top = baseline + metrics.y * scale_factor;
@@ -4019,6 +4026,7 @@ fn paint_list_marker(
             let width = measured.width + space * trailing as f32;
             let left = match line_start {
                 Some(start) => start,
+                None if rtl => content_right,
                 None => content_left - width * scale_factor,
             };
             let top = baseline - measured.baseline * scale_factor;
@@ -4101,24 +4109,32 @@ fn inside_line_start(
             content_width,
         )
     };
+    // The marker is at the start of the first line: its left end, or its right end when the
+    // text runs right to left.
+    let rtl = style.direction.is_rtl();
     let first = shaped.and_then(|shaped| {
-        shaped
+        let runs = shaped
             .layout
             .runs
             .iter()
-            .filter(|run| run.line == 0)
-            .map(|run| run.x)
-            .min_by(f32::total_cmp)
+            .filter(|run| run.line == 0 && run.width > 0.0);
+        if rtl {
+            runs.map(|run| run.x + run.width).max_by(f32::total_cmp)
+        } else {
+            runs.map(|run| run.x).min_by(f32::total_cmp)
+        }
     });
     match first {
+        Some(first) if rtl => origin + first * scale_factor,
         Some(first) => origin + (first - advance) * scale_factor,
         None => {
             let free = (width / scale_factor - advance).max(0.0);
+            let (start, end) = if rtl { (free, 0.0) } else { (0.0, free) };
             origin
                 + match style.text_align {
                     florui_style::TextAlign::Center => free / 2.0,
-                    florui_style::TextAlign::End => free,
-                    _ => 0.0,
+                    florui_style::TextAlign::End => end,
+                    _ => start,
                 } * scale_factor
         }
     }
@@ -7196,13 +7212,19 @@ fn paint_inline_boxes(
         {
             continue;
         }
-        if !fragment.starts {
+        // The start of the element is on the right when its text runs right to left.
+        let (left_joined, right_joined) = if fragment.rtl {
+            (!fragment.ends, !fragment.starts)
+        } else {
+            (!fragment.starts, !fragment.ends)
+        };
+        if left_joined {
             border.left.width = 0.0;
             padding.left = 0.0;
             radius.top_left = square;
             radius.bottom_left = square;
         }
-        if !fragment.ends {
+        if right_joined {
             border.right.width = 0.0;
             padding.right = 0.0;
             radius.top_right = square;

@@ -1,0 +1,302 @@
+{
+    "id":  "direction",
+    "description":  "direction: rtl on text, on blocks, flex rows, grids, inline boxes, lists and tables, with unicode-bidi and mixed text.",
+    "html":  "index.html",
+    "css":  "style.css",
+    "element_id":  "el",
+    "viewport":  {
+                     "width_css_px":  340,
+                     "height_css_px":  640,
+                     "device_pixel_ratio":  1
+                 },
+    "canvas_color":  "#ffffff",
+    "florui":  {
+                   "tag":  "div",
+                   "class":  "wrap",
+                   "css":  ".wrap { position: relative; width: 340px; height: 640px; background-color: #ffffff; color: #101010; font-size: 14px; line-height: 18px; } .wrap \u003e div { margin: 0 0 6px 10px; width: 300px; background-color: #e8e8e8; } .rtl { direction: rtl; } .box { width: 40px; height: 14px; background-color: #6080c0; margin-right: 4px; } .a { height: 18px; } .d { display: flex; } .d .box { margin: 0 6px 0 0; } .e { display: grid; grid-template-columns: 40px 40px 40px; gap: 4px; } .e .box { margin: 0; } .g span { background-color: #ffd0d0; padding: 0 10px; border-left: 3px solid #c02020; } .h { unicode-bidi: bidi-override; } .j { text-indent: 30px; } .k { display: table; width: 150px; } .k \u003e div { display: table-cell; width: 50px; background-color: #d0e0d0; } ul { margin: 0; padding-left: 24px; } .u { direction: rtl; margin: 0; padding-left: 0; padding-right: 24px; }",
+                   "children":  [
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a",
+                                        "css":  "",
+                                        "text":  "abc def ghi",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a rtl",
+                                        "css":  "",
+                                        "text":  "abc def ghi",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a rtl",
+                                        "css":  "",
+                                        "text":  "abc def ghi",
+                                        "children":  [
+
+                                                     ],
+                                        "attrs":  [
+                                                      [
+                                                          "style",
+                                                          "text-align: left"
+                                                      ]
+                                                  ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "rtl",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "box",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "style",
+                                                                               "margin-left: 20px"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "box",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "d rtl",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "box",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "box",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "style",
+                                                                               "background-color: #c08060"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "box",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "style",
+                                                                               "background-color: #60c080"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "e rtl",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "box",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "box",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "style",
+                                                                               "background-color: #c08060"
+                                                                           ]
+                                                                       ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "box",
+                                                             "css":  "",
+                                                             "text":  "",
+                                                             "children":  [
+
+                                                                          ],
+                                                             "attrs":  [
+                                                                           [
+                                                                               "style",
+                                                                               "background-color: #60c080"
+                                                                           ]
+                                                                       ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "rtl",
+                                        "css":  "",
+                                        "text":  "abc שלום עולם def 123 ghi!",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "g rtl",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         "before ",
+                                                         {
+                                                             "tag":  "span",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "padded span",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         " after"
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a h rtl",
+                                        "css":  "",
+                                        "text":  "abc def ghi",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "a h",
+                                        "css":  "",
+                                        "text":  "abc def ghi",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "j rtl",
+                                        "css":  "",
+                                        "text":  "indent from the start edge that wraps around to a second line of text in the box",
+                                        "children":  [
+
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "div",
+                                        "class":  "k rtl",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "one",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "two",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "div",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "three",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    },
+                                    {
+                                        "tag":  "ul",
+                                        "class":  "u",
+                                        "css":  "",
+                                        "text":  "",
+                                        "children":  [
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "first item",
+                                                             "children":  [
+
+                                                                          ]
+                                                         },
+                                                         {
+                                                             "tag":  "li",
+                                                             "class":  "",
+                                                             "css":  "",
+                                                             "text":  "second item",
+                                                             "children":  [
+
+                                                                          ]
+                                                         }
+                                                     ]
+                                    }
+                                ]
+               },
+    "classification":  {
+                           "kind":  "tolerant",
+                           "threshold_percent":  4.5,
+                           "geometry_tolerance_px":  0.5,
+                           "channel_tolerance":  0,
+                           "reason":  "Measured against Chromium 155 on Windows: 3.98% of the pixels differ and the boxes, the columns, the table cells and the list markers are where Chromium puts them. What is left is the antialiasing of the text, which is placed on a slightly different subpixel in each right to left line. With direction ignored the same fixture measures 11.18%, so it fails."
+                       }
+}

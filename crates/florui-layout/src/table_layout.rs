@@ -1064,8 +1064,14 @@ impl Run<'_> {
                     None => (0.0, 0.0),
                 },
             };
+            // The first column is the rightmost in a right to left table.
+            let cell_x = if role.rtl {
+                pb.left + at - (column_x[col] + cell_width)
+            } else {
+                column_x[col]
+            };
             let location = Point {
-                x: column_x[col] - parent.0,
+                x: cell_x - parent.0,
                 y: row_y[row] - parent.1,
             };
             let cell_style = self.tree.node(cell_id).style.clone();

@@ -74,6 +74,8 @@ mod collapse;
 mod counter_style;
 mod counter_style_custom;
 mod deferred;
+#[cfg(test)]
+mod direction_tests;
 mod floats;
 mod flow;
 mod grid;
@@ -393,6 +395,10 @@ pub fn text_style_of(style: &ComputedStyle) -> florui_text::TextStyle {
             .as_ref()
             .map_or(0, |css| interned(Interned::Variations, css)),
     )
+    .with_direction(
+        to_text_direction(style.direction),
+        to_bidi_mode(style.unicode_bidi),
+    )
     .with_line_height(line_height)
     .with_spacing(style.letter_spacing, style.word_spacing)
     .with_align(align)
@@ -428,6 +434,25 @@ pub fn text_style_of(style: &ComputedStyle) -> florui_text::TextStyle {
             florui_style::OverflowWrap::Anywhere => florui_text::OverflowWrap::Anywhere,
         },
     )
+}
+
+fn to_text_direction(direction: florui_style::Direction) -> florui_text::TextDirection {
+    match direction {
+        florui_style::Direction::Ltr => florui_text::TextDirection::Ltr,
+        florui_style::Direction::Rtl => florui_text::TextDirection::Rtl,
+    }
+}
+
+fn to_bidi_mode(mode: florui_style::UnicodeBidi) -> florui_text::BidiMode {
+    use florui_style::UnicodeBidi as Css;
+    match mode {
+        Css::Normal => florui_text::BidiMode::Normal,
+        Css::Embed => florui_text::BidiMode::Embed,
+        Css::Isolate => florui_text::BidiMode::Isolate,
+        Css::BidiOverride => florui_text::BidiMode::Override,
+        Css::IsolateOverride => florui_text::BidiMode::IsolateOverride,
+        Css::Plaintext => florui_text::BidiMode::Plaintext,
+    }
 }
 
 /// What text is shaped with when its node has no computed style.
@@ -1699,6 +1724,25 @@ fn build_run_content_items(
     context
 }
 
+/// Whether the text of the inline element `node` runs right to left, which is what says
+/// which side of its box its start is on: the direction the element gives its own text
+/// when it opens an embedding, an isolate or an override, and otherwise the direction of
+/// the first strong character in it, or of the paragraph when there is none.
+fn runs_rtl(arena: &Tree, styles: &StyleMap, node: NodeId) -> bool {
+    use florui_style::UnicodeBidi as Bidi;
+    let Some(style) = styles.get(&node) else {
+        return false;
+    };
+    let own = style.direction.is_rtl();
+    match style.unicode_bidi {
+        Bidi::Embed | Bidi::Isolate | Bidi::BidiOverride | Bidi::IsolateOverride => own,
+        Bidi::Normal | Bidi::Plaintext => florui_text::first_strong(arena.text_content(node))
+            .map_or(own, |direction| {
+                direction == florui_text::TextDirection::Rtl
+            }),
+    }
+}
+
 /// Adds the inline items of `node`, which is element `element` of `context`.
 fn flatten_inline(
     font: &mut florui_text::Font,
@@ -1836,16 +1880,33 @@ fn flatten_items(
                             .push(inline_element(styles, *child, element, text_style));
                         let own = context.elements.len() - 1;
                         context.nodes.push(*child);
+                        // Which side of the box its start is on follows the direction of
+                        // its own text, and the box is opened and closed as the Unicode
+                        // algorithm is asked to treat it.
+                        let rtl = runs_rtl(arena, styles, *child);
+                        context.elements[own].rtl = rtl;
+                        let (open, close) = child_style.map_or(("", ""), |style| {
+                            florui_text::element_frame(
+                                to_text_direction(style.direction),
+                                to_bidi_mode(style.unicode_bidi),
+                            )
+                        });
+                        if !open.is_empty() {
+                            context.items.push(InlineContentItem::Text {
+                                text: open.to_owned(),
+                                element: own,
+                            });
+                        }
                         let sides = |style: &ComputedStyle, end: bool| {
-                            if end {
-                                (
-                                    style.padding.right + style.border.right.width,
-                                    style.margin.right.unwrap_or(0.0),
-                                )
-                            } else {
+                            if end == rtl {
                                 (
                                     style.padding.left + style.border.left.width,
                                     style.margin.left.unwrap_or(0.0),
+                                )
+                            } else {
+                                (
+                                    style.padding.right + style.border.right.width,
+                                    style.margin.right.unwrap_or(0.0),
                                 )
                             }
                         };
@@ -1877,6 +1938,12 @@ fn flatten_items(
                                     end: true,
                                 });
                             }
+                        }
+                        if !close.is_empty() {
+                            context.items.push(InlineContentItem::Text {
+                                text: close.to_owned(),
+                                element: own,
+                            });
                         }
                     }
                 }
@@ -3870,6 +3937,11 @@ fn to_taffy_style(style: Option<&ComputedStyle>) -> taffy::Style {
 
     taffy::Style {
         display: to_display(style.display),
+        direction: if style.direction.is_rtl() {
+            taffy::Direction::Rtl
+        } else {
+            taffy::Direction::Ltr
+        },
         item_is_table: matches!(
             style.display,
             StyleDisplay::Table | StyleDisplay::InlineTable
